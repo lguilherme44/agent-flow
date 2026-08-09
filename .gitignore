@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+
+# Local tooling state, not part of the project
+.atl/
+
+# Working documents that predate the public repository
+agent-flow-implementation-spec.md
+agent-flow-mvp1-plan.md
+
+# agent-flow's own run state, when used on itself
+.agent-flow/runs/
+.agent-flow/cache/
+.agent-flow/current-run

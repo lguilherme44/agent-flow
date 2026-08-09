@@ -1,0 +1,1 @@
+ERROR:[0m[0m {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'not-a-real-model' model is not supported when using Codex with a ChatGPT account."}}

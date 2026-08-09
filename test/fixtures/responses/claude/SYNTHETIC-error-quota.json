@@ -1,0 +1,1 @@
+{"is_error":true,"subtype":"error_during_execution","api_error_status":429,"result":"Claude usage limit reached. Your limit will reset at 9pm.","permission_denials":[],"terminal_reason":"error","type":"result","duration_ms":95,"session_id":"00000000-0000-0000-0000-000000000007","uuid":"00000000-0000-0000-0000-000000000008"}

@@ -1,0 +1,108 @@
+import { createHash } from 'node:crypto';
+import type { Plan, ReviewResult, RunState } from '../contracts/index.js';
+import type { StateStore } from './state-store.js';
+
+/**
+ * Identity of a specific plan.
+ *
+ * Approval is granted to *this* plan, not to the run. Without a hash, a revise
+ * after approval would leave the gate satisfied for something the human never
+ * read — which is precisely the failure the gate exists to prevent (§17).
+ */
+export function planHash(plan: Plan): string {
+  return createHash('sha256').update(JSON.stringify(plan)).digest('hex').slice(0, 16);
+}
+
+export type ApprovalRefusal =
+  | { kind: 'no_run' }
+  | { kind: 'no_plan' }
+  | { kind: 'review_missing' }
+  | { kind: 'review_failed'; review: ReviewResult }
+  | { kind: 'already_approved' };
+
+export interface ApprovalCheck {
+  readonly allowed: boolean;
+  readonly refusal?: ApprovalRefusal;
+  /** Present whenever the human should be told something before confirming. */
+  readonly warnings: string[];
+}
+
+/**
+ * Whether approval may proceed, and what the person should know first.
+ *
+ * `--force` can override a failed review, but never silently: the caller records
+ * the override as an event so the decision is attributable afterwards.
+ */
+export function checkApproval(
+  state: RunState | null,
+  plan: Plan | null,
+  review: ReviewResult | null,
+): ApprovalCheck {
+  const warnings: string[] = [];
+
+  if (state === null) return { allowed: false, refusal: { kind: 'no_run' }, warnings };
+  if (plan === null) return { allowed: false, refusal: { kind: 'no_plan' }, warnings };
+
+  if (state.approved) {
+    return { allowed: false, refusal: { kind: 'already_approved' }, warnings };
+  }
+
+  // A degraded run is still approvable — but the person approving should know
+  // what was lost before they sign off, not discover it in a post-mortem (R-16).
+  for (const degradation of state.degradations) {
+    warnings.push(`${degradation.reason} — ${degradation.impact}`);
+  }
+
+  if (review === null) {
+    return { allowed: false, refusal: { kind: 'review_missing' }, warnings };
+  }
+
+  if (review.independence === 'same-provider-fresh-context') {
+    warnings.push(
+      'the plan review was same-provider: it does not protect against an assumption ' +
+        'repeated from planning',
+    );
+  }
+
+  if (review.verdict === 'FAIL') {
+    return { allowed: false, refusal: { kind: 'review_failed', review }, warnings };
+  }
+
+  return { allowed: true, warnings };
+}
+
+/** Records approval against a specific plan. */
+export async function approveRun(
+  store: StateStore,
+  runId: string,
+  plan: Plan,
+  options: { forced?: boolean } = {},
+): Promise<RunState> {
+  const hash = planHash(plan);
+
+  const state = await store.updateRun(runId, (current) => ({
+    ...current,
+    approved: true,
+    approvedAt: undefined,
+    approvedPlanHash: hash,
+    status: 'approved',
+  }));
+
+  await store.appendEvent(runId, 'run_approved', {
+    planHash: hash,
+    taskCount: plan.tasks.length,
+    forced: options.forced === true,
+  });
+
+  return state;
+}
+
+/**
+ * Whether an approval still applies to the plan on disk.
+ *
+ * Checked before execution: if the plan changed after approval, the gate was
+ * satisfied for a different document and has to be satisfied again.
+ */
+export function approvalCoversPlan(state: RunState, plan: Plan): boolean {
+  return state.approved && state.approvedPlanHash === planHash(plan);
+}
