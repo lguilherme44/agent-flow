@@ -803,3 +803,88 @@ authentication as a degradation — which made every healthy machine report
 `DEGRADED`, since the shallow check never probes auth. An alert that always
 fires is an alert nobody reads. Unverified auth became a note; only a genuinely
 lost capability moves the verdict.
+
+---
+
+## What UI-B changed, and the three claims it caught being false
+
+The dashboard grew five pages and the ability to write. Most of the work was
+ordinary; four things in it are worth writing down.
+
+**A modal Radix dialog returns focus to a `Trigger`, and to nothing without one.**
+Replacing the hand-rolled task drawer with `@radix-ui/react-dialog` bought the
+focus trap, Escape, and the `aria-hidden` that makes "one dialog" true for a
+screen reader rather than only for the DOM. It also silently broke focus return:
+`DialogContentImpl` overrides its own `FocusScope` restore with
+`context.triggerRef.current?.focus()`, and these dialogs open from table rows and
+ordinary buttons rather than from a `Dialog.Trigger`. Left alone, closing dropped
+focus on the document body — in a browser, not just in jsdom. Every dialog here
+supplies its own `onCloseAutoFocus`, and captures the element to return to in a
+*layout* effect: a passive effect in the parent runs after the child that has
+already moved focus into the panel, so it reads the close button instead.
+
+**Playwright's `reuseExistingServer` will serve a stale bundle at you.** Several
+screenshot baselines were generated against a build from an earlier run, because
+the `webServer` command is `npm run build && vite preview` and Playwright skips
+the whole command when something is already listening. Two of those baselines
+recorded a bug as correct. The visible symptom was a date format that had already
+been changed in the source. The lesson is smaller than the bug: a baseline is only
+worth what the build behind it was.
+
+**A screenshot cannot fail on an ellipsis.** Truncation looks deliberate, which is
+exactly why nobody notices it. The visual suite now measures instead: any element
+whose `scrollWidth` exceeds its box, has `text-overflow: ellipsis`, and carries no
+`title` is reported by name, across every route and every viewport. A `title` is
+the opt-out, and it means something specific — "this value is genuinely variable,
+here is the rest". That check found five real clips, one of them pre-existing in
+the task table, and one that only a live run had: the real
+`architecture-impact` prompt declares four required variables and the fixture
+declared one.
+
+**Three pieces of copy had quietly become false**, and this is the failure mode
+worth naming. The breadcrumb hardcoded "Runs" as its third segment — true of the
+two pages that existed, a lie the moment there were seven, so the Projects page
+announced itself as Runs. The approval card told people to run `agent-flow
+approve` while the button to do it sat forty pixels above. And the analytics page
+claimed the implementation stage was excluded from "time per stage" to avoid
+double-counting; it never was. Telemetry carries one entry per planning stage and
+one per *task*, and every task entry's stage is `implementation` — so that row is
+the sum of the tasks, and the panel beside it is the same total split by executor
+role. Running the page against a real run is what showed it: 7m43s of
+implementation across nine calls, and 4m00s + 2m12s + 1m30s of executor time that
+adds up to the same thing.
+
+None of those three were caught by a test, because each was a sentence rather than
+a behaviour. The first two are now derived from the same table the sidebar reads
+and from the run's actual state; the third is a label that describes the
+arithmetic instead of contradicting it.
+
+## The rules of UI-B, as tests
+
+The architectural review the milestone required is a list of ways the browser and
+the CLI could start enforcing the workflow separately — the kind of divergence
+that is silent until it matters. Reviewing for them by hand works on the day
+somebody looks. So they are checks now, nine over the server and five over the
+browser.
+
+The server ones assert that no HTTP handler calls `updateRun`, `appendEvent` or
+`writeArtifact`; that nothing under `src/server` imports `app/approval`,
+`app/scheduler`, `core/dag` or `app/task-executor`; that no write request schema
+accepts a `planHash`, a `path`, a `command` or a `cwd`; that no request schema
+takes an unconstrained `z.string()`; that no provider or model name appears
+anywhere in the server; that no route matches `/pause`, `/resume` or `/cancel`
+while the core has no semantics for them; and that both adapters reach the use
+cases through `app/run-actions.ts`.
+
+The browser ones assert that no store, reducer or `RunStateSchema` exists; that
+nothing imports the contracts as a value; that `fetch` appears in exactly one
+file; that no plan hash appears in a request body; and that the only timer in the
+whole app is the one belonging to the SSE fallback.
+
+That last one failed when it was written, against code written the same day. The
+job-status query polled every two seconds — a reasonable-looking choice, and
+exactly the thing §89 forbids. It was replaceable: a job's lifecycle now goes down
+the same stream as everything else. It has to be published explicitly rather than
+inferred from the run, because a job the workflow *refused* never touched
+`state.json`, so the watcher would never see it happen and a page waiting for the
+run to change would wait forever.

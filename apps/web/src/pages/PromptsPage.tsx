@@ -231,6 +231,7 @@ function PromptDetail(props: {
             />
             <MetaCell
               label="Stages"
+              title={meta.stages.join(', ')}
               value={
                 meta.stages.length === 0
                   ? 'per task, not a stage'
@@ -239,6 +240,9 @@ function PromptDetail(props: {
             />
             <MetaCell
               label="Required vars"
+              // Four of them on the real architecture-impact prompt, which the
+              // fixtures did not have and a live run did.
+              title={meta.requiredVars.join(', ')}
               value={meta.requiredVars.length === 0 ? 'none' : meta.requiredVars.join(', ')}
             />
             <MetaCell

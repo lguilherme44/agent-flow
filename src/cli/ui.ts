@@ -116,7 +116,11 @@ export async function runUiCommand(
       );
     }
 
-    lines.push('Read-only. Approve, run and review stay with the CLI.', '');
+    lines.push(
+      'Approve, revise, retry and run work from the dashboard or from here — both go',
+      'through the same use cases, so the two cannot disagree about a gate.',
+      '',
+    );
     process.stdout.write(lines.join('\n'));
 
     hooks.onListening?.(url);

@@ -34,6 +34,13 @@ import { TONE_DOT, runToneOf, taskToneOf } from '../lib/status';
  * recorded. Inferring complexity from anything else would be reporting a routing
  * decision nobody made.
  *
+ * It is also a breakdown rather than a separate measurement, and the labels say
+ * that too. Telemetry carries one entry per planning stage and one per *task*, and
+ * every task entry's stage is `implementation` — so the implementation row in "time
+ * per stage" is the sum of exactly the tasks this panel splits by executor. An
+ * earlier version of this page claimed implementation was excluded from the stage
+ * totals. It never was, and running it against a real run is what showed that.
+ *
  * **The scope is stated.** The server aggregates the most recent runs and reports
  * the bound; when history was left out, this page says how much. A chart that
  * describes twenty of two hundred runs while looking like it describes all of them
@@ -85,8 +92,8 @@ export function AnalyticsPage(): JSX.Element {
       <div className="grid shrink-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
         <MetricPanel
           title="Time per stage"
-          note="planning stages only"
-          explain="The implementation stage is absent on purpose: it runs once per task, and every one of those is already counted under time per complexity. Including both would double every implementation call in every total."
+          note="implementation is every task, summed"
+          explain="Each planning stage runs once. Implementation runs once per task, and its row here is all of them together — the panel below breaks that same total down by the executor role each task was routed to."
           buckets={orderedByStage(data.byStage)}
           measure="duration"
         />
@@ -97,7 +104,7 @@ export function AnalyticsPage(): JSX.Element {
         <MetricPanel
           title="Time per complexity"
           note="by executor role"
-          explain="The router sends a complex task to executor.complex, and that decision is what the run recorded. Inferring complexity any other way would report a routing decision nobody made."
+          explain="The implementation row above, broken down. The router sends a complex task to executor.complex, and that decision is what the run recorded — inferring complexity any other way would report a routing decision nobody made."
           buckets={data.byRole.filter((bucket) => bucket.key.startsWith('executor.'))}
           measure="duration"
           rename={(key) => key.replace('executor.', '')}

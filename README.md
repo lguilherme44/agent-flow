@@ -80,7 +80,7 @@ it works here.
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
 | `review` | Run validation, inspect the code, judge it against the SDD. `--fix` turns findings into tasks and reviews the corrected plan. |
-| `ui` | Serve the local dashboard on `127.0.0.1:4782`. Read-only — it shows runs, it does not change them. |
+| `ui` | Serve the local dashboard on `127.0.0.1:4782`. Approve, revise, retry and run go through the same use cases this CLI does. |
 | `clean` | Remove old run state. Never the active run without `--force`. |
 
 `--dry-run` shows the routing without invoking anything. `--verbose`, `--json`,
@@ -179,13 +179,25 @@ result; a number written here would be neither for long.
 - [x] Corrective rounds reviewed in their own right, so the loop needs no `--force`
 - [x] `doctor --deep` — live probe per runner, folded back into the verdict
 - [x] Local telemetry, derived from the run's own state and event log
-- [x] `agent-flow ui` — local server and read-only dashboard (spec §59–§102)
+- [x] `agent-flow ui` — local server and dashboard (spec §59–§102)
+- [x] Seven pages: run detail, runs, projects, agents & models, prompts, analytics, settings
+- [x] Write actions — approve, reject, revise, retry, start — as one set of use cases
+      the CLI and the HTTP API are both adapters over
 - [x] Dashboard layout checked by screenshot at 1440, 1280, 1200 and 1024
 
 ### Incomplete
 
-- [ ] Web UI write actions — approve, run, retry from the browser
-- [ ] DAG view, workspace multi-project, prompts and settings pages
+- [ ] `pause`, `resume`, `cancel` — listed in the spec's endpoint table and absent
+      here on purpose: `RUN_STATUSES` has no paused or cancelled and the scheduler
+      cannot be interrupted between tasks, so an endpoint would only be able to set
+      a status field and lie about what it did
+- [ ] `PATCH /config` — writing a merged value back means deciding which of three
+      layers it belongs in, and guessing would move a project's override into the
+      global file and change every other project on the machine
+- [ ] A lock two processes can see. One job per run is enforced inside the server,
+      so the dashboard cannot start the same run twice; a CLI `agent-flow run`
+      alongside it still can
+- [ ] DAG view, workspace multi-project mode, full empty/degraded state sweep
 
 ### Validated end to end, against live CLIs
 
@@ -241,6 +253,8 @@ Short version:
 - Neither CLI validates its reasoning-level flag; a wrong mapping is invisible
 - Text-matching on model output will eventually misclassify a success as a failure
 - Read-only mode is real, but "read-only" does not mean "writes nothing anywhere"
+- A modal Radix dialog restores focus to a `Dialog.Trigger` and to nothing at all
+  when there is none — every dialog here supplies its own focus return
 
 [`docs/runner-capabilities.md`](docs/runner-capabilities.md) records what each
 CLI actually does, with the command that proves each claim and the version it
