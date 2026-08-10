@@ -119,9 +119,19 @@ export async function readFingerprint(
   const path = metadataPath(projectDir);
   if (!(await fs.exists(path))) return null;
 
-  const parsed = CacheFingerprintSchema.safeParse(JSON.parse(await fs.readFile(path)));
   // An unreadable fingerprint means the cache cannot be trusted, which is the
-  // same position as having none.
+  // same position as having none. That was the intent before, but `JSON.parse`
+  // ran outside the guard: a truncated file — a crash mid-write, a bad merge —
+  // threw out of here and took the whole command with it, when the correct
+  // response is simply to re-run discovery.
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(path));
+  } catch {
+    return null;
+  }
+
+  const parsed = CacheFingerprintSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { judgeValidation } from '../../src/core/validation-outcome.js';
+import { TaskSchema } from '../../src/contracts/index.js';
 
 /**
  * V-04 regression.
@@ -77,4 +78,49 @@ describe('the full truth table', () => {
       expect(judgeValidation(expectation, ran(passed)).state).toBe(state);
     });
   }
+});
+
+// Regression suite — was `[DEFECT] AF-R05` in test/reanalysis.repro.test.ts.
+// The judgement above is only as good as the plan it judges. A task could
+// declare `validationExpectation: 'fail'` with no validation ids at all: an
+// expectation with nothing that could ever falsify it, which then read as
+// satisfied. A test-first task that never wrote a test passed its own gate.
+describe('a contradictory expectation is rejected by the contract', () => {
+  const base = {
+    id: 'TASK-001',
+    title: 'Write the failing tests',
+    description: 'Implements FR-001.',
+    complexity: 'normal',
+    risk: 'low',
+    dependencies: [],
+    requirements: ['FR-001'],
+    files: { likely: ['a.ts'] },
+    acceptanceCriteria: ['it fails'],
+  };
+
+  it('refuses to expect a failure with nothing to run', () => {
+    expect(() =>
+      TaskSchema.parse({ ...base, validation: [], validationExpectation: 'fail' }),
+    ).toThrow(/at least one validation id/);
+  });
+
+  it('accepts the same expectation once something can fail', () => {
+    const task = TaskSchema.parse({
+      ...base,
+      validation: ['unit'],
+      validationExpectation: 'fail',
+    });
+
+    expect(task.validationExpectation).toBe('fail');
+  });
+
+  it('leaves the other expectations alone', () => {
+    // `none` with no ids, and the default `pass`, are both coherent and stay
+    // valid: the rule is about a claim that cannot be tested, not about tidiness.
+    expect(
+      TaskSchema.parse({ ...base, validation: [], validationExpectation: 'none' })
+        .validationExpectation,
+    ).toBe('none');
+    expect(TaskSchema.parse({ ...base, validation: [] }).validationExpectation).toBe('pass');
+  });
 });

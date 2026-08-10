@@ -10,6 +10,7 @@ import { PromptLoader } from '../app/prompt-loader.js';
 import { resolvePromptsDir } from '../app/prompt-paths.js';
 import { PlanningPipeline } from '../app/planning-pipeline.js';
 import { createRunnerFactory } from '../app/runner-factory.js';
+import { recordFallback } from '../app/fallback-audit.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
@@ -81,7 +82,13 @@ export async function runFeatureCommand(
       config: config.global,
       capabilities: registry.capabilities(),
       promptLoader: new PromptLoader({ fs, promptsDir: resolvePromptsDir() }),
-      getRunner: createRunnerFactory({ registry, config: config.global }),
+      // Planning stages fall back too, and a run that quietly produced its SDD
+      // on a different provider has to be able to say so.
+      getRunner: createRunnerFactory({
+        registry,
+        config: config.global,
+        onFallback: recordFallback(store),
+      }),
       projectDir: globals.cwd,
     });
 
@@ -93,6 +100,7 @@ export async function runFeatureCommand(
       processRunner,
       config,
       capabilities: registry.capabilities(),
+      providerOf: (id) => registry.providerOf(id),
       projectDir: globals.cwd,
     });
 

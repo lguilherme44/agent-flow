@@ -6,6 +6,10 @@ import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
 import type { FallbackEvent } from '../../src/adapters/runners/fallback-runner.js';
 import type { RunnerRegistry } from '../../src/adapters/runners/registry.js';
 import type { AgentRunInput } from '../../src/ports/index.js';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
+import { FixedClock } from '../fakes/fixed-clock.js';
+import { StateStore } from '../../src/app/state-store.js';
+import { recordFallback } from '../../src/app/fallback-audit.js';
 
 /**
  * V-02 regression.
@@ -60,6 +64,7 @@ function registryOf(runners: Record<string, FakeAgentRunner>, caps = CAPS): Runn
     },
     has: (id) => id in runners,
     capabilities: () => Object.fromEntries(Object.keys(runners).map((id) => [id, caps])),
+    providerOf: (id) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
     health: async () => ({}),
     validateRoles: () => undefined,
   };
@@ -245,5 +250,121 @@ describe('resolveFallback', () => {
 
     expect(resolved?.reasoning).toBe('high');
     expect(resolved?.reasoningClamped).toBe(true);
+  });
+});
+
+describe('every fallback is recorded (AF-R02 regression)', () => {
+  // Three separate mistakes lived in the inline hook this replaces, and each
+  // was enough on its own to lose the record: the promise was discarded with
+  // `void`, the run id was captured once when the context was built, and any
+  // failure was swallowed by the same `void`.
+  //
+  // A fallback is exactly the event a run must be able to explain afterwards —
+  // it finished on a provider nobody configured for it.
+
+  async function auditWorld() {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const store = new StateStore({ fs, clock, projectDir: '/repo' });
+    const claude = new FakeAgentRunner('claude', CAPS);
+    const codex = new FakeAgentRunner('codex', CAPS);
+
+    const cfg = withFallback({ 'executor.normal': { runner: 'claude', effort: 'high' } });
+    const factory = createRunnerFactory({
+      registry: registryOf({ claude, codex }),
+      config: cfg,
+      onFallback: recordFallback(store),
+    });
+
+    return { fs, store, claude, codex, cfg, factory };
+  }
+
+  it('persists the degradation before the run continues', async () => {
+    // The awaited write is the point: recordDegradation is a read-modify-write
+    // on state.json, so a pending promise lost the entry to the next write.
+    const w = await auditWorld();
+    const run = await w.store.createRun('f');
+
+    w.codex.pushFailure('quota_exceeded');
+    w.claude.pushText('done');
+
+    await w.factory(resolveRole('executor.normal', w.cfg, { claude: CAPS, codex: CAPS })).run(input);
+
+    const state = await w.store.loadRun(run.runId);
+    expect(state.degradations.map((d) => d.kind)).toContain('runner_unavailable_with_fallback');
+  });
+
+  it('names the role, the substitute and the effort it ran at', async () => {
+    const w = await auditWorld();
+    const run = await w.store.createRun('f');
+
+    w.codex.pushFailure('auth_required');
+    w.claude.pushText('done');
+
+    await w.factory(resolveRole('executor.normal', w.cfg, { claude: CAPS, codex: CAPS })).run(input);
+
+    const degradation = (await w.store.loadRun(run.runId)).degradations[0];
+    expect(degradation?.reason).toContain('codex');
+    expect(degradation?.impact).toContain('executor.normal');
+    expect(degradation?.impact).toContain('claude');
+  });
+
+  it('logs an event alongside the degradation', async () => {
+    const w = await auditWorld();
+    const run = await w.store.createRun('f');
+
+    w.codex.pushFailure('quota_exceeded');
+    w.claude.pushText('done');
+
+    await w.factory(resolveRole('executor.normal', w.cfg, { claude: CAPS, codex: CAPS })).run(input);
+
+    const events = await w.store.readEvents(run.runId);
+    const used = events.find((event) => event.type === 'fallback_used');
+
+    expect(used?.detail['from']).toBe('codex');
+    expect(used?.detail['to']).toBe('claude');
+  });
+
+  it('records against the run that is in flight, not the one that existed at wiring time', async () => {
+    // The run id used to be captured when the context was built. A fallback
+    // during a later run recorded against the wrong id — or against ''.
+    const w = await auditWorld();
+    await w.store.createRun('first');
+    const second = await w.store.createRun('second');
+
+    w.codex.pushFailure('quota_exceeded');
+    w.claude.pushText('done');
+
+    await w.factory(resolveRole('executor.normal', w.cfg, { claude: CAPS, codex: CAPS })).run(input);
+
+    expect((await w.store.loadRun(second.runId)).degradations).toHaveLength(1);
+  });
+
+  it('does nothing when no run is active, rather than throwing into the void', async () => {
+    const w = await auditWorld();
+
+    w.codex.pushFailure('quota_exceeded');
+    w.claude.pushText('done');
+
+    const result = await w
+      .factory(resolveRole('executor.normal', w.cfg, { claude: CAPS, codex: CAPS }))
+      .run(input);
+
+    // The work still succeeds; the audit simply has nowhere to go.
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not pile up identical entries when a role falls back repeatedly', async () => {
+    const w = await auditWorld();
+    const run = await w.store.createRun('f');
+    const runner = w.factory(resolveRole('executor.normal', w.cfg, { claude: CAPS, codex: CAPS }));
+
+    for (let i = 0; i < 3; i += 1) {
+      w.codex.pushFailure('quota_exceeded');
+      w.claude.pushText('done');
+      await runner.run(input);
+    }
+
+    expect((await w.store.loadRun(run.runId)).degradations).toHaveLength(1);
   });
 });

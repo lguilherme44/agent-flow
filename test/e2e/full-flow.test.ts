@@ -154,6 +154,7 @@ async function world(options: { globalConfig?: ReturnType<typeof config> } = {})
     processRunner,
     config: { global, project: projectConfig },
     capabilities: { claude: CAPS, codex: CAPS },
+    providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
     projectDir: PROJECT,
   });
 
@@ -394,6 +395,16 @@ describe('resume after the process is killed', () => {
     expect(plainResume.complete).toBe(false);
 
     // `retry` is what puts it back in the queue — explicit and bounded (§23).
+    // Persisted first, exactly as the command does: handing the scheduler an
+    // in-memory state the file does not agree with is the divergence the §22
+    // guard exists to catch, and it would catch this.
+    await w.store.updateRun(run.runId, (current) => ({
+      ...current,
+      tasks: current.tasks.map((t) =>
+        t.id === 'TASK-002' ? { ...t, state: 'queued' as const } : t,
+      ),
+    }));
+
     const requeued = Object.fromEntries(
       afterCrash.tasks.map((t) => [t.id, t.id === 'TASK-002' ? 'queued' : t.state]),
     );

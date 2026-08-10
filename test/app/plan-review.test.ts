@@ -8,7 +8,6 @@ import { StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, ReviewResultSchema } from '../../src/contracts/index.js';
-import { reviewIndependence } from '../../src/app/stages/plan-review.js';
 import { runPaths } from '../../src/app/paths.js';
 import { computeFingerprint, writeFingerprint } from '../../src/app/discovery-cache.js';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -103,6 +102,7 @@ async function harness(reviewerRunner: string) {
     processRunner,
     config: { global },
     capabilities: { claude: CAPS, codex: CAPS },
+    providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
     projectDir: PROJECT,
   });
 
@@ -126,15 +126,61 @@ async function harness(reviewerRunner: string) {
   return { fs, store, run, runners, pipeline };
 }
 
-describe('reviewIndependence', () => {
-  it('is cross-provider when the planner and reviewer differ', () => {
-    expect(reviewIndependence(config('codex', 'claude'))).toBe('cross-provider');
+// Regression suite — was `[DEFECT] AF-R01` in test/reanalysis.repro.test.ts.
+// Independence used to be derived from the configured runners, so a review that
+// a fallback had landed on the planner's own runner still produced an artifact
+// claiming `cross-provider`. The guarantee printed on the artifact had not held.
+describe('independence follows execution, not configuration', () => {
+  it('reports same-provider when a fallback lands the review on the planner runner', async () => {
+    const { pipeline, run, runners, fs } = await harness('codex');
+    runners.claude.pushJson(goodPlan);
+    // The reviewer resolved to codex, but codex was unavailable and the work
+    // was substituted onto claude — the runner that produced the plan.
+    runners.codex.push({
+      ok: true,
+      text: JSON.stringify({ verdict: 'PASS', findings: [] }),
+      json: { verdict: 'PASS', findings: [] },
+      durationMs: 1,
+      provenance: {
+        runner: 'claude',
+        reasoning: 'high',
+        reasoningClamped: false,
+        substitutedFor: { runner: 'codex', errorCode: 'quota_exceeded' },
+      },
+    });
+
+    await pipeline.run(run.runId, 'f', { from: 'planning' });
+
+    const review = ReviewResultSchema.parse(
+      JSON.parse(await fs.readFile(runPaths(PROJECT, run.runId).planReview)),
+    );
+    expect(review.independence).toBe('same-provider-fresh-context');
+    // And the provenance names what ran, not what was asked for.
+    expect(review.reviewer.runner).toBe('claude');
   });
 
-  it('is same-provider when they are the same runner', () => {
-    // §56 permits this, but it is not the same thing and must not be reported
-    // as though it were.
-    expect(reviewIndependence(config('claude', 'claude'))).toBe('same-provider-fresh-context');
+  it('records the loss of independence on the run, naming both sides', async () => {
+    const { pipeline, run, runners, store } = await harness('codex');
+    runners.claude.pushJson(goodPlan);
+    runners.codex.push({
+      ok: true,
+      text: JSON.stringify({ verdict: 'PASS', findings: [] }),
+      json: { verdict: 'PASS', findings: [] },
+      durationMs: 1,
+      provenance: {
+        runner: 'claude',
+        reasoning: 'high',
+        reasoningClamped: false,
+        substitutedFor: { runner: 'codex', errorCode: 'quota_exceeded' },
+      },
+    });
+
+    await pipeline.run(run.runId, 'f', { from: 'planning' });
+
+    const state = await store.loadRun(run.runId);
+    const degradation = state.degradations.find((d) => d.kind === 'single_provider');
+    expect(degradation?.reason).toContain('claude');
+    expect(degradation?.reason).toContain('claude-code-cli');
   });
 });
 

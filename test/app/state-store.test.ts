@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { StateStore, StateError } from '../../src/app/state-store.js';
+import { TaskStateError } from '../../src/core/task-state.js';
+import type { RunState } from '../../src/contracts/index.js';
 import { runPaths, agentFlowPaths } from '../../src/app/paths.js';
 
 const PROJECT = '/repo';
@@ -242,5 +244,88 @@ describe('artifacts', () => {
     const { store } = makeStore();
     const run = await store.createRun('f');
     expect(await store.readArtifact(run.runId, 'sdd')).toBeNull();
+  });
+});
+
+// Regression suite — AF-R06.
+// `core/task-state.ts` described the seven-state machine of §22, was fully
+// tested, and nothing called it. Every writer assigned states directly, so the
+// policy was documentation. It is enforced here, at the one place every
+// persisted state change already passes through.
+describe('the task state machine is enforced on write', () => {
+  const withTasks = (tasks: Array<{ id: string; state: string }>) =>
+    (state: RunState): RunState => ({
+      ...state,
+      tasks: tasks.map((task) => ({ ...task, attempts: 0 })) as RunState['tasks'],
+    });
+
+  it('refuses a transition the machine forbids', async () => {
+    const { store } = makeStore();
+    const run = await store.createRun('f');
+
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'completed' }]));
+
+    // `completed` is the only terminal state. Reopening it would make every
+    // downstream gate meaningless.
+    await expect(
+      store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'running' }])),
+    ).rejects.toThrow(TaskStateError);
+  });
+
+  it('names both ends of the illegal move', async () => {
+    const { store } = makeStore();
+    const run = await store.createRun('f');
+
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'blocked' }]));
+
+    await expect(
+      store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'running' }])),
+    ).rejects.toThrow(/blocked.*running/);
+  });
+
+  it('leaves the file untouched when it refuses', async () => {
+    // A rejected write must not be a partial write: the run has to stay
+    // readable, and readable as what it was before the attempt.
+    const { store } = makeStore();
+    const run = await store.createRun('f');
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'completed' }]));
+
+    await expect(
+      store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'failed' }])),
+    ).rejects.toThrow(TaskStateError);
+
+    const persisted = await store.loadRun(run.runId);
+    expect(persisted.tasks[0]?.state).toBe('completed');
+  });
+
+  it('allows the transitions the scheduler actually makes', async () => {
+    const { store } = makeStore();
+    const run = await store.createRun('f');
+
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'queued' }]));
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'running' }]));
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'completed' }]));
+
+    expect((await store.loadRun(run.runId)).tasks[0]?.state).toBe('completed');
+  });
+
+  it('accepts a task appearing for the first time', async () => {
+    // A new id has no previous state, so there is no transition to judge.
+    const { store } = makeStore();
+    const run = await store.createRun('f');
+
+    await expect(
+      store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'queued' }])),
+    ).resolves.toBeDefined();
+  });
+
+  it('ignores writes that do not touch task state', async () => {
+    const { store } = makeStore();
+    const run = await store.createRun('f');
+    await store.updateRun(run.runId, withTasks([{ id: 'TASK-001', state: 'completed' }]));
+
+    await expect(
+      store.updateRun(run.runId, (state) => ({ ...state, stage: 'implementation' })),
+    ).resolves.toBeDefined();
   });
 });

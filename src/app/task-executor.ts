@@ -7,7 +7,7 @@ import {
 } from '../contracts/index.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
-import { StageFailure, type StageRunner } from './stage-runner.js';
+import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
@@ -47,16 +47,11 @@ export class TaskExecutor {
     await store.appendEvent(runId, 'task_started', { task: task.id, role });
 
     let text: string;
-    let runner = 'unknown';
-    // What actually ran. Populated from the stage result rather than from the
-    // resolution, because a fallback may have sent the work elsewhere.
-    let execution: {
-      runner: string;
-      model?: string;
-      reasoning: TaskResult['reasoning'];
-      reasoningClamped: boolean;
-      fallback?: { from: string; errorCode: NonNullable<TaskResult['errorCode']> };
-    } = { runner: 'unknown', reasoning: 'medium', reasoningClamped: false };
+    // What actually ran. Taken from the stage result rather than from the
+    // resolution, because a fallback may have sent the work elsewhere — and
+    // from the failure when there is no result, because a stage that failed
+    // still ran somewhere.
+    let execution: StageExecution | undefined;
 
     try {
       const result = await stageRunner.run(
@@ -74,14 +69,13 @@ export class TaskExecutor {
         },
       );
       text = result.text;
-      runner = result.runner;
       execution = result.execution;
     } catch (error) {
       const failure = error instanceof StageFailure ? error : undefined;
       return this.persist(runId, {
         task: task.id,
         status: 'failed',
-        ...provenanceOf(execution, runner),
+        ...provenanceOf(failure?.execution ?? execution ?? stageRunner.plannedExecution(role)),
         startedAt,
         finishedAt: clock.now(),
         validation: { passed: false, commands: [] },
@@ -98,7 +92,7 @@ export class TaskExecutor {
       return this.persist(runId, {
         task: task.id,
         status: 'blocked',
-        ...provenanceOf(execution, runner),
+        ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
         startedAt,
         finishedAt: clock.now(),
         filesChanged: report.filesChanged,
@@ -126,7 +120,7 @@ export class TaskExecutor {
       return this.persist(runId, {
         task: task.id,
         status: 'review_required',
-        ...provenanceOf(execution, runner),
+        ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
         startedAt,
         finishedAt: clock.now(),
         filesChanged: report.filesChanged,
@@ -162,7 +156,7 @@ export class TaskExecutor {
     return this.persist(runId, {
       task: task.id,
       status: judgement.state,
-      ...provenanceOf(execution, runner),
+      ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
       startedAt,
       finishedAt: clock.now(),
       filesChanged: report.filesChanged,
@@ -244,22 +238,18 @@ export function parseResultBlock(text: string): ParsedReport {
 /**
  * Flattens the recorded execution into the shape `TaskResult` persists.
  *
- * Nothing here is a default standing in for the truth: when the stage never
- * ran — the runner failed before producing anything — the fields describe that
- * absence rather than inventing a plausible value.
+ * Nothing here stands in for the truth. The caller supplies what ran — from the
+ * result, from the failure, or from the role's resolution when neither exists —
+ * so a failed task says which runner was tried and at what effort. It once said
+ * `unknown` at `medium`, which reads like a fact and is not one: `medium` in
+ * particular is a real level a run can have, so a task configured at `high` and
+ * failed would have been indistinguishable from one that genuinely ran low.
  */
 function provenanceOf(
-  execution: {
-    runner: string;
-    model?: string;
-    reasoning: TaskResult['reasoning'];
-    reasoningClamped: boolean;
-    fallback?: { from: string; errorCode: NonNullable<TaskResult['errorCode']> };
-  },
-  fallbackRunner: string,
+  execution: StageExecution,
 ): Pick<TaskResult, 'runner' | 'model' | 'reasoning' | 'reasoningClamped' | 'fallback'> {
   return {
-    runner: execution.runner === 'unknown' ? fallbackRunner : execution.runner,
+    runner: execution.runner,
     ...(execution.model === undefined ? {} : { model: execution.model }),
     reasoning: execution.reasoning,
     reasoningClamped: execution.reasoningClamped,

@@ -126,11 +126,13 @@ export class FallbackRunner implements AgentRunner {
         : { model: secondaryConfig.model }),
     });
 
-    if (!result.ok) return result;
-
     // The caller resolved a role and knows what it asked for; only this layer
-    // knows what ran. Attaching it here is what lets `result.json` record the
+    // knows what ran. Attaching it here is what lets the result record the
     // truth rather than the intention.
+    //
+    // Attached on failure too. A substitution that also failed is still a
+    // substitution: without this, a run where both providers were down recorded
+    // the primary as the runner and the fallback left no trace at all.
     return {
       ...result,
       provenance: {

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant. Cancelling it
+# is not only cheaper — a queue of stale runs makes the latest result harder to
+# find, which is the one anybody actually wants.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # One version failing should not hide the result on the others.
+      fail-fast: false
+      matrix:
+        # The floor declared in package.json engines, and the current LTS.
+        # Testing only what the maintainer happens to run locally is how a
+        # `>=20` claim quietly becomes untrue.
+        node: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `ci` rather than `install`: the lockfile is the input, and a run that
+      # silently resolved different versions would not be testing this commit.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm run test
+
+      # The CLI is published as a build artifact, so a green test suite over
+      # source proves less than it appears to. This catches a bundler
+      # configuration that no unit test would.
+      - run: npm run build
+
+  # Separated from `check` because coverage is a report, not a gate: a drop is
+  # worth seeing without failing a pull request over a number.
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run test:coverage

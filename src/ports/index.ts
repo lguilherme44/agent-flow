@@ -4,6 +4,7 @@ export type {
   AgentRunResult,
   AgentRunSuccess,
   AgentRunFailure,
+  RunProvenance,
   RunnerCapabilities,
   RunnerHealth,
 } from './agent-runner.js';

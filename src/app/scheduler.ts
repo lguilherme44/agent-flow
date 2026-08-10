@@ -36,8 +36,23 @@ export interface RunOptions {
 export interface SchedulerOutcome {
   readonly states: Record<string, TaskState>;
   readonly results: TaskResult[];
-  /** True when every task reached `completed`. */
+  /**
+   * True when everything this invocation was asked to run reached `completed`.
+   *
+   * Distinct from `planComplete`, and the distinction is the whole point:
+   * `agent-flow task TASK-002` asks for one task. Judging that invocation
+   * against the whole plan reported failure for work that had succeeded, and
+   * exited non-zero — so a script driving one task at a time could never make
+   * progress.
+   */
   readonly complete: boolean;
+  /**
+   * True when every task in the plan reached `completed`.
+   *
+   * The gate to review. Only this may advance the run's stage; `complete`
+   * decides nothing beyond the exit code of the command that just ran.
+   */
+  readonly planComplete: boolean;
   /** Tasks that will never run because something upstream failed. */
   readonly blocked: string[];
   /** Tasks found orphaned in `running` and put back in the queue. */
@@ -131,10 +146,15 @@ export class Scheduler {
     for (const id of blocked) states[id] = 'blocked';
     if (blocked.length > 0) await this.persist(runId, states);
 
+    const inScope = (id: string): boolean => options.only?.has(id) ?? true;
+
     return {
       states,
       results,
-      complete: Object.values(states).every((state) => state === 'completed'),
+      complete: Object.entries(states).every(
+        ([id, state]) => !inScope(id) || state === 'completed',
+      ),
+      planComplete: Object.values(states).every((state) => state === 'completed'),
       blocked,
       recovered,
       ...(haltedBy === undefined ? {} : { haltedBy }),
@@ -169,12 +189,23 @@ export class Scheduler {
     const maxAttempts = this.options.maxAttempts ?? Number.POSITIVE_INFINITY;
     const requeued: string[] = [];
 
+    // Every orphan passes through `interrupted` first, including the ones that
+    // go straight back to the queue. Skipping it wrote `queued` over `running`
+    // — a transition §22 forbids, and forbids for a reason: the state on disk
+    // would then be indistinguishable from a task that had simply never
+    // started, and a run that silently restarted work is exactly what the
+    // recovery path must not look like.
+    for (const id of orphans) states[id] = 'interrupted';
+    await this.persist(runId, states);
+
     for (const id of orphans) {
       const attempts = attemptsOf(id);
       const exhausted = attempts >= maxAttempts;
 
-      states[id] = exhausted ? 'interrupted' : 'queued';
-      if (!exhausted) requeued.push(id);
+      if (!exhausted) {
+        states[id] = 'queued';
+        requeued.push(id);
+      }
 
       await this.options.store.appendEvent(runId, 'task_interrupted', {
         task: id,

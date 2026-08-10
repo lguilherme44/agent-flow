@@ -99,6 +99,15 @@ export const TaskSchema = z
   .refine((task) => !task.dependencies.includes(task.id), {
     message: 'a task cannot depend on itself',
     path: ['dependencies'],
+  })
+  .refine((task) => task.validationExpectation !== 'fail' || task.validation.length > 0, {
+    // A RED task with nothing to run is a contradiction the plan cannot hold:
+    // the whole point of `fail` is that a specific command must fail *now*, and
+    // an empty list makes the expectation unfalsifiable. Worse, it reads as
+    // satisfied — no command failed, but none could — so a test-first task that
+    // never wrote a test would have passed its own gate.
+    message: "validationExpectation 'fail' requires at least one validation id to fail",
+    path: ['validation'],
   });
 
 export type Task = z.infer<typeof TaskSchema>;

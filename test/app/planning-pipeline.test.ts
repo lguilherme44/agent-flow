@@ -157,6 +157,7 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     processRunner,
     config: { global: globalConfig, project: PROJECT_CONFIG },
     capabilities: CAPABILITIES,
+    providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
     projectDir: PROJECT,
   });
 

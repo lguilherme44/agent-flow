@@ -8,6 +8,7 @@ import {
 } from '../contracts/index.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import { agentFlowPaths, artifactPath, runPaths, type ArtifactName } from './paths.js';
+import { transition } from '../core/task-state.js';
 
 export class StateError extends Error {
   constructor(message: string) {
@@ -103,6 +104,13 @@ export class StateStore {
   /**
    * Read-modify-write. The mutator is a pure function of the current state, so
    * a caller cannot accidentally persist something it did not read first.
+   *
+   * Also the one gate every task state change passes through, which is why the
+   * §22 machine is enforced here rather than at each caller. It was enforced
+   * nowhere: `core/task-state.ts` described the transitions, was fully tested,
+   * and no production path called it — so the policy held only for as long as
+   * every writer happened to agree with it. Checking here needs no cooperation
+   * from callers and cannot be forgotten by a new one.
    */
   async updateRun(
     runId: string,
@@ -110,6 +118,11 @@ export class StateStore {
   ): Promise<RunState> {
     const current = await this.loadRun(runId);
     const next = RunStateSchema.parse({ ...mutate(current), updatedAt: this.clock.now() });
+
+    // Raises before the write, so a refused transition leaves the run exactly
+    // as it was rather than half-applied.
+    assertLegalTransitions(current, next);
+
     await this.write(next);
     return next;
   }
@@ -223,5 +236,23 @@ export class StateStore {
 
     const next = (existing.length > 0 ? Math.max(...existing) : 0) + 1;
     return `${prefix}${String(next).padStart(3, '0')}`;
+  }
+}
+
+/**
+ * Rejects any task whose state moved somewhere §22 does not allow.
+ *
+ * Tasks absent from the previous state are new and have no transition to judge;
+ * tasks whose state is unchanged are not transitions at all. Everything else is
+ * checked, including writes that touch several tasks at once — the scheduler
+ * persists the whole map after each batch.
+ */
+function assertLegalTransitions(current: RunState, next: RunState): void {
+  const before = new Map(current.tasks.map((task) => [task.id, task.state]));
+
+  for (const task of next.tasks) {
+    const from = before.get(task.id);
+    if (from === undefined || from === task.state) continue;
+    transition(from, task.state);
   }
 }

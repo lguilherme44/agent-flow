@@ -59,6 +59,14 @@ export interface RunnerRegistry {
   get(id: string): AgentRunner;
   has(id: string): boolean;
   capabilities(): Readonly<Record<string, RunnerCapabilities>>;
+  /**
+   * The adapter type behind a runner id.
+   *
+   * Independence is a question about providers, not about configuration keys:
+   * two entries can point at the same CLI under different names, and a review
+   * across them is not independent of anything.
+   */
+  providerOf(id: string): string | undefined;
   health(): Promise<Readonly<Record<string, RunnerHealth>>>;
   /** Throws unless every configured role points at a registered runner. */
   validateRoles(config: GlobalConfig): void;
@@ -76,9 +84,11 @@ export function buildRegistry(
   deps: RegistryDependencies,
 ): RunnerRegistry {
   const runners = new Map<string, AgentRunner>();
+  const providers = new Map<string, string>();
 
   for (const [id, runnerConfig] of Object.entries(config.runners)) {
     if (!runnerConfig.enabled) continue;
+    providers.set(id, runnerConfig.type);
 
     const factory = FACTORIES[runnerConfig.type];
     if (!factory) {
@@ -109,6 +119,8 @@ export function buildRegistry(
 
     capabilities: () =>
       Object.fromEntries([...runners].map(([id, runner]) => [id, runner.capabilities()])),
+
+    providerOf: (id) => providers.get(id),
 
     health: async () => {
       const entries = await Promise.all(

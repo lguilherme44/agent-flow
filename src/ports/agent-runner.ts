@@ -81,6 +81,14 @@ export interface AgentRunFailure {
   /** Original message, kept for diagnosis. Never used for control flow. */
   readonly raw: string;
   readonly durationMs: number;
+  /**
+   * Absent when the run happened on the runner that was asked.
+   *
+   * Present on failures as well as successes: a substitution that also failed
+   * is still a substitution, and a run where every provider was down should be
+   * able to say so rather than blaming the one that was tried first.
+   */
+  readonly provenance?: RunProvenance;
 }
 
 export type AgentRunResult = AgentRunSuccess | AgentRunFailure;

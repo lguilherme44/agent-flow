@@ -423,3 +423,159 @@ describe('an interrupted task is recoverable (V-03 regression)', () => {
     expect(events.map((event) => event.type)).not.toContain('task_interrupted');
   });
 });
+
+// Regression suite — was `[DEFECT] AF-R03` in test/reanalysis.repro.test.ts.
+// `complete` used to mean "every task in the plan finished", so running one
+// task successfully reported failure and exited non-zero. A script driving a
+// plan one task at a time could never make progress.
+describe('a run is judged against what it was asked to do', () => {
+  it('is complete when the only requested task finished', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002'), task('TASK-003')],
+    });
+
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      {},
+      { only: new Set(['TASK-002']) },
+    );
+
+    expect(outcome.states['TASK-002']).toBe('completed');
+    expect(outcome.complete).toBe(true);
+  });
+
+  it('does not call the plan complete when other tasks are still queued', async () => {
+    // The two answers must not collapse into one: the invocation succeeded and
+    // the plan is unfinished, and only the second gates review.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002')],
+    });
+
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      {},
+      { only: new Set(['TASK-001']) },
+    );
+
+    expect(outcome.complete).toBe(true);
+    expect(outcome.planComplete).toBe(false);
+  });
+
+  it('is not complete when the requested task itself failed', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor({ 'TASK-002': 'failed' });
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002')],
+    });
+
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      {},
+      { only: new Set(['TASK-002']) },
+    );
+
+    expect(outcome.complete).toBe(false);
+  });
+
+  it('is not complete when the requested task never became ready', async () => {
+    // Narrowing the set of tasks allowed to start does not waive dependencies.
+    // Nothing ran, so nothing succeeded — however small the request was.
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      {},
+      { only: new Set(['TASK-002']) },
+    );
+
+    expect(executed).toEqual([]);
+    expect(outcome.complete).toBe(false);
+  });
+
+  it('still means the whole plan when nothing was narrowed', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002')],
+    });
+
+    const outcome = await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD');
+
+    expect(outcome.complete).toBe(true);
+    expect(outcome.planComplete).toBe(true);
+  });
+});
+
+// AF-R06. The §22 machine is enforced by the store now, and enforcement is only
+// worth anything on a run whose tasks are already on disk — which is every real
+// run, and was no test until this one.
+describe('recovery obeys the state machine on a persisted run', () => {
+  it('moves an orphan through interrupted rather than straight back to queued', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+
+    // What a killed process leaves behind: persisted, not merely passed in.
+    await store.updateRun(run.runId, (current) => ({
+      ...current,
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1 }],
+    }));
+
+    const outcome = await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
+      'TASK-001': 'running',
+    });
+
+    expect(outcome.recovered).toEqual(['TASK-001']);
+    expect(executed).toEqual(['TASK-001']);
+    expect(outcome.states['TASK-001']).toBe('completed');
+  });
+
+  it('leaves an orphan past its attempt limit interrupted', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+
+    await store.updateRun(run.runId, (current) => ({
+      ...current,
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 3 }],
+    }));
+
+    const outcome = await new Scheduler({ store, executor, maxAttempts: 3 }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'running' },
+    );
+
+    expect(executed).toEqual([]);
+    expect(outcome.states['TASK-001']).toBe('interrupted');
+  });
+});

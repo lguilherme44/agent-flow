@@ -7,13 +7,13 @@ import type { StageRunner } from './stage-runner.js';
 import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { agentFlowPaths } from './paths.js';
-import { resolveRole, type RunnerCapabilitiesMap } from '../core/role.js';
+import type { RunnerCapabilitiesMap } from '../core/role.js';
 import {
   PLAN_REVIEW_STAGE,
   PlanReviewResponseSchema,
   buildReviewResult,
-  reviewIndependence,
 } from './stages/plan-review.js';
+import { assessIndependence, explainIndependence } from '../core/independence.js';
 import {
   ARCHITECTURE_IMPACT_STAGE,
   DISCOVERY_STAGE,
@@ -48,6 +48,8 @@ export interface PlanningPipelineOptions {
   readonly stageRunner: StageRunner;
   readonly config: EffectiveConfig;
   readonly capabilities: RunnerCapabilitiesMap;
+  /** Maps a runner id to its provider, for judging review independence. */
+  readonly providerOf: (runnerId: string) => string | undefined;
   readonly projectDir: string;
 }
 
@@ -139,6 +141,10 @@ export class PlanningPipeline {
     });
 
     const plan = PlanSchema.parse(result.data);
+    // Who actually produced the plan — not who was configured to. A fallback
+    // may have sent it elsewhere, and that is precisely what decides whether
+    // the review that follows is independent of it.
+    const plannerRunner = result.execution.runner;
 
     // Coverage, validation ids and graph checks run after the schema, because
     // they need the SDD and the project config as well. A plan that fails here
@@ -163,7 +169,7 @@ export class PlanningPipeline {
 
     // ---- Plan review, in a fresh context holding only the artifacts (§27).
     options.onProgress?.('plan-review', 'started');
-    const review = await this.review(runId, {
+    const review = await this.review(runId, plannerRunner, {
       sdd,
       architectureImpact,
       plan: JSON.stringify(plan, null, 2),
@@ -182,37 +188,38 @@ export class PlanningPipeline {
 
   private async review(
     runId: string,
+    plannerRunner: string,
     vars: Record<string, string>,
   ): Promise<ReviewResult> {
-    const { store, config } = this.options;
-    const independence = reviewIndependence(config.global);
+    const { store, providerOf } = this.options;
+
+    const result = await this.options.stageRunner.run(PLAN_REVIEW_STAGE, runId, vars);
+    const response = PlanReviewResponseSchema.parse(result.data);
+
+    // Judged after the fact, from what ran on both sides. Deriving it from
+    // configuration beforehand meant a reviewer that fell back onto the
+    // planner's runner still produced an artifact claiming independence.
+    const independence = assessIndependence([plannerRunner], result.execution.runner, providerOf);
 
     if (independence === 'same-provider-fresh-context') {
       // §56 allows this, but the protection cross-provider review exists to
       // provide is simply absent — so it is recorded on the run rather than
-      // left for a reader to infer from configuration they cannot see (R-16).
+      // left for a reader to infer (R-16).
       await store.recordDegradation(runId, {
         kind: 'single_provider',
-        reason: 'the planner and the plan reviewer are configured to the same runner',
+        reason: explainIndependence([plannerRunner], result.execution.runner, providerOf),
         impact:
           'the plan review is same-provider: a wrong assumption made while planning may be ' +
           'repeated rather than caught',
       });
     }
 
-    const result = await this.options.stageRunner.run(PLAN_REVIEW_STAGE, runId, vars);
-    const response = PlanReviewResponseSchema.parse(result.data);
-
-    const reviewer = resolveRole('planReviewer', config.global, this.options.capabilities, {
-      readOnly: true,
-    });
-
     const review = buildReviewResult(
       response,
       {
-        runner: reviewer.runner,
-        ...(reviewer.model === undefined ? {} : { model: reviewer.model }),
-        reasoning: reviewer.reasoning,
+        runner: result.execution.runner,
+        ...(result.execution.model === undefined ? {} : { model: result.execution.model }),
+        reasoning: result.execution.reasoning,
       },
       independence,
     );

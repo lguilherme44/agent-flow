@@ -241,6 +241,75 @@ asserted that anything constructs one.
 
 ---
 
+## 9. A second review of the fixed code found seven more, in the same place
+
+The twelve findings of §8 were closed and the suite went green. A fresh review
+of the result found seven more — and every one of them sat in the same category
+as the first round: not a wrong line, but a wrong *belief*, held consistently
+enough that every test agreed with it.
+
+**Independence was a claim about configuration, not about what ran.** The plan
+review artifact recorded `cross-provider` by comparing the planner's configured
+runner with the reviewer's. Two ways that lied. A fallback changes who actually
+runs, so a reviewer that landed on the planner's own runner still produced an
+artifact asserting independence. And ids are not providers: two entries pointing
+at the same CLI under different names compared as different, which needed no
+failure at all — just a plausible config file. Independence is now judged after
+both sides have run, by provider. Where the authors are unknown, it reports
+same-provider: an absence of evidence is not evidence of independence.
+
+**A failed task described a run that never happened.** `runner: "unknown"`,
+`reasoning: "medium"`. The first reads as a missing value; the second does not —
+`medium` is a real level a run can have, so a task configured at `high` that
+failed was indistinguishable on disk from one that genuinely ran low. A failure
+is provenance too, and it is knowable: the work was routed somewhere specific.
+`StageFailure` carries it now. The same fix surfaced a smaller one underneath:
+when a fallback fired and the substitute *also* failed, the fallback runner
+returned the bare failure with no provenance at all — so an outage across both
+providers was recorded against the one that was tried first.
+
+**A successful command reported failure.** `agent-flow task TASK-002` ran one
+task, completed it, and exited non-zero, because the scheduler's `complete`
+meant "every task in the plan finished". Two different questions had one answer.
+A script driving a plan one task at a time could never make progress.
+
+**A test-first task could expect a failure it had no way to produce.**
+`validationExpectation: 'fail'` with an empty validation list parsed cleanly.
+Nothing ran, nothing failed, and the expectation read as satisfied — so a RED
+task that never wrote a test passed its own gate. The schema rejects the
+combination now.
+
+**The state machine was documentation.** `core/task-state.ts` encoded the seven
+states of §22, transition by transition, with a full test suite. Nothing in
+production called it. Every writer assigned states directly, and the policy held
+only for as long as each of them happened to agree with it.
+
+That last one is the most interesting, because enforcing it proved the machine
+itself was wrong. The table required `queued → ready → running`; the scheduler
+went straight from `queued` to `running`, because readiness is computed from the
+DAG on every pass and a persisted `ready` would go stale the moment a dependency
+failed. The design had abandoned an intermediate state the documentation still
+described — and nobody noticed, because nothing checked.
+
+It was also right about something. The recovery path moved an orphaned task from
+`running` straight back to `queued`, which the table forbids. That one was a real
+defect: `interrupted` exists precisely to record that a process died, and
+skipping it left the task on disk looking like one that had simply never
+started. The guard is enforced in `StateStore.updateRun` — the single point every
+persisted state change already passes through, so it needs no cooperation from
+callers and cannot be forgotten by a new one.
+
+**The pattern held across both rounds.** Twelve findings, then seven, and not one
+of them was a line of code that did something other than what it said. They were
+all agreements between components about something that was never true: what a
+review is independent of, what a failed run can report about itself, what
+"complete" is a question about, whether a rule that is written down is a rule
+that is applied. A test suite written by the same mind that held the belief will
+confirm the belief. That is not a coverage problem, and more tests of the same
+kind would not have found any of these.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -267,6 +336,7 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 | Local telemetry | The schema exists (`TelemetryEntry`); nothing writes it. Per-stage timings are in the run's event log, but there is no aggregated view. |
 | `review --fix` | Reports the corrective tasks the findings *would* produce. Does not create them or feed them back into the pipeline. The generator (`findingsToTasks`) is written and tested; the loop that consumes it is not. |
 | Codex strict-mode schemas | Would restore runtime-enforced structured output for Codex. Needs optional→nullable rewriting plus null-stripping on parse. |
+| End-to-end tests against real CLIs | The suite runs entirely on fakes. The real-CLI cycles were run by hand, and their findings are in §7 and §8; nothing reruns them. Automating it means spending quota on every push, which is why it has not been done rather than why it should not be. |
 
 ### Not validated
 

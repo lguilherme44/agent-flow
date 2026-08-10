@@ -129,12 +129,25 @@ export async function runRunCommand(
 
     process.stdout.write('\n');
 
-    if (outcome.complete) {
+    if (outcome.planComplete) {
       await context.store.updateRun(state.runId, (current) => ({
         ...current,
         stage: 'implementation',
       }));
       process.stdout.write('All tasks completed.\n\nNext: agent-flow review\n');
+      return ExitCode.OK;
+    }
+
+    if (outcome.complete) {
+      // The requested task finished. The plan has not, and the message says so
+      // — but this invocation did what it was asked, and exits accordingly.
+      const remaining = Object.values(outcome.states).filter(
+        (taskState) => taskState !== 'completed',
+      ).length;
+      process.stdout.write(
+        `${target?.id ?? 'The requested work'} completed. ` +
+          `${String(remaining)} task(s) remaining.\n\nNext: agent-flow run\n`,
+      );
       return ExitCode.OK;
     }
 

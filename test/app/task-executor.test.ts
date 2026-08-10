@@ -474,6 +474,7 @@ describe('recorded provenance is what actually ran (V-06 regression)', () => {
             get: (id) => (id === 'claude' ? claude : codex),
             has: () => true,
             capabilities: () => ({ claude: CAPS, codex: CAPS }),
+            providerOf: (id) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
             health: async () => ({}),
             validateRoles: () => undefined,
           },
@@ -569,5 +570,54 @@ describe('test-first tasks are judged by what they expected (V-04 regression)', 
 
     const result = await executor.execute(task({ validation: ['test'] }), run.runId, 'SDD');
     expect(result.validation.expectation).toBe('pass');
+  });
+});
+
+// Regression suite — was `[DEFECT] AF-R04` in test/reanalysis.repro.test.ts.
+// A failed task recorded `runner: "unknown"` at `reasoning: "medium"`. Neither
+// was true, and `medium` is the more dangerous of the two: it is a real level a
+// run can have, so a task routed at `high` that failed was indistinguishable
+// from one that genuinely ran low.
+describe('a failed task records where the work was actually routed', () => {
+  it('names the runner that failed, not a placeholder', async () => {
+    const { executor, runner, run } = await harness();
+    runner.pushFailure('quota_exceeded');
+
+    const result = await executor.execute(task(), run.runId, 'SDD');
+
+    expect(result.status).toBe('failed');
+    expect(result.runner).toBe('claude');
+    expect(result.errorCode).toBe('quota_exceeded');
+  });
+
+  it('keeps the effort the role was configured at', async () => {
+    // executor.complex is `high`. The old placeholder would have said `medium`
+    // — a plausible answer, and the wrong one.
+    const { executor, runner, run } = await harness();
+    runner.pushFailure('runner_unavailable');
+
+    const result = await executor.execute(
+      task({ complexity: 'complex', risk: 'high' }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.reasoning).toBe('high');
+  });
+
+  it('records a failure the same way a success does', async () => {
+    const { executor, runner, run } = await harness();
+    runner.pushText(COMPLETED);
+    const ok = await executor.execute(task(), run.runId, 'SDD');
+
+    const second = await harness();
+    second.runner.pushFailure('quota_exceeded');
+    const failed = await second.executor.execute(task(), second.run.runId, 'SDD');
+
+    // Same runner, same effort — only the status differs. The provenance of a
+    // run should not depend on whether it worked.
+    expect(failed.runner).toBe(ok.runner);
+    expect(failed.reasoning).toBe(ok.reasoning);
   });
 });

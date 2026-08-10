@@ -8,7 +8,7 @@ import {
   type RunnerErrorCode,
   type WorkflowRole,
 } from '../contracts/index.js';
-import type { AgentRunner, Clock, FileSystem } from '../ports/index.js';
+import type { AgentRunner, Clock, FileSystem, RunProvenance } from '../ports/index.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveRole, type ResolvedAgentConfig } from '../core/role.js';
 import type { PromptLoader } from './prompt-loader.js';
@@ -40,6 +40,16 @@ export class StageFailure extends Error {
     readonly errorCode: RunnerErrorCode,
     message: string,
     readonly raw?: string,
+    /**
+     * What ran, as far as it got.
+     *
+     * A failure is provenance too. Callers used to have nothing to record here
+     * and invented placeholders — `runner: "unknown"`, `reasoning: "medium"` —
+     * which are not unknowns but assertions, and false ones: the run was
+     * routed somewhere specific, at a specific effort, and that is exactly what
+     * someone reading a failed result needs to know.
+     */
+    readonly execution?: StageExecution,
   ) {
     super(message);
     this.name = 'StageFailure';
@@ -60,6 +70,15 @@ export interface StageDefinition {
   readonly validate?: (value: unknown, text: string) => string[];
 }
 
+/** What actually ran, as opposed to what was resolved. */
+export interface StageExecution {
+  readonly runner: string;
+  readonly model?: string;
+  readonly reasoning: ReasoningLevel;
+  readonly reasoningClamped: boolean;
+  readonly fallback?: { readonly from: string; readonly errorCode: RunnerErrorCode };
+}
+
 export interface StageResult {
   readonly text: string;
   readonly data?: unknown;
@@ -73,13 +92,7 @@ export interface StageResult {
    * as though it were the execution makes every downstream artifact — result
    * files, telemetry, a future dashboard — quietly wrong.
    */
-  readonly execution: {
-    readonly runner: string;
-    readonly model?: string;
-    readonly reasoning: ReasoningLevel;
-    readonly reasoningClamped: boolean;
-    readonly fallback?: { readonly from: string; readonly errorCode: RunnerErrorCode };
-  };
+  readonly execution: StageExecution;
 }
 
 export interface StageRunnerOptions {
@@ -110,6 +123,21 @@ export interface StageRunnerOptions {
  */
 export class StageRunner {
   constructor(private readonly options: StageRunnerOptions) {}
+
+  /**
+   * Where a role would be routed, before anything runs.
+   *
+   * Callers need this only to describe a stage that failed before it could
+   * report anything of its own. Resolution already lives here, next to the
+   * configuration and capabilities it depends on — asking the caller to redo it
+   * would mean two answers to one question, and the caller's would drift.
+   */
+  plannedExecution(role: StageDefinition['role']): StageExecution {
+    return executionOf(
+      undefined,
+      resolveRole(role, this.options.config, this.options.capabilities),
+    );
+  }
 
   async run(
     stage: StageDefinition,
@@ -190,6 +218,7 @@ export class StageRunner {
           result.errorCode,
           `Stage "${stage.name}" failed: ${result.errorCode}`,
           result.raw,
+          executionOf(result.provenance, resolved),
         );
       }
 
@@ -211,37 +240,16 @@ export class StageRunner {
           finishedAt: clock.now(),
         });
 
-        // Prefer what the runner reported over what was resolved: they differ
-        // exactly when a fallback fired, which is the case worth recording.
-        const provenance = result.provenance;
+        const execution = executionOf(result.provenance, resolved);
 
         return {
           text: result.text,
           ...(stage.outputSchema === undefined
             ? {}
             : { data: stage.outputSchema.parse(result.json ?? safeJson(result.text)) }),
-          runner: provenance?.runner ?? resolved.runner,
+          runner: execution.runner,
           attempts: attempt,
-          execution: {
-            runner: provenance?.runner ?? resolved.runner,
-            ...(provenance !== undefined
-              ? provenance.model === undefined
-                ? {}
-                : { model: provenance.model }
-              : resolved.model === undefined
-                ? {}
-                : { model: resolved.model }),
-            reasoning: provenance?.reasoning ?? resolved.reasoning,
-            reasoningClamped: provenance?.reasoningClamped ?? resolved.reasoningClamped,
-            ...(provenance === undefined
-              ? {}
-              : {
-                  fallback: {
-                    from: provenance.substitutedFor.runner,
-                    errorCode: provenance.substitutedFor.errorCode,
-                  },
-                }),
-          },
+          execution,
         };
       }
 
@@ -314,4 +322,37 @@ function safeJson(text: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Reconciles what was asked for with what the runner reported.
+ *
+ * The runner's own account wins where it exists: the two differ exactly when a
+ * fallback fired, which is the case worth recording. Built here, in one place,
+ * so success and failure describe the run the same way — a failed stage still
+ * ran somewhere, at some effort, and saying otherwise is a fabrication.
+ */
+function executionOf(
+  provenance: RunProvenance | undefined,
+  resolved: ResolvedAgentConfig,
+): StageExecution {
+  if (provenance === undefined) {
+    return {
+      runner: resolved.runner,
+      ...(resolved.model === undefined ? {} : { model: resolved.model }),
+      reasoning: resolved.reasoning,
+      reasoningClamped: resolved.reasoningClamped,
+    };
+  }
+
+  return {
+    runner: provenance.runner,
+    ...(provenance.model === undefined ? {} : { model: provenance.model }),
+    reasoning: provenance.reasoning,
+    reasoningClamped: provenance.reasoningClamped,
+    fallback: {
+      from: provenance.substitutedFor.runner,
+      errorCode: provenance.substitutedFor.errorCode,
+    },
+  };
 }

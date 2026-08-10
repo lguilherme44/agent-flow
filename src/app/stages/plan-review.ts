@@ -36,18 +36,13 @@ export const PLAN_REVIEW_STAGE: StageDefinition = {
 };
 
 /**
- * Whether the reviewer is a different provider from the author (§56).
+ * The runner a role is configured to use, before anything has run.
  *
- * The point of cross-provider review (§3.2) is that one model should not confirm
- * its own mistaken hypothesis. Running the reviewer on the same runner as the
- * planner does not achieve that, however fresh the context is — so the two cases
- * are named differently and the distinction is recorded, rather than being left
- * for a reader to infer from configuration they cannot see.
+ * Kept only for `--dry-run` style reporting. Independence is decided from what
+ * actually executed — see `core/independence.ts`.
  */
-export function reviewIndependence(config: GlobalConfig): Independence {
-  const planner = roleConfigOf(config.roles, 'planner').runner;
-  const reviewer = roleConfigOf(config.roles, 'planReviewer').runner;
-  return planner === reviewer ? 'same-provider-fresh-context' : 'cross-provider';
+export function configuredRunner(config: GlobalConfig, role: 'planner' | 'planReviewer'): string {
+  return roleConfigOf(config.roles, role).runner;
 }
 
 /** Combines the reviewer's answer with provenance agent-flow knows. */

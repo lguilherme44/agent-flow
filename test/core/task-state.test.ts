@@ -130,3 +130,41 @@ describe('allowedTransitions', () => {
     expect(allowedTransitions('completed')).toEqual([]);
   });
 });
+
+// AF-R06. The table used to describe a design the implementation had abandoned:
+// it required `queued → ready → running`, while `ready` is computed by the DAG
+// on every pass and never stored. Enforcing the machine meant first making it
+// true — otherwise the guard would have rejected the scheduler's normal work.
+describe('the states that are actually persisted', () => {
+  it('lets a queued task start without a stored ready', () => {
+    // Readiness depends on the dependencies' current states. Persisting it
+    // would go stale the moment one of them failed, so it is recomputed.
+    expect(canTransition('queued', 'running')).toBe(true);
+  });
+
+  it('still allows naming the condition explicitly', () => {
+    expect(canTransition('queued', 'ready')).toBe(true);
+    expect(canTransition('ready', 'running')).toBe(true);
+  });
+
+  it('lets retry put a stopped task back in the queue', () => {
+    // `agent-flow retry` writes `queued`, not `ready`: the DAG may well decide
+    // the task is not ready at all, and that decision is not retry's to make.
+    for (const from of ['failed', 'blocked', 'review_required'] as const) {
+      expect(canTransition(from, 'queued')).toBe(true);
+    }
+  });
+
+  it('keeps a killed task from looking like one that never started', () => {
+    // The recovery path goes running → interrupted → queued. The shortcut
+    // straight to `queued` erased the evidence that a process had died.
+    expect(canTransition('running', 'queued')).toBe(false);
+    expect(canTransition('running', 'interrupted')).toBe(true);
+    expect(canTransition('interrupted', 'queued')).toBe(true);
+  });
+
+  it('still refuses to reopen a completed task', () => {
+    // The one guarantee none of this widening may touch.
+    expect(allowedTransitions('completed')).toEqual([]);
+  });
+});

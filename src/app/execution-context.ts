@@ -18,6 +18,7 @@ import { TaskExecutor } from './task-executor.js';
 import { Scheduler } from './scheduler.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { createRunnerFactory } from './runner-factory.js';
+import { recordFallback } from './fallback-audit.js';
 
 /**
  * The wiring every execution command needs.
@@ -65,8 +66,6 @@ export async function buildExecutionContext(
   registry.validateRoles(config.global);
 
   const store = new StateStore({ fs, clock, projectDir: options.projectDir });
-  // Needed by the fallback hook, which fires while a run is in flight.
-  const currentRunId = await store.currentRunId();
 
   // Where a configured fallback becomes actual behaviour. Every substitution is
   // recorded on the run: a run that quietly finished on a different provider
@@ -74,15 +73,7 @@ export async function buildExecutionContext(
   const getRunner = createRunnerFactory({
     registry,
     config: config.global,
-    onFallback: (event) => {
-      void store.recordDegradation(currentRunId ?? '', {
-        kind: 'runner_unavailable_with_fallback',
-        reason: `runner "${event.from}" failed with ${event.errorCode}`,
-        impact:
-          `role "${event.config.role}" ran on "${event.to}" at ${event.config.reasoning}` +
-          (event.reasoningClamped ? ' (clamped)' : ''),
-      });
-    },
+    onFallback: recordFallback(store),
   });
 
   const stageRunner = new StageRunner({

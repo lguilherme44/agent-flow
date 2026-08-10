@@ -140,6 +140,23 @@ describe('there is no fallback of the fallback', () => {
     if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
     expect(secondary.calls).toHaveLength(1);
   });
+
+  it('still reports which runner the failure came from (AF-R04)', async () => {
+    // A substitution that also failed is still a substitution. Without this,
+    // an outage across both providers was recorded against the primary alone,
+    // and the fallback left no trace of having fired at all.
+    const { runner, primary, secondary } = pair();
+    primary.pushFailure('quota_exceeded');
+    secondary.pushFailure('runner_unavailable');
+
+    const result = await runner.run(input);
+
+    expect(result.provenance?.runner).toBe('codex');
+    expect(result.provenance?.substitutedFor).toEqual({
+      runner: 'claude',
+      errorCode: 'quota_exceeded',
+    });
+  });
 });
 
 describe('known-unhealthy primary (AD-16)', () => {
