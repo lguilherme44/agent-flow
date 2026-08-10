@@ -186,6 +186,10 @@ export class StageRunner {
     let attempt = 0;
     let promptText = rendered;
     let lastProblems: string[] = [];
+    // Who produced the answer we are about to reject. Repairs can straddle a
+    // fallback, so this is not a constant — and when the repairs run out, it is
+    // the only record of who actually wrote the output that failed.
+    let lastExecution = executionOf(undefined, resolved);
 
     while (attempt < MAX_REPAIR_ATTEMPTS + 1) {
       attempt += 1;
@@ -201,6 +205,8 @@ export class StageRunner {
           ? {}
           : { outputSchema: toJsonSchema(stage.outputSchema) }),
       });
+
+      lastExecution = executionOf(result.provenance, resolved);
 
       if (!result.ok) {
         // Infrastructure failures are not retried here: re-running immediately
@@ -218,7 +224,7 @@ export class StageRunner {
           result.errorCode,
           `Stage "${stage.name}" failed: ${result.errorCode}`,
           result.raw,
-          executionOf(result.provenance, resolved),
+          lastExecution,
         );
       }
 
@@ -240,7 +246,7 @@ export class StageRunner {
           finishedAt: clock.now(),
         });
 
-        const execution = executionOf(result.provenance, resolved);
+        const execution = lastExecution;
 
         return {
           text: result.text,
@@ -277,6 +283,8 @@ export class StageRunner {
       'invalid_output',
       `Stage "${stage.name}" produced output that never satisfied its contract ` +
         `after ${String(attempt)} attempts:\n${lastProblems.map((p) => `  - ${p}`).join('\n')}`,
+      undefined,
+      lastExecution,
     );
   }
 

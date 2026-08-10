@@ -2,6 +2,8 @@
 
 **English** · [Português (BR)](README.pt-BR.md)
 
+[![CI](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml)
+
 Turn a feature request into a reviewed design document, a task breakdown, a
 human approval gate — and only then code.
 
@@ -153,7 +155,10 @@ overwrite each other.
 ## Status
 
 MVP 1 is complete and has been run end to end against Claude Code and Codex.
-628 tests, no CLI invoked by the suite.
+The suite invokes no CLI: every runner is faked, so it costs nothing to run and
+proves nothing about the CLIs themselves. What it does prove is in `FINDINGS.md`
+— as is what it does not. The badge above is the current count and the current
+result; a number written here would be neither for long.
 
 ### Working
 

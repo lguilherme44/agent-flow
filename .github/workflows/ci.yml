@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The repository's default branch. Written as a list because a rename is a
+    # one-line change here and a silent no-op otherwise: the first version of
+    # this file said `main`, the branch is `master`, and the workflow simply
+    # never ran — a CI that reports nothing looks exactly like a CI that passes.
+    branches: [master, main]
   pull_request:
 
 # A second push to the same branch makes the first run irrelevant. Cancelling it

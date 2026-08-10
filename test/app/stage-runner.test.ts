@@ -301,3 +301,57 @@ describe('reasoning clamping is recorded as a degradation (R-16)', () => {
     expect(state.degradations.map((d) => d.kind)).toContain('reasoning_clamped');
   });
 });
+
+// AF-R04, second pass. The runner-failure path carries its provenance; the
+// repair-exhausted path did not. A fallback that answered three times with
+// output the schema rejected produced a StageFailure with nothing attached, and
+// the caller fell back to describing the runner it had *asked* for — naming the
+// primary for work the substitute did.
+describe('exhausted repairs still say who produced the output', () => {
+  const schema = z.object({ feature: z.string() });
+  const stage: StageDefinition = {
+    name: 'planning',
+    role: 'planner',
+    prompt: 'sdd',
+    outputSchema: schema,
+  };
+
+  const fromFallback = (text: string) => ({
+    ok: true as const,
+    text,
+    durationMs: 1,
+    provenance: {
+      runner: 'codex',
+      reasoning: 'high' as const,
+      reasoningClamped: false,
+      substitutedFor: { runner: 'claude', errorCode: 'quota_exceeded' as const },
+    },
+  });
+
+  it('attaches the execution of the last attempt', async () => {
+    const { stageRunner, run, runner } = await harness();
+    // Every attempt answers, and every answer is rejected by the schema.
+    runner.always(fromFallback('not json at all'));
+
+    const error = await stageRunner
+      .run(stage, run.runId, { featureRequest: 'x' })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(StageFailure);
+    expect((error as StageFailure).errorCode).toBe('invalid_output');
+    expect((error as StageFailure).execution?.runner).toBe('codex');
+    expect((error as StageFailure).execution?.fallback?.from).toBe('claude');
+  });
+
+  it('reports the resolved role when nothing ever answered differently', async () => {
+    const { stageRunner, run, runner } = await harness();
+    runner.always({ ok: true, text: 'still not json', durationMs: 1 });
+
+    const error = await stageRunner
+      .run(stage, run.runId, { featureRequest: 'x' })
+      .catch((caught: unknown) => caught);
+
+    expect((error as StageFailure).execution?.runner).toBe('claude');
+    expect((error as StageFailure).execution?.fallback).toBeUndefined();
+  });
+});

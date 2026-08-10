@@ -2,6 +2,8 @@
 
 [English](README.md) · **Português (BR)**
 
+[![CI](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml)
+
 Transforma um pedido de feature em um documento de design revisado, uma quebra
 em tasks, um gate de aprovação humana — e só então em código.
 
@@ -156,7 +158,10 @@ não se sobrescrevem.
 ## Estado atual
 
 O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
-628 testes, e a suíte não invoca nenhuma CLI.
+A suíte não invoca nenhuma CLI: todo runner é fake, então rodar não custa nada e
+não prova nada sobre as CLIs em si. O que ela prova está em `FINDINGS.md` — e o
+que ela não prova também. O badge acima é a contagem e o resultado atuais; um
+número escrito aqui não seria nenhum dos dois por muito tempo.
 
 ### Funcionando
 

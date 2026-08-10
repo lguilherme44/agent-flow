@@ -358,7 +358,7 @@ exists. There is no systematic measurement across models or repository sizes.
 **Prompt quality has no automated test, and cannot have one.** This is the
 largest risk in the project. The prompts are what determine whether the output
 is any good, and the only way to evaluate them is to run them and read the
-result. Everything else here is covered by 552 tests; this is covered by
+result. Everything else here is covered by the test suite; this is covered by
 judgement.
 
 ### Accepted limitations

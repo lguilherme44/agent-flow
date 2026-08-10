@@ -156,6 +156,11 @@ export class PlanningPipeline {
         'planning',
         'invalid_output',
         `The plan does not satisfy the SDD:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+        undefined,
+        // The plan parsed and then failed a check agent-flow makes itself. It
+        // was still written by somebody, and the run should be able to say by
+        // whom — the answer is already in hand a few lines above.
+        result.execution,
       );
     }
 
