@@ -8,13 +8,7 @@ import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { agentFlowPaths } from './paths.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
-import {
-  PLAN_REVIEW_STAGE,
-  PlanReviewResponseSchema,
-  buildReviewResult,
-} from './stages/plan-review.js';
-import { assessIndependence, explainIndependence } from '../core/independence.js';
-import { planHash } from './approval.js';
+import { PlanReviewService } from './plan-review-service.js';
 import {
   ARCHITECTURE_IMPACT_STAGE,
   DISCOVERY_STAGE,
@@ -175,10 +169,12 @@ export class PlanningPipeline {
 
     // ---- Plan review, in a fresh context holding only the artifacts (§27).
     options.onProgress?.('plan-review', 'started');
-    const review = await this.review(runId, plannerRunner, planHash(plan), {
+    const review = await this.planReview().review({
+      runId,
+      plan,
       sdd,
       architectureImpact,
-      plan: JSON.stringify(plan, null, 2),
+      authors: [plannerRunner],
     });
 
     stagesRun.push('plan-review');
@@ -192,48 +188,13 @@ export class PlanningPipeline {
     return { runId, plan, stagesRun, review };
   }
 
-  private async review(
-    runId: string,
-    plannerRunner: string,
-    planHash: string,
-    vars: Record<string, string>,
-  ): Promise<ReviewResult> {
-    const { store, providerOf } = this.options;
-
-    const result = await this.options.stageRunner.run(PLAN_REVIEW_STAGE, runId, vars);
-    const response = PlanReviewResponseSchema.parse(result.data);
-
-    // Judged after the fact, from what ran on both sides. Deriving it from
-    // configuration beforehand meant a reviewer that fell back onto the
-    // planner's runner still produced an artifact claiming independence.
-    const independence = assessIndependence([plannerRunner], result.execution.runner, providerOf);
-
-    if (independence === 'same-provider-fresh-context') {
-      // §56 allows this, but the protection cross-provider review exists to
-      // provide is simply absent — so it is recorded on the run rather than
-      // left for a reader to infer (R-16).
-      await store.recordDegradation(runId, {
-        kind: 'single_provider',
-        reason: explainIndependence([plannerRunner], result.execution.runner, providerOf),
-        impact:
-          'the plan review is same-provider: a wrong assumption made while planning may be ' +
-          'repeated rather than caught',
-      });
-    }
-
-    const review = buildReviewResult(
-      response,
-      {
-        runner: result.execution.runner,
-        ...(result.execution.model === undefined ? {} : { model: result.execution.model }),
-        reasoning: result.execution.reasoning,
-      },
-      independence,
-      planHash,
-    );
-
-    await store.writeArtifact(runId, 'planReview', `${JSON.stringify(review, null, 2)}\n`);
-    return review;
+  /** Shared with the corrective loop, so both plans are judged the same way. */
+  private planReview(): PlanReviewService {
+    return new PlanReviewService({
+      store: this.options.store,
+      stageRunner: this.options.stageRunner,
+      providerOf: this.options.providerOf,
+    });
   }
 
   private async discover(

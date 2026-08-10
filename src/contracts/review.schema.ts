@@ -16,6 +16,37 @@ export const FindingSchema = z.object({
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
+/** The review stages whose findings can become work (§29). */
+export const CORRECTIVE_ORIGINS = ['plan-review', 'verification', 'final-review'] as const;
+export const CorrectiveOriginStageSchema = z.enum(CORRECTIVE_ORIGINS);
+export type CorrectiveOriginStage = z.infer<typeof CorrectiveOriginStageSchema>;
+
+/**
+ * Where a corrective task came from.
+ *
+ * The generator this replaces had one channel for traceability — `requirements`
+ * — and a finding with no requirement was given `FR-001` so the field could be
+ * filled. That is a fabricated relationship: `out_of_scope`, `missing_test`,
+ * `security` and `architectural_deviation` findings routinely correspond to no
+ * requirement at all, and coverage checking then treats the invented citation as
+ * real work against FR-001.
+ *
+ * So the origin gets its own field. A finding that *does* name a requirement
+ * still carries it, unchanged, in both places; a finding that does not carries
+ * nothing it did not say.
+ */
+export const CorrectiveOriginSchema = z.object({
+  stage: CorrectiveOriginStageSchema,
+  /** The finding's own `type`, verbatim — never normalised into a requirement. */
+  findingType: z.string().min(1),
+  severity: FindingSeveritySchema,
+  /** Present only when the finding named one. */
+  requirement: RequirementIdSchema.optional(),
+  description: z.string().min(1),
+  file: z.string().optional(),
+});
+export type CorrectiveOrigin = z.infer<typeof CorrectiveOriginSchema>;
+
 /**
  * Whether the reviewer was genuinely independent of the author (§56, R-16).
  *

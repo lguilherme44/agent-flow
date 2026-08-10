@@ -13,6 +13,8 @@ import { TaskExecutor } from '../../src/app/task-executor.js';
 import { Scheduler } from '../../src/app/scheduler.js';
 import { initProject } from '../../src/app/init-project.js';
 import { approveRun, checkApproval, approvalCoversPlan } from '../../src/app/approval.js';
+import { runCorrectiveRound } from '../../src/app/corrective-round.js';
+import { buildValidationRegistry } from '../../src/core/validation-registry.js';
 import { runVerification } from '../../src/app/verification-commands.js';
 import { checkDefinitionOfDone } from '../../src/core/definition-of-done.js';
 import { assessHealth } from '../../src/core/health.js';
@@ -168,7 +170,18 @@ async function world(options: { globalConfig?: ReturnType<typeof config> } = {})
     projectDir: PROJECT,
   });
 
-  return { fs, clock, store, runners, processRunner, pipeline, executor, global, projectConfig };
+  return {
+    fs,
+    clock,
+    store,
+    runners,
+    processRunner,
+    stageRunner,
+    pipeline,
+    executor,
+    global,
+    projectConfig,
+  };
 }
 
 /** Scripts a clean planning run: discovery, impact, SDD (claude) then plan (codex), review (claude). */
@@ -513,6 +526,137 @@ describe('artifacts', () => {
     const events = (await w.store.readEvents(run.runId)).map((event) => event.type);
     expect(events).toContain('run_created');
     expect(events).toContain('stage_completed');
+  });
+});
+
+describe('the corrective loop, end to end, without --force (AF-H01)', () => {
+  // The cycle a live run could not complete: Final Review FAIL → review --fix →
+  // corrective tasks → approve → run → review. Every step here is the ordinary
+  // command. The moment any of them needs `--force`, the run carries a
+  // degradation saying its own review gate did not hold — which is what this
+  // test exists to prevent from coming back.
+  it('goes FAIL → fix → approve → run → done', async () => {
+    const w = await world();
+    const run = await w.store.createRun('weekly recurrence');
+    scriptPlanning(w.runners);
+
+    const planning = await w.pipeline.run(run.runId, 'Add weekly recurrence');
+    await approveRun(w.store, run.runId, planning.plan);
+
+    w.runners.codex.pushText(IMPLEMENTED).pushText(IMPLEMENTED);
+    await new Scheduler({ store: w.store, executor: w.executor }).run(
+      planning.plan,
+      run.runId,
+      SDD,
+    );
+
+    // ---- Final review rejects the implementation.
+    const finalReview = ReviewResultSchema.parse({
+      verdict: 'FAIL',
+      independence: 'cross-provider',
+      reviewer: { runner: 'claude', reasoning: 'very_high' },
+      findings: [
+        {
+          severity: 'high',
+          type: 'missing_test',
+          description: 'Nothing covers the last week of a month.',
+          suggestedAction: 'Add a test for the boundary.',
+        },
+      ],
+    });
+
+    // ---- review --fix: corrective tasks, and a review of the corrected plan.
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'The fix is scoped.', findings: [] });
+
+    const round = await runCorrectiveRound({
+      store: w.store,
+      stageRunner: w.stageRunner,
+      providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
+      runId: run.runId,
+      plan: planning.plan,
+      finalReview,
+      origin: 'final-review',
+      sdd: SDD,
+      architectureImpact: (await w.store.readArtifact(run.runId, 'architectureImpact')) ?? '',
+      validation: buildValidationRegistry(w.projectConfig),
+    });
+
+    expect(round.outcome).toBe('applied');
+    if (round.outcome !== 'applied') return;
+
+    // ---- approve, with no override of any kind.
+    const reopened = await w.store.loadRun(run.runId);
+    expect(reopened.approved).toBe(false);
+    expect(checkApproval(reopened, round.plan, round.review).allowed).toBe(true);
+
+    const approved = await approveRun(w.store, run.runId, round.plan);
+    expect(approvalCoversPlan(approved, round.plan)).toBe(true);
+    expect(approved.degradations.map((d) => d.kind)).not.toContain('forced_approval');
+
+    // ---- the corrective task runs like any other, and the run finishes.
+    w.runners.codex.pushText(IMPLEMENTED);
+    const outcome = await new Scheduler({ store: w.store, executor: w.executor }).run(
+      round.plan,
+      run.runId,
+      SDD,
+      Object.fromEntries(reopened.tasks.map((task) => [task.id, task.state])),
+    );
+
+    expect(outcome.complete).toBe(true);
+    expect(outcome.states['FIX-001']).toBe('completed');
+
+    const done = checkDefinitionOfDone({
+      approved: true,
+      taskStates: Object.values(outcome.states),
+      verificationPassed: true,
+      finalReviewVerdict: 'PASS',
+    });
+    expect(done.done).toBe(true);
+  });
+
+  it('carries the finding into the task instead of a requirement it invented', async () => {
+    const w = await world();
+    const run = await w.store.createRun('f');
+    scriptPlanning(w.runners);
+    const planning = await w.pipeline.run(run.runId, 'Add weekly recurrence');
+
+    w.runners.claude.pushJson({ verdict: 'PASS', findings: [] });
+
+    const round = await runCorrectiveRound({
+      store: w.store,
+      stageRunner: w.stageRunner,
+      providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
+      runId: run.runId,
+      plan: planning.plan,
+      finalReview: ReviewResultSchema.parse({
+        verdict: 'FAIL',
+        independence: 'cross-provider',
+        reviewer: { runner: 'claude', reasoning: 'very_high' },
+        findings: [
+          {
+            severity: 'critical',
+            type: 'security',
+            description: 'The token is logged in full.',
+            suggestedAction: 'Redact it.',
+            file: 'src/log.js',
+          },
+        ],
+      }),
+      origin: 'final-review',
+      sdd: SDD,
+      architectureImpact: (await w.store.readArtifact(run.runId, 'architectureImpact')) ?? '',
+      validation: buildValidationRegistry(w.projectConfig),
+    });
+
+    if (round.outcome !== 'applied') throw new Error('expected the round to apply');
+
+    const fix = round.plan.tasks.find((task) => task.id === 'FIX-001');
+    expect(fix?.requirements).toEqual([]);
+    expect(fix?.correctiveFor).toMatchObject({
+      stage: 'final-review',
+      findingType: 'security',
+      severity: 'critical',
+    });
   });
 });
 

@@ -7,7 +7,14 @@ import type {
 } from '../../src/ports/index.js';
 import type { RunnerErrorCode } from '../../src/contracts/index.js';
 
-export type AgentScript = (input: AgentRunInput) => AgentRunResult;
+/**
+ * A scripted response, or a function producing one.
+ *
+ * Allowed to be async because the real port is: a test that needs to observe
+ * state *while* a stage is in flight — ordering, partial writes — can only do
+ * so from inside the call, and every such observation is a file read.
+ */
+export type AgentScript = (input: AgentRunInput) => AgentRunResult | Promise<AgentRunResult>;
 
 const DEFAULT_CAPABILITIES: RunnerCapabilities = {
   supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AnyTaskIdSchema, RequirementIdSchema, ValidationIdSchema } from './common.schema.js';
+import { CorrectiveOriginSchema } from './review.schema.js';
 
 export const ComplexitySchema = z.enum(['trivial', 'normal', 'complex']);
 export type Complexity = z.infer<typeof ComplexitySchema>;
@@ -59,11 +60,23 @@ export const TaskSchema = z
     dependencies: z.array(AnyTaskIdSchema).default([]),
 
     /**
-     * Required and non-empty. Coverage checking (§41) only works if every task
-     * points at a requirement — the §12 example omits this, the §46 interface
-     * demands it, and the check is worthless without it.
+     * Required and non-empty for planned work — see the refinement below.
+     * Coverage checking (§41) only works if every task points at a requirement:
+     * the §12 example omits this, the §46 interface demands it, and the check is
+     * worthless without it.
      */
-    requirements: z.array(RequirementIdSchema).min(1, 'a task must implement at least one requirement'),
+    requirements: z.array(RequirementIdSchema).default([]),
+
+    /**
+     * Set only on corrective tasks (§29), and the reason `requirements` is not
+     * unconditionally required.
+     *
+     * A corrective task answers a *finding*, not a requirement. Demanding one
+     * anyway is what produced the invented `FR-001`; the honest alternative is
+     * to say where the task came from and leave the requirement empty when the
+     * finding named none.
+     */
+    correctiveFor: CorrectiveOriginSchema.optional(),
 
     files: z.object({ likely: z.array(z.string()).default([]) }).prefault({}),
     // prefault, not default: the nested field defaults must actually be applied
@@ -99,6 +112,14 @@ export const TaskSchema = z
   .refine((task) => !task.dependencies.includes(task.id), {
     message: 'a task cannot depend on itself',
     path: ['dependencies'],
+  })
+  .refine((task) => task.correctiveFor !== undefined || task.requirements.length > 0, {
+    // The exception is narrow on purpose. Planned tasks still must cite a
+    // requirement, because that citation is the whole basis of coverage
+    // checking; only a task that carries its own provenance — a finding — is
+    // allowed to have none, and it is not allowed to be silent about why.
+    message: 'a task must implement at least one requirement unless it is corrective',
+    path: ['requirements'],
   })
   .refine((task) => task.validationExpectation !== 'fail' || task.validation.length > 0, {
     // A RED task with nothing to run is a contradiction the plan cannot hold:

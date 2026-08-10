@@ -1,4 +1,9 @@
-import { PlanSchema, type Plan, type ReviewResult } from '../contracts/index.js';
+import {
+  PlanSchema,
+  type CorrectiveOriginStage,
+  type Plan,
+  type ReviewResult,
+} from '../contracts/index.js';
 
 /** Severity at or above which a finding becomes work rather than a note. */
 const ORDER = ['low', 'medium', 'high', 'critical'] as const;
@@ -12,6 +17,14 @@ export interface FixOptions {
    * wrong reason. The caller knows the registry; this function must not guess.
    */
   readonly validation: readonly string[];
+  /**
+   * Which review produced these findings.
+   *
+   * Required, and deliberately not defaulted: the origin is the traceability a
+   * corrective task has instead of a requirement, and a default would let a
+   * caller record a provenance it never established.
+   */
+  readonly origin: CorrectiveOriginStage;
   readonly minSeverity?: (typeof ORDER)[number];
 }
 
@@ -52,7 +65,19 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
       finding.severity === 'critical' || finding.severity === 'high' ? 'complex' : 'normal',
     risk: finding.severity === 'critical' ? 'high' : finding.severity === 'high' ? 'medium' : 'low',
     dependencies: [],
-    requirements: finding.requirement === undefined ? ['FR-001'] : [finding.requirement],
+    // Exactly what the finding said, and nothing more. The generator this
+    // replaces wrote `FR-001` whenever a finding named no requirement, which
+    // made an `out_of_scope` or `security` finding look like work against a
+    // functional requirement nobody had connected it to.
+    requirements: finding.requirement === undefined ? [] : [finding.requirement],
+    correctiveFor: {
+      stage: options.origin,
+      findingType: finding.type,
+      severity: finding.severity,
+      ...(finding.requirement === undefined ? {} : { requirement: finding.requirement }),
+      description: finding.description,
+      ...(finding.file === undefined ? {} : { file: finding.file }),
+    },
     files: { likely: finding.file === undefined ? [] : [finding.file] },
     acceptanceCriteria: [finding.suggestedAction],
     // The generator this replaces emitted an empty list, so a fix for a review
