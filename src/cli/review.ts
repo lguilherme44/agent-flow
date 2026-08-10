@@ -137,6 +137,21 @@ export async function runReviewCommand(
       `${JSON.stringify(finalReview, null, 2)}\n`,
     );
 
+    // ---- What this run gave up along the way.
+    //
+    // Reported here and not only in `status`, because this is the screen that
+    // says FEATURE COMPLETE. A run that fell back to another provider, ran
+    // below its configured effort, reviewed itself, or had its gate overruled
+    // by --force reached that verdict on weaker terms, and the person reading
+    // the verdict is the one who needs to know it.
+    const finalState = await context.store.loadRun(state.runId);
+    if (finalState.degradations.length > 0) {
+      process.stdout.write('\nThis run was degraded:\n');
+      for (const degradation of finalState.degradations) {
+        process.stdout.write(`  · ${degradation.reason}\n    ${degradation.impact}\n`);
+      }
+    }
+
     // ---- Definition of Done, evaluated as code (§42).
     const doneCheck = checkDefinitionOfDone({
       approved: state.approved,

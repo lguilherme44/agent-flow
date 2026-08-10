@@ -41,6 +41,10 @@ export const DEGRADATION_KINDS = [
   'single_provider',
   'auth_unverified',
   'reasoning_clamped',
+  // A human overruled a gate. Not a malfunction — a guarantee the workflow
+  // normally provides, deliberately given up, which is exactly what this
+  // channel exists to carry.
+  'forced_approval',
 ] as const;
 
 export const DegradationSchema = z.object({

@@ -99,6 +99,20 @@ export async function approveRun(
     approvedAt,
   });
 
+  if (options.forced === true) {
+    // The event above is the audit trail; this is what anyone actually reads.
+    // `--force` promised to record the override and did — into a log that
+    // `status` and the Definition of Done never open, so an approval that
+    // overruled a failed review looked identical to one that passed it.
+    return store.recordDegradation(runId, {
+      kind: 'forced_approval',
+      reason: 'the plan was approved with --force, over a failed or missing review',
+      impact:
+        'the review gate did not hold for this run: whatever the reviewer objected to ' +
+        'was accepted by a person rather than resolved',
+    });
+  }
+
   return state;
 }
 

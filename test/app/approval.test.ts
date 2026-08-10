@@ -233,3 +233,52 @@ describe('approvalCoversPlan', () => {
     expect(approvalCoversPlan(state(), plan())).toBe(false);
   });
 });
+
+// Found in a live run. `--force` promises, in its own help text, that the
+// override is "recorded on the run" — and it was, as `forced: true` inside a
+// `run_approved` event. Nothing reads that. `status` printed `Approval ✓`, and
+// the Definition of Done consults a boolean, so a plan approved over a failed
+// review was indistinguishable from one whose review passed.
+//
+// RK-12 and AF-R02 are the same lesson twice already: a record written where
+// nobody looks is barely a record. Degradations are the channel that status and
+// the final report actually read, and an overridden gate is precisely what that
+// channel is for — a guarantee the workflow normally provides, deliberately
+// given up.
+describe('a forced approval is visible where people look', () => {
+  const makeStore = () =>
+    new StateStore({ fs: new InMemoryFileSystem(), clock: new FixedClock(), projectDir: '/repo' });
+
+  it('records the override as a degradation', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+
+    await approveRun(store, run.runId, plan(), { forced: true });
+
+    const state = await store.loadRun(run.runId);
+    const degradation = state.degradations.find((d) => d.kind === 'forced_approval');
+    expect(degradation).toBeDefined();
+    expect(degradation?.impact).toMatch(/review/i);
+  });
+
+  it('records nothing when the gate was satisfied normally', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+
+    await approveRun(store, run.runId, plan());
+
+    const state = await store.loadRun(run.runId);
+    expect(state.degradations).toHaveLength(0);
+  });
+
+  it('still writes the event, which is the audit trail', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+
+    await approveRun(store, run.runId, plan(), { forced: true });
+
+    const events = await store.readEvents(run.runId);
+    const approved = events.find((event) => event.type === 'run_approved');
+    expect(approved?.detail['forced']).toBe(true);
+  });
+})
