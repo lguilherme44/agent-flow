@@ -289,6 +289,73 @@ describe('the run detail composition', () => {
   });
 });
 
+/**
+ * UI-P01 — the drawer below 1200 is a modal, not a floating panel.
+ *
+ * The unit suite runs on the wide layout by default (see `test-setup`), so the
+ * drawer only exists once `matchMedia` says the pane does not fit. That switch is
+ * the whole reason these assertions are possible in jsdom at all: the layout
+ * choice is made in JavaScript, not in CSS.
+ */
+describe('the inspector as a drawer', () => {
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  });
+
+  it('is a modal dialog, and the only inspector in the document', async () => {
+    renderPage();
+    await userEvent.click(await screen.findByText('Add recurrence types'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Task inspector' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+
+    // One inspector, and the tab list is the part only an inspector has. A
+    // CSS-hidden second copy would be invisible to the eye and entirely
+    // present here.
+    expect(document.querySelectorAll('[role="tablist"]')).toHaveLength(1);
+
+    // The table leaves the accessibility tree while the drawer is open, which is
+    // what makes focus containment real rather than decorative: Tab used to walk
+    // straight out of the panel into rows that are still on screen.
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('closes on Escape and gives the focus back to the row that opened it', async () => {
+    renderPage();
+
+    const row = (await screen.findByText('Add recurrence types')).closest('tr');
+    await userEvent.click(row as HTMLElement);
+    await screen.findByRole('dialog', { name: 'Task inspector' });
+
+    // Focus moved into the drawer, so it has to come back — otherwise closing
+    // leaves a keyboard user at the top of the document, having lost their place
+    // in a table they were half way down.
+    expect(row?.contains(document.activeElement)).toBe(false);
+
+    await userEvent.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Task inspector' })).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(row);
+    });
+  });
+
+  // Clicking the overlay closes it too. Asserted in the visual suite rather than
+  // here: it depends on pointer capture and hit testing, which jsdom does not
+  // have, so a passing test here would prove nothing about a browser.
+});
+
 describe('live updates', () => {
   it('subscribes to the stream for the selected project', () => {
     renderPage({ live: true });

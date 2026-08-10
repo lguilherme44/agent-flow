@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
@@ -150,50 +150,75 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
  * table. Rendered by the same `TaskInspector` the wide layout uses, so the two
  * cannot drift — the drawer supplies a surface, not a second inspector.
  *
- * Hidden above 1200 by CSS rather than by unmounting, so a viewport crossing the
- * boundary keeps its selection instead of closing the panel under the cursor.
+ * Above 1200 it is not rendered at all: `RunDetailPage` chooses pane or drawer in
+ * JavaScript, so exactly one inspector is ever in the document. A CSS-hidden
+ * second copy is invisible to the eye and entirely present to a screen reader,
+ * which would then find two panels describing the same task.
+ *
+ * The modal behaviour is Radix's rather than hand-rolled (UI-P01). The previous
+ * version had an overlay, an Escape listener and one inspector — everything
+ * except the parts that are genuinely hard: `aria-modal`, a focus trap, and
+ * returning focus to the row that opened it. Tab used to walk straight out of the
+ * drawer into the table underneath, which is still visible and, to a keyboard,
+ * still there. Radix also marks everything outside the panel `aria-hidden`, which
+ * is what makes "one dialog" true for assistive technology and not just for the
+ * DOM.
  */
 function InspectorDrawer(props: {
   open: boolean;
   task: TaskDetailView | undefined;
   onClose: () => void;
-}): JSX.Element | null {
-  // Escape closes it, because an overlay that traps the reader is worse than no
-  // overlay. The listener is scoped to when it is actually open.
-  useEffect(() => {
-    if (!props.open) return undefined;
+}): JSX.Element {
+  const opener = useRef<HTMLElement | null>(null);
 
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') props.onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [props]);
-
-  if (!props.open) return null;
+  // Captured in a layout effect, which runs during the commit — before the
+  // passive effect inside Radix that moves focus into the panel. In a plain
+  // `useEffect` this reads the close button, because child effects run first.
+  useLayoutEffect(() => {
+    if (props.open) opener.current = document.activeElement as HTMLElement | null;
+  }, [props.open]);
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={props.onClose}
-        aria-label="Close inspector"
-        className="fixed inset-0 z-40 bg-black/60"
-      />
-      {/* The role goes on the panel, not on a wrapper around it. A wrapper whose
-          children are all `fixed` has no size of its own, so the dialog was
-          present in the tree and zero pixels tall — which is "hidden" to
-          anything that measures, including assistive technology. */}
-      <div
-        role="dialog"
-        aria-label="Task inspector"
-        className="fixed inset-y-0 right-0 z-50 flex w-[min(440px,88vw)] flex-col border-l border-border-strong bg-bg p-3 shadow-2xl"
-      >
-        <TaskInspector task={props.task} onClose={props.onClose} />
-      </div>
-    </>
+    <DialogPrimitive.Root
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+    >
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/60" />
+        <DialogPrimitive.Content
+          // A label rather than the task's own title. The panel already states
+          // the id and the title as its heading, and a hidden copy of them here
+          // would make a screen reader read the task twice before reaching it.
+          aria-label="Task inspector"
+          // Radix does not set this: it hides everything else with `aria-hidden`
+          // instead, which is the more widely supported of the two techniques.
+          // Both are stated here — the hiding is what actually contains a screen
+          // reader, and this is what §97 and every ARIA dialog example expect to
+          // find on the panel itself.
+          aria-modal="true"
+          // Radix's modal Dialog overrides its own focus restore to focus a
+          // `Dialog.Trigger`, and this drawer has none — it opens because a task
+          // got selected, not because a button was pressed. Left alone, closing
+          // drops focus on the document body, and a keyboard user loses their
+          // place half way down a table they will have to find again.
+          onCloseAutoFocus={(event) => {
+            const target = opener.current;
+            if (target === null || !document.contains(target)) return;
+            event.preventDefault();
+            target.focus({ preventScroll: true });
+          }}
+          className="fixed inset-y-0 right-0 z-50 flex w-[min(440px,88vw)] flex-col border-l border-border-strong bg-bg p-3 shadow-2xl"
+        >
+          {/* Radix derives the accessible name from a `Title` when one exists,
+              and from `aria-label` otherwise. Both are given the same words, so
+              the name is stable whichever path a reader takes. */}
+          <DialogPrimitive.Title className="sr-only">Task inspector</DialogPrimitive.Title>
+          <TaskInspector task={props.task} onClose={props.onClose} />
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 

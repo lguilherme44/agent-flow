@@ -5,6 +5,7 @@ import type {
   TaskSummaryView,
 } from '@contracts/index.js';
 import { Badge, Button, Progress, StatusDot, Tooltip, cx } from '../components/ui';
+import { useHorizontalOverflow } from '../hooks/use-horizontal-overflow';
 import { formatDuration, formatPercent, formatWhen, humanise } from '../lib/format';
 import { TONE_BG, TONE_TEXT, runLabel, runTone, stageTone } from '../lib/status';
 
@@ -193,118 +194,162 @@ function Divider(): JSX.Element {
  * would be the wrong one.
  */
 export function StagePipeline(props: { stages: StageViewResponse[] }): JSX.Element {
+  const { ref, overflow } = useHorizontalOverflow();
+
   return (
-    // Scrolls sideways below 1440 rather than compressing. Nine steps across
-    // 780px give each chip 53px of text, and "Architecture" needs 62 — so the
-    // labels clipped at every narrow width. A stepper you can push is still a
-    // stepper; a stepper whose labels are shaved is not readable at all.
-    <ol
-      className="flex items-stretch overflow-x-auto pb-0.5 wide:overflow-visible"
-      aria-label="Pipeline"
-    >
-      {props.stages.map((stage, index) => {
-        const tone = stageTone(stage.status);
-        const running = stage.status === 'running';
-        const pending = stage.status === 'pending';
-
-        const detail = [
-          stage.runner === undefined ? undefined : `runner ${stage.runner}`,
-          stage.model === undefined ? undefined : `model ${stage.model}`,
-          stage.reasoning === undefined ? undefined : `effort ${stage.reasoning}`,
-          stage.attempts === undefined || stage.attempts <= 1
-            ? undefined
-            : `${String(stage.attempts)} attempts`,
-          stage.errorCode === undefined ? undefined : `error ${stage.errorCode}`,
-        ].filter((value): value is string => value !== undefined);
-
-        return (
-          <li
+    // The fades are the affordance (UI-P02). Scrolling sideways is right at
+    // these widths, but a row whose last chip ends flush at the edge reads as
+    // finished, and then nobody looks for the four stages behind it. Driven by
+    // measurement, so a short pipeline that fits gets no fade at all.
+    <div className="relative">
+      {/* Scrolls sideways below 1440 rather than compressing. Nine steps across
+          780px give each chip 53px of text, and "Architecture" needs 62 — so the
+          labels clipped at every narrow width. A stepper you can push is still a
+          stepper; a stepper whose labels are shaved is not readable at all. */}
+      <ol
+        ref={ref}
+        className="flex items-stretch overflow-x-auto pb-0.5 wide:overflow-visible"
+        aria-label="Pipeline"
+      >
+        {props.stages.map((stage, index) => (
+          <StageStep
             key={stage.stage}
-            // The running step is wider. Partly because it is the answer to
-            // "where is this run right now" and deserves the emphasis, and
-            // partly because "Implementation" is the longest single unbreakable
-            // word in the pipeline and an equal share clips it.
-            className={cx(
-              'flex items-stretch',
-              // A floor wide enough for the longest label, then flexible above
-              // it. Without the floor `min-w-0` lets the chips shrink to
-              // nothing and the labels clip instead of the row scrolling.
-              // 132px is what "Implementation" needs beside its marker at 12px.
-              // Measured, not guessed: at 116 the running step — the one the
-              // eye goes to first — read "Implementati".
-              'min-w-[132px] wide:min-w-0',
-              running ? 'flex-[1.4]' : 'flex-1',
-            )}
-          >
-            <Tooltip
-              content={
-                <span>
-                  {humanise(stage.stage)} — {stage.status.replace(/_/g, ' ')}
-                  {detail.length === 0 ? '' : ` · ${detail.join(' · ')}`}
-                </span>
-              }
-            >
-              <div
-                className={cx(
-                  // Tight padding and a small gap, because nine steps across
-                  // ~1180px leave each chip about 130px and "Implementation" is
-                  // a single unbreakable word that needs nearly all of it.
-                  'flex min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-md border px-1.5 py-1.5',
-                  running
-                    ? 'border-primary-border bg-primary-soft'
-                    : pending
-                      ? 'border-border bg-transparent'
-                      : cx('border-border', TONE_BG[tone]),
-                )}
-              >
-                <StatusDot
-                  tone={tone}
-                  label={stage.status.replace(/_/g, ' ')}
-                  // A step with no duration prints its status underneath, and
-                  // then this marker is decoration; a step with a duration
-                  // prints that instead, so the marker carries the status.
-                  {...(stage.durationMs === undefined
-                    ? { decorative: true }
-                    : { showLabel: false })}
-                  solid={stage.status === 'completed'}
-                  spin={running}
-                />
-                <span className="flex min-w-0 flex-col">
-                  {/* Wraps to a second line rather than truncating. Nine steps
-                      across 1200px cannot all fit on one line, and
-                      "Architectu…" beside "Implemen…" is a pipeline nobody can
-                      read — the reference wraps for exactly this reason. */}
-                  <span
-                    className={cx(
-                      'line-clamp-2 text-label leading-tight',
-                      running ? 'font-medium text-text' : pending ? 'text-muted' : 'text-text',
-                    )}
-                    title={humanise(stage.stage)}
-                  >
-                    {humanise(stage.stage)}
-                  </span>
-                  <span className={cx('tabular text-micro', running ? TONE_TEXT[tone] : 'text-faint')}>
-                    {stage.durationMs === undefined
-                      ? stage.status === 'pending'
-                        ? 'pending'
-                        : stage.status.replace(/_/g, ' ')
-                      : formatDuration(stage.durationMs)}
-                  </span>
-                </span>
-              </div>
-            </Tooltip>
+            stage={stage}
+            last={index === props.stages.length - 1}
+          />
+        ))}
+      </ol>
 
-            {/* The connector. Everything else here could be a widget; this is
-                what makes the row a flow. */}
-            {index < props.stages.length - 1 ? (
-              <span className="flex w-2 shrink-0 items-center" aria-hidden>
-                <span className="h-px w-full bg-border-strong" />
-              </span>
-            ) : null}
-          </li>
-        );
-      })}
-    </ol>
+      {/* Page-ground gradients, not scrollbars. A custom scrollbar is furniture
+          at every width; this appears only where content is genuinely hidden and
+          costs nothing when it is not. */}
+      {overflow.left ? <Fade side="left" /> : null}
+      {overflow.right ? <Fade side="right" /> : null}
+    </div>
+  );
+}
+
+/** One step of the pipeline: chip, status, duration, and the connector after it. */
+function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Element {
+  const { stage } = props;
+  const tone = stageTone(stage.status);
+  const running = stage.status === 'running';
+  const pending = stage.status === 'pending';
+
+  const detail = [
+    stage.runner === undefined ? undefined : `runner ${stage.runner}`,
+    stage.model === undefined ? undefined : `model ${stage.model}`,
+    stage.reasoning === undefined ? undefined : `effort ${stage.reasoning}`,
+    stage.attempts === undefined || stage.attempts <= 1
+      ? undefined
+      : `${String(stage.attempts)} attempts`,
+    stage.errorCode === undefined ? undefined : `error ${stage.errorCode}`,
+  ].filter((value): value is string => value !== undefined);
+
+  return (
+    <li
+      // The running step is wider. Partly because it is the answer to
+      // "where is this run right now" and deserves the emphasis, and
+      // partly because "Implementation" is the longest single unbreakable
+      // word in the pipeline and an equal share clips it.
+      className={cx(
+        'flex items-stretch',
+        // A floor wide enough for the longest label, then flexible above
+        // it. Without the floor `min-w-0` lets the chips shrink to
+        // nothing and the labels clip instead of the row scrolling.
+        // 132px is what "Implementation" needs beside its marker at 12px.
+        // Measured, not guessed: at 116 the running step — the one the
+        // eye goes to first — read "Implementati".
+        'min-w-[132px] wide:min-w-0',
+        running ? 'flex-[1.4]' : 'flex-1',
+      )}
+    >
+      <Tooltip
+        content={
+          <span>
+            {humanise(stage.stage)} — {stage.status.replace(/_/g, ' ')}
+            {detail.length === 0 ? '' : ` · ${detail.join(' · ')}`}
+          </span>
+        }
+      >
+        <div
+          className={cx(
+            // Tight padding and a small gap, because nine steps across
+            // ~1180px leave each chip about 130px and "Implementation" is
+            // a single unbreakable word that needs nearly all of it.
+            'flex min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-md border px-1.5 py-1.5',
+            running
+              ? 'border-primary-border bg-primary-soft'
+              : pending
+                ? 'border-border bg-transparent'
+                : cx('border-border', TONE_BG[tone]),
+          )}
+        >
+          <StatusDot
+            tone={tone}
+            label={stage.status.replace(/_/g, ' ')}
+            // A step with no duration prints its status underneath, and
+            // then this marker is decoration; a step with a duration
+            // prints that instead, so the marker carries the status.
+            {...(stage.durationMs === undefined
+              ? { decorative: true }
+              : { showLabel: false })}
+            solid={stage.status === 'completed'}
+            spin={running}
+          />
+          <span className="flex min-w-0 flex-col">
+            {/* Wraps to a second line rather than truncating. Nine steps
+                across 1200px cannot all fit on one line, and
+                "Architectu…" beside "Implemen…" is a pipeline nobody can
+                read — the reference wraps for exactly this reason. */}
+            <span
+              className={cx(
+                'line-clamp-2 text-label leading-tight',
+                running ? 'font-medium text-text' : pending ? 'text-muted' : 'text-text',
+              )}
+              title={humanise(stage.stage)}
+            >
+              {humanise(stage.stage)}
+            </span>
+            <span className={cx('tabular text-micro', running ? TONE_TEXT[tone] : 'text-faint')}>
+              {stage.durationMs === undefined
+                ? stage.status === 'pending'
+                  ? 'pending'
+                  : stage.status.replace(/_/g, ' ')
+                : formatDuration(stage.durationMs)}
+            </span>
+          </span>
+        </div>
+      </Tooltip>
+
+      {/* The connector. Everything else here could be a widget; this is
+          what makes the row a flow. */}
+      {props.last ? null : (
+        <span className="flex w-2 shrink-0 items-center" aria-hidden>
+          <span className="h-px w-full bg-border-strong" />
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * The edge gradient that says "there is more this way".
+ *
+ * `from-surface` because the pipeline sits inside the run panel, not on the page
+ * ground — a fade to the wrong colour is a grey smear rather than an edge.
+ */
+function Fade(props: { side: 'left' | 'right' }): JSX.Element {
+  return (
+    <span
+      aria-hidden
+      className={cx(
+        'pointer-events-none absolute inset-y-0 w-10',
+        props.side === 'left'
+          ? 'left-0 bg-gradient-to-r from-surface to-transparent'
+          : 'right-0 bg-gradient-to-l from-surface to-transparent',
+      )}
+    />
   );
 }
 
