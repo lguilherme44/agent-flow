@@ -75,4 +75,25 @@ export const AnyTaskIdSchema = z.union([TaskIdSchema, FixTaskIdSchema]);
 
 export const RunIdSchema = z.string().regex(/^AF-\d{4}-\d{3}$/, 'expected AF-YYYY-NNN');
 
+/**
+ * Identifier of a validation command declared in the project configuration.
+ *
+ * The shape is the first of two defences. A plan is written by a model, and the
+ * repository's own contents feed the prompt that produces it — so plan content
+ * is untrusted input. Before this existed, `Task.validation` was a free string
+ * that the orchestrator handed to `/bin/sh -c`, which put model-authored text on
+ * a shell *outside* the runner's sandbox, the only containment agent-flow has.
+ *
+ * Restricting the character set means no string accepted here can express a
+ * command, a pipe, a redirect or a substitution. The second defence is
+ * `checkPlan`, which requires the id to exist in the project configuration.
+ */
+export const ValidationIdSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9][a-z0-9-]*$/,
+    'expected the id of a validation command declared in the project config ' +
+      '(lowercase letters, digits and dashes), not a shell command',
+  );
+
 export const IsoTimestampSchema = z.iso.datetime();

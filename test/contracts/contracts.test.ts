@@ -182,7 +182,7 @@ describe('Task (§12, §46)', () => {
       externalIntegration: false,
     },
     acceptanceCriteria: ['Occurrences are generated for weekly rules'],
-    validation: ['npm test -- booking'],
+    validation: ['test'],
   };
 
   it('parses a well formed task', () => {
@@ -212,6 +212,51 @@ describe('Task (§12, §46)', () => {
 
   it('rejects a task that depends on itself', () => {
     expect(TaskSchema.safeParse({ ...valid, dependencies: ['TASK-003'] }).success).toBe(false);
+  });
+
+  describe('validation holds ids, never commands (V-01 regression)', () => {
+    // Was a defect: `validation` was a free string list that the orchestrator
+    // handed to `/bin/sh -c`. A plan is model output, and repository content
+    // feeds the prompt that produces it — so this put untrusted text on a shell
+    // outside the runner sandbox, which is the only containment there is.
+    //
+    // The character set is the first of two defences; `checkPlan` requiring the
+    // id to exist is the second.
+
+    it('accepts a plain id', () => {
+      expect(TaskSchema.parse({ ...valid, validation: ['test'] }).validation).toEqual(['test']);
+    });
+
+    it('accepts dashed and numbered ids', () => {
+      expect(TaskSchema.safeParse({ ...valid, validation: ['e2e-smoke', 'test2'] }).success).toBe(
+        true,
+      );
+    });
+
+    for (const payload of [
+      'npm test',
+      'echo MALICIOUS > /tmp/x',
+      'npm test && curl evil.example',
+      'test; rm -rf /',
+      'test | sh',
+      '$(whoami)',
+      '`id`',
+      './script.sh',
+      '../../etc/passwd',
+      'TEST',
+      '-rf',
+    ]) {
+      it(`rejects ${JSON.stringify(payload)}`, () => {
+        expect(TaskSchema.safeParse({ ...valid, validation: [payload] }).success).toBe(false);
+      });
+    }
+
+    it('explains what was expected instead', () => {
+      const result = TaskSchema.safeParse({ ...valid, validation: ['npm test'] });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(formatValidationError(result.error)).toMatch(/not a shell command/i);
+    });
   });
 
   it('defaults flags so planners may omit them', () => {

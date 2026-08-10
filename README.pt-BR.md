@@ -192,8 +192,8 @@ Uma revisão estruturada após o MVP 1 confirmou 17 findings, reproduzidos em
 [`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts).
 Ordem de correção e severidade:
 
-- [ ] **V-01 · crítico** — strings geradas pelo planner chegam ao `/bin/sh -c`; sem allowlist
-- [ ] **V-09 · alto** — o timeout de processo nunca dispara quando o filho tem filhos
+- [x] **V-01 · crítico** — strings geradas pelo planner chegam ao `/bin/sh -c`; sem allowlist → **corrigido:** `validation` guarda ids resolvidos pela config do projeto
+- [x] **V-09 · alto** — o timeout de processo nunca dispara quando o filho tem filhos → **corrigido:** o filho roda no próprio process group
 - [ ] **V-02 · alto** — `FallbackRunner` nunca é construído em runtime
 - [ ] **V-03 · alto** — uma task interrompida no meio fica `running` para sempre
 - [ ] **V-04 · alto** — planos test-first não conseguem expressar falha esperada

@@ -26,9 +26,16 @@ You are READ-ONLY. Do not modify, create or delete any file.
 
 {{projectConfig}}
 
-## Available validation commands
+## Available validation ids
 
 {{validationCommands}}
+
+A task's `validation` field takes **ids from this list** — never a command
+line. The orchestrator resolves an id to the command the project configured and
+runs it itself. An id that is not listed above will be rejected, and a command
+written where an id belongs will be rejected too.
+
+If nothing above fits a task, use an empty list.
 
 ## What makes a good task
 
@@ -64,8 +71,8 @@ rejected and you will be asked again, so it is cheaper to get them right now.
 3. **Dependencies reference tasks that exist, and contain no cycles.**
 4. **Ids are sequential**: `TASK-001`, `TASK-002`, … with no gaps.
 5. **Acceptance criteria are non-empty** and specific enough to be checked.
-6. **Validation commands come from the list above.** Do not invent a command the
-   project does not have; use an empty list if none applies.
+6. **Validation entries are ids from the list above**, not command lines. An
+   unknown id fails the plan; so does anything that looks like a command.
 
 ## Classification
 
@@ -110,7 +117,7 @@ Return **only** a JSON object, no prose, no code fences:
         "externalIntegration": false
       },
       "acceptanceCriteria": ["Checkable statement."],
-      "validation": ["npm test -- something"]
+      "validation": ["test"]
     }
   ]
 }

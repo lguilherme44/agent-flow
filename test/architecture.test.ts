@@ -126,6 +126,42 @@ describe('no stack-specific rules leak into the tool (§58)', () => {
   });
 });
 
+describe('nothing a model wrote reaches a shell (V-01)', () => {
+  // The rule the specification's command guard (§36) was cut for not being able
+  // to enforce. Agent Flow cannot intercept what a runner executes inside its
+  // sandbox — but it absolutely can refuse to run model-authored text itself.
+  //
+  // Only two modules may name a shell, and both take strings that came from
+  // configuration a human wrote.
+  const ALLOWED_TO_SHELL = ['src/app/verification-commands.ts'];
+
+  it('spawns a shell from one module only', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (ALLOWED_TO_SHELL.includes(path)) continue;
+      if (/\/bin\/sh|\bsh\b\s*['"`]?\s*,\s*\[\s*['"`]-c|cmd\.exe|powershell/i.test(codeOnly(text))) {
+        offenders.push(path);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('resolves validation ids through the registry, never straight from a task', () => {
+    // The executor must not read `task.validation` into a command position. It
+    // maps ids through buildValidationRegistry, which only knows what the
+    // project config declared.
+    const { text } = read(join(ROOT, 'src/app/task-executor.ts'));
+    const code = codeOnly(text);
+
+    expect(code).toContain('buildValidationRegistry');
+    // The old defect, verbatim: joining plan entries into a command line.
+    expect(code).not.toMatch(/task\.validation\.join/);
+  });
+});
+
 describe('graph logic lives in exactly one module (C-3)', () => {
   // The rev.1 plan would have grown a partial cycle check inside planning and a
   // full DAG later. One module, one implementation.

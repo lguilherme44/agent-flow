@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { checkPlan } from '../../src/app/stages/planning-checks.js';
-import { PlanSchema, type Plan } from '../../src/contracts/index.js';
+import { PlanSchema, ProjectConfigSchema, type Plan } from '../../src/contracts/index.js';
+import { buildValidationRegistry } from '../../src/core/validation-registry.js';
 
 const SDD = `
 ## Functional Requirements
@@ -87,6 +88,67 @@ describe('checkPlan', () => {
 - SEC-001: Safe.
 `);
     expect(problems).toEqual([]);
+  });
+
+  describe('validation ids must exist in the project config (V-01 regression)', () => {
+    // Was a defect: checkPlan had no opinion on validation at all, so a plan
+    // could name a step nobody configured — validating nothing while appearing
+    // to, or worse, inviting someone to later add a command matching the
+    // invented name.
+    const registry = buildValidationRegistry(
+      ProjectConfigSchema.parse({
+        project: { name: 'x', type: 'node' },
+        commands: { test: 'npm test', lint: 'npm run lint' },
+      }),
+    );
+
+    it('accepts ids the project declares', () => {
+      const problems = checkPlan(
+        plan([{ ...task('TASK-001', ['FR-001', 'FR-002']), validation: ['test', 'lint'] }]),
+        SDD,
+        registry,
+      );
+      expect(problems).toEqual([]);
+    });
+
+    it('rejects an id the project never declared, naming the task', () => {
+      const problems = checkPlan(
+        plan([{ ...task('TASK-001', ['FR-001', 'FR-002']), validation: ['e2e'] }]),
+        SDD,
+        registry,
+      );
+
+      expect(problems.join(' ')).toContain('TASK-001');
+      expect(problems.join(' ')).toContain('e2e');
+    });
+
+    it('lists what was available, so the planner can correct itself', () => {
+      const problems = checkPlan(
+        plan([{ ...task('TASK-001', ['FR-001', 'FR-002']), validation: ['bench'] }]),
+        SDD,
+        registry,
+      );
+      expect(problems.join(' ')).toContain('lint, test');
+    });
+
+    it('says so plainly when the project configured nothing', () => {
+      const empty = buildValidationRegistry(undefined);
+      const problems = checkPlan(
+        plan([{ ...task('TASK-001', ['FR-001', 'FR-002']), validation: ['test'] }]),
+        SDD,
+        empty,
+      );
+      expect(problems.join(' ')).toContain('none configured');
+    });
+
+    it('accepts an empty validation list', () => {
+      const problems = checkPlan(
+        plan([{ ...task('TASK-001', ['FR-001', 'FR-002']), validation: [] }]),
+        SDD,
+        registry,
+      );
+      expect(problems).toEqual([]);
+    });
   });
 
   it('accepts a task citing an NFR or SEC the SDD defines', () => {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AnyTaskIdSchema, RequirementIdSchema } from './common.schema.js';
+import { AnyTaskIdSchema, RequirementIdSchema, ValidationIdSchema } from './common.schema.js';
 
 export const ComplexitySchema = z.enum(['trivial', 'normal', 'complex']);
 export type Complexity = z.infer<typeof ComplexitySchema>;
@@ -60,8 +60,12 @@ export const TaskSchema = z
     flags: TaskFlagsSchema.prefault({}),
 
     acceptanceCriteria: z.array(z.string().min(1)).min(1, 'a task must state how it is judged done'),
-    /** Commands run by the orchestrator after the task (AD-10). */
-    validation: z.array(z.string()).default([]),
+    /**
+     * Ids of validation commands, resolved against the project configuration by
+     * the orchestrator (AD-10). Never the commands themselves: a plan is model
+     * output, and model output must not reach a shell.
+     */
+    validation: z.array(ValidationIdSchema).default([]),
   })
   .refine((task) => !task.dependencies.includes(task.id), {
     message: 'a task cannot depend on itself',

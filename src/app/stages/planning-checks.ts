@@ -2,6 +2,7 @@ import type { Plan } from '../../contracts/index.js';
 import { buildDag, DagError } from '../../core/dag.js';
 import { checkCoverage } from '../../core/coverage.js';
 import { extractRequirementIds } from '../../core/sdd-validator.js';
+import { unknownValidationIds, type ValidationRegistry } from '../../core/validation-registry.js';
 
 /**
  * Mechanical checks a plan must pass before anyone is asked to review it.
@@ -17,7 +18,11 @@ import { extractRequirementIds } from '../../core/sdd-validator.js';
  * detection here: one implementation of topological logic, enforced by an
  * architecture test.
  */
-export function checkPlan(plan: Plan, sddText: string): string[] {
+export function checkPlan(
+  plan: Plan,
+  sddText: string,
+  validation?: ValidationRegistry,
+): string[] {
   const problems: string[] = [];
 
   // Every id the SDD defines is a legitimate citation; only the functional ones
@@ -27,6 +32,21 @@ export function checkPlan(plan: Plan, sddText: string): string[] {
   const declared = extractRequirementIds(sddText);
   const coverage = checkCoverage({ declared }, plan.tasks);
   problems.push(...coverage.problems);
+
+  // The second half of the validation trust boundary. The schema already
+  // guarantees an id cannot express a command; this guarantees the id is one the
+  // project actually declared, so a planner cannot invent a step that silently
+  // does nothing — or, worse, that someone later "fixes" by adding a command
+  // matching the invented name.
+  if (validation !== undefined) {
+    for (const { task, id } of unknownValidationIds(validation, plan.tasks)) {
+      const known = validation.ids.length > 0 ? validation.ids.join(', ') : '(none configured)';
+      problems.push(
+        `task ${task} references validation "${id}", which the project does not define ` +
+          `(available: ${known})`,
+      );
+    }
+  }
 
   try {
     buildDag(plan.tasks.map((task) => ({ id: task.id, dependencies: task.dependencies })));

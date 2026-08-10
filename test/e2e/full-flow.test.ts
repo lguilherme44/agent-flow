@@ -74,7 +74,7 @@ const PLAN = {
       dependencies: [],
       requirements: ['FR-001'],
       acceptanceCriteria: ['Types compile.'],
-      validation: ['npm test'],
+      validation: ['test'],
     },
     {
       id: 'TASK-002',
@@ -85,7 +85,7 @@ const PLAN = {
       dependencies: ['TASK-001'],
       requirements: ['FR-001'],
       acceptanceCriteria: ['Occurrences are generated.'],
-      validation: ['npm test'],
+      validation: ['test'],
     },
   ],
 };

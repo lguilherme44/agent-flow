@@ -11,7 +11,8 @@ import { routeTask, type RoutingPolicy } from '../core/router.js';
 import { StageFailure, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { runPaths } from './paths.js';
-import { runVerification } from './verification-commands.js';
+import { runCommands } from './verification-commands.js';
+import { buildValidationRegistry } from '../core/validation-registry.js';
 
 /** Marker the implementation prompt asks the agent to end with. */
 const RESULT_BLOCK = /##\s*RESULT\s*([\s\S]*)$/i;
@@ -99,19 +100,44 @@ export class TaskExecutor {
       });
     }
 
-    // Run the task's own validation commands ourselves rather than trusting the
-    // agent's account of them (§42).
+    // Run the task's own validation ourselves rather than trusting the agent's
+    // account of it (§42).
+    //
+    // `task.validation` holds *ids*, never commands. They are resolved here
+    // against the project configuration, so the string that reaches a shell was
+    // written by a human in a config file — not by a model in a plan.
+    const registry = buildValidationRegistry(config.project);
+    const commands = task.validation.map((id) => ({ id, command: registry.resolve(id) }));
+    const unresolved = commands.filter((entry) => entry.command === undefined);
+
+    if (unresolved.length > 0) {
+      // Reachable only when configuration changed after the plan was approved:
+      // checkPlan rejects unknown ids at planning time. Treated as a failure
+      // rather than skipped, because silently not validating is worse than
+      // stopping.
+      return this.persist(runId, {
+        task: task.id,
+        status: 'review_required',
+        runner,
+        reasoning: 'medium',
+        startedAt,
+        finishedAt: clock.now(),
+        filesChanged: report.filesChanged,
+        validation: { passed: false, commands: [] },
+        notes: [
+          ...report.notes,
+          `validation ${unresolved.map((entry) => `"${entry.id}"`).join(', ')} ` +
+            `is not defined by the project configuration`,
+        ],
+      });
+    }
+
     const verification =
-      task.validation.length === 0
+      commands.length === 0
         ? { passed: true, results: [] }
-        : await runVerification({
+        : await runCommands({
             processRunner: this.options.processRunner,
-            project: {
-              project: { name: 'task', type: 'task' },
-              commands: { test: task.validation.join(' && ') },
-              paths: { source: [], tests: [] },
-              rules: { architecture: [] },
-            },
+            commands: commands.map((entry) => entry.command as string),
             cwd: projectDir,
           });
 

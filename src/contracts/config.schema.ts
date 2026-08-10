@@ -100,6 +100,22 @@ export const ProjectConfigSchema = z.object({
       build: z.string().optional(),
     })
     .prefault({}),
+
+  /**
+   * Extra commands a task may reference by id, beyond the standard steps above.
+   *
+   * This is the trusted side of the boundary. A plan names an id; the
+   * orchestrator looks the command up here. Nothing a model writes is ever
+   * executed, because a plan cannot carry a command in the first place — only a
+   * reference to one a human put in this file.
+   *
+   * ```yaml
+   * validationCommands:
+   *   recurrence: npm test -- recurrence
+   *   contract: npm run test:contract
+   * ```
+   */
+  validationCommands: z.record(z.string(), z.string().min(1)).prefault({}),
   paths: z
     .object({
       source: z.array(z.string()).default([]),

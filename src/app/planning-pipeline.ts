@@ -21,6 +21,7 @@ import {
   SDD_STAGE,
 } from './stages/definitions.js';
 import { checkPlan } from './stages/planning-checks.js';
+import { buildValidationRegistry } from '../core/validation-registry.js';
 
 /** Ordered stages of the planning half of the workflow. */
 export const PLANNING_STAGES: readonly RunStage[] = [
@@ -127,9 +128,10 @@ export class PlanningPipeline {
 
     const plan = PlanSchema.parse(result.data);
 
-    // Coverage and graph checks run after the schema, because they need the SDD
-    // as well. A plan that fails here is a planning failure, not bad luck.
-    const problems = checkPlan(plan, sdd);
+    // Coverage, validation ids and graph checks run after the schema, because
+    // they need the SDD and the project config as well. A plan that fails here
+    // is a planning failure, not bad luck.
+    const problems = checkPlan(plan, sdd, buildValidationRegistry(this.options.config.project));
     if (problems.length > 0) {
       await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
       throw new StageFailure(
@@ -280,15 +282,23 @@ export class PlanningPipeline {
       : toYaml(project).trim();
   }
 
+  /**
+   * The validation ids a plan may reference, with the command behind each.
+   *
+   * The command is shown so the planner can choose sensibly; only the id is
+   * ever accepted back. A plan cannot carry a command, so nothing the model
+   * writes here can reach a shell.
+   */
   private renderValidationCommands(): string {
-    const commands = this.options.config.project?.commands ?? {};
-    const available = Object.entries(commands)
-      .filter(([, command]) => (command ?? '').trim().length > 0)
-      .map(([name, command]) => `- ${name}: ${command as string}`);
+    const registry = buildValidationRegistry(this.options.config.project);
 
-    return available.length > 0
-      ? available.join('\n')
-      : 'None configured. Use an empty validation list for every task.';
+    if (registry.ids.length === 0) {
+      return 'None configured. Use an empty validation list for every task.';
+    }
+
+    return registry.ids
+      .map((id) => `- ${id} (runs: ${registry.resolve(id) ?? ''})`)
+      .join('\n');
   }
 
   private async readAgentsMd(): Promise<string> {

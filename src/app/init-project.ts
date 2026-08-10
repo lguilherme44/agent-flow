@@ -78,6 +78,10 @@ function renderProjectConfig(stack: DetectedStack): string {
   const body = toYaml({
     project: { name: stack.name, type: stack.type },
     commands,
+    // Extra ids a plan may reference beyond the standard steps above. A plan
+    // names an id; agent-flow looks the command up here. Nothing a model writes
+    // ever reaches a shell.
+    validationCommands: {},
     paths: stack.paths,
     rules: { architecture: [] },
   });

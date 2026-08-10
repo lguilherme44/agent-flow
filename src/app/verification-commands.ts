@@ -87,6 +87,50 @@ export async function runVerification(
   };
 }
 
+export interface RunCommandsOptions {
+  readonly processRunner: ProcessRunner;
+  /**
+   * Already resolved from configuration. Callers must not pass anything that
+   * originated in model output — see core/validation-registry.ts.
+   */
+  readonly commands: readonly string[];
+  readonly cwd: string;
+  readonly timeoutSeconds?: number;
+}
+
+/**
+ * Runs an explicit list of commands, in order, reporting all of them.
+ *
+ * Used for per-task validation, where the steps come from resolving the ids a
+ * plan referenced rather than from the project's standard lint/test/build set.
+ */
+export async function runCommands(options: RunCommandsOptions): Promise<VerificationOutcome> {
+  const results: CommandResult[] = [];
+
+  for (const command of options.commands) {
+    const spawned = await options.processRunner.run({
+      command: '/bin/sh',
+      args: ['-c', command],
+      cwd: options.cwd,
+      timeoutSeconds: options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
+      maxOutputBytes: MAX_OUTPUT_BYTES,
+    });
+
+    results.push(
+      CommandResultSchema.parse({
+        command,
+        exitCode: spawned.exitCode ?? (spawned.timedOut ? 124 : 127),
+        durationMs: spawned.durationMs,
+        stdout: spawned.stdout,
+        stderr: spawned.stderr,
+        truncated: spawned.truncated,
+      }),
+    );
+  }
+
+  return { passed: results.every((result) => result.exitCode === 0), results, skipped: [] };
+}
+
 /** Compact rendering for a prompt or a terminal. */
 export function summariseVerification(outcome: VerificationOutcome): string {
   if (outcome.results.length === 0) {

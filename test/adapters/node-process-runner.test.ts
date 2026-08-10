@@ -115,6 +115,62 @@ describe('timeout (R-11)', () => {
   });
 });
 
+describe('timeout reaches the whole process tree (V-09 regression)', () => {
+  // Was a defect: the timeout did not fire at all when the child had children.
+  //
+  // A grandchild inherits the stdout pipes, and Node emits `close` only once
+  // the process has exited *and* every stream is closed — so killing the direct
+  // child left the promise pending until the grandchild finished on its own.
+  // Measured before the fix: 4s against a 300ms timeout.
+  //
+  // This is the normal case rather than an exotic one. Every validation command
+  // is shelled out, `npm test` spawns node, and the agent CLIs spawn
+  // subprocesses of their own.
+  const shell = (script: string, overrides: Record<string, unknown> = {}) =>
+    runner.run({
+      command: '/bin/sh',
+      args: ['-c', script],
+      cwd: '/tmp',
+      timeoutSeconds: 0.3,
+      killGraceMs: 150,
+      ...overrides,
+    });
+
+  it('gives up on schedule even when the child spawned its own children', async () => {
+    const startedAt = Date.now();
+    const result = await shell('( sleep 5 ) & sleep 8');
+    const elapsed = Date.now() - startedAt;
+
+    expect(result.timedOut).toBe(true);
+    // Before the fix this waited the full 8 seconds.
+    expect(elapsed).toBeLessThan(2_000);
+  }, 15_000);
+
+  it('leaves no grandchild running behind it', async () => {
+    const { existsSync, rmSync } = await import('node:fs');
+    const marker = `/tmp/agent-flow-tree-test-${String(process.pid)}`;
+    rmSync(marker, { force: true });
+
+    await shell(`( sleep 1; echo x > ${marker} ) & sleep 8`);
+
+    // The grandchild would write its marker one second in. Wait past that.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    const survived = existsSync(marker);
+    rmSync(marker, { force: true });
+    expect(survived).toBe(false);
+  }, 15_000);
+
+  it('still reports a normal exit for a process that finishes in time', async () => {
+    // The group signalling must not disturb the ordinary path.
+    const result = await shell('echo done', { timeoutSeconds: 10 });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('done');
+  }, 15_000);
+});
+
 describe('missing executable', () => {
   it('reports a spawn failure instead of crashing', async () => {
     // Not hypothetical: the Codex CLI on this machine is installed via npm but

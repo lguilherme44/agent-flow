@@ -108,7 +108,11 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     processRunner,
     config: {
       global: globalConfig,
-      project: ProjectConfigSchema.parse({ project: { name: 'x', type: 'node' } }),
+      project: ProjectConfigSchema.parse({
+        project: { name: 'x', type: 'node' },
+        commands: { test: 'npm test' },
+        validationCommands: { recurrence: 'npm test -- recurrence' },
+      }),
     },
     projectDir: PROJECT,
   });
@@ -205,10 +209,12 @@ describe('validation is run by agent-flow, not reported by the agent (§42)', ()
     const { executor, runner, run } = await harness({ processRunner: proc });
     runner.pushText(COMPLETED);
 
-    await executor.execute(task({ validation: ['npm test -- recurrence'] }), run.runId, 'SDD');
+    await executor.execute(task({ validation: ['recurrence'] }), run.runId, 'SDD');
 
+    // The id resolved to the command the *project* configured, not to anything
+    // the plan carried (V-01 regression).
     expect(proc.calls).toHaveLength(1);
-    expect(proc.lastCall?.args[1]).toContain('npm test -- recurrence');
+    expect(proc.lastCall?.args[1]).toBe('npm test -- recurrence');
   });
 
   it('sends a task to review when its validation fails', async () => {
@@ -219,7 +225,7 @@ describe('validation is run by agent-flow, not reported by the agent (§42)', ()
     const { executor, runner, run } = await harness({ processRunner: proc });
     runner.pushText(COMPLETED);
 
-    const result = await executor.execute(task({ validation: ['npm test'] }), run.runId, 'SDD');
+    const result = await executor.execute(task({ validation: ['test'] }), run.runId, 'SDD');
 
     expect(result.status).toBe('review_required');
     expect(result.validation.passed).toBe(false);
@@ -231,7 +237,7 @@ describe('validation is run by agent-flow, not reported by the agent (§42)', ()
     const { executor, runner, run } = await harness({ processRunner: proc });
     runner.pushText(COMPLETED);
 
-    const result = await executor.execute(task({ validation: ['npm test'] }), run.runId, 'SDD');
+    const result = await executor.execute(task({ validation: ['test'] }), run.runId, 'SDD');
     expect(result.status).not.toBe('completed');
   });
 
@@ -266,7 +272,7 @@ describe('BLOCKED', () => {
     const { executor, runner, run } = await harness({ processRunner: proc });
     runner.pushText('## RESULT\nSTATUS: BLOCKED\nNOTES:\n- missing decision\n');
 
-    await executor.execute(task({ validation: ['npm test'] }), run.runId, 'SDD');
+    await executor.execute(task({ validation: ['test'] }), run.runId, 'SDD');
     expect(proc.calls).toHaveLength(0);
   });
 });

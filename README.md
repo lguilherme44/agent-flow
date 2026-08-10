@@ -189,8 +189,8 @@ A structured review after MVP 1 confirmed 17 findings, reproduced in
 [`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts).
 Fix order and severity:
 
-- [ ] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist
-- [ ] **V-09 · high** — the process timeout never fires when the child has children
+- [x] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist → **fixed:** `validation` holds ids resolved against the project config
+- [x] **V-09 · high** — the process timeout never fires when the child has children → **fixed:** the child runs in its own process group
 - [ ] **V-02 · high** — `FallbackRunner` is never constructed at runtime
 - [ ] **V-03 · high** — a task interrupted mid-flight stays `running` forever
 - [ ] **V-04 · high** — test-first plans cannot express an expected failure
