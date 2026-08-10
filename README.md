@@ -180,6 +180,7 @@ result; a number written here would be neither for long.
 - [x] `doctor --deep` — live probe per runner, folded back into the verdict
 - [x] Local telemetry, derived from the run's own state and event log
 - [x] `agent-flow ui` — local server and read-only dashboard (spec §59–§102)
+- [x] Dashboard layout checked by screenshot at 1440×900 and 1280×800
 
 ### Incomplete
 
@@ -251,8 +252,12 @@ was probed against.
 
 ```bash
 npm install
-npm run check    # typecheck + lint + test
-npm run build
+npm run check         # typecheck + lint + CLI tests + dashboard tests
+npm run build         # the CLI bundle
+npm run build:web     # the dashboard bundle
+
+npm run dev:web       # dashboard against a running `agent-flow ui`
+npm run test:visual   # screenshot regression, local only — see below
 ```
 
 The suite never invokes a real CLI. Runners are exercised through a scripted
@@ -266,6 +271,15 @@ Architectural rules are executable (`test/architecture.test.ts`):
 - `src/core/` mentions no provider, model or CLI name
 - no framework name appears in `src/` outside stack detection
 - topological ordering exists in exactly one module
+- the core side never imports the server; the server never imports the CLI
+- no server module names an auth file or reads the environment
+
+The dashboard's layout is checked by screenshot against
+[`agent-flow-ui-reference.png`](agent-flow-ui-reference.png), at 1440×900 and
+1280×800, with a stubbed API and a pinned clock. Those baselines are darwin
+images — font rasterisation differs by platform — so `test:visual` is not in CI
+and running it elsewhere means regenerating baselines there first with
+`npm run test:visual:update`.
 
 ---
 

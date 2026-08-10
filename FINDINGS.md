@@ -646,6 +646,55 @@ normalisation on three platforms.
 
 ---
 
+## 16. Every element was present and the screen was still wrong
+
+The dashboard shipped with everything §66–§78 lists. Run header, nine-stage
+pipeline, five task metrics, table, inspector with four tabs, four summary
+cards. Fifty-two DOM assertions passed. Put it beside the reference and it was
+obviously a different product.
+
+The cause was one decision repeated sixteen times: `rounded-lg border
+bg-surface` on every region. Run, pipeline, each metric, table, inspector, each
+summary — the same rectangle at the same weight. Sixteen things of equal
+importance is not a hierarchy, it is a grid, and the eye has nowhere to land.
+The screen read as an admin panel because that is what a uniform grid of cards
+*is*, regardless of what the cards contain.
+
+**What actually fixed it was subtraction.** Two surfaces instead of one, and a
+question asked of every remaining border: why does this need to be an
+independent plane? The run and its pipeline became one panel, because they
+answer one question. Five metric cards became a strip inside the tasks header,
+because they are a caption to the table rather than a peer of it. The pipeline
+stopped being nine tiles and became connected chips, because a sequence has to
+be legible as a sequence and a connector does that in one glance where nine
+identical rectangles do not.
+
+**One addition mattered as much: something had to go *below* the page.** The log
+view is darker than the ground everything else sits on. Nothing else in the app
+is, which is precisely why it reads as a terminal without needing a heavier
+border to announce itself. Depth was available the whole time and the first pass
+only ever went up.
+
+**Three of the ten problems were only visible in a picture.** The title column
+collapsed to 40px under auto table layout, so every task read "Cri…". A single
+unbreakable word — "Implementation" — clipped in the pipeline at every viewport.
+At 1280×800 the terminal rendered two lines tall. None throws, none fails an
+assertion, and all three make the screen useless for the thing it exists to do.
+
+So the layout is now checked by screenshot, at both target viewports, against a
+fixture rich enough to have edges: nine tasks, a stage in flight, four models, a
+corrective task, durations spanning three orders of magnitude. **An empty run
+has no edges, and layout is only ever wrong at the edges** — which is the real
+lesson, and the reason the previous milestone's green suite proved so little.
+
+**A note on what did not change.** Not one line outside `apps/web`. The core,
+the workflow, the StateStore, the server and its security model were untouched,
+and the redesign needed nothing from them — every field it renders was already
+being served. A visual problem that requires reshaping the data underneath it is
+usually a sign the data was wrong, and this one was not.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -674,7 +723,9 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 | Codex strict-mode schemas | Would restore runtime-enforced structured output for Codex. Needs optional→nullable rewriting plus null-stripping on parse. |
 | `packages/*` split | §63 puts core, contracts, config and adapters in separate packages. The dependency *direction* it exists to guarantee is enforced today by an executable architecture test; the directory move is not done, because rewriting every import in a validated CLI buys nothing functional and risks the thing that works. |
 | UI write actions | The dashboard reads. Approve, run, retry and revise stay with the CLI until the write API is designed — every one of them is a state transition the StateStore owns. |
-| `agent-flow-ui-reference.png` | Missing from the repository. The composition was built from the layout and token specifications in §61–§78, which are detailed enough to work from; the pixel reference itself was never available to compare against. |
+| ~~`agent-flow-ui-reference.png`~~ | Closed. The file is in the repository and the dashboard was rebuilt against it — see §16. |
+| Visual regression in CI | The baselines are per-platform: font rasterisation differs between macOS and Linux, so the committed darwin images would fail on an Ubuntu runner. Running it there means generating Linux baselines on Linux, which this machine cannot do. `npm run test:visual` is local-only until then. |
+| Inspector as a drawer below 1200px | §66 allows it. The inspector narrows to 400px at 1200–1439 and the layout is validated at 1440×900 and 1280×800; below that it still renders beside the table rather than over it. |
 | End-to-end tests against real CLIs | The suite runs entirely on fakes. The real-CLI cycles were run by hand, and their findings are in §7 and §8; nothing reruns them. Automating it means spending quota on every push, which is why it has not been done rather than why it should not be. |
 
 ### Not validated
