@@ -108,23 +108,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const views: ProjectView[] = [];
 
     for (const project of options.registry.all()) {
-      const store = new StateStore({
-        fs: options.fs,
-        clock: options.clock,
-        projectDir: project.path,
-      });
-
-      let currentRunId: string | null = null;
-      let status: ProjectView['status'] = null;
-
-      try {
-        currentRunId = await store.currentRunId();
-        if (currentRunId !== null) status = (await store.loadRun(currentRunId)).status;
-      } catch {
-        // A project whose current run is unreadable is still a project.
-        status = null;
-      }
-
+      const overview = await reader.projectOverview(project);
       const stack = await stackOf(options, project);
 
       views.push({
@@ -132,8 +116,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
         name: project.name,
         path: project.path,
         ...(stack === undefined ? {} : { stack }),
-        currentRunId,
-        status,
+        ...overview,
       });
     }
 

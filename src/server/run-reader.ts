@@ -4,6 +4,8 @@ import {
   type ArtifactView,
   type Plan,
   type RunDetailView,
+  type RunRefView,
+  type RunStatus,
   type RunSummaryView,
   type RunState,
   type StageViewResponse,
@@ -32,6 +34,13 @@ import type { RegisteredProject } from './project-registry.js';
 
 /** How much artifact text the API will hand over in one response. */
 export const MAX_ARTIFACT_BYTES = 512 * 1024;
+
+/** Statuses a run does not leave on its own. What "last run" means (§81). */
+const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
+  'completed',
+  'failed',
+  'plan_rejected',
+]);
 
 const ARTIFACT_LABELS: Record<ArtifactName, string> = {
   request: 'Request',
@@ -95,22 +104,68 @@ export class RunReader {
     const state = await this.loadState(project, runId);
     if (state === null) return null;
 
-    const summary = await this.summarise(project, state);
-    const progress =
-      summary.taskCount === 0
-        ? 0
-        : Math.round((summary.completedTasks / summary.taskCount) * 100);
-
     return {
-      ...summary,
+      ...(await this.summarise(project, state)),
       ...(state.approvedAt === undefined ? {} : { approvedAt: state.approvedAt }),
       ...(state.approvedPlanHash === undefined
         ? {}
         : { approvedPlanHash: state.approvedPlanHash }),
       degradationDetail: state.degradations,
-      progress,
       startedAt: state.createdAt,
-      durationMs: Math.max(0, Date.parse(state.updatedAt) - Date.parse(state.createdAt)),
+    };
+  }
+
+  /**
+   * What the Projects page needs about one project (§81).
+   *
+   * Deliberately not `listRuns`: that reads every run's state and plan, and the
+   * projects list would then cost O(projects × runs) before anything appears on
+   * screen. Run ids sort newest-first, so this walks from the top and stops as
+   * soon as it has the current run and the last finished one — usually two reads
+   * regardless of how much history a project has.
+   */
+  async projectOverview(project: RegisteredProject): Promise<{
+    currentRunId: string | null;
+    status: RunStatus | null;
+    lastRun?: RunRefView;
+    runCount: number;
+  }> {
+    const store = this.storeFor(project);
+
+    let currentRunId: string | null = null;
+    try {
+      currentRunId = await store.currentRunId();
+    } catch {
+      // A project whose pointer is unreadable is still a project.
+    }
+
+    const ids = await store.listRunIds();
+    let status: RunStatus | null = null;
+    let lastRun: RunRefView | undefined;
+
+    for (const runId of ids) {
+      if (status !== null && lastRun !== undefined) break;
+
+      const state = await this.loadState(project, runId);
+      if (state === null) continue;
+
+      if (runId === currentRunId) status = state.status;
+      if (lastRun === undefined && TERMINAL_STATUSES.has(state.status)) {
+        lastRun = {
+          runId: state.runId,
+          feature: state.feature,
+          status: state.status,
+          stage: state.stage,
+          updatedAt: state.updatedAt,
+        };
+      }
+    }
+
+    return {
+      currentRunId,
+      status,
+      ...(lastRun === undefined ? {} : { lastRun }),
+      runCount: ids.length,
     };
   }
 
@@ -276,6 +331,9 @@ export class RunReader {
   ): Promise<RunSummaryView> {
     const plan = await this.loadPlan(this.storeFor(project), state.runId);
 
+    const taskCount = plan?.tasks.length ?? state.tasks.length;
+    const completedTasks = state.tasks.filter((task) => task.state === 'completed').length;
+
     return {
       projectId: project.id,
       runId: state.runId,
@@ -285,9 +343,14 @@ export class RunReader {
       approved: state.approved,
       createdAt: state.createdAt,
       updatedAt: state.updatedAt,
-      taskCount: plan?.tasks.length ?? state.tasks.length,
-      completedTasks: state.tasks.filter((task) => task.state === 'completed').length,
+      taskCount,
+      completedTasks,
       degradations: state.degradations.length,
+      progress: taskCount === 0 ? 0 : Math.round((completedTasks / taskCount) * 100),
+      // Last activity minus creation. Not wall-clock elapsed: a run nobody has
+      // touched since yesterday took the time it took, and reporting "18h" for
+      // an abandoned run would say something about the clock, not about the run.
+      durationMs: Math.max(0, Date.parse(state.updatedAt) - Date.parse(state.createdAt)),
     };
   }
 

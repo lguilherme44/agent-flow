@@ -85,6 +85,15 @@ export interface HealthResponse {
   readonly port: number;
 }
 
+/** A run named from somewhere that is not looking at the run itself. */
+export interface RunRefView {
+  readonly runId: string;
+  readonly feature: string;
+  readonly status: RunStatus;
+  readonly stage: string;
+  readonly updatedAt: string;
+}
+
 export interface ProjectView {
   readonly id: string;
   readonly name: string;
@@ -93,6 +102,15 @@ export interface ProjectView {
   readonly stack?: string;
   readonly currentRunId: string | null;
   readonly status: RunStatus | null;
+  /**
+   * The most recent run that has finished, one way or another.
+   *
+   * Distinct from `currentRunId`, which is whatever `.agent-flow/current-run`
+   * points at — a project can have an active run and a last completed run at the
+   * same time, and §81 asks for both.
+   */
+  readonly lastRun?: RunRefView;
+  readonly runCount: number;
 }
 
 export interface RunSummaryView {
@@ -107,16 +125,22 @@ export interface RunSummaryView {
   readonly taskCount: number;
   readonly completedTasks: number;
   readonly degradations: number;
+  /**
+   * Overall progress, 0–100, from task states. Zero before a plan exists.
+   *
+   * Computed here rather than in the browser so the runs list and the run detail
+   * cannot round it differently — the same number in two places that disagree is
+   * worse than the number being absent from one of them.
+   */
+  readonly progress: number;
+  readonly durationMs: number;
 }
 
 export interface RunDetailView extends RunSummaryView {
   readonly approvedAt?: string;
   readonly approvedPlanHash?: string;
   readonly degradationDetail: Degradation[];
-  /** Overall progress, 0–100, from task states. Zero before a plan exists. */
-  readonly progress: number;
   readonly startedAt: string;
-  readonly durationMs: number;
 }
 
 export interface StageViewResponse {

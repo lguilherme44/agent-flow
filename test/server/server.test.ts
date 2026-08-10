@@ -167,6 +167,50 @@ describe('UI-03 — the project registry', () => {
     });
   });
 
+  it('names the last finished run separately from the current one (UI-22)', async () => {
+    // §81 asks for both, and they are genuinely different facts: a project can
+    // have something in flight and something finished at the same moment. The
+    // pointer in `current-run` answers only the first.
+    const { server, store, run } = await serve();
+
+    const earlier = await store.createRun('an earlier feature');
+    await store.updateRun(earlier.runId, (state) => ({ ...state, status: 'completed' }));
+    // `createRun` moves the pointer, so the run in flight has to reclaim it.
+    await store.setCurrentRun(run.runId);
+
+    const projects = (await server.app.inject('/api/v1/projects')).json<ProjectView[]>();
+
+    expect(projects[0]).toMatchObject({
+      currentRunId: run.runId,
+      status: 'waiting_for_approval',
+      runCount: 2,
+      lastRun: { runId: earlier.runId, status: 'completed', feature: 'an earlier feature' },
+    });
+  });
+
+  it('omits the last run when nothing has finished, rather than inventing one', async () => {
+    const { server } = await serve();
+
+    const projects = (await server.app.inject('/api/v1/projects')).json<ProjectView[]>();
+
+    // The only run is waiting for approval. Reporting it as "last" would say a
+    // run finished when none has.
+    expect(projects[0]?.lastRun).toBeUndefined();
+    expect(projects[0]?.runCount).toBe(1);
+  });
+
+  it('lists a project that has never run', async () => {
+    // What every project looks like the minute after `agent-flow init`, and the
+    // row a list has to render without looking broken.
+    const { server } = await serve({ projects: [PROJECT, OTHER] });
+
+    const projects = (await server.app.inject('/api/v1/projects')).json<ProjectView[]>();
+    const fresh = projects.find((project) => project.id === 'other');
+
+    expect(fresh).toMatchObject({ currentRunId: null, status: null, runCount: 0 });
+    expect(fresh?.lastRun).toBeUndefined();
+  });
+
   it('refuses a project id nobody registered', async () => {
     const { server } = await serve();
 
@@ -213,6 +257,22 @@ describe('UI-04 — the run read API', () => {
 
     // Only /repo has runs; /other is registered and simply has none.
     expect(runs.map((entry) => entry.projectId)).toEqual(['demo']);
+  });
+
+  it('gives the list the same progress the detail reports (UI-21)', async () => {
+    // The runs list and the run detail must not round this differently. They read
+    // the same number from the same place, which is the only way to be sure.
+    const { server, run } = await serve();
+
+    const summary = (await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>()[0];
+    const detail = (
+      await server.app.inject(`/api/v1/runs/${run.runId}`)
+    ).json<RunDetailView>();
+
+    expect(summary?.progress).toBe(detail.progress);
+    expect(summary?.durationMs).toBe(detail.durationMs);
+    // One of two tasks completed, so this is a real number rather than 0 or 100.
+    expect(summary?.progress).toBe(50);
   });
 
   it('returns a run with its progress', async () => {
