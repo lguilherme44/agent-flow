@@ -1,8 +1,14 @@
 import { loadConfig } from '../config/loader.js';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../adapters/process/node-process-runner.js';
-import { buildRegistry } from '../adapters/runners/registry.js';
-import { assessHealth, referencedRunners, type ObservedRunner } from '../core/health.js';
+import { buildRegistry, type RunnerRegistry } from '../adapters/runners/registry.js';
+import {
+  assessHealth,
+  referencedRunners,
+  withProbeEvidence,
+  type ObservedRunner,
+} from '../core/health.js';
+import { probeRunner, type ProbeResult } from '../app/runner-probe.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
@@ -47,7 +53,7 @@ export async function runDoctorCommand(
     const registry = buildRegistry(config.global, { processRunner, fs });
     const health = await registry.health();
 
-    const observed: ObservedRunner[] = referencedRunners(config.global).map((id) => {
+    const shallow: ObservedRunner[] = referencedRunners(config.global).map((id) => {
       const reported = health[id];
       return reported === undefined
         ? { id, installed: false, executable: false, auth: 'not_configured' as const }
@@ -58,6 +64,11 @@ export async function runDoctorCommand(
             auth: reported.auth,
           };
     });
+
+    // ---- Live probe, only when asked for. It spends quota on every runner,
+    // which is the entire reason the shallow check exists as the default.
+    const probes = options.deep === true ? await probeAll(registry, shallow, globals.cwd) : [];
+    const observed = withProbeEvidence(shallow, probes);
 
     for (const runner of observed) {
       const reported = health[runner.id];
@@ -72,6 +83,26 @@ export async function runDoctorCommand(
         lines.push(`  detail             ${reported.detail}`);
       }
       lines.push('');
+    }
+
+    if (probes.length > 0) {
+      lines.push('Live probe:');
+      for (const probe of probes) {
+        const detail = probe.detail === undefined ? '' : ` — ${probe.detail}`;
+        lines.push(
+          `  ${probe.outcome === 'healthy' ? TICK : CROSS} ${probe.id.padEnd(18)}` +
+            `${probe.outcome} (${String(probe.durationMs)}ms)${detail}`,
+        );
+      }
+      // Stated rather than left to be worked out from the verdict below.
+      lines.push(
+        '',
+        '  Quota and failed calls are reported but do not change the verdict:',
+        '  a spent budget is a billing window, and a bad answer is not a broken',
+        '  environment. Missing credentials do change it — that is what --deep',
+        '  was for.',
+        '',
+      );
     }
 
     const verdict = assessHealth(config.global, observed);
@@ -107,16 +138,10 @@ export async function runDoctorCommand(
       lines.push('Work is still possible. Use --strict to treat this as a failure in CI.');
     }
 
-    if (options.deep === true) {
-      lines.push('');
-      lines.push('--deep was requested but live probing is not implemented yet.');
-      lines.push('It will spend quota on each runner when it is.');
-    }
-
     process.stdout.write(`${lines.join('\n')}\n`);
 
     if (globals.json) {
-      process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ ...verdict, probes }, null, 2)}\n`);
     }
 
     if (verdict.status === 'FAIL') return ExitCode.EXECUTION_ERROR;
@@ -127,6 +152,33 @@ export async function runDoctorCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+/**
+ * Probes every runner a role could actually be sent to.
+ *
+ * A runner the shallow check already found missing is skipped: spawning a binary
+ * that is not on PATH tells nobody anything new, and the probe would report
+ * `runner_unavailable` for a fact already on the screen.
+ *
+ * Sequential on purpose. These are real invocations against real quota, and
+ * firing them all at once is how a health check turns into a rate limit.
+ */
+async function probeAll(
+  registry: RunnerRegistry,
+  observed: readonly ObservedRunner[],
+  workingDirectory: string,
+): Promise<ProbeResult[]> {
+  const results: ProbeResult[] = [];
+
+  for (const runner of observed) {
+    if (!runner.installed || !runner.executable) continue;
+    if (!registry.has(runner.id)) continue;
+
+    results.push(await probeRunner(registry.get(runner.id), { workingDirectory }));
+  }
+
+  return results;
 }
 
 interface ToolStatus {

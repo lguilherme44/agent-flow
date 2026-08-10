@@ -151,6 +151,74 @@ export function assessHealth(
   return { status, routes, orphanRoles, degradations, notes };
 }
 
+/**
+ * What a live probe found.
+ *
+ * Deliberately narrower than the runner error codes. The shallow check asks
+ * "could this run?" and a probe answers it with evidence, so only the outcomes
+ * that change that answer get their own name. Everything else — a timeout, a
+ * malformed reply, a non-zero exit — is `execution_failed`: the runner was
+ * reachable and authenticated, and something about *this call* went wrong. That
+ * distinction is the same one §55 draws for fallback, and for the same reason.
+ */
+export const PROBE_OUTCOMES = [
+  'healthy',
+  'auth_required',
+  'runner_unavailable',
+  'quota_exceeded',
+  'execution_failed',
+] as const;
+
+export type ProbeOutcome = (typeof PROBE_OUTCOMES)[number];
+
+export interface ProbeObservation {
+  readonly id: string;
+  readonly outcome: ProbeOutcome;
+}
+
+/**
+ * Folds probe evidence back into what was observed shallowly.
+ *
+ * The shallow check leaves `auth: 'unknown'` on every runner, because verifying
+ * credentials costs quota and `doctor` must stay free (R-14). Its own note says
+ * to use `--deep` "to check for real" — so when `--deep` does check, the answer
+ * has to reach the verdict rather than being printed beside it.
+ *
+ * Two outcomes deliberately change nothing:
+ *
+ *   - `quota_exceeded` means the credentials work and the budget does not, which
+ *     is a property of a billing window rather than of this machine. Failing the
+ *     environment on it would make `doctor --strict` flap in CI for a condition
+ *     that resolves itself.
+ *   - `execution_failed` is a bad call, not a broken runner. Treating output
+ *     quality as an infrastructure fault is precisely what the fallback policy
+ *     forbids, and the same reasoning applies here.
+ *
+ * Both are still reported to the reader. Silent is not the same as ignored.
+ */
+export function withProbeEvidence(
+  observed: readonly ObservedRunner[],
+  probes: readonly ProbeObservation[],
+): ObservedRunner[] {
+  const byId = new Map(probes.map((probe) => [probe.id, probe.outcome]));
+
+  return observed.map((runner) => {
+    switch (byId.get(runner.id)) {
+      case 'healthy':
+      case 'quota_exceeded':
+        // It answered, which is the only direct evidence of working credentials
+        // this tool can obtain without reading them.
+        return { ...runner, auth: 'available' as const };
+      case 'auth_required':
+        return { ...runner, auth: 'not_configured' as const };
+      case 'runner_unavailable':
+        return { ...runner, executable: false };
+      default:
+        return runner;
+    }
+  });
+}
+
 /** Runners referenced by configuration, in declaration order. */
 export function referencedRunners(config: GlobalConfig): string[] {
   const seen = new Set<string>();
