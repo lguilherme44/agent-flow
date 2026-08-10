@@ -153,7 +153,7 @@ overwrite each other.
 ## Status
 
 MVP 1 is complete and has been run end to end against Claude Code and Codex.
-540 tests, no CLI invoked by the suite.
+552 tests, no CLI invoked by the suite.
 
 ### Working
 
@@ -182,6 +182,25 @@ MVP 1 is complete and has been run end to end against Claude Code and Codex.
 - [ ] Verification and final review against a live CLI (covered by tests only)
 - [ ] Any stack other than Node
 - [ ] Cost across models and repository sizes
+
+### Known defects — validation review
+
+A structured review after MVP 1 confirmed 17 findings, reproduced in
+[`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts).
+Fix order and severity:
+
+- [ ] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist
+- [ ] **V-09 · high** — the process timeout never fires when the child has children
+- [ ] **V-02 · high** — `FallbackRunner` is never constructed at runtime
+- [ ] **V-03 · high** — a task interrupted mid-flight stays `running` forever
+- [ ] **V-04 · high** — test-first plans cannot express an expected failure
+- [ ] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies
+- [ ] **V-06 · medium** — `result.json` records a hardcoded reasoning level
+- [ ] **V-07 · medium** — the discovery cache is reused without invalidation
+- [ ] **V-08 · medium** — validation commands run twice, once by the agent
+- [ ] **V-10/11/12 · low** — `approvedAt` unset, prompt role metadata unused, stale CLI copy
+
+See [FINDINGS §8](FINDINGS.md#8-a-structured-review-found-things-the-build-did-not).
 
 ### Next
 

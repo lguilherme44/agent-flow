@@ -156,7 +156,7 @@ não se sobrescrevem.
 ## Estado atual
 
 O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
-540 testes, e a suíte não invoca nenhuma CLI.
+552 testes, e a suíte não invoca nenhuma CLI.
 
 ### Funcionando
 
@@ -185,6 +185,25 @@ O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
 - [ ] Verification e final review contra uma CLI real (só cobertos por testes)
 - [ ] Qualquer stack além de Node
 - [ ] Custo entre modelos e tamanhos de repositório
+
+### Defeitos conhecidos — revisão de validação
+
+Uma revisão estruturada após o MVP 1 confirmou 17 findings, reproduzidos em
+[`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts).
+Ordem de correção e severidade:
+
+- [ ] **V-01 · crítico** — strings geradas pelo planner chegam ao `/bin/sh -c`; sem allowlist
+- [ ] **V-09 · alto** — o timeout de processo nunca dispara quando o filho tem filhos
+- [ ] **V-02 · alto** — `FallbackRunner` nunca é construído em runtime
+- [ ] **V-03 · alto** — uma task interrompida no meio fica `running` para sempre
+- [ ] **V-04 · alto** — planos test-first não conseguem expressar falha esperada
+- [ ] **V-05 · médio** — `agent-flow task` monta um grafo sem as dependências
+- [ ] **V-06 · médio** — `result.json` grava um reasoning level hardcoded
+- [ ] **V-07 · médio** — o cache de discovery é reusado sem invalidação
+- [ ] **V-08 · médio** — comandos de validação rodam duas vezes, uma delas pelo agente
+- [ ] **V-10/11/12 · baixo** — `approvedAt` não gravado, metadata de role do prompt sem uso, textos desatualizados
+
+Veja [FINDINGS §8](FINDINGS.md#8-a-structured-review-found-things-the-build-did-not).
 
 ### Próximos passos
 

@@ -173,6 +173,60 @@ probably a task-level flag (`expectsFailingValidation`), and it is not written.
 
 ---
 
+## 8. A structured review found things the build did not
+
+After MVP 1 was declared complete, the implementation went through a validation
+pass against a written checklist — hypotheses to disprove, not defects to
+confirm. All seventeen were real. Reproductions live in
+[`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts),
+where the assertions describe the **defect**; each will be inverted as its fix
+lands and then moved into the suite of the feature it belongs to.
+
+Two are worth stating here because they are exactly the kind of thing a passing
+suite hides.
+
+**Model-authored text reaches a shell.** `Task.validation` is `string[]`, filled
+in by the planner. `checkPlan` never inspects it. `TaskExecutor` joins the
+entries with `&&` and `runVerification` hands the result to `/bin/sh -c`. The
+planning prompt asks for commands from the project's configured list — an
+instruction, not a constraint. Since repository content feeds the planning
+prompt, a hostile repository can influence a plan, and the resulting command
+runs in the Agent Flow process, outside the runner sandbox that is our only
+containment. Cutting the specification's command guard (§36) was right — it
+could not see the commands the agent ran — but it left this uncovered: nothing
+protected the orchestrator from executing text a model wrote.
+
+**The timeout does not fire.** This was filed as "kills the child, not the
+tree", which understates it. A grandchild inherits the stdout pipes, and Node
+emits `close` only when the process has exited *and* every stream is closed —
+so killing the direct child leaves the promise pending. Measured:
+
+```
+sleep 20, kill child                 → closed at 405ms
+( sleep 15 ) & sleep 20, kill child  → never closed
+same, detached + kill(-pid)          → closed at 406ms
+```
+
+A run asked to give up after 300ms waited four seconds for the script instead.
+This is the normal case rather than an exotic one: every validation command is
+shelled out, `npm test` spawns node, and the agent CLIs spawn subprocesses of
+their own. The liveness guarantee simply does not hold.
+
+The other fifteen are smaller but the same shape — `FallbackRunner` is never
+instantiated outside its own tests, so configuring a fallback has no runtime
+effect while `doctor` still counts it when computing routes; a task interrupted
+mid-flight stays `running` forever, because `readyTasks` only admits `queued`
+and `ready`; `result.json` records `reasoning: 'medium'` regardless of what ran.
+
+**What this says about the test suite.** 540 tests passed throughout. They were
+not wrong — every one of them tested something real. But a unit test asserts
+that a component does what its author intended, and every one of these findings
+lives in the space between components, or in an intention that was never
+questioned. `FallbackRunner` has eighteen tests and works perfectly; nothing
+asserted that anything constructs one.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -220,7 +274,7 @@ exists. There is no systematic measurement across models or repository sizes.
 **Prompt quality has no automated test, and cannot have one.** This is the
 largest risk in the project. The prompts are what determine whether the output
 is any good, and the only way to evaluate them is to run them and read the
-result. Everything else here is covered by 540 tests; this is covered by
+result. Everything else here is covered by 552 tests; this is covered by
 judgement.
 
 ### Accepted limitations
