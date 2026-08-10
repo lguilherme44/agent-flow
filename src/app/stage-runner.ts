@@ -68,6 +68,15 @@ export interface StageDefinition {
   readonly outputSchema?: ZodType;
   /** Extra structural checks beyond the schema, e.g. required SDD sections. */
   readonly validate?: (value: unknown, text: string) => string[];
+  /**
+   * Log file name, when the stage name is not unique within a run.
+   *
+   * Implementation runs once per task, and every one of them wrote
+   * `logs/implementation.log` — so a run of nine tasks kept the log of whichever
+   * finished last, and the other eight were gone. It went unnoticed because
+   * nothing read the logs back until the dashboard needed them.
+   */
+  readonly logName?: string;
 }
 
 /** What actually ran, as opposed to what was resolved. */
@@ -216,7 +225,14 @@ export class StageRunner {
         await this.writeLog(runId, stage, logLines);
         await store.appendEvent(runId, 'stage_failed', {
           stage: stage.name,
+          role: stage.role,
           errorCode: result.errorCode,
+          // A failure is provenance too: it ran somewhere, at some effort, and
+          // possibly after a substitution that also failed.
+          ...executionDetail(lastExecution),
+          attempts: attempt,
+          startedAt,
+          finishedAt: clock.now(),
         });
 
         throw new StageFailure(
@@ -235,18 +251,21 @@ export class StageRunner {
         await this.persist(runId, stage, result.text);
         await this.writeLog(runId, stage, logLines);
 
+        const execution = lastExecution;
+
         await store.updateRun(runId, (state) => ({ ...state, stage: stage.name }));
         await store.appendEvent(runId, 'stage_completed', {
           stage: stage.name,
           role: stage.role,
-          runner: resolved.runner,
-          reasoning: resolved.reasoning,
+          // What ran, not what was resolved. A stage that fell back was logged
+          // under the runner that was *down* — so every reader of the event log
+          // inherited configured intent where the invariant is that actual
+          // execution wins. The two agree except in the one case worth seeing.
+          ...executionDetail(execution),
           attempts: attempt,
           startedAt,
           finishedAt: clock.now(),
         });
-
-        const execution = lastExecution;
 
         return {
           text: result.text,
@@ -274,7 +293,12 @@ export class StageRunner {
     await this.writeLog(runId, stage, logLines);
     await store.appendEvent(runId, 'stage_failed', {
       stage: stage.name,
+      role: stage.role,
       errorCode: 'invalid_output',
+      ...executionDetail(lastExecution),
+      attempts: attempt,
+      startedAt,
+      finishedAt: clock.now(),
       problems: lastProblems,
     });
 
@@ -318,10 +342,30 @@ export class StageRunner {
     stage: StageDefinition,
     lines: readonly string[],
   ): Promise<void> {
-    const path = runPaths(this.options.projectDir, runId).log(stage.name);
-    await this.options.fs.mkdirp(runPaths(this.options.projectDir, runId).logsDir);
-    await this.options.fs.writeFileAtomic(path, `${lines.join('\n')}\n`);
+    const paths = runPaths(this.options.projectDir, runId);
+    await this.options.fs.mkdirp(paths.logsDir);
+    await this.options.fs.writeFileAtomic(
+      paths.log(stage.logName ?? stage.name),
+      `${lines.join('\n')}\n`,
+    );
   }
+}
+
+/**
+ * The execution, flattened into event detail.
+ *
+ * One shape for every event that reports a finished attempt, so a reader of
+ * `events.jsonl` — `status`, telemetry, a future dashboard — never has to know
+ * which event it is looking at to find out who actually ran.
+ */
+export function executionDetail(execution: StageExecution): Record<string, unknown> {
+  return {
+    runner: execution.runner,
+    ...(execution.model === undefined ? {} : { model: execution.model }),
+    reasoning: execution.reasoning,
+    reasoningClamped: execution.reasoningClamped,
+    ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
+  };
 }
 
 function safeJson(text: string): unknown {

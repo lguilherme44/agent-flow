@@ -59,6 +59,10 @@ export class TaskExecutor {
           name: 'implementation',
           role,
           prompt: 'implementation',
+          // One log per task. The stage name is not unique here — it runs once
+          // per task — and sharing the file meant every task but the last one
+          // lost its log.
+          logName: `implementation-${task.id}`,
         },
         runId,
         {
