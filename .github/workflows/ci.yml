@@ -52,6 +52,14 @@ jobs:
       # configuration that no unit test would.
       - run: npm run build
 
+      # The dashboard is a separate workspace with its own compiler settings and
+      # its own bundler. Its tests run in jsdom and touch no network, so they
+      # cost the same as the rest — and a type error in the browser code would
+      # otherwise only surface when somebody ran `agent-flow ui`.
+      - run: npm run test:web
+
+      - run: npm run build:web
+
   # Separated from `check` because coverage is a report, not a gate: a drop is
   # worth seeing without failing a pull request over a number.
   coverage:

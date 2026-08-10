@@ -545,6 +545,107 @@ instruments, and they do not overlap as much as a green suite suggests.
 
 ---
 
+## 14. The corrective loop's normal path required waiving its own gate
+
+The run in §13 reached `FEATURE COMPLETE`, and the table above shows how:
+`approve --force` appears twice. The second one is the interesting one.
+
+`review --fix` appends corrective tasks. That changes the plan, which changes its
+hash, which invalidates the approval — all correct, and deliberate. What it did
+not do was give the corrected plan a review. The only `plan-review.json` on disk
+described the *previous* document, so `approve` refused it as unreviewed, and the
+way forward was `--force`.
+
+`--force` records a degradation on the run saying the review gate did not hold.
+So the ordinary route through a corrective round left every run asserting, in its
+own state file, that its plan had not really been reviewed. A gate whose normal
+path is an override is not a gate — and worse, `forced_approval` stops meaning
+anything once it appears on every corrected run.
+
+The fix is not to relax the check. The check is right: a verdict about one
+document is not a verdict about another. The fix is that there are now two
+producers of plans and only one of them had a review. Plan review moved into a
+service both use, and the corrective round takes its plan through it.
+
+**Judging that review honestly needed a second look at who wrote the plan.** The
+original tasks came from the planner. The FIX tasks are a transcription of the
+final reviewer's own findings — so a plan review run by that reviewer's provider
+is a fresh context, not an independent one. Independence for a corrective plan is
+assessed against both authors, and the run in §13, whose reviewer and planner sat
+on different providers, would now correctly report `same-provider-fresh-context`
+for the corrective round rather than claiming a protection it did not have.
+
+**Two things nearby turned out to be fabrications.**
+
+A review with no `planHash` was treated as covering whatever it was shown. That
+was a compatibility shim for artifacts written before the field existed, and it
+invents the one relationship the gate exists to verify. It is now
+`review_unverifiable` — refused, forceable, and never automatic.
+
+And a finding with no requirement produced a FIX task citing `FR-001`. Most
+findings name no requirement: `out_of_scope`, `missing_test`, `security` and
+`architectural_deviation` are about the shape of the work. So the common case
+manufactured a citation, and coverage checking then counted it as real work
+against a requirement nobody had connected it to. Corrective tasks now carry
+`correctiveFor` — the stage, the finding type, the severity, the description, and
+the requirement *only when the finding named one*. Planned tasks still must cite
+a requirement; the exception is narrow and stated in the schema.
+
+**And the event log had the same disease as the artifacts once did.**
+`stage_completed` recorded the runner the role *resolved to*, not the one that
+ran. Under a fallback the audit trail credited the runner that was down. The
+invariant — actual execution beats configured intent — held everywhere except in
+the log that exists to record what happened. Found while building telemetry on
+top of it, which is the argument for building the reader: nothing else had ever
+asked the event log a question it could get wrong.
+
+---
+
+## 15. Building a reader found the bugs that writing had hidden
+
+The dashboard is read-only, and it still changed the core three times — because
+nothing had ever asked the persisted state a question it could get wrong.
+
+**Every task but the last one had lost its log.** `StageRunner` wrote
+`logs/<stage>.log`, and implementation runs once *per task*. Nine tasks, one
+file, last writer wins. Nobody noticed because nothing read the logs back; the
+CLI prints its own progress, and the file existed, which is what "it works"
+looks like from the outside.
+
+**The event log recorded the runner that was down.** `stage_completed` carried
+`resolved.runner` — the runner the role was configured for — rather than the one
+that executed. Under a fallback the audit trail credited the wrong one. The
+invariant that actual execution beats configured intent held in every artifact
+and failed in the log whose whole job is recording what happened. Found while
+building telemetry on top of it.
+
+**The dashboard would have gone quiet, and looked idle doing it.** Query keys
+carried the project as a positional segment, and a single-project dashboard
+fetches without naming a project while every SSE event names one — so the
+invalidation never matched. Everything rendered; nothing updated. That failure is
+indistinguishable from a run that is simply not doing anything, which is the one
+mode a live view cannot afford. Keys now carry their scope as an object, which
+the cache matches partially, and a test asks the real matcher rather than
+comparing arrays.
+
+**And four defects the screenshot found that no assertion would have.** A card
+title wrapping into a fixed-height header and pushing the card's own content out
+of view. An artifacts list clipped with no indication that more existed. `sdd`
+title-cased to "Sdd" in the one place it is not spelled the way the CLI spells
+it. A duration badge upper-cased into `25M04S`, which is a different unit in
+every other context a reader has ever seen. All four render, none throws, and
+every one of them is wrong.
+
+**What the dashboard deliberately does not do.** It has no write path. Approve,
+run, retry and revise are state transitions the StateStore owns, and an HTTP
+handler performing one would be the parallel state machine §60 rules out. It
+also never accepts a filesystem path: the browser names a project by an id the
+server issued, so there is no request shape that can address a directory the
+operator did not register — which is a smaller surface to defend than path
+normalisation on three platforms.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -567,10 +668,13 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 
 | Gap | What is missing |
 |---|---|
-| `doctor --deep` | Prints that live probing is not implemented. Verifying auth for real means spending quota on each runner; the command exists so the shallow check has somewhere to defer to. |
-| Local telemetry | The schema exists (`TelemetryEntry`); nothing writes it. Per-stage timings are in the run's event log, but there is no aggregated view. |
+| ~~`doctor --deep`~~ | Closed. Probes each installed runner through the `AgentRunner` port with a one-line read-only prompt at the lowest effort it supports, and folds the answer back into the verdict. Missing credentials now fail the environment — the shallow check's own note said to use `--deep` "to check for real", and it did not. A spent quota and a failed call are reported without changing the verdict: a billing window is not a property of the machine, and a bad answer is not a broken runner. |
+| ~~Local telemetry~~ | Closed, as a projection rather than a file. Stage entries are derived from `events.jsonl`, task entries from the result files; `summariseTelemetry` aggregates by runner, model, role and stage with fallback and retry counts. Nothing is stored, so nothing can disagree with the state and the event log. Reachable via `status --json`. |
 | ~~`review --fix`~~ | Closed. Findings at or above `medium` become FIX tasks in the plan, which reopens the approval gate — the plan is no longer the one that was approved. The old generator claimed here to be "written and tested" had no tests at all, and produced tasks with `validation: []`: a fix for a review finding that ran no validation. |
 | Codex strict-mode schemas | Would restore runtime-enforced structured output for Codex. Needs optional→nullable rewriting plus null-stripping on parse. |
+| `packages/*` split | §63 puts core, contracts, config and adapters in separate packages. The dependency *direction* it exists to guarantee is enforced today by an executable architecture test; the directory move is not done, because rewriting every import in a validated CLI buys nothing functional and risks the thing that works. |
+| UI write actions | The dashboard reads. Approve, run, retry and revise stay with the CLI until the write API is designed — every one of them is a state transition the StateStore owns. |
+| `agent-flow-ui-reference.png` | Missing from the repository. The composition was built from the layout and token specifications in §61–§78, which are detailed enough to work from; the pixel reference itself was never available to compare against. |
 | End-to-end tests against real CLIs | The suite runs entirely on fakes. The real-CLI cycles were run by hand, and their findings are in §7 and §8; nothing reruns them. Automating it means spending quota on every push, which is why it has not been done rather than why it should not be. |
 
 ### Not validated

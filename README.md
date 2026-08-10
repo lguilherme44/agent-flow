@@ -73,13 +73,14 @@ it works here.
 | Command | |
 |---|---|
 | `init` | Prepare a repository. Detects the stack, reads your real scripts, never overwrites without `--force`. |
-| `doctor` | Can this environment work? Reports `OK` / `DEGRADED` / `FAIL`. |
+| `doctor` | Can this environment work? Reports `OK` / `DEGRADED` / `FAIL`. `--deep` probes each runner for real, which spends quota. |
 | `feature "<description>"` | Discovery → impact → SDD → plan → review. Stops at the gate. |
 | `status` | Where the run is, what it produced, what is degraded. |
 | `approve` | Open the gate. Refuses a failed review unless `--force`. |
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
-| `review` | Run validation, inspect the code, judge it against the SDD. |
+| `review` | Run validation, inspect the code, judge it against the SDD. `--fix` turns findings into tasks and reviews the corrected plan. |
+| `ui` | Serve the local dashboard on `127.0.0.1:4782`. Read-only — it shows runs, it does not change them. |
 | `clean` | Remove old run state. Never the active run without `--force`. |
 
 `--dry-run` shows the routing without invoking anything. `--verbose`, `--json`,
@@ -175,11 +176,15 @@ result; a number written here would be neither for long.
 - [x] Verification commands run by the orchestrator, not by an agent
 - [x] Final review and Definition of Done evaluated as code
 - [x] `review --fix` — findings become tasks in the plan and re-enter the pipeline
+- [x] Corrective rounds reviewed in their own right, so the loop needs no `--force`
+- [x] `doctor --deep` — live probe per runner, folded back into the verdict
+- [x] Local telemetry, derived from the run's own state and event log
+- [x] `agent-flow ui` — local server and read-only dashboard (spec §59–§102)
 
 ### Incomplete
 
-- [ ] `doctor --deep` — live auth probing (currently reports that it is unimplemented)
-- [ ] Local telemetry — schema exists, nothing writes it
+- [ ] Web UI write actions — approve, run, retry from the browser
+- [ ] DAG view, workspace multi-project, prompts and settings pages
 
 ### Validated end to end, against live CLIs
 
