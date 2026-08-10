@@ -5,8 +5,14 @@ import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { buildServer, type RunningServer } from '../../src/server/server.js';
 import { registryOf } from '../../src/server/project-registry.js';
 import { StateStore } from '../../src/app/state-store.js';
+import { PlanSchema, type TaskState } from '../../src/contracts/index.js';
+import { planHash } from '../../src/app/approval.js';
 import type {
+  ActionErrorView,
+  ActionJobView,
   AnalyticsView,
+  ApprovalGateView,
+  ConfigView,
   ArtifactView,
   HealthResponse,
   ProjectView,
@@ -781,3 +787,600 @@ describe('UI-05 — SSE', () => {
     expect(received).toEqual([]);
   });
 });
+
+describe('UI-26 — the effective configuration', () => {
+  it('reports every section, and where each value came from', async () => {
+    const { fs, server } = await serve();
+
+    fs.seed('/home/.agent-flow/config.yaml', 'parallelism:\n  maxTasks: 1\nretry:\n  maxAttempts: 3\n');
+
+    const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
+
+    expect(config.sections.map((section) => section.id)).toEqual([
+      'general',
+      'workspace',
+      'runners',
+      'models',
+      'execution',
+      'ui',
+      'retention',
+    ]);
+
+    const execution = config.sections.find((section) => section.id === 'execution');
+    const attempts = execution?.settings.find((entry) => entry.key === 'retry.maxAttempts');
+
+    // The origin is the point: "3, from the global file" says which file to edit,
+    // and "3" alone invites an edit to whichever one the reader opens first.
+    expect(attempts).toMatchObject({ value: '3', origin: 'global' });
+  });
+
+  it('marks a value the project overrides as the project’s', async () => {
+    const { fs, server } = await serve();
+
+    fs.seed('/home/.agent-flow/config.yaml', 'retry:\n  maxAttempts: 3\n');
+    fs.seed(
+      '/repo/.agent-flow/config.yaml',
+      `${PROJECT_CONFIG}retry:\n  maxAttempts: 5\n`,
+    );
+
+    const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
+    const execution = config.sections.find((section) => section.id === 'execution');
+
+    expect(execution?.settings.find((entry) => entry.key === 'retry.maxAttempts')).toMatchObject({
+      value: '5',
+      origin: 'project',
+    });
+  });
+
+  it('falls back to default for a key no file mentions', async () => {
+    const { server } = await serve();
+
+    const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
+    const execution = config.sections.find((section) => section.id === 'execution');
+
+    expect(execution?.settings.find((entry) => entry.key === 'git.useWorktrees')?.origin).toBe(
+      'default',
+    );
+  });
+
+  it('says which sections the spec names and the config has no keys for', async () => {
+    const { server } = await serve();
+
+    const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
+
+    // Models, UI and Retention. Empty with a reason rather than empty with a
+    // plausible-looking blank row — a settings page that showed a control for a
+    // setting nothing reads is worse than one that says there is none.
+    for (const id of ['models', 'ui', 'retention']) {
+      const section = config.sections.find((entry) => entry.id === id);
+      expect(section?.settings).toEqual([]);
+      expect(section?.note).toBeTruthy();
+    }
+  });
+
+  it('reports a broken config with the paths needed to fix it', async () => {
+    const { fs, server } = await serve();
+
+    fs.seed('/home/.agent-flow/config.yaml', 'runners: [this is not a mapping]\n');
+
+    const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
+
+    expect(config.configError).toBeTruthy();
+    expect(config.sections).toEqual([]);
+    // The sources come back anyway: they are what somebody needs in order to fix
+    // it, so they arrive alongside the reason rather than instead of it.
+    expect(config.sources.globalPath).toBe('/home/.agent-flow/config.yaml');
+  });
+
+  it('exposes no credential, environment variable or auth file', async () => {
+    const { server } = await serve();
+
+    const raw = (await server.app.inject('/api/v1/config')).body;
+
+    expect(raw).not.toMatch(/auth\.json|credential|api[_-]?key|token|process\.env|secret/i);
+  });
+
+  it('has no write endpoint for configuration', async () => {
+    // §86 lists PATCH /config. Writing a merged value back means deciding which of
+    // three layers it belongs in, and a page that guessed would move a project's
+    // override into the global file — changing every other project on the machine.
+    const { server } = await serve();
+
+    const response = await server.app.inject({ method: 'PATCH', url: '/api/v1/config' });
+
+    expect(response.statusCode).toBe(404);
+  });
+});
+
+/**
+ * UI-27 — the write API.
+ *
+ * These are the tests that make "two adapters, one use case" checkable rather than
+ * merely stated. Every one of them is about a refusal, a recomputation, or a shape
+ * the browser is not allowed to send — because a write endpoint that happens to work
+ * is not the same as one that cannot be talked into the wrong thing.
+ */
+describe('UI-27 — the write API', () => {
+  /** A run whose plan has passed a review that names the right plan. */
+  async function approvable(): Promise<Awaited<ReturnType<typeof serve>>> {
+    const context = await serve();
+    const hash = planHash(PlanSchema.parse(PLAN));
+
+    await context.store.writeArtifact(
+      context.run.runId,
+      'planReview',
+      JSON.stringify({
+        verdict: 'PASS',
+        findings: [],
+        independence: 'cross-provider',
+        reviewer: { runner: 'claude', model: 'a-model', reasoning: 'high' },
+        planHash: hash,
+      }),
+    );
+
+    return context;
+  }
+
+  describe('the approval gate', () => {
+    it('describes the gate with the hash the server computed', async () => {
+      const { server, run } = await approvable();
+
+      const gate = (
+        await server.app.inject(`/api/v1/runs/${run.runId}/approval`)
+      ).json<ApprovalGateView>();
+
+      expect(gate.canApprove).toBe(true);
+      expect(gate.planHash).toMatch(/^[0-9a-f]{16}$/);
+      expect(gate.taskCount).toBe(2);
+      expect(gate.review).toMatchObject({ verdict: 'PASS', coversThisPlan: true });
+      // No version fields: neither artifact declares one, so the SDD is identified
+      // by a digest that says it is a digest.
+      expect(gate.sddDigest).toMatch(/^[0-9a-f]{12}$/);
+    });
+
+    it('says a review of a different plan does not cover this one', async () => {
+      const { server, store, run } = await approvable();
+
+      await store.writeArtifact(
+        run.runId,
+        'planReview',
+        JSON.stringify({
+          verdict: 'PASS',
+          findings: [],
+          independence: 'cross-provider',
+          reviewer: { runner: 'claude', model: 'a-model', reasoning: 'high' },
+          planHash: 'deadbeefdeadbeef',
+        }),
+      );
+
+      const gate = (
+        await server.app.inject(`/api/v1/runs/${run.runId}/approval`)
+      ).json<ApprovalGateView>();
+
+      // A verdict about another document is not a verdict about this one (§17).
+      expect(gate.canApprove).toBe(false);
+      expect(gate.refusal).toMatchObject({ kind: 'review_stale', forcible: true });
+      expect(gate.review?.coversThisPlan).toBe(false);
+    });
+  });
+
+  describe('approve', () => {
+    it('approves the plan on disk and binds the approval to its hash', async () => {
+      const { server, store, run } = await approvable();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(200);
+      const state = await store.loadRun(run.runId);
+      expect(state.approved).toBe(true);
+      expect(state.approvedPlanHash).toBe(planHash(PlanSchema.parse(PLAN)));
+    });
+
+    it('ignores a plan hash a client tries to supply', async () => {
+      // The security property §90 turns on. A body carrying a hash must not be able
+      // to get that hash credited with the approval — so the server recomputes and
+      // the extra field is simply not part of the contract.
+      const { server, store, run } = await approvable();
+
+      await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { force: false, planHash: 'deadbeefdeadbeef' },
+      });
+
+      const state = await store.loadRun(run.runId);
+      expect(state.approvedPlanHash).toBe(planHash(PlanSchema.parse(PLAN)));
+      expect(state.approvedPlanHash).not.toBe('deadbeefdeadbeef');
+    });
+
+    it('refuses an unreviewed plan, and says the refusal is forcible', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: {},
+      });
+
+      // 409: the request was well formed and the workflow said no.
+      expect(response.statusCode).toBe(409);
+      expect(response.json<ActionErrorView>()).toMatchObject({
+        error: 'review_missing',
+        forcible: true,
+      });
+      // What to do about it, which is what §95 asks a refusal to carry.
+      expect(response.json<ActionErrorView>().action).toBeTruthy();
+    });
+
+    it('records a forced approval as a degradation rather than as a normal one', async () => {
+      const { server, store, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { force: true },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const state = await store.loadRun(run.runId);
+      // A gate opened over a missing review has to look different afterwards from
+      // one that passed. `status --json` and the Definition of Done both read this.
+      expect(state.degradations.map((entry) => entry.kind)).toContain('forced_approval');
+    });
+
+    it('leaks no stack trace when something inside fails', async () => {
+      const { server, store, run } = await serve();
+
+      // A plan that will not parse. The refusal names the plan; a Zod error with a
+      // file path in it would be the wrong thing to hand a browser.
+      await store.writeArtifact(run.runId, 'plan', '{ not json');
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: {},
+      });
+
+      expect(response.body).not.toMatch(/at \w+ \(|node_modules|ZodError/);
+      expect(response.json<ActionErrorView>().error).toBe('no_plan');
+    });
+  });
+
+  describe('reject', () => {
+    it('records the rejection and the reason', async () => {
+      const { server, store, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: { reason: 'the approach is wrong' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect((await store.loadRun(run.runId)).status).toBe('plan_rejected');
+      const events = await store.readEvents(run.runId);
+      expect(events.some((event) => event.type === 'run_rejected')).toBe(true);
+    });
+
+    it('refuses to reject the same run twice', async () => {
+      const { server, run } = await serve();
+
+      await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: {},
+      });
+      const second = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: {},
+      });
+
+      expect(second.statusCode).toBe(409);
+      expect(second.json<ActionErrorView>().error).toBe('already_rejected');
+    });
+
+    it('refuses to reject a run that already completed', async () => {
+      const { server, store, run } = await serve();
+
+      await store.updateRun(run.runId, (state) => ({ ...state, status: 'completed' }));
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: {},
+      });
+
+      // Nothing guarded the run's own status before, so this used to succeed and
+      // record that a finished run's plan had been turned down.
+      expect(response.statusCode).toBe(409);
+      expect(response.json<ActionErrorView>().error).toBe('run_completed');
+    });
+  });
+
+  describe('retry', () => {
+    it('queues a failed task again', async () => {
+      const { server, store, run } = await serve();
+
+      // Through the legal path: §22 has no queued → failed, and StateStore enforces
+      // that on every write. Seeding an illegal state would test a run that cannot
+      // exist.
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'failed', 1);
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(200);
+      const state = await store.loadRun(run.runId);
+      expect(state.tasks.find((task) => task.id === 'FIX-001')?.state).toBe('queued');
+    });
+
+    it('refuses a BLOCKED task without a deliberate override', async () => {
+      const { server, store, run } = await serve();
+
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+        payload: {},
+      });
+
+      // BLOCKED means a decision is missing. Re-running the same prompt produces
+      // the same gap, or a guess — which is worse (§20).
+      expect(response.statusCode).toBe(409);
+      expect(response.json<ActionErrorView>()).toMatchObject({
+        error: 'task_blocked',
+        forcible: true,
+      });
+    });
+
+    it('404s a task that has never run', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/tasks/TASK-999/retry`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('rejects a task id that is not one before touching the filesystem', async () => {
+      const { server, run } = await serve();
+
+      for (const attempt of ['../../etc', 'TASK-1', 'rm -rf /']) {
+        const response = await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/tasks/${encodeURIComponent(attempt)}/retry`,
+          payload: {},
+        });
+        expect(response.statusCode).toBe(400);
+      }
+    });
+  });
+
+  describe('start and revise', () => {
+    it('answers 202 with a job rather than holding the socket open', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/start`,
+        payload: {},
+      });
+
+      // Starting a run executes a plan. A handler that awaited it would hold a
+      // socket past every timeout between the browser and this process.
+      expect(response.statusCode).toBe(202);
+      expect(response.json<ActionJobView>()).toMatchObject({ kind: 'start', runId: run.runId });
+    });
+
+    it('reports the gate refusal through the job, not through the response', async () => {
+      const { server, run } = await serve();
+
+      const started = (
+        await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/start`,
+          payload: {},
+        })
+      ).json<ActionJobView>();
+
+      // The gates live inside the use case, which is the only place they may live.
+      // So the 202 means "asked", and the job says whether the workflow agreed.
+      const job = await settleJob(server, started.id);
+      expect(job.status).toBe('failed');
+      expect(job.error?.error).toBe('approval_required');
+      expect(job.error?.action).toBe(
+        'Review and approve the current plan before starting.',
+      );
+    });
+
+    it('refuses to run the same run twice at once', async () => {
+      const { server, run } = await approvable();
+
+      await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: {},
+      });
+
+      // Two schedulers on one run would both move the same task to running and
+      // spawn the same agent twice. A double-clicked button produces exactly that.
+      const first = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/start`,
+        payload: {},
+      });
+      const second = await server.app.inject({
+        method: 'POST',
+        url: `/api/v1/runs/${run.runId}/start`,
+        payload: {},
+      });
+
+      expect(first.statusCode).toBe(202);
+      // Either the first job is still in flight — 409 — or it finished before the
+      // second arrived, which is a legitimate 202. What must never happen is two
+      // jobs running at once, and `activeFor` is what guarantees that.
+      if (second.statusCode === 409) {
+        expect(second.json<ActionErrorView>().error).toBe('run_busy');
+      } else {
+        expect(second.statusCode).toBe(202);
+      }
+    });
+
+    it('refuses a revision with no instruction', async () => {
+      const { server, run } = await serve();
+
+      for (const payload of [{}, { instruction: '' }, { instruction: '   ' }]) {
+        const response = await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/revise`,
+          payload,
+        });
+        expect(response.statusCode).toBe(400);
+      }
+    });
+
+    it('refuses to act on a run that is not the active one', async () => {
+      const { server, store, run } = await serve();
+
+      const other = await store.createRun('a newer feature');
+      expect(other.runId).not.toBe(run.runId);
+
+      const started = (
+        await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/start`,
+          payload: {},
+        })
+      ).json<ActionJobView>();
+
+      // The CLI has always acted on the current run. Executing an older one would
+      // write into a directory the rest of the tool has moved on from, and the
+      // person clicking would have no way to tell.
+      const job = await settleJob(server, started.id);
+      expect(job.error?.error).toBe('not_current_run');
+    });
+
+    it('serves a job by id, and the active job for a run', async () => {
+      const { server, run } = await serve();
+
+      const started = (
+        await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/start`,
+          payload: {},
+        })
+      ).json<ActionJobView>();
+
+      const byId = await server.app.inject(`/api/v1/jobs/${started.id}`);
+      expect(byId.statusCode).toBe(200);
+
+      // Null rather than 404 once it finishes: "nothing is running" is the normal
+      // answer, and a page that polled a 404 to learn it would log every time.
+      await settleJob(server, started.id);
+      const active = await server.app.inject(`/api/v1/runs/${run.runId}/job`);
+      expect(active.statusCode).toBe(200);
+      expect(active.json()).toBeNull();
+    });
+
+    it('rejects a job id that is not one', async () => {
+      const { server } = await serve();
+
+      for (const attempt of ['../../etc/passwd', 'job-x', '1']) {
+        const response = await server.app.inject(`/api/v1/jobs/${encodeURIComponent(attempt)}`);
+        expect(response.statusCode).toBe(400);
+      }
+    });
+  });
+
+  describe('what the write API refuses to have', () => {
+    it('has no pause, resume or cancel', async () => {
+      // §86 lists all three and the core has semantics for none: RUN_STATUSES has
+      // no paused or cancelled, and the scheduler cannot be interrupted between
+      // tasks. An endpoint that set a status field to satisfy the list would be a
+      // button that lies about what it did.
+      const { server, run } = await serve();
+
+      for (const action of ['pause', 'resume', 'cancel']) {
+        const response = await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/${action}`,
+          payload: {},
+        });
+        expect(response.statusCode).toBe(404);
+      }
+    });
+
+    it('accepts no path, command or runner executable in any write body', async () => {
+      const { server, run } = await serve();
+
+      // Every write body is validated by a Zod object whose fields are a boolean, a
+      // sentence, or an id the server issued. These extras are not in any of them,
+      // so they cannot reach a handler that might act on one.
+      const hostile = {
+        force: true,
+        instruction: 'change it',
+        path: '/etc/passwd',
+        command: 'rm -rf /',
+        runnerCommand: '/tmp/evil',
+        cwd: '/',
+        planHash: 'deadbeefdeadbeef',
+      };
+
+      for (const action of ['approve', 'reject', 'revise']) {
+        const response = await server.app.inject({
+          method: 'POST',
+          url: `/api/v1/runs/${run.runId}/${action}`,
+          payload: hostile,
+        });
+        // Whatever the workflow decides, none of the extras appear in the answer —
+        // which is the only place they could have had an effect.
+        expect(response.body).not.toMatch(/etc\/passwd|rm -rf|tmp\/evil/);
+      }
+    });
+  });
+});
+
+/** One legal task transition, so a fixture cannot describe an impossible run. */
+async function moveTask(
+  store: StateStore,
+  runId: string,
+  taskId: string,
+  state: TaskState,
+  attempts?: number,
+): Promise<void> {
+  await store.updateRun(runId, (current) => ({
+    ...current,
+    tasks: current.tasks.map((task) =>
+      task.id === taskId
+        ? { ...task, state, ...(attempts === undefined ? {} : { attempts }) }
+        : task,
+    ),
+  }));
+}
+
+/** Waits for a job to stop running. The work is real, so this polls the registry. */
+async function settleJob(
+  server: RunningServer,
+  jobId: string,
+): Promise<ActionJobView> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const job = (await server.app.inject(`/api/v1/jobs/${jobId}`)).json<ActionJobView>();
+    if (job.status !== 'running') return job;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`job ${jobId} never finished`);
+}

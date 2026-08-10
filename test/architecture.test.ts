@@ -275,3 +275,126 @@ describe('graph logic lives in exactly one module (C-3)', () => {
     expect(text).toMatch(/topological/i);
   });
 });
+
+describe('the write API is an adapter, not a second workflow (UI-27, §60)', () => {
+  // The rules the final architectural review of UI-B checks for by hand, written
+  // down so they hold in six months instead of on the day somebody looked. Every
+  // one of them maps to a way the browser and the CLI could start enforcing the
+  // workflow separately, which is the failure that would be silent.
+
+  const serverText = (): string => codeOnly(read(join(ROOT, 'src/server/server.ts')).text);
+
+  it('has no HTTP handler that writes state directly', () => {
+    // A handler that called `updateRun`, `appendEvent` or `writeArtifact` would be
+    // the parallel state machine §60 forbids. Every write goes through a use case.
+    const code = serverText();
+
+    for (const writer of ['updateRun', 'appendEvent', 'writeArtifact', 'setCurrentRun']) {
+      expect(code, `server.ts calls ${writer} directly`).not.toContain(`${writer}(`);
+    }
+  });
+
+  it('decides no approval of its own', () => {
+    // `checkApproval`, `planHash`, `approveRun` and `FORCIBLE_REFUSALS` live in
+    // `app/approval.ts` and are reached only through `app/run-actions.ts`. A server
+    // that imported them would be a second implementation of the gate.
+    const offenders = sourceFiles('src/server')
+      .map(read)
+      .filter(({ text }) => importSpecifiers(text).some((s) => s.includes('app/approval')))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('reimplements neither the scheduler nor the dependency graph', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src/server')) {
+      const { path, text } = read(file);
+      const bad = importSpecifiers(text).filter(
+        (specifier) =>
+          specifier.includes('app/scheduler') ||
+          specifier.includes('core/dag') ||
+          specifier.includes('app/task-executor'),
+      );
+      if (bad.length > 0) offenders.push(`${path}: ${bad.join(', ')}`);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('never accepts a plan hash from a client', () => {
+    // The property §90 turns on. `ApproveRequestSchema` is the only shape the
+    // approve endpoint will act on, and a hash is not in it — so there is no request
+    // that could get a caller-chosen hash credited with an approval.
+    const contracts = read(join(ROOT, 'src/contracts/api.schema.ts')).text;
+    const requestSection = contracts.slice(
+      contracts.indexOf('// Write requests'),
+      contracts.indexOf('// Responses'),
+    );
+
+    expect(requestSection).toContain('ApproveRequestSchema');
+    for (const forbidden of ['planHash', 'path', 'command', 'cwd']) {
+      expect(requestSection, `a write request accepts ${forbidden}`).not.toMatch(
+        new RegExp(`${forbidden}\\s*:`, 'i'),
+      );
+    }
+  });
+
+  it('accepts no filesystem path anywhere in the request contracts', () => {
+    // Ids, never locations — for projects, runs, tasks, prompts and jobs alike.
+    const contracts = read(join(ROOT, 'src/contracts/api.schema.ts')).text;
+    const schemas = contracts.slice(0, contracts.indexOf('// Responses'));
+
+    // Every request schema validates against one of these, and none of them is a
+    // path. `z.string()` on its own would be, which is why the assertion is on the
+    // absence of an unconstrained string rather than on the presence of a regex.
+    expect(schemas).not.toMatch(/z\.string\(\)\s*[,)}]/);
+  });
+
+  it('names no runner, model or provider in the server', () => {
+    // The core knows no provider (§3, §58) and neither does the layer above it. A
+    // server that branched on "codex" would have to be edited to add a runner.
+    const forbidden = ['claude', 'codex', 'anthropic', 'openai', 'gpt-', 'opus', 'sonnet'];
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src/server')) {
+      const { path, text } = read(file);
+      const haystack = codeOnly(text).toLowerCase();
+      const hits = forbidden.filter((needle) => haystack.includes(needle));
+      if (hits.length > 0) offenders.push(`${path}: ${hits.join(', ')}`);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('exposes no pause, resume or cancel while the core has no semantics for them', () => {
+    // §86 lists all three. `RUN_STATUSES` has no paused or cancelled and the
+    // scheduler cannot be interrupted, so an endpoint would have to fake it. This
+    // test is the thing that will fail when somebody adds one without the semantics.
+    const code = serverText();
+
+    for (const action of ['pause', 'resume', 'cancel']) {
+      expect(code, `the server routes /${action}`).not.toContain(`/${action}'`);
+    }
+  });
+
+  it('keeps every use case reachable from both adapters', () => {
+    // The CLI must not have grown its own copy of a use case. Each of these is
+    // imported from `app/run-actions.ts` by both the CLI and the server, and the
+    // test fails if either side stops going through it.
+    const cli = sourceFiles('src/cli')
+      .map(read)
+      .filter(({ text }) => importSpecifiers(text).some((s) => s.includes('app/run-actions')))
+      .map(({ path }) => path);
+
+    expect(cli.length, 'no CLI command uses the shared use cases').toBeGreaterThan(0);
+
+    // Read from the raw text: `codeOnly` blanks string literals, so an import
+    // specifier is exactly the thing it removes.
+    const server = read(join(ROOT, 'src/server/server.ts')).text;
+    expect(
+      importSpecifiers(server).some((specifier) => specifier.includes('app/run-actions')),
+    ).toBe(true);
+  });
+});

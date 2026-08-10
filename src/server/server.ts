@@ -1,13 +1,24 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import {
   AnalyticsQuerySchema,
+  ApproveRequestSchema,
   ArtifactParamsSchema,
   EventsQuerySchema,
+  JobParamsSchema,
   ProjectQuerySchema,
   PromptParamsSchema,
+  RejectRequestSchema,
+  RetryRequestSchema,
+  ReviseRequestSchema,
   RunParamsSchema,
+  StartRequestSchema,
   TaskParamsSchema,
+  type ActionErrorView,
+  type ActionJobView,
+  type ActionResultView,
   type AnalyticsView,
+  type ApprovalGateView,
+  type ConfigView,
   type HealthResponse,
   type ProjectView,
   type PromptView,
@@ -20,6 +31,17 @@ import {
 import { StateStore } from '../app/state-store.js';
 import { PromptLoader } from '../app/prompt-loader.js';
 import { describeRoleRoutes } from '../app/role-routes.js';
+import {
+  approve,
+  describeApprovalGate,
+  reject,
+  retryTask,
+  revise,
+  start,
+  type ActionError,
+  type ActionErrorCode,
+  type RunActionDeps,
+} from '../app/run-actions.js';
 import { loadConfig } from '../config/loader.js';
 import { buildRegistry } from '../adapters/runners/registry.js';
 import { referencedRunners } from '../core/health.js';
@@ -29,28 +51,35 @@ import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import { RunReader } from './run-reader.js';
 import { PromptReader } from './prompt-reader.js';
 import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
+import { ConfigReader } from './config-reader.js';
+import { ActionJobs, type ActionJob, type JobResult } from './action-jobs.js';
 import { createEventBus, RunWatcher, type EventBus } from './event-bridge.js';
 import type { ProjectRegistry, RegisteredProject } from './project-registry.js';
 
 /**
  * The local control plane (§59, §86).
  *
- * Read-only, and structurally so: there is no route here that writes anything.
- * Approving a plan or starting a run stays with the CLI until the write API is
- * designed, because every one of those actions is a state transition the
- * StateStore owns, and an HTTP handler that performed one itself would be the
- * parallel state machine §60 forbids.
+ * It writes now, and the shape of *how* is the important part: every write handler
+ * calls a use case in `app/run-actions.ts`, which is the same use case the CLI
+ * calls. Not a shared helper — the same function. An HTTP handler that decided a
+ * gate, computed a hash or touched `state.json` itself would be the parallel state
+ * machine §60 forbids, and the browser and the terminal would drift apart in
+ * silence rather than loudly.
  *
- * Three rules this file exists to keep:
+ * Four rules this file exists to keep:
  *
  *   - **No path ever arrives from the client.** Endpoints name a project by id
  *     and the registry resolves it. There is no request that can address a
- *     directory the operator did not register.
+ *     directory the operator did not register — and no write body carries a path,
+ *     a command or a runner executable either.
+ *   - **No trusted hash arrives from the client.** `approve` takes no plan hash.
+ *     The use case reads the plan on disk and hashes it, so there is no call that
+ *     opens the gate for a plan the person did not see (§90).
  *   - **Nothing reads a credential.** Runner health reports whether auth is
  *     configured, which is what the adapters already report to `doctor`; no
  *     handler opens an auth file, and none returns environment variables.
- *   - **The browser never talks to a runner.** The only live calls this process
- *     makes are `healthCheck`, which spawns a CLI with `--version`.
+ *   - **The browser never talks to a runner.** Runners are spawned by the use
+ *     cases, inside a job, exactly as the CLI spawns them.
  */
 
 export interface ServerOptions {
@@ -88,6 +117,25 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   const reader = new RunReader({ fs: options.fs, clock: options.clock });
   const prompts = new PromptReader({ fs: options.fs, promptsDir: options.promptsDir });
   const analytics = new AnalyticsReader({ fs: options.fs, clock: options.clock });
+  const jobs = new ActionJobs({
+    clock: options.clock,
+    // Down the same stream everything else uses. A job that the workflow refused
+    // never touched `state.json`, so the run watcher cannot see it — publishing here
+    // is what keeps polling out of the dashboard.
+    onChange: (job) => {
+      bus.publish({
+        type: job.status === 'running' ? 'job.started' : 'job.finished',
+        projectId: job.projectId,
+        runId: job.runId,
+        timestamp: job.finishedAt ?? job.startedAt,
+        payload: { jobId: job.id, kind: job.kind, status: job.status },
+      });
+    },
+  });
+  const configReader = new ConfigReader({
+    fs: options.fs,
+    globalConfigPath: options.globalConfigPath,
+  });
 
   const watcher = new RunWatcher({
     fs: options.fs,
@@ -348,6 +396,21 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     }));
   });
 
+  /**
+   * The effective configuration (§85).
+   *
+   * Read-only. `PATCH /config` is listed in §86 and is not implemented: writing a
+   * merged value back means deciding which of three layers it belongs in, and a
+   * settings page that guessed would move a project's override into the global file
+   * — silently changing every other project on the machine.
+   */
+  app.get('/api/v1/config', async (request, reply): Promise<ConfigView | undefined> => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    return configReader.describe(project);
+  });
+
   app.get('/api/v1/prompts', async (): Promise<PromptView[]> => prompts.list());
 
   app.get('/api/v1/prompts/:prompt', async (request, reply) => {
@@ -373,6 +436,236 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     if (scoped.length === 0) return notFound(reply, 'no such project');
 
     return analytics.aggregate(scoped, query.data.limit ?? DEFAULT_ANALYTICS_RUNS);
+  });
+
+  // -------------------------------------------------------------------------
+  // Write API (§86, UI-27)
+  // -------------------------------------------------------------------------
+  //
+  // Every handler below is a translator and nothing else. It validates the shape
+  // that arrived, resolves the project through the registry, calls the use case in
+  // `app/run-actions.ts` — the same one the CLI calls — and turns the outcome into
+  // a status code. No handler reads a plan, computes a hash, decides a gate or
+  // touches `state.json`: doing any of that here would be the parallel state
+  // machine §60 forbids, and the browser and the terminal would start enforcing the
+  // workflow separately.
+  //
+  // `pause`, `resume` and `cancel` are absent. §86 lists them and the core has no
+  // semantics for any of the three: `RUN_STATUSES` has no paused or cancelled, and
+  // the scheduler has no way to be interrupted between tasks. An endpoint that set
+  // a status field to satisfy the list would be a button that lies.
+
+  /** How a use case's refusal becomes a status code. */
+  const statusOf = (code: ActionErrorCode): number => {
+    switch (code) {
+      case 'no_such_run':
+      case 'no_such_task':
+        return 404;
+      case 'invalid_input':
+        return 400;
+      // Everything else is a refusal about the run's *state*, not about the
+      // request: the request was well formed and the workflow said no.
+      default:
+        return 409;
+    }
+  };
+
+  const rejectAction = (reply: FastifyReply, error: ActionError): ActionErrorView => {
+    reply.code(statusOf(error.code));
+    return errorView(error);
+  };
+
+  /** The ports a use case needs, for one project. Never a client-supplied path. */
+  const depsFor = (project: RegisteredProject): RunActionDeps => ({
+    fs: options.fs,
+    clock: options.clock,
+    processRunner: options.processRunner,
+    projectDir: project.path,
+    globalConfigPath: options.globalConfigPath,
+    promptsDir: options.promptsDir,
+  });
+
+  app.get('/api/v1/runs/:runId/approval', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const outcome = await describeApprovalGate(depsFor(scope.project), scope.runId);
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+
+    const gate = outcome.value;
+    const view: ApprovalGateView = {
+      ...gate,
+      warnings: [...gate.warnings],
+      ...(gate.review === undefined
+        ? {}
+        : { review: { ...gate.review, findings: [...gate.review.findings] } }),
+      degradations: [...gate.degradations],
+    };
+    return view;
+  });
+
+  app.post('/api/v1/runs/:runId/approve', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const body = ApproveRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid approve request');
+
+    // No hash crosses this boundary. The use case reads the plan on disk and
+    // hashes it, so there is no version of this call that approves a plan the
+    // person did not see (§90).
+    const outcome = await approve(depsFor(scope.project), scope.runId, {
+      force: body.data.force,
+    });
+
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+    return actionResult(scope.runId, outcome.warnings, {
+      planHash: outcome.value.planHash,
+      taskCount: outcome.value.taskCount,
+      forced: outcome.value.forced,
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/reject', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const body = RejectRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid reject request');
+
+    const outcome = await reject(depsFor(scope.project), scope.runId, body.data.reason);
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+    return actionResult(scope.runId, outcome.warnings);
+  });
+
+  app.post('/api/v1/runs/:runId/tasks/:taskId/retry', async (request, reply) => {
+    const params = TaskParamsSchema.safeParse(request.params);
+    if (!params.success) return badRequest(reply, 'invalid run or task id');
+
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const body = RetryRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid retry request');
+
+    const outcome = await retryTask(depsFor(project), params.data.runId, params.data.taskId, {
+      force: body.data.force,
+    });
+
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+    return actionResult(params.data.runId, outcome.warnings, {
+      taskId: outcome.value.taskId,
+      attempts: outcome.value.attempts,
+      forced: outcome.value.forced,
+    });
+  });
+
+  /**
+   * Starting a run and revising a plan are jobs, not requests.
+   *
+   * Both spawn runner processes and take minutes. The handler answers 202 with a
+   * job id and the work proceeds; progress arrives through the stream the run
+   * watcher already feeds, because `state.json` changing is what progress *is*.
+   */
+  const startJob = (
+    reply: FastifyReply,
+    project: RegisteredProject,
+    kind: 'start' | 'revise',
+    runId: string,
+    work: () => Promise<JobResult>,
+  ): ActionJobView | ActionErrorView => {
+    const outcome = jobs.start({ kind, projectId: project.id, runId, work });
+
+    if ('busy' in outcome) {
+      reply.code(409);
+      return {
+        error: 'run_busy',
+        message: `${runId} is already ${
+          outcome.busy.kind === 'start' ? 'running' : 're-planning'
+        } in this server.`,
+        action: 'Wait for it to finish, or watch it on the run page.',
+        detail: { jobId: outcome.busy.id, kind: outcome.busy.kind },
+      };
+    }
+
+    reply.code(202);
+    return jobView(outcome.started);
+  };
+
+  app.post('/api/v1/runs/:runId/start', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const body = StartRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid start request');
+
+    const deps = depsFor(scope.project);
+    const runId = scope.runId;
+    const taskId = body.data.taskId;
+
+    // The gates are checked *inside* the use case, so a refusal has to come back
+    // through the job rather than through the response. Checked eagerly here as
+    // well would mean two implementations of the same gate, one of which could
+    // fall behind — so the 202 says "asked", not "will succeed", and the job says
+    // which.
+    return startJob(reply, scope.project, 'start', runId, async () => {
+      const outcome = await start(deps, runId, taskId === undefined ? {} : { taskId });
+      if (!outcome.ok) return { error: outcome.error };
+
+      const scheduled = outcome.value.outcome;
+      return {
+        summary: scheduled.planComplete
+          ? 'Every task completed.'
+          : scheduled.complete
+            ? 'The requested work completed; the plan has not.'
+            : `Stopped: ${scheduled.haltedBy ?? 'not all tasks completed'}.`,
+      };
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/revise', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const body = ReviseRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return badRequest(reply, 'a revision needs an instruction saying what should change');
+    }
+
+    const deps = depsFor(scope.project);
+    const runId = scope.runId;
+    const instruction = body.data.instruction;
+
+    return startJob(reply, scope.project, 'revise', runId, async () => {
+      const outcome = await revise(deps, runId, instruction);
+      if (!outcome.ok) return { error: outcome.error };
+
+      return {
+        summary: `Re-planned into ${String(outcome.value.taskCount)} tasks${
+          outcome.value.reviewVerdict === undefined
+            ? ''
+            : `; review ${outcome.value.reviewVerdict}`
+        }.`,
+      };
+    });
+  });
+
+  app.get('/api/v1/jobs/:jobId', (request, reply) => {
+    const params = JobParamsSchema.safeParse(request.params);
+    if (!params.success) return badRequest(reply, 'invalid job id');
+
+    const job = jobs.get(params.data.jobId);
+    return job === undefined ? notFound(reply, 'no such job') : jobView(job);
+  });
+
+  app.get('/api/v1/runs/:runId/job', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    // Null rather than 404: "nothing is running" is the normal answer, and a page
+    // that polled a 404 to learn it would log an error every time it asked.
+    const active = jobs.activeFor(scope.project.id, scope.runId);
+    return active === undefined ? null : jobView(active);
   });
 
   app.get('/api/v1/events', (request, reply) => {
@@ -481,6 +774,49 @@ async function stackOf(
     // make the one project that needs attention the one that disappears.
     return undefined;
   }
+}
+
+/**
+ * A job as the browser sees it.
+ *
+ * The error is re-shaped rather than passed through: the wire form leads with a
+ * `code` under the name `error`, because a client branching on the outcome should
+ * find the machine-readable part first and the prose second.
+ */
+function jobView(job: ActionJob): ActionJobView {
+  return {
+    id: job.id,
+    kind: job.kind,
+    projectId: job.projectId,
+    runId: job.runId,
+    startedAt: job.startedAt,
+    status: job.status,
+    ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+    ...(job.summary === undefined ? {} : { summary: job.summary }),
+    ...(job.error === undefined ? {} : { error: errorView(job.error) }),
+  };
+}
+
+function errorView(error: ActionError): ActionErrorView {
+  return {
+    error: error.code,
+    message: error.message,
+    ...(error.action === undefined ? {} : { action: error.action }),
+    ...(error.forcible === undefined ? {} : { forcible: error.forcible }),
+    ...(error.detail === undefined ? {} : { detail: error.detail }),
+  };
+}
+
+function actionResult(
+  runId: string,
+  warnings: readonly string[],
+  detail?: Record<string, unknown>,
+): ActionResultView {
+  return {
+    runId,
+    warnings: [...warnings],
+    ...(detail === undefined ? {} : { detail }),
+  };
 }
 
 function badRequest(
