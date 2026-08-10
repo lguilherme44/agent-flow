@@ -174,17 +174,27 @@ result; a number written here would be neither for long.
 - [x] Deterministic router, DAG scheduler, task executor, resume and retry
 - [x] Verification commands run by the orchestrator, not by an agent
 - [x] Final review and Definition of Done evaluated as code
+- [x] `review --fix` — findings become tasks in the plan and re-enter the pipeline
 
 ### Incomplete
 
 - [ ] `doctor --deep` — live auth probing (currently reports that it is unimplemented)
-- [ ] `review --fix` — generates corrective tasks but does not feed them back
 - [ ] Local telemetry — schema exists, nothing writes it
+
+### Validated end to end, against live CLIs
+
+One Node and one Python repository have run the whole workflow — plan,
+cross-provider review, approval, implementation, verification, final review,
+Definition of Done. The Python run reached `FEATURE COMPLETE` after a
+corrective round: the final review rejected it, `--fix` turned the findings
+into tasks, and the tests those tasks produced kill the corresponding mutations.
+`FINDINGS.md` §10–§13 records what that surfaced, including a defect where the
+prompt could set the runner's error code.
 
 ### Not yet validated
 
-- [ ] Verification and final review against a live CLI (covered by tests only)
-- [ ] Any stack other than Node
+- [ ] Flutter, Go or Rust repositories (stack detection is unit-tested only)
+- [ ] Fallback and reasoning clamping against a live CLI
 - [ ] Cost across models and repository sizes
 
 ### Known defects — validation review

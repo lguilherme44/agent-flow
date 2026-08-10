@@ -177,17 +177,27 @@ número escrito aqui não seria nenhum dos dois por muito tempo.
 - [x] Router determinístico, scheduler DAG, task executor, resume e retry
 - [x] Comandos de verificação executados pelo orquestrador, não por um agente
 - [x] Final review e Definition of Done avaliados como código
+- [x] `review --fix` — findings viram tasks no plano e reentram no pipeline
 
 ### Incompleto
 
 - [ ] `doctor --deep` — probe real de autenticação (hoje apenas avisa que não está implementado)
-- [ ] `review --fix` — gera as tasks corretivas, mas não as reinjeta no pipeline
 - [ ] Telemetria local — o schema existe, nada escreve nele
+
+### Validado de ponta a ponta, contra CLIs reais
+
+Um repositório Node e um Python rodaram o fluxo inteiro — plano, review
+cross-provider, aprovação, implementação, verificação, final review, Definition
+of Done. O run Python chegou a `FEATURE COMPLETE` depois de uma rodada
+corretiva: o final review reprovou, o `--fix` transformou os findings em tasks,
+e os testes que essas tasks produziram matam as mutações correspondentes.
+O `FINDINGS.md` §10–§13 registra o que isso revelou, incluindo um defeito em que
+o prompt podia definir o código de erro do runner.
 
 ### Ainda não validado
 
-- [ ] Verification e final review contra uma CLI real (só cobertos por testes)
-- [ ] Qualquer stack além de Node
+- [ ] Repositórios Flutter, Go ou Rust (detecção de stack só tem teste unitário)
+- [ ] Fallback e clamp de reasoning contra uma CLI real
 - [ ] Custo entre modelos e tamanhos de repositório
 
 ### Defeitos conhecidos — revisão de validação

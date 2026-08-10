@@ -487,6 +487,64 @@ distribution*, and the input is what this system routes on.
 
 ---
 
+## 13. A run reached DONE, and the last thing in its way was us
+
+The Python repository went through the corrective loop and came out the other
+side: `FEATURE COMPLETE`, all four gates of the Definition of Done satisfied.
+It is the first run to get there, and the route is worth reading in order.
+
+    feature       Codex plans, Claude reviews        FAIL
+    revise        Codex replans                      FAIL — a new finding
+    approve --force                                  degradation recorded
+    run           three tasks, RED then GREEN        all completed
+    review        Codex rejects it                   NOT DONE, two real defects
+    review --fix  findings become FIX-001, FIX-002   gate reopens
+    approve --force, run                             corrections executed
+    review        clean diff                         PASS — FEATURE COMPLETE
+
+The defect that drove the corrective round is the same one from §12: no test
+exercised the declared backoff default. The plan review predicted it, I forced
+the gate past it, the final review found it, `--fix` turned it into a task, and
+the task produced a test. That test was then verified by mutation rather than by
+its name — changing the default from `0.5` to `0.05` kills it, and wrapping the
+re-raised exception kills the other one. A test that passes proves nothing about
+what it would catch; a test that fails when you break the thing does.
+
+**Closing the loop found two defects in the part that already existed.** The
+generator emitted `validation: []`, so a fix for a review finding would have run
+no validation at all — the single outcome this workflow exists to prevent. And
+`FINDINGS` described that generator as "written and tested" when it had neither
+tests nor callers. A line of documentation asserting coverage that does not
+exist is worse than saying nothing, because it stops the reader from checking.
+
+**It also found a design bug that no unit test could reach.** Adding FIX tasks
+changes the plan, which reopens the approval gate — correct, and deliberate: a
+person approved a set of tasks and this is a different set. But the gate then
+re-read `plan-review.json`, a verdict about the *previous* plan, and refused the
+corrected plan while quoting the very finding a FIX task had been created to
+resolve. A review is a statement about one specific document. `ReviewResult`
+carries `planHash` now, and the gate says "this plan has not been reviewed" —
+true, and forceable — instead of citing findings that are neither.
+
+**And the last three findings were ours.** With everything else resolved, the
+final review still failed on `.gitignore`, `AGENTS.md` and `.atl/` — all written
+by `init`, none by the feature. Rather than change the design on a hypothesis, I
+committed the scaffolding, which is exactly what `init` now tells the user to
+do, and re-ran. The review passed. The tool was right and the operator was
+wrong, which was worth one review's quota to establish rather than assume:
+the alternative was filtering files out of the diff, and a hand-edited
+`AGENTS.md` changes how every future agent behaves and is squarely a reviewer's
+business.
+
+**What the whole day argues.** Nine defects were fixed here, and not one came
+from reading the code. Two adversarial source reviews had already passed over
+most of them. They needed a second provider to judge, or a process killed at the
+wrong moment, or a repository that was not Node, or a feature whose subject
+matter happened to be rate limiting. Review and execution are different
+instruments, and they do not overlap as much as a green suite suggests.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -522,10 +580,10 @@ Stack detection also handles Flutter, Go and Rust and is unit-tested, but no
 repository in those has been through it. There is no Flutter SDK on the machine
 this was built on, which is a reason and not an excuse.
 
-**No run has yet reached DONE.** Both live cycles ended `NOT DONE` on a final
-review that was right to fail them. That is the workflow working, but it means
-the path past the last gate — `review --fix` turning findings into FIX tasks and
-re-entering the pipeline — has never executed end to end.
+**One run has reached DONE; the corrective loop has run once.** That is one
+sample. The loop converged on the second review, and there is no evidence yet
+about what happens when a correction introduces a new finding — the revision
+round in §12 did exactly that at the planning stage, so it is not hypothetical.
 
 **No live fallback, and no live reasoning clamp.** Both are covered by tests
 with scripted runners. Forcing them for real would mean exhausting a quota or
