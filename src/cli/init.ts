@@ -38,7 +38,17 @@ export async function runInitCommand(
       );
     }
 
-    lines.push('', 'Next: agent-flow doctor', '');
+    // Said here because the alternative is discovering it at review time: these
+    // files are in the working tree from now on, and an uncommitted AGENTS.md
+    // turns up inside the first feature's diff looking like part of it.
+    lines.push(
+      '',
+      'Commit what was just written before starting a feature — otherwise it',
+      'lands in the first diff the reviewer sees, as though the feature did it.',
+      '',
+      'Next: agent-flow doctor',
+      '',
+    );
     process.stdout.write(lines.join('\n'));
 
     return ExitCode.OK;

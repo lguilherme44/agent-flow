@@ -431,6 +431,62 @@ form the first fix did not cover.
 
 ---
 
+## 12. Two reviewers, two providers, the same defect — and I overruled the first
+
+The second stack went through the whole workflow: a Python package, planned by
+Codex, implemented by Claude, reviewed by Codex. It also ended `NOT DONE`, and
+the way it got there is the strongest evidence in this document for why there
+are two review gates rather than one.
+
+Before any code existed, the plan review said:
+
+> nenhum dos onze testes exercita o caminho do default. Uma implementação com
+> `backoff: float = 0.05` (ou `5.0`, ou `0`) passa a suíte inteira verde.
+
+I forced the gate with `--force` and let it run.
+
+After the implementation, the final review — a different provider, at a
+different point in the pipeline, with no sight of the earlier review — said:
+
+> No test proves that the default backoff is exactly 0.5. Every new timing test
+> passes backoff explicitly, so changing the declared default would leave all
+> eleven tests green.
+
+The same defect, found twice, independently. The workflow was right at both
+ends; the human in the middle was the failure. That is worth stating plainly,
+because the value of a gate is not that it is clever — it is that it holds when
+the person operating it is in a hurry.
+
+It is also what made the `--force` finding concrete. `approve --force` promised
+in its own help that the override was "recorded on the run", and it was: as
+`forced: true` inside a `run_approved` event that `status` never opens and the
+Definition of Done never consults. So the run that overruled a correct review
+looked exactly like one whose review had passed. RK-12 and AF-R02 are the same
+lesson; this was the third time, and the third different place. A forced
+approval is a degradation now, and `review` prints the run's degradations above
+the verdict — the screen that says FEATURE COMPLETE is the one that has to say
+on what terms.
+
+**Both reviewers, in both stacks, also caught the tool contaminating its own
+evidence.** `init` appends to `.gitignore` and writes `AGENTS.md`, and it runs
+before the first feature, so unless the user commits in between, both sit in the
+working tree when `review` reads the diff. Codex named `AGENTS.md` "an
+instruction file that can alter future agent validation and workflow behavior" —
+which is precisely why it should not arrive unreviewed inside a feature
+delivery. The changed-file list now marks what agent-flow wrote itself, and
+`init` says to commit before starting. Marked rather than filtered: a
+hand-edited AGENTS.md is a real part of a change, and hiding it to reduce noise
+would trade a wrong finding for a missing one.
+
+**What the second stack was actually worth.** Not the Python-specific bugs —
+there were two, both in the stack detector. It was that running a different
+shape of project put a different SDD in front of the same code, and that SDD
+happened to be about retry and rate limits, which is how §11 surfaced. A second
+stack is not a checkbox for portability. It is a second sample of the *input
+distribution*, and the input is what this system routes on.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -461,12 +517,15 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 
 ### Not validated
 
-**Only Node has been through the whole workflow.** Stack detection handles
-Flutter, Python, Go and Rust and is unit-tested, but only Node has run end to
-end. A Python run is what surfaced §10's detector gaps, and it has not yet
-reached implementation. No Flutter repository has been through it at all —
-there is no Flutter SDK on the machine this was built on, which is a reason and
-not an excuse.
+**Node and Python have been through the whole workflow; nothing else has.**
+Stack detection also handles Flutter, Go and Rust and is unit-tested, but no
+repository in those has been through it. There is no Flutter SDK on the machine
+this was built on, which is a reason and not an excuse.
+
+**No run has yet reached DONE.** Both live cycles ended `NOT DONE` on a final
+review that was right to fail them. That is the workflow working, but it means
+the path past the last gate — `review --fix` turning findings into FIX tasks and
+re-entering the pipeline — has never executed end to end.
 
 **No live fallback, and no live reasoning clamp.** Both are covered by tests
 with scripted runners. Forcing them for real would mean exhausting a quota or

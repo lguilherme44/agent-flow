@@ -75,6 +75,35 @@ export class GitClient {
 
 /** Compact rendering of a change list for a prompt. */
 export function renderChanges(changes: readonly GitChange[]): string {
+  return annotateScaffold(changes);
+}
+
+/** Paths `init` writes. Not a feature's doing, whatever the diff says. */
+const SCAFFOLD = ['.agent-flow/', '.gitignore', 'AGENTS.md'];
+
+/**
+ * The changed-file list, with agent-flow's own scaffolding marked as such.
+ *
+ * `init` appends to .gitignore and writes AGENTS.md, and it runs before the
+ * first feature — so unless the user commits in between, those files are in the
+ * working tree when `review` reads the diff. Both reviewers, in both live
+ * stacks, spent findings saying the change was out of scope. They were right,
+ * and the change was the tool's, not the feature's.
+ *
+ * Marked rather than filtered. A hand-edited AGENTS.md changes how every future
+ * agent behaves and is squarely the reviewer's business; hiding it to reduce
+ * noise would be trading a wrong finding for a missing one.
+ */
+export function annotateScaffold(changes: readonly GitChange[]): string {
   if (changes.length === 0) return 'No files were changed.';
-  return changes.map((change) => `- ${change.status.padEnd(2)} ${change.path}`).join('\n');
+
+  return changes
+    .map((change) => {
+      const scaffold = SCAFFOLD.some(
+        (path) => change.path === path || change.path.startsWith(path),
+      );
+      const note = scaffold ? '   (written by agent-flow itself, not by this feature)' : '';
+      return `- ${change.status.padEnd(2)} ${change.path}${note}`;
+    })
+    .join('\n');
 }
