@@ -3,6 +3,7 @@ import { api } from './api';
 import type {
   AnalyticsView,
   ArtifactContentView,
+  ConfigView,
   ArtifactView,
   ProjectView,
   RunDetailView,
@@ -64,6 +65,10 @@ export const keys = {
   prompts: ['prompts'] as const,
   prompt: (name: string) => ['prompt', { name }] as const,
   analytics: (projectId?: string) => ['analytics', { projectId }] as const,
+  config: (projectId?: string) => ['config', { projectId }] as const,
+  approval: (projectId: string | undefined, runId: string) =>
+    ['approval', { runId, projectId }] as const,
+  job: (projectId: string | undefined, runId: string) => ['job', { runId, projectId }] as const,
 };
 
 export function useProjects(): UseQueryResult<ProjectView[]> {
@@ -224,5 +229,14 @@ export function useAnalytics(projectId?: string): UseQueryResult<AnalyticsView> 
     queryKey: keys.analytics(projectId),
     queryFn: () => api.analytics(projectId),
     staleTime: 15_000,
+  });
+}
+
+/** The effective configuration, sectioned, with the origin of each value (§85). */
+export function useConfig(projectId?: string): UseQueryResult<ConfigView> {
+  return useQuery({
+    queryKey: keys.config(projectId),
+    queryFn: () => api.config(projectId),
+    staleTime: 30_000,
   });
 }

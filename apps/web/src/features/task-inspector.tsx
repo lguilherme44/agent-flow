@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
-import { ArrowDownToLine, Copy, Pause, X } from 'lucide-react';
+import { ArrowDownToLine, Copy, Pause, RotateCcw, X } from 'lucide-react';
 import type { TaskDetailView } from '@contracts/index.js';
-import { Badge, Empty, MetaCell, Panel, cx } from '../components/ui';
+import { ActionRefusal, Badge, Button, Dialog, Empty, MetaCell, Panel, cx } from '../components/ui';
+import { useRetry } from '../lib/mutations';
 import { formatDuration, formatTime } from '../lib/format';
 import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
 
@@ -24,6 +25,8 @@ import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
  */
 export function TaskInspector(props: {
   task: TaskDetailView | undefined;
+  projectId: string | undefined;
+  runId: string | undefined;
   onClose?: () => void;
 }): JSX.Element {
   const [tab, setTab] = useState('logs');
@@ -69,16 +72,22 @@ export function TaskInspector(props: {
               )}
             </div>
 
-            {props.onClose === undefined ? null : (
-              <button
-                type="button"
-                onClick={props.onClose}
-                className="shrink-0 rounded-sm p-1 text-faint hover:bg-surface-2 hover:text-text"
-              >
-                <X className="h-3.5 w-3.5" aria-hidden />
-                <span className="sr-only">Close inspector</span>
-              </button>
-            )}
+            <div className="flex shrink-0 items-center gap-1">
+              {props.runId === undefined ? null : (
+                <RetryTask projectId={props.projectId} runId={props.runId} task={task} />
+              )}
+
+              {props.onClose === undefined ? null : (
+                <button
+                  type="button"
+                  onClick={props.onClose}
+                  className="shrink-0 rounded-sm p-1 text-faint hover:bg-surface-2 hover:text-text"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden />
+                  <span className="sr-only">Close inspector</span>
+                </button>
+              )}
+            </div>
           </div>
 
           <dl className="grid grid-cols-3 gap-x-3 gap-y-2 border-t border-border pt-2.5">
@@ -443,5 +452,121 @@ function Section(props: { title: string; children: ReactNode }): JSX.Element {
       <h3 className="text-micro uppercase tracking-wide text-faint">{props.title}</h3>
       {props.children}
     </section>
+  );
+}
+
+/**
+ * Retrying one task (§23, UI-27).
+ *
+ * Confirmed, always, because all three of its consequences are irreversible: the
+ * previous result is overwritten, the attempt counter moves, and the task re-enters
+ * the queue for the scheduler to pick up. None of those is visible from a button
+ * label, so the dialog states them.
+ *
+ * Only offered for a task that has finished badly, or finished at all. A queued task
+ * has nothing to retry, and a running one would be a race — the refusal for both
+ * would be correct and the button would be teaching people to ignore it.
+ */
+const RETRYABLE: readonly TaskDetailView['state'][] = [
+  'failed',
+  'blocked',
+  'interrupted',
+  'review_required',
+  'completed',
+];
+
+function RetryTask(props: {
+  projectId: string | undefined;
+  runId: string;
+  task: TaskDetailView;
+}): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const [force, setForce] = useState(false);
+  const retry = useRetry(props.projectId, props.runId);
+
+  if (!RETRYABLE.includes(props.task.state)) return null;
+
+  const close = (): void => {
+    setForce(false);
+    retry.reset();
+    setOpen(false);
+  };
+
+  // A refusal the use case says is forcible, or a task that is BLOCKED — which is
+  // the same rule the use case applies, read from its answer rather than kept as a
+  // second copy here.
+  const refusal = retry.error as { forcible?: boolean } | null;
+  const canForce = props.task.state === 'blocked' || refusal?.forcible === true;
+
+  return (
+    <>
+      <Button
+        size="sm"
+        onClick={() => {
+          setOpen(true);
+        }}
+        title={`Retry ${props.task.id}`}
+      >
+        <RotateCcw className="h-3 w-3" aria-hidden />
+        Retry
+      </Button>
+
+      <Dialog
+        open={open}
+        onClose={close}
+        title={`Retry ${props.task.id}?`}
+        description="The task goes back in the queue. Run the plan again to execute it."
+        footer={
+          <>
+            <Button onClick={close}>Cancel</Button>
+            <Button
+              variant="primary"
+              disabled={retry.isPending}
+              onClick={() => {
+                retry.mutate({ taskId: props.task.id, force }, { onSuccess: close });
+              }}
+            >
+              Retry task
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          {/* The three consequences, because none of them is visible from a button
+              label and all three are irreversible. */}
+          <ul className="flex list-disc flex-col gap-1 pl-4 text-label text-muted">
+            <li>
+              {props.task.finishedAt === undefined
+                ? 'Whatever this task produced is replaced when it runs again.'
+                : 'The result on file, including its validation output, is replaced.'}
+            </li>
+            <li>
+              Attempt {props.task.attempts} becomes attempt {props.task.attempts + 1}.
+            </li>
+            <li>Anything that depends on it stays where it is until this completes.</li>
+          </ul>
+
+          {canForce ? (
+            <label className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-soft px-3 py-2 text-micro text-text">
+              <input
+                type="checkbox"
+                checked={force}
+                onChange={(changed) => {
+                  setForce(changed.target.checked);
+                }}
+                className="mt-0.5"
+              />
+              <span>
+                {props.task.state === 'blocked'
+                  ? 'This task is BLOCKED: it stopped because of something the SDD does not answer. Retrying will not supply that answer, or it will produce a guess. Retry anyway.'
+                  : 'Retry past the refusal above.'}
+              </span>
+            </label>
+          ) : null}
+
+          <ActionRefusal error={retry.error} title="Retry refused:" />
+        </div>
+      </Dialog>
+    </>
   );
 }

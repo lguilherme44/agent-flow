@@ -6,6 +6,8 @@ import type {
   StageViewResponse,
   TaskSummaryView,
 } from '@contracts/index.js';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createQueryClient } from '../app/App';
 import { RunHeader, RunPanel, StagePipeline, countTasks } from './run-overview';
 
 const run = (overrides: Partial<RunDetailView> = {}): RunDetailView => ({
@@ -46,8 +48,18 @@ const STAGES: StageViewResponse[] = [
   { stage: 'final-review', status: 'failed', errorCode: 'timeout' },
 ];
 
+/**
+ * The header carries real actions now, so it needs a query client.
+ *
+ * Not a fixture concession: the actions read the gate and the active job from the
+ * server, because what a run *is* comes from re-reading it rather than from
+ * anything this component keeps. A wrapper that faked those would be testing a
+ * component that does not exist.
+ */
 const withTooltips = (node: JSX.Element): JSX.Element => (
-  <TooltipPrimitive.Provider>{node}</TooltipPrimitive.Provider>
+  <QueryClientProvider client={createQueryClient()}>
+    <TooltipPrimitive.Provider>{node}</TooltipPrimitive.Provider>
+  </QueryClientProvider>
 );
 
 describe('countTasks', () => {
@@ -89,7 +101,7 @@ describe('countTasks', () => {
 
 describe('RunHeader', () => {
   it('leads with the run id, its status and the feature', () => {
-    render(withTooltips(<RunHeader run={run()} />));
+    render(withTooltips(<RunHeader run={run()} projectId="demo" />));
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('AF-2026-001');
     expect(screen.getByText('Add weekly recurrence')).toBeInTheDocument();
@@ -101,18 +113,47 @@ describe('RunHeader', () => {
   it('uses the duration the server computed', () => {
     // Recomputing from `createdAt` in the browser would tick upward forever on
     // a run that finished hours ago — a stopped run has no clock.
-    render(withTooltips(<RunHeader run={run({ status: 'completed', durationMs: 2_482_000 })} />));
+    render(
+      withTooltips(
+        <RunHeader run={run({ status: 'completed', durationMs: 2_482_000 })} projectId="demo" />,
+      ),
+    );
 
     expect(screen.getByText('41m22s')).toBeInTheDocument();
   });
 
-  it('offers the actions of §70, disabled while nothing writes', () => {
-    // Present as composition, honest as behaviour: a button that silently did
-    // nothing would be worse than one that says it cannot yet.
-    render(withTooltips(<RunHeader run={run()} />));
+  it('offers the actions the run is actually at, and disables only what is absent', () => {
+    // An approved run mid-execution: it can be resumed and it can be revised. It
+    // cannot be approved again, and it is not offered a Reject button, because a
+    // control whose only outcome is a refusal teaches people to ignore refusals.
+    render(withTooltips(<RunHeader run={run({ approved: true })} projectId="demo" />));
 
-    for (const name of ['View as DAG', 'Logs', 'Actions']) {
-      expect(screen.getByRole('button', { name })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resume run' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Revise' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+
+    // The one still genuinely absent. Composition present, behaviour honest.
+    expect(screen.getByRole('button', { name: 'View as DAG' })).toBeDisabled();
+  });
+
+  it('asks for approval before it offers to start', () => {
+    render(withTooltips(<RunHeader run={run({ approved: false, progress: 0 })} projectId="demo" />));
+
+    expect(screen.getByRole('button', { name: 'Review & approve' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /run$/ })).toBeNull();
+    // Rejecting is offered while the plan is still up for judgement, and not after.
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
+  });
+
+  it('offers nothing to change on a finished run', () => {
+    render(
+      withTooltips(
+        <RunHeader run={run({ status: 'completed', approved: true, progress: 100 })} projectId="demo" />,
+      ),
+    );
+
+    for (const name of ['Review & approve', 'Resume run', 'Start run', 'Revise', 'Reject']) {
+      expect(screen.queryByRole('button', { name })).toBeNull();
     }
   });
 
@@ -131,6 +172,7 @@ describe('RunHeader', () => {
               },
             ],
           })}
+          projectId="demo"
         />,
       ),
     );
@@ -175,7 +217,7 @@ describe('RunPanel', () => {
   it('is one surface holding the run and its pipeline', () => {
     // The composition change that matters: header and pipeline answer one
     // question together, and two bordered cards read as two unrelated widgets.
-    const { container } = render(withTooltips(<RunPanel run={run()} stages={STAGES} />));
+    const { container } = render(withTooltips(<RunPanel run={run()} stages={STAGES} projectId="demo" />));
 
     const panel = container.querySelector('section');
     expect(panel).not.toBeNull();
@@ -186,7 +228,7 @@ describe('RunPanel', () => {
   });
 
   it('renders without a pipeline the server has not produced yet', () => {
-    render(withTooltips(<RunPanel run={run()} stages={undefined} />));
+    render(withTooltips(<RunPanel run={run()} stages={undefined} projectId="demo" />));
 
     expect(screen.queryByRole('list', { name: 'Pipeline' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();

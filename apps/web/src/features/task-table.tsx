@@ -262,9 +262,13 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                     </Td>
 
                     <Td className="pr-2 text-right">
+                      {/* A marker, not a menu. Per-task actions — retry, for now —
+                          live in the inspector, where the log, the validation output
+                          and the attempt count are already on screen: deciding to
+                          retry without those is deciding blind. */}
                       <span
                         className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-faint opacity-50"
-                        title="Per-task actions stay with the CLI in this milestone"
+                        title="Open the task to retry it"
                         aria-hidden
                       >
                         <MoreVertical className="h-3.5 w-3.5" />

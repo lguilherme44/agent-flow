@@ -34,6 +34,13 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
     return [...runScoped, ['artifacts', { runId }]];
   }
 
+  // A job's own lifecycle. Published by the server rather than derived from the
+  // run, because a refused action never touches `state.json` — and invalidating the
+  // run alongside it, since a job that finished may well have changed one.
+  if (event.type.startsWith('job.')) {
+    return [...runScoped, ['job', { runId }], ['tasks', { runId }], ['artifacts', { runId }]];
+  }
+
   if (event.type.startsWith('approval.')) {
     return [...runScoped, ['tasks', { runId }], ['projects']];
   }

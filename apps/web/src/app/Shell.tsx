@@ -28,12 +28,11 @@ import { runTone, TONE_DOT } from '../lib/status';
  * Sidebar 216px, topbar 56px, page padding 18px — all tokens, so the layout and
  * the design system cannot drift apart.
  *
- * The sidebar carries the whole product's navigation, not only the parts that
- * are built. §68 lists seven destinations, and a shell that shows two of them
- * misrepresents the tool: a person cannot tell whether Analytics is missing or
- * merely elsewhere. So all seven are present, and Settings — the one still
- * without a page — is visibly disabled rather than absent, which says "not yet"
- * in the one place somebody would look for it.
+ * The sidebar carries the whole product's navigation, and as of UI-26 every one of
+ * §68's seven destinations has a page behind it. `pending` stays on `NavEntry`
+ * because the honesty it buys is worth keeping: a destination with no page belongs
+ * in this list, visibly disabled, rather than absent — a person cannot tell whether
+ * something missing is missing or merely elsewhere.
  */
 export function Shell(): JSX.Element {
   return (
@@ -66,7 +65,7 @@ const NAV: readonly NavEntry[] = [
   { to: '/agents', label: 'Agents & Models', icon: Cpu },
   { to: '/prompts', label: 'Prompts', icon: FileText },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { to: '/settings', label: 'Settings', icon: Settings, pending: true },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
 function Sidebar(): JSX.Element {

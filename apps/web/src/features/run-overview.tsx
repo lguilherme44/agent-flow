@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, GitBranch, ListTree, ScrollText, Timer, User } from 'lucide-react';
+import { AlertTriangle, Clock, GitBranch, ListTree, Timer, User } from 'lucide-react';
 import type {
   RunDetailView,
   StageViewResponse,
@@ -6,6 +6,7 @@ import type {
 } from '@contracts/index.js';
 import { Badge, Button, Progress, StatusDot, Tooltip, cx } from '../components/ui';
 import { useHorizontalOverflow } from '../hooks/use-horizontal-overflow';
+import { RunActions } from './run-actions';
 import { formatDuration, formatPercent, formatWhen, humanise } from '../lib/format';
 import { TONE_BG, TONE_TEXT, runLabel, runTone, stageTone } from '../lib/status';
 
@@ -25,10 +26,11 @@ import { TONE_BG, TONE_TEXT, runLabel, runTone, stageTone } from '../lib/status'
 export function RunPanel(props: {
   run: RunDetailView;
   stages: StageViewResponse[] | undefined;
+  projectId: string | undefined;
 }): JSX.Element {
   return (
-    <section className="shrink-0 overflow-hidden rounded-lg border border-border bg-surface">
-      <RunHeader run={props.run} />
+    <section className="relative shrink-0 overflow-visible rounded-lg border border-border bg-surface">
+      <RunHeader run={props.run} projectId={props.projectId} />
       {props.stages === undefined ? null : (
         <div className="border-t border-border px-4 py-3">
           <StagePipeline stages={props.stages} />
@@ -38,7 +40,10 @@ export function RunPanel(props: {
   );
 }
 
-export function RunHeader(props: { run: RunDetailView }): JSX.Element {
+export function RunHeader(props: {
+  run: RunDetailView;
+  projectId: string | undefined;
+}): JSX.Element {
   const { run } = props;
 
   return (
@@ -114,27 +119,19 @@ export function RunHeader(props: { run: RunDetailView }): JSX.Element {
             />
           </div>
 
-          {/* Composition now, behaviour later. A button that silently did
-              nothing would be worse than one that says it cannot yet. */}
           <div className="flex items-center gap-1.5">
             {/* Labels collapse to icons below 1440, where the title needs the
-                width more than these two need their words. The word stays in
-                the tooltip and in the accessible name. */}
+                width more than these need their words. The word stays in the
+                tooltip and in the accessible name. */}
             <Button disabled title="View as DAG — not implemented yet">
               <GitBranch className="h-3.5 w-3.5" aria-hidden />
               <span className="sr-only wide:not-sr-only">View as DAG</span>
             </Button>
-            <Button disabled title="Run-wide logs — not implemented yet">
-              <ScrollText className="h-3.5 w-3.5" aria-hidden />
-              <span className="sr-only wide:not-sr-only">Logs</span>
-            </Button>
-            <Button
-              variant="primary"
-              disabled
-              title="Approve, run and retry stay with the CLI in this milestone"
-            >
-              Actions
-            </Button>
+
+            {/* Real now, and driven by where the run is: a Start button on an
+                unapproved plan is a button whose only outcome is a refusal, and
+                offering it teaches people to ignore the gate. */}
+            <RunActions projectId={props.projectId} run={run} />
           </div>
         </div>
       </div>

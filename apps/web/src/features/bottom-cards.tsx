@@ -95,7 +95,10 @@ export function ApprovalCard(props: { run: RunDetailView }): JSX.Element {
         run.approved ? (
           <span>Bound to this exact plan — a revision reopens the gate</span>
         ) : (
-          <span>Approve, reject and revise stay with the CLI</span>
+          // Where the buttons are, not which command to type. Approve, revise and
+          // reject stopped being CLI-only with UI-27, and a card still pointing at
+          // the terminal would send somebody to do by hand what is on screen.
+          <span>Review &amp; approve is in the run header</span>
         )
       }
     >
@@ -149,11 +152,11 @@ export function ApprovalCard(props: { run: RunDetailView }): JSX.Element {
               </dd>
             </dl>
           ) : (
-            <code className="truncate rounded-sm border border-border bg-surface-2 px-2 py-1 font-mono text-micro text-muted">
+            <span className="truncate text-micro text-muted">
               {run.status === 'waiting_for_approval'
-                ? 'agent-flow approve'
-                : 'agent-flow revise "…"'}
-            </code>
+                ? 'The gate shows the review verdict and the plan hash before you decide.'
+                : 'Request a revision to produce a plan the review can pass.'}
+            </span>
           )}
 
           {forced ? (

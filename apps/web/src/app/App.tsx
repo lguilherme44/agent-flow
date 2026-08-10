@@ -9,16 +9,17 @@ import { ProjectsPage } from '../pages/ProjectsPage';
 import { AgentsPage } from '../pages/AgentsPage';
 import { PromptsPage } from '../pages/PromptsPage';
 import { AnalyticsPage } from '../pages/AnalyticsPage';
+import { SettingsPage } from '../pages/SettingsPage';
 
 /**
- * The dashboard, still read-only.
+ * The control plane. Seven destinations, and it writes.
  *
- * Seven destinations now, and no mutation wired to any of them. That remains a
- * design position rather than an unfinished one: approving a plan, starting a run
- * and retrying a task are state transitions the StateStore owns, and the write API
- * that lets the browser ask for one arrives with UI-27. Until it does, the CLI is
- * the only thing that changes a run — which means nothing on any of these screens
- * can be wrong about what a click did.
+ * What changed with UI-27 is narrower than it looks. Approving a plan, revising it,
+ * rejecting it, starting a run and retrying a task are still state transitions the
+ * StateStore owns and the CLI performs — this app asks for them through endpoints
+ * that call the same use cases, and then re-reads. No mutation here patches a cache
+ * or keeps a copy of `RunState`, so nothing on any of these screens can be wrong
+ * about what a click did: it either happened on disk or it did not.
  */
 export function createQueryClient(): QueryClient {
   return new QueryClient({
@@ -49,6 +50,7 @@ export function App(): JSX.Element {
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/prompts" element={<PromptsPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Route>
           </Routes>

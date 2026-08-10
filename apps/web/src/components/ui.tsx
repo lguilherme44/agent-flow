@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import {
   AlertTriangle,
@@ -449,6 +450,133 @@ export function MetaCell(props: {
       <dd className="truncate text-label text-text" title={props.title}>
         {props.value}
       </dd>
+    </div>
+  );
+}
+
+/**
+ * The one modal in this app (§97).
+ *
+ * Radix supplies everything that is hard and easy to get wrong: `aria-modal`, a
+ * focus trap, Escape, dismissal on an outside click, and `aria-hidden` on
+ * everything else so a screen reader finds one dialog rather than a page with a
+ * panel floating over it. Every dialog in the app goes through here, so none of
+ * them can be the one that forgot.
+ *
+ * Focus return is the exception Radix does not cover: a modal `Dialog.Content`
+ * overrides its own restore to focus a `Dialog.Trigger`, and the triggers here are
+ * ordinary buttons rendered wherever they belong. The element that had focus is
+ * captured in a layout effect — before the passive effect inside Radix moves it —
+ * and given it back on close.
+ */
+export function Dialog(props: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  description?: string;
+  children: ReactNode;
+  /** Pinned to the bottom, separated by a hairline. Buttons belong here. */
+  footer?: ReactNode;
+  className?: string;
+}): JSX.Element {
+  const opener = useRef<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (props.open) opener.current = document.activeElement as HTMLElement | null;
+  }, [props.open]);
+
+  return (
+    <DialogPrimitive.Root
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+    >
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/70" />
+        <DialogPrimitive.Content
+          aria-modal="true"
+          onCloseAutoFocus={(event) => {
+            const target = opener.current;
+            if (target === null || !document.contains(target)) return;
+            event.preventDefault();
+            target.focus({ preventScroll: true });
+          }}
+          className={cx(
+            'fixed left-1/2 top-1/2 z-50 flex max-h-[86vh] w-[min(560px,92vw)] -translate-x-1/2',
+            '-translate-y-1/2 flex-col rounded-lg border border-border-strong bg-surface shadow-2xl',
+            props.className,
+          )}
+        >
+          <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="flex min-w-0 flex-col gap-1">
+              <DialogPrimitive.Title className="text-section font-semibold text-text">
+                {props.title}
+              </DialogPrimitive.Title>
+              {props.description === undefined ? null : (
+                <DialogPrimitive.Description className="text-label text-muted">
+                  {props.description}
+                </DialogPrimitive.Description>
+              )}
+            </div>
+            <DialogPrimitive.Close className="shrink-0 rounded-sm p-1 text-faint hover:bg-surface-2 hover:text-text">
+              <X className="h-4 w-4" aria-hidden />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-3">{props.children}</div>
+
+          {props.footer === undefined ? null : (
+            <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
+              {props.footer}
+            </footer>
+          )}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
+/**
+ * A refusal, as §95 asks for it: what happened, and what to do about it.
+ *
+ * The two are separate fields on the wire and stay separate here, because a person
+ * reads them differently — one explains, the other instructs. Rendered wherever an
+ * action can be refused, so a refusal never arrives as a bare sentence.
+ */
+export function ActionRefusal(props: {
+  error: unknown;
+  /** Prefix for the first line, when the caller has better words than the server. */
+  title?: string;
+}): JSX.Element | null {
+  if (props.error === null || props.error === undefined) return null;
+
+  const api = props.error as {
+    message?: unknown;
+    action?: unknown;
+    code?: unknown;
+  };
+  const message = typeof api.message === 'string' ? api.message : 'The action failed.';
+  const action = typeof api.action === 'string' ? api.action : undefined;
+  const code = typeof api.code === 'string' ? api.code : undefined;
+
+  return (
+    <div
+      role="alert"
+      className="flex flex-col gap-1 rounded-md border border-danger/25 bg-danger-soft px-3 py-2"
+    >
+      <span className="flex items-start gap-2 text-label text-text">
+        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden />
+        <span>
+          {props.title === undefined ? null : <strong className="font-medium">{props.title} </strong>}
+          {message}
+        </span>
+      </span>
+      {action === undefined ? null : <span className="pl-5 text-micro text-muted">{action}</span>}
+      {code === undefined ? null : (
+        <span className="pl-5 font-mono text-micro text-faint">{code}</span>
+      )}
     </div>
   );
 }

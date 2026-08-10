@@ -78,7 +78,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <RunPanel run={run.data} stages={stages.data} />
+      <RunPanel run={run.data} stages={stages.data} projectId={projectId} />
 
       {/* Below 1200 the inspector leaves the grid and becomes a drawer (§66).
           Side by side it would take 400px from a table that only has ~740, and
@@ -100,6 +100,8 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         {asPane ? (
           <TaskInspector
             task={task.data}
+            projectId={projectId}
+            runId={runId}
             {...(selectedTask === undefined
               ? {}
               : {
@@ -115,6 +117,8 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         <InspectorDrawer
           open={selectedTask !== undefined}
           task={task.data}
+          projectId={projectId}
+          runId={runId}
           onClose={() => {
             setSelectedTask(undefined);
           }}
@@ -167,6 +171,8 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
 function InspectorDrawer(props: {
   open: boolean;
   task: TaskDetailView | undefined;
+  projectId: string | undefined;
+  runId: string | undefined;
   onClose: () => void;
 }): JSX.Element {
   const opener = useRef<HTMLElement | null>(null);
@@ -215,7 +221,12 @@ function InspectorDrawer(props: {
               and from `aria-label` otherwise. Both are given the same words, so
               the name is stable whichever path a reader takes. */}
           <DialogPrimitive.Title className="sr-only">Task inspector</DialogPrimitive.Title>
-          <TaskInspector task={props.task} onClose={props.onClose} />
+          <TaskInspector
+            task={props.task}
+            projectId={props.projectId}
+            runId={props.runId}
+            onClose={props.onClose}
+          />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

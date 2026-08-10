@@ -1,6 +1,10 @@
 import type {
+  ActionJobView,
+  ActionResultView,
   AnalyticsView,
+  ApprovalGateView,
   ArtifactContentView,
+  ConfigView,
   ArtifactView,
   HealthResponse,
   ProjectView,
@@ -32,14 +36,57 @@ import type { TelemetrySummary } from '../../../../src/core/telemetry.js';
 
 export const API_BASE = '/api/v1';
 
+/**
+ * A refused request, with everything the server said about it.
+ *
+ * The write API answers a refusal with a code, a message and the suggested next
+ * step (§95), and all three matter to different readers: the code is what a
+ * component branches on, the message is what a person reads, and `action` is what
+ * turns "no" into something they can do. Flattening them into one string would
+ * throw away the two that are hardest to reconstruct.
+ */
 export class ApiError extends Error {
+  readonly code?: string;
+  readonly action?: string;
+  /** True when a deliberate override could get past this refusal. */
+  readonly forcible?: boolean;
+  readonly detail?: Record<string, unknown>;
+
   constructor(
     readonly status: number,
     message: string,
+    extras: {
+      code?: string;
+      action?: string;
+      forcible?: boolean;
+      detail?: Record<string, unknown>;
+    } = {},
   ) {
     super(message);
     this.name = 'ApiError';
+    if (extras.code !== undefined) this.code = extras.code;
+    if (extras.action !== undefined) this.action = extras.action;
+    if (extras.forcible !== undefined) this.forcible = extras.forcible;
+    if (extras.detail !== undefined) this.detail = extras.detail;
   }
+}
+
+/** Reads whatever a failed response managed to say, without trusting its shape. */
+async function errorFrom(response: Response): Promise<ApiError> {
+  const body: unknown = await response.json().catch(() => null);
+  const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+
+  const message =
+    typeof record['message'] === 'string' ? record['message'] : response.statusText;
+
+  return new ApiError(response.status, message, {
+    ...(typeof record['error'] === 'string' ? { code: record['error'] } : {}),
+    ...(typeof record['action'] === 'string' ? { action: record['action'] } : {}),
+    ...(typeof record['forcible'] === 'boolean' ? { forcible: record['forcible'] } : {}),
+    ...(typeof record['detail'] === 'object' && record['detail'] !== null
+      ? { detail: record['detail'] as Record<string, unknown> }
+      : {}),
+  });
 }
 
 async function get<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
@@ -51,18 +98,40 @@ async function get<T>(path: string, params: Record<string, string | undefined> =
   const suffix = query.toString();
   const response = await fetch(`${API_BASE}${path}${suffix === '' ? '' : `?${suffix}`}`);
 
-  if (!response.ok) {
-    // The server's own message, when it sent one. A generic "request failed"
-    // hides the difference between "no such run" and "the server is down",
-    // which is exactly what the person looking at the screen needs (§95).
-    const body: unknown = await response.json().catch(() => null);
-    const message =
-      typeof body === 'object' && body !== null && 'message' in body
-        ? String((body as { message: unknown }).message)
-        : response.statusText;
-    throw new ApiError(response.status, message);
+  // The server's own message, when it sent one. A generic "request failed" hides
+  // the difference between "no such run" and "the server is down", which is
+  // exactly what the person looking at the screen needs (§95).
+  if (!response.ok) throw await errorFrom(response);
+
+  return response.json() as Promise<T>;
+}
+
+/**
+ * A write.
+ *
+ * Look at what it cannot carry. The body is whatever the caller passes, and every
+ * caller below passes a boolean, a sentence, or an id the server issued — there is
+ * no path, no command and no plan hash anywhere in this file, because the server
+ * would not act on one and offering the field would suggest otherwise.
+ */
+async function post<T>(
+  path: string,
+  body: Record<string, unknown>,
+  params: Record<string, string | undefined> = {},
+): Promise<T> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) query.set(key, value);
   }
 
+  const suffix = query.toString();
+  const response = await fetch(`${API_BASE}${path}${suffix === '' ? '' : `?${suffix}`}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) throw await errorFrom(response);
   return response.json() as Promise<T>;
 }
 
@@ -101,4 +170,36 @@ export const api = {
   prompt: (name: string) => get<PromptContentView>(`/prompts/${name}`),
 
   analytics: (projectId?: string) => get<AnalyticsView>('/analytics', { projectId }),
+  config: (projectId?: string) => get<ConfigView>('/config', { projectId }),
+
+  approvalGate: (runId: string, projectId?: string) =>
+    get<ApprovalGateView>(`/runs/${runId}/approval`, { projectId }),
+  activeJob: (runId: string, projectId?: string) =>
+    get<ActionJobView | null>(`/runs/${runId}/job`, { projectId }),
+  job: (jobId: string) => get<ActionJobView>(`/jobs/${jobId}`),
+
+  // The writes (§86, UI-27). Each one names a run and says what to do; none of
+  // them describes *how*, because the how is the server's.
+  approve: (runId: string, force: boolean, projectId?: string) =>
+    post<ActionResultView>(`/runs/${runId}/approve`, { force }, { projectId }),
+  reject: (runId: string, reason: string | undefined, projectId?: string) =>
+    post<ActionResultView>(
+      `/runs/${runId}/reject`,
+      reason === undefined ? {} : { reason },
+      { projectId },
+    ),
+  revise: (runId: string, instruction: string, projectId?: string) =>
+    post<ActionJobView>(`/runs/${runId}/revise`, { instruction }, { projectId }),
+  start: (runId: string, taskId: string | undefined, projectId?: string) =>
+    post<ActionJobView>(
+      `/runs/${runId}/start`,
+      taskId === undefined ? {} : { taskId },
+      { projectId },
+    ),
+  retry: (runId: string, taskId: string, force: boolean, projectId?: string) =>
+    post<ActionResultView>(
+      `/runs/${runId}/tasks/${taskId}/retry`,
+      { force },
+      { projectId },
+    ),
 };

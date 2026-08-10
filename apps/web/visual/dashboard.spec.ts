@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { FIXTURE_NOW, FIXTURE_RUN_ID, ROUTES } from './fixtures';
+import { FIXTURE_NOW, FIXTURE_RUN_ID, ROUTES, RUN } from './fixtures';
 
 /**
  * What the dashboard actually looks like.
@@ -14,7 +14,18 @@ import { FIXTURE_NOW, FIXTURE_RUN_ID, ROUTES } from './fixtures';
  * and "reconnecting" — non-deterministic in exactly the region the screenshot
  * covers.
  */
-async function stubApi(page: Page): Promise<void> {
+async function stubApi(
+  page: Page,
+  /**
+   * Route bodies to answer instead of the shared fixtures.
+   *
+   * The reference run is approved and part-way through execution, which is the
+   * composition the design was signed off against — so the gate specs, which need a
+   * run still awaiting judgement, say so here rather than by changing the fixture
+   * every other screenshot depends on.
+   */
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
   await page.clock.setFixedTime(FIXTURE_NOW);
 
   await page.addInitScript(() => {
@@ -37,9 +48,11 @@ async function stubApi(page: Page): Promise<void> {
     Object.defineProperty(window, 'EventSource', { value: OpenForever, writable: true });
   });
 
+  const answers = { ...ROUTES, ...overrides };
+
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
-    const body = ROUTES[path];
+    const body = answers[path];
 
     if (body === undefined) {
       await route.fulfill({
@@ -363,5 +376,100 @@ test.describe('analytics', () => {
     await page.waitForTimeout(300);
 
     await expect(page).toHaveScreenshot('analytics.png', { fullPage: false });
+  });
+});
+
+/** The reference run, still awaiting judgement. */
+const AWAITING = {
+  [`/api/v1/runs/${FIXTURE_RUN_ID}`]: {
+    ...RUN,
+    status: 'waiting_for_approval',
+    approved: false,
+    progress: 0,
+    completedTasks: 0,
+  },
+};
+
+test.describe('the human gate', () => {
+  test('shows the verdict, the findings and both hashes', async ({ page }) => {
+    await stubApi(page, AWAITING);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    await page.getByRole('button', { name: 'Review & approve' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute('aria-modal', 'true');
+    await expect(dialog.getByText('Plan review: FAIL')).toBeVisible();
+
+    await expect(page).toHaveScreenshot('approval-gate.png', { fullPage: false });
+  });
+
+  test('traps focus, closes on Escape, and gives focus back', async ({ page }) => {
+    await stubApi(page, AWAITING);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    const trigger = page.getByRole('button', { name: 'Review & approve' });
+    await trigger.click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    // Every tab stop inside the modal. The run behind it is still on screen and,
+    // to a keyboard, still there.
+    for (let stop = 0; stop < 10; stop += 1) {
+      await page.keyboard.press('Tab');
+      const inside = await dialog.evaluate((panel) => panel.contains(document.activeElement));
+      expect(inside, `focus left the dialog after ${String(stop + 1)} tabs`).toBe(true);
+    }
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    // Back on the button that opened it, not on the body.
+    await expect(trigger).toBeFocused();
+  });
+
+  test('will not approve over a refusal until the override is deliberate', async ({ page }) => {
+    await stubApi(page, AWAITING);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    await page.getByRole('button', { name: 'Review & approve' }).click();
+    const dialog = page.getByRole('dialog');
+
+    await expect(dialog.getByRole('button', { name: 'Approve Plan' })).toBeDisabled();
+    await dialog.getByRole('checkbox').check();
+    await expect(dialog.getByRole('button', { name: 'Approve over the review' })).toBeEnabled();
+  });
+
+  test('asks what should change, and sends only that', async ({ page }) => {
+    const posted: { url: string; body: string }[] = [];
+    await stubApi(page, AWAITING);
+    page.on('request', (request) => {
+      if (request.method() === 'POST') {
+        posted.push({ url: request.url(), body: request.postData() ?? '' });
+      }
+    });
+
+    await page.goto('/dashboard');
+    await settle(page);
+
+    await page.getByRole('button', { name: 'Revise' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('button', { name: 'Request revision' })).toBeDisabled();
+
+    await dialog.getByRole('textbox').fill('Split TASK-004 into service and rules.');
+    await expect(page).toHaveScreenshot('revision.png', { fullPage: false });
+  });
+});
+
+test.describe('settings', () => {
+  test('renders the effective configuration with its origins', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/settings');
+    await expect(page.getByRole('heading', { name: 'Execution' })).toBeVisible();
+
+    await expect(page).toHaveScreenshot('settings.png', { fullPage: false });
   });
 });

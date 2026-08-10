@@ -84,6 +84,10 @@ export function useLiveEvents(projectId?: string): ConnectionState {
       'approval.completed',
       'runner.health_changed',
       'log.appended',
+      // A long action starting or finishing. Not a run event: a refused gate never
+      // touches `state.json`, so nothing else would ever report it.
+      'job.started',
+      'job.finished',
     ];
 
     const listener = (message: Event): void => {

@@ -15,6 +15,8 @@
 
 import type {
   AnalyticsView,
+  ApprovalGateView,
+  ConfigView,
   ArtifactView,
   ProjectView,
   PromptContentView,
@@ -753,6 +755,152 @@ export const ANALYTICS: AnalyticsView = {
   ],
 };
 
+
+/**
+ * The gate, with a verdict worth looking at (§90).
+ *
+ * A PASS with no findings proves nothing about the modal: the parts that matter are
+ * the findings list, the degradation warning and the two hashes side by side. So the
+ * fixture is a FAIL whose review judged this exact plan — which is the case where
+ * approving is possible and deliberate rather than impossible.
+ */
+export const APPROVAL_GATE: ApprovalGateView = {
+  runId: RUN_ID,
+  approved: false,
+  canApprove: false,
+  refusal: { kind: 'review_failed', forcible: true },
+  warnings: [
+    'the plan review was same-provider: it does not protect against an assumption repeated from planning',
+  ],
+  planHash: 'a1b2c3d4e5f60718',
+  taskCount: 9,
+  sddDigest: 'ff00aa11bb22',
+  review: {
+    verdict: 'FAIL',
+    independence: 'same-provider-fresh-context',
+    planHash: 'a1b2c3d4e5f60718',
+    coversThisPlan: true,
+    findings: [
+      {
+        severity: 'high',
+        type: 'missing_test',
+        description: 'TASK-005 changes the expansion window and declares no validation.',
+        suggestedAction: 'Give it a validation id the project config declares.',
+      },
+      {
+        severity: 'medium',
+        type: 'task_too_large',
+        description: 'TASK-004 covers the service and the scheduling rules at once.',
+        suggestedAction: 'Split it so each half can fail on its own.',
+        requirement: 'FR-004',
+      },
+    ],
+  },
+  degradations: [],
+};
+
+export const CONFIG: ConfigView = {
+  sources: {
+    globalPath: '/Users/dev/.agent-flow/config.yaml',
+    globalPresent: true,
+    projectPath: '/Users/dev/wk/beahub-api/.agent-flow/config.yaml',
+    projectPresent: true,
+  },
+  sections: [
+    {
+      id: 'general',
+      title: 'General',
+      settings: [
+        { key: 'version', label: 'Config version', value: '1', origin: 'default' },
+        {
+          key: 'sources.global',
+          label: 'Global config',
+          value: '/Users/dev/.agent-flow/config.yaml',
+          origin: 'global',
+        },
+        {
+          key: 'sources.project',
+          label: 'Project config',
+          value: '/Users/dev/wk/beahub-api/.agent-flow/config.yaml',
+          origin: 'project',
+        },
+      ],
+    },
+    {
+      id: 'workspace',
+      title: 'Workspace',
+      settings: [
+        { key: 'project.name', label: 'Project name', value: 'beahub-api', origin: 'project' },
+        { key: 'project.type', label: 'Detected stack', value: 'node', origin: 'project' },
+        { key: 'paths.source', label: 'Source paths', value: 'src', origin: 'project' },
+        { key: 'paths.tests', label: 'Test paths', value: 'test', origin: 'project' },
+        {
+          key: 'rules.architecture',
+          label: 'Architecture rules',
+          value: '3 declared',
+          origin: 'project',
+        },
+      ],
+    },
+    {
+      id: 'runners',
+      title: 'Runners',
+      settings: [
+        { key: 'runners.claude', label: 'claude', value: 'claude-code-cli · enabled', origin: 'default' },
+        { key: 'runners.codex', label: 'codex', value: 'codex-cli · enabled', origin: 'global' },
+      ],
+    },
+    {
+      id: 'models',
+      title: 'Models',
+      note: 'Role routing has its own page, which resolves each role against what its runner can actually do.',
+      settings: [],
+    },
+    {
+      id: 'execution',
+      title: 'Execution',
+      settings: [
+        {
+          key: 'approval.requiredBeforeImplementation',
+          label: 'Approval before implementation',
+          value: 'required',
+          origin: 'default',
+        },
+        { key: 'parallelism.maxTasks', label: 'Parallel tasks', value: '1', origin: 'default' },
+        { key: 'retry.maxAttempts', label: 'Attempts per task', value: '3', origin: 'project' },
+        { key: 'git.useWorktrees', label: 'Git worktrees', value: 'off', origin: 'default' },
+        { key: 'fallback.enabled', label: 'Fallback', value: 'enabled', origin: 'global' },
+        {
+          key: 'fallback.on',
+          label: 'Fallback triggers',
+          value: 'runner_unavailable, auth_required, quota_exceeded',
+          origin: 'default',
+          note: 'infrastructure failures only — a capability gap is never routed around',
+        },
+        {
+          key: 'validationCommands',
+          label: 'Extra validation commands',
+          value: '2 declared',
+          origin: 'project',
+          note: 'a plan names one of these by id; nothing a model writes reaches a shell',
+        },
+      ],
+    },
+    {
+      id: 'ui',
+      title: 'UI',
+      note: 'The dashboard keeps its preferences in the browser. There is no server-side UI configuration to show.',
+      settings: [],
+    },
+    {
+      id: 'retention',
+      title: 'Retention',
+      note: 'Run history is pruned on request rather than on a policy: agent-flow clean --keep <n>. There is no retention setting to read.',
+      settings: [],
+    },
+  ],
+};
+
 /** Path → body. The visual tests answer every call the dashboard makes. */
 export const ROUTES: Record<string, unknown> = {
   '/api/v1/health': { status: 'ok', version: '0.1.0', projects: 4, host: '127.0.0.1', port: 4782 },
@@ -770,6 +918,10 @@ export const ROUTES: Record<string, unknown> = {
   '/api/v1/prompts': PROMPTS,
   '/api/v1/prompts/architecture-impact': PROMPT_CONTENT,
   '/api/v1/analytics': ANALYTICS,
+  '/api/v1/config': CONFIG,
+  [`/api/v1/runs/${RUN_ID}/approval`]: APPROVAL_GATE,
+  // Nothing in flight, which is the state the buttons are drawn for.
+  [`/api/v1/runs/${RUN_ID}/job`]: null,
 };
 
 export const FIXTURE_RUN_ID = RUN_ID;
