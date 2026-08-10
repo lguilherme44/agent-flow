@@ -1,0 +1,49 @@
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-text font-sans text-body antialiased;
+  }
+
+  /**
+   * Focus is visible everywhere (§97). The default outline disappears against
+   * this palette, and a dashboard people drive from the keyboard where they
+   * cannot see where they are is not accessible in any useful sense.
+   */
+  :focus-visible {
+    outline: 2px solid var(--af-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--af-border-strong);
+    border-radius: 6px;
+  }
+}
+
+@layer utilities {
+  /** Numbers that change in place must not make the layout jump. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

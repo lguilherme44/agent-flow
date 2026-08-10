@@ -1,0 +1,49 @@
+/**
+ * Design tokens (§67).
+ *
+ * The only place in the dashboard where a colour is written down. Components
+ * reference these through Tailwind's palette, which is generated from this file
+ * — so a component cannot invent a shade, and the whole surface can be retuned
+ * from one place.
+ *
+ * The palette is dark by design, not by preference: this is a tool that sits
+ * open beside a terminal, and it should not be the bright rectangle on the
+ * screen.
+ */
+
+:root {
+  --af-bg: #08111f;
+  --af-surface: #0f1a2a;
+  --af-surface-2: #131f31;
+  /* One step above surface-2, for rows and inputs that need to lift without a
+     border. The spec stops at two; a table with hover states needs a third. */
+  --af-surface-3: #182740;
+
+  --af-border: rgba(148, 163, 184, 0.14);
+  --af-border-strong: rgba(148, 163, 184, 0.28);
+
+  --af-text: #f8fafc;
+  --af-text-muted: #94a3b8;
+  --af-text-faint: #64748b;
+
+  --af-primary: #7c3aed;
+  --af-primary-soft: rgba(124, 58, 237, 0.18);
+
+  --af-success: #34d399;
+  --af-success-soft: rgba(52, 211, 153, 0.16);
+  --af-info: #3b82f6;
+  --af-info-soft: rgba(59, 130, 246, 0.16);
+  --af-warning: #fbbf24;
+  --af-warning-soft: rgba(251, 191, 36, 0.16);
+  --af-danger: #f87171;
+  --af-danger-soft: rgba(248, 113, 113, 0.16);
+
+  --af-radius-sm: 8px;
+  --af-radius-md: 10px;
+  --af-radius-lg: 12px;
+
+  --af-sidebar-width: 216px;
+  --af-topbar-height: 56px;
+  --af-inspector-width: 480px;
+  --af-page-padding: 18px;
+}
