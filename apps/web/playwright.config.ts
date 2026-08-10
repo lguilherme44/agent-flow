@@ -52,6 +52,10 @@ export default defineConfig({
   },
 
   projects: [
+    // The four widths §66 draws a line at. 1440 and 1280 are the layout
+    // targets; 1200 is the first pixel where the inspector still sits beside
+    // the table, and 1024 the first where it does not — the two sides of a
+    // boundary are the only places a boundary can be wrong.
     {
       name: 'desktop-1440',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
@@ -59,6 +63,14 @@ export default defineConfig({
     {
       name: 'laptop-1280',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } },
+    },
+    {
+      name: 'narrow-1200',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1200, height: 800 } },
+    },
+    {
+      name: 'small-1024',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1024, height: 768 } },
     },
   ],
 

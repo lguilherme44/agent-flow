@@ -180,7 +180,7 @@ result; a number written here would be neither for long.
 - [x] `doctor --deep` — live probe per runner, folded back into the verdict
 - [x] Local telemetry, derived from the run's own state and event log
 - [x] `agent-flow ui` — local server and read-only dashboard (spec §59–§102)
-- [x] Dashboard layout checked by screenshot at 1440×900 and 1280×800
+- [x] Dashboard layout checked by screenshot at 1440, 1280, 1200 and 1024
 
 ### Incomplete
 
@@ -275,8 +275,10 @@ Architectural rules are executable (`test/architecture.test.ts`):
 - no server module names an auth file or reads the environment
 
 The dashboard's layout is checked by screenshot against
-[`agent-flow-ui-reference.png`](agent-flow-ui-reference.png), at 1440×900 and
-1280×800, with a stubbed API and a pinned clock. Those baselines are darwin
+[`agent-flow-ui-reference.png`](agent-flow-ui-reference.png), at 1440, 1280,
+1200 and 1024 — the last two being the sides of the boundary where the inspector
+stops sharing the row with the table and becomes a drawer. Stubbed API, pinned
+clock, fixed locale and timezone. Those baselines are darwin
 images — font rasterisation differs by platform — so `test:visual` is not in CI
 and running it elsewhere means regenerating baselines there first with
 `npm run test:visual:update`.

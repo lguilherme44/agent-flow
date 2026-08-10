@@ -51,7 +51,12 @@ export function RunHeader(props: { run: RunDetailView }): JSX.Element {
             <Badge tone={runTone(run.status)} caps className="shrink-0 px-2 py-0.5 text-label">
               {runLabel(run.status)}
             </Badge>
-            <span className="min-w-0 truncate text-title font-medium text-text" title={run.feature}>
+            {/* Regular weight, not medium. The run id carries the hierarchy by
+                size *and* weight, as the reference does; matching the title's
+                weight to it made two competing headlines on one line. Full text
+                colour, though — secondary is not the same as dim, and this is
+                the only place the feature is named. */}
+            <span className="min-w-0 truncate text-title font-normal text-text" title={run.feature}>
               {run.feature}
             </span>
           </div>
@@ -83,16 +88,27 @@ export function RunHeader(props: { run: RunDetailView }): JSX.Element {
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
-          <div className="flex w-52 flex-col gap-1">
+          {/* Narrower below 1440. Every pixel this cluster gives up goes to the
+              feature title, which is the one thing here that cannot be
+              recovered from anywhere else on the screen. */}
+          <div className="flex w-40 flex-col gap-1 wide:w-52">
             <div className="flex items-baseline justify-between">
               <span className="text-micro text-faint">Overall progress</span>
               <span className="tabular text-label font-medium text-text">
                 {formatPercent(run.progress)}
               </span>
             </div>
+            {/* Green, as the reference has it. Progress is a quantity, not a
+                status — and purple is spoken for: it marks the running step of
+                the pipeline, which only reads as special while nothing else
+                shares it. */}
             <Progress
               value={run.progress}
-              tone={run.progress === 100 ? 'success' : 'primary'}
+              tone={
+                run.status === 'failed' || run.status === 'plan_rejected'
+                  ? 'danger'
+                  : 'success'
+              }
               label="Overall progress"
             />
           </div>
@@ -100,13 +116,16 @@ export function RunHeader(props: { run: RunDetailView }): JSX.Element {
           {/* Composition now, behaviour later. A button that silently did
               nothing would be worse than one that says it cannot yet. */}
           <div className="flex items-center gap-1.5">
-            <Button disabled title="The DAG view is not implemented yet">
+            {/* Labels collapse to icons below 1440, where the title needs the
+                width more than these two need their words. The word stays in
+                the tooltip and in the accessible name. */}
+            <Button disabled title="View as DAG — not implemented yet">
               <GitBranch className="h-3.5 w-3.5" aria-hidden />
-              View as DAG
+              <span className="sr-only wide:not-sr-only">View as DAG</span>
             </Button>
-            <Button disabled title="A run-wide log view is not implemented yet">
+            <Button disabled title="Run-wide logs — not implemented yet">
               <ScrollText className="h-3.5 w-3.5" aria-hidden />
-              Logs
+              <span className="sr-only wide:not-sr-only">Logs</span>
             </Button>
             <Button
               variant="primary"
@@ -175,7 +194,14 @@ function Divider(): JSX.Element {
  */
 export function StagePipeline(props: { stages: StageViewResponse[] }): JSX.Element {
   return (
-    <ol className="flex items-stretch" aria-label="Pipeline">
+    // Scrolls sideways below 1440 rather than compressing. Nine steps across
+    // 780px give each chip 53px of text, and "Architecture" needs 62 — so the
+    // labels clipped at every narrow width. A stepper you can push is still a
+    // stepper; a stepper whose labels are shaved is not readable at all.
+    <ol
+      className="flex items-stretch overflow-x-auto pb-0.5 wide:overflow-visible"
+      aria-label="Pipeline"
+    >
       {props.stages.map((stage, index) => {
         const tone = stageTone(stage.status);
         const running = stage.status === 'running';
@@ -198,7 +224,17 @@ export function StagePipeline(props: { stages: StageViewResponse[] }): JSX.Eleme
             // "where is this run right now" and deserves the emphasis, and
             // partly because "Implementation" is the longest single unbreakable
             // word in the pipeline and an equal share clips it.
-            className={cx('flex min-w-0 items-stretch', running ? 'flex-[1.4]' : 'flex-1')}
+            className={cx(
+              'flex items-stretch',
+              // A floor wide enough for the longest label, then flexible above
+              // it. Without the floor `min-w-0` lets the chips shrink to
+              // nothing and the labels clip instead of the row scrolling.
+              // 132px is what "Implementation" needs beside its marker at 12px.
+              // Measured, not guessed: at 116 the running step — the one the
+              // eye goes to first — read "Implementati".
+              'min-w-[132px] wide:min-w-0',
+              running ? 'flex-[1.4]' : 'flex-1',
+            )}
           >
             <Tooltip
               content={

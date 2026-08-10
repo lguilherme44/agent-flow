@@ -50,6 +50,29 @@ Object.defineProperty(globalThis, 'EventSource', {
 
 export { StubEventSource };
 
+/**
+ * jsdom has no layout, so `matchMedia` is absent.
+ *
+ * Reported as matching, which puts the unit suite on the wide layout: the
+ * inspector sits beside the table, as it does at the 1440 and 1280 targets. The
+ * drawer below 1200 is a layout the browser decides, and it is covered where
+ * layout is real — in the visual suite.
+ */
+Object.defineProperty(globalThis, 'matchMedia', {
+  writable: true,
+  configurable: true,
+  value: (query: string) => ({
+    matches: true,
+    media: query,
+    onchange: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => false,
+  }),
+});
+
 /** Recharts measures its container; jsdom reports zero and renders nothing. */
 Object.defineProperty(globalThis.HTMLElement.prototype, 'getBoundingClientRect', {
   writable: true,

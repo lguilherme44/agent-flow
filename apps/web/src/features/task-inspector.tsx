@@ -30,7 +30,7 @@ export function TaskInspector(props: {
 
   if (props.task === undefined) {
     return (
-      <Panel>
+      <Panel className="flex-1">
         <Empty title="Select a task" hint="Its logs, files, tests and context appear here." />
       </Panel>
     );
@@ -41,6 +41,10 @@ export function TaskInspector(props: {
 
   return (
     <Panel
+      // Stretches to whatever holds it. In the grid the column does that on its
+      // own; in the drawer the panel is a flex child and sized to its content,
+      // which left the terminal floating above 250px of empty dark.
+      className="flex-1"
       header={
         <div className="flex flex-col gap-2 px-3.5 pb-3 pt-3.5">
           <div className="flex items-start justify-between gap-2">

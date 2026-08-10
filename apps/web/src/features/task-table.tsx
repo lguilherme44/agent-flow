@@ -118,7 +118,10 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
               <tr className="border-b border-border text-micro uppercase tracking-wide text-faint">
                 <Th className="w-[108px] pl-4">ID</Th>
                 <Th>Task</Th>
-                <Th className="w-[82px]">Complexity</Th>
+                {/* Dropped below 1280. The brief calls complexity discreet, and
+                    it is the column the title can most afford to take back —
+                    at 1200 the title was down to 84px, which reads "Criar en…". */}
+                <Th className="hidden w-[82px] xl:table-cell">Complexity</Th>
                 {/* Runner, model and effort in one cell. Effort had its own
                     column and cost the title 64px it could not spare — and the
                     reference stacks all three anyway, because they are one fact
@@ -204,7 +207,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                       </span>
                     </Td>
 
-                    <Td>
+                    <Td className="hidden xl:table-cell">
                       {/* Discreet on purpose: complexity drives routing, it is
                           not what anybody scans the table for. */}
                       <span className="rounded-sm border border-border px-1.5 py-px text-micro capitalize text-muted">

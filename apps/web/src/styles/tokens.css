@@ -84,10 +84,11 @@
   :root {
     --af-inspector-width: 400px;
     --af-page-padding: 14px;
-    /* Height is the scarcer axis at 1280×800. This is as low as the row goes
-       before its own content clips — at 132px the summary lost a line and the
-       artifacts list lost an entry, which trades one squeezed region for four. */
-    --af-bottom-height: 148px;
+    /* Height is the scarcer axis below 1440, and this row is where it comes
+       from — but there is a floor. At 148px the execution summary's fourth row
+       and the approval hash were both sliced through; 160 clears them and costs
+       the table twelve pixels, which is less than one row. */
+    --af-bottom-height: 160px;
   }
 }
 

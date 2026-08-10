@@ -246,11 +246,14 @@ function Row(props: {
       >
         {props.value}
       </dd>
+      {/* The bar is hidden below 1280, where the card leaves it about 30px.
+          A progress bar that short is not a reading of a ratio, it is a
+          smudge — and the number beside it already says the same thing. */}
       {props.ratio === undefined ? null : (
         <Progress
           value={props.ratio}
           tone={props.tone === 'danger' ? 'danger' : 'success'}
-          className="flex-1"
+          className="hidden flex-1 xl:block"
           label={props.label}
         />
       )}
@@ -308,17 +311,23 @@ export function ModelUsageCard(props: { telemetry: TelemetryResponse | undefined
       footer={
         // One line, no wrapping. Four facts on two lines made the shortest card
         // in the row the tallest thing in it.
+        // One line, no wrapping. Retries and fallbacks drop below 1280, where
+        // the card is ~215px wide and the fourth fact was being sliced through
+        // rather than shown — the two that remain are the ones that describe
+        // every run, not only a degraded one.
         <span className="flex items-center gap-1.5 whitespace-nowrap">
           <span>{String(total)} runs</span>
           <Dot />
           <span>{formatDuration(summary.durationMs)}</span>
-          <Dot />
-          <span className={summary.retries > 0 ? 'text-warning' : undefined}>
-            {summary.retries} retries
-          </span>
-          <Dot />
-          <span className={summary.fallbacks > 0 ? 'text-warning' : undefined}>
-            {summary.fallbacks} fallbacks
+          <span className="hidden items-center gap-1.5 xl:flex">
+            <Dot />
+            <span className={summary.retries > 0 ? 'text-warning' : undefined}>
+              {summary.retries} retries
+            </span>
+            <Dot />
+            <span className={summary.fallbacks > 0 ? 'text-warning' : undefined}>
+              {summary.fallbacks} fallbacks
+            </span>
           </span>
         </span>
       }
@@ -367,7 +376,10 @@ export function ModelUsageCard(props: { telemetry: TelemetryResponse | undefined
               </span>
               <span className="tabular shrink-0 text-label text-muted">
                 {entry.share}%{' '}
-                <span className="text-faint">({entry.value})</span>
+                {/* The execution count drops below 1280, where the 24px it
+                    takes is 24px the model name does not have. The share is
+                    the number the legend exists for. */}
+                <span className="hidden text-faint xl:inline">({entry.value})</span>
               </span>
             </li>
           ))}

@@ -725,7 +725,8 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 | UI write actions | The dashboard reads. Approve, run, retry and revise stay with the CLI until the write API is designed — every one of them is a state transition the StateStore owns. |
 | ~~`agent-flow-ui-reference.png`~~ | Closed. The file is in the repository and the dashboard was rebuilt against it — see §16. |
 | Visual regression in CI | The baselines are per-platform: font rasterisation differs between macOS and Linux, so the committed darwin images would fail on an Ubuntu runner. Running it there means generating Linux baselines on Linux, which this machine cannot do. `npm run test:visual` is local-only until then. |
-| Inspector as a drawer below 1200px | §66 allows it. The inspector narrows to 400px at 1200–1439 and the layout is validated at 1440×900 and 1280×800; below that it still renders beside the table rather than over it. |
+| ~~Inspector as a drawer below 1200px~~ | Closed. Below 1200 the inspector opens as an overlay and the table takes the full width; the choice is made in JavaScript so only one inspector is ever in the document. Validated at 1440, 1280, 1200 and 1024. |
+| Long titles truncate on one line | A feature description of 80+ characters and a task title over ~28 characters do not fit beside a run id, a progress bar and three buttons — or in a seven-column table with the inspector open. Both truncate with the full text on hover. Widening either would take the space from the other. |
 | End-to-end tests against real CLIs | The suite runs entirely on fakes. The real-CLI cycles were run by hand, and their findings are in §7 and §8; nothing reruns them. Automating it means spending quota on every push, which is why it has not been done rather than why it should not be. |
 
 ### Not validated

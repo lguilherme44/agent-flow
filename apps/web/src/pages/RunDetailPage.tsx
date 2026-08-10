@@ -22,6 +22,8 @@ import {
   ModelUsageCard,
 } from '../features/bottom-cards';
 import { Empty } from '../components/ui';
+import { INSPECTOR_PANE, useMediaQuery } from '../hooks/use-media-query';
+import type { TaskDetailView } from '@contracts/index.js';
 
 /**
  * Run detail (UI-20) — the composition of the reference.
@@ -45,6 +47,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
 
   const [selectedTask, setSelectedTask] = useState<string | undefined>(undefined);
   const [openArtifact, setOpenArtifact] = useState<string | undefined>(undefined);
+  const asPane = useMediaQuery(INSPECTOR_PANE);
 
   const run = useRun(projectId, runId);
   const stages = useStages(projectId, runId);
@@ -77,23 +80,46 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
     <div className="flex h-full min-h-0 flex-col gap-3">
       <RunPanel run={run.data} stages={stages.data} />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3">
+      {/* Below 1200 the inspector leaves the grid and becomes a drawer (§66).
+          Side by side it would take 400px from a table that only has ~740, and
+          a task title rendered as "Criar en…" is a table nobody can scan.
+          Chosen in JavaScript rather than with `hidden`, so only one inspector
+          is ever in the document — see `use-media-query`. */}
+      <div
+        className={
+          asPane
+            ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
+            : 'flex min-h-0 flex-1'
+        }
+      >
         <TaskTable
           tasks={tasks.data ?? []}
           selectedId={selectedTask}
           onSelect={setSelectedTask}
         />
-        <TaskInspector
-          task={task.data}
-          {...(selectedTask === undefined
-            ? {}
-            : {
-                onClose: () => {
-                  setSelectedTask(undefined);
-                },
-              })}
-        />
+        {asPane ? (
+          <TaskInspector
+            task={task.data}
+            {...(selectedTask === undefined
+              ? {}
+              : {
+                  onClose: () => {
+                    setSelectedTask(undefined);
+                  },
+                })}
+          />
+        ) : null}
       </div>
+
+      {asPane ? null : (
+        <InspectorDrawer
+          open={selectedTask !== undefined}
+          task={task.data}
+          onClose={() => {
+            setSelectedTask(undefined);
+          }}
+        />
+      )}
 
       {/* Token-driven, because height is the scarce axis at 1280×800 and this
           row is the part of the screen that can afford to give some back. */}
@@ -113,6 +139,61 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The inspector as a drawer, for 1024–1199 (§66).
+ *
+ * A real overlay rather than a narrower column: at these widths there is no
+ * width to share, and shrinking the panel would only move the damage into the
+ * table. Rendered by the same `TaskInspector` the wide layout uses, so the two
+ * cannot drift — the drawer supplies a surface, not a second inspector.
+ *
+ * Hidden above 1200 by CSS rather than by unmounting, so a viewport crossing the
+ * boundary keeps its selection instead of closing the panel under the cursor.
+ */
+function InspectorDrawer(props: {
+  open: boolean;
+  task: TaskDetailView | undefined;
+  onClose: () => void;
+}): JSX.Element | null {
+  // Escape closes it, because an overlay that traps the reader is worse than no
+  // overlay. The listener is scoped to when it is actually open.
+  useEffect(() => {
+    if (!props.open) return undefined;
+
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') props.onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [props]);
+
+  if (!props.open) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={props.onClose}
+        aria-label="Close inspector"
+        className="fixed inset-0 z-40 bg-black/60"
+      />
+      {/* The role goes on the panel, not on a wrapper around it. A wrapper whose
+          children are all `fixed` has no size of its own, so the dialog was
+          present in the tree and zero pixels tall — which is "hidden" to
+          anything that measures, including assistive technology. */}
+      <div
+        role="dialog"
+        aria-label="Task inspector"
+        className="fixed inset-y-0 right-0 z-50 flex w-[min(440px,88vw)] flex-col border-l border-border-strong bg-bg p-3 shadow-2xl"
+      >
+        <TaskInspector task={props.task} onClose={props.onClose} />
+      </div>
+    </>
   );
 }
 

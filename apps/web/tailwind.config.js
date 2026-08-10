@@ -13,10 +13,12 @@ export default {
   theme: {
     extend: {
       screens: {
-        /* The layout target of §66. Tailwind's own scale stops at 1280, and
-           the two viewports this design is validated at sit either side of
-           it. Added under `extend` so the defaults survive: replacing
-           `screens` wholesale would silently delete sm/md/lg/xl. */
+        /* The two boundaries §66 draws that Tailwind's own scale does not.
+           `pane` is where the inspector stops sitting beside the table and
+           becomes a drawer over it; `wide` is the full layout. Added under
+           `extend` so the defaults survive — replacing `screens` wholesale
+           would silently delete sm/md/lg/xl. */
+        pane: '1200px',
         wide: '1440px',
       },
       colors: {

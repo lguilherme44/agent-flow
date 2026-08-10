@@ -97,6 +97,35 @@ test.describe('run detail', () => {
     await expect(page).toHaveScreenshot('run-detail-inspector.png', { fullPage: false });
   });
 
+  test('the inspector is a pane above 1200 and a drawer below it', async ({ page }, info) => {
+    // §66's boundary, checked on both sides. The drawer is chosen in
+    // JavaScript, so exactly one inspector exists in the document either way —
+    // a CSS-hidden second copy is invisible to the eye and entirely present to
+    // a screen reader.
+    await stubApi(page);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    const row = page.getByText('Recurrence Repository');
+    await row.scrollIntoViewIfNeeded();
+    await row.click();
+
+    const width = info.project.use.viewport?.width ?? 0;
+    const drawer = page.getByRole('dialog', { name: 'Task inspector' });
+
+    if (width >= 1200) {
+      await expect(drawer).toHaveCount(0);
+    } else {
+      await expect(drawer).toBeVisible();
+      // Escape closes it: an overlay that traps the reader is worse than none.
+      await page.keyboard.press('Escape');
+      await expect(drawer).toHaveCount(0);
+    }
+
+    // Either way, one panel describing this task. Never two.
+    await expect(page.getByText('Recurrence Repository')).toHaveCount(width >= 1200 ? 2 : 1);
+  });
+
   test('no region scrolls the page sideways', async ({ page }) => {
     // The failure this catches is not subtle in a screenshot and is invisible
     // in a DOM assertion: a column that overflows pushes the whole layout.
