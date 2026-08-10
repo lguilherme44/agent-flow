@@ -1,12 +1,17 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { api } from './api';
 import type {
+  AnalyticsView,
   ArtifactContentView,
   ArtifactView,
   ProjectView,
   RunDetailView,
   RunSummaryView,
   RunnerHealthView,
+  RunnerView,
+  PromptContentView,
+  PromptView,
+  RoleRouteView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
@@ -54,6 +59,11 @@ export const keys = {
   telemetry: (projectId: string | undefined, runId: string) =>
     ['telemetry', { runId, projectId }] as const,
   runnerHealth: (projectId?: string) => ['runner-health', { projectId }] as const,
+  runners: (projectId?: string) => ['runners', { projectId }] as const,
+  agents: (projectId?: string) => ['agents', { projectId }] as const,
+  prompts: ['prompts'] as const,
+  prompt: (name: string) => ['prompt', { name }] as const,
+  analytics: (projectId?: string) => ['analytics', { projectId }] as const,
 };
 
 export function useProjects(): UseQueryResult<ProjectView[]> {
@@ -161,5 +171,58 @@ export function useRunnerHealth(
     enabled: options.enabled ?? true,
     // Worth knowing, not worth re-asking every time a component mounts.
     staleTime: 30_000,
+  });
+}
+
+/**
+ * The routing table (§82).
+ *
+ * Resolution only — no runner is contacted, so this is as cheap as reading the
+ * config, and the page can hold it as long as the config has not changed.
+ */
+export function useAgents(projectId?: string): UseQueryResult<RoleRouteView[]> {
+  return useQuery({ queryKey: keys.agents(projectId), queryFn: () => api.agents(projectId) });
+}
+
+/** Runner identity — the adapter type behind an id. Never a credential. */
+export function useRunners(projectId?: string): UseQueryResult<RunnerView[]> {
+  return useQuery({
+    queryKey: keys.runners(projectId),
+    queryFn: () => api.runners(projectId),
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * The prompts this installation ships.
+ *
+ * Not scoped to a project: prompts belong to the agent-flow installation, not to
+ * a repository, and pretending otherwise would suggest a project can change them.
+ */
+export function usePrompts(): UseQueryResult<PromptView[]> {
+  return useQuery({ queryKey: keys.prompts, queryFn: () => api.prompts(), staleTime: 60_000 });
+}
+
+export function usePrompt(name: string | undefined): UseQueryResult<PromptContentView> {
+  return useQuery({
+    queryKey: keys.prompt(name ?? ''),
+    queryFn: () => api.prompt(name as string),
+    enabled: name !== undefined,
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * Aggregates across a project's history (§84).
+ *
+ * Reads every considered run's event log, so it is the most expensive read in the
+ * API. Held longer than the default because history does not change while you look
+ * at it — and the stream invalidates it when a run does move.
+ */
+export function useAnalytics(projectId?: string): UseQueryResult<AnalyticsView> {
+  return useQuery({
+    queryKey: keys.analytics(projectId),
+    queryFn: () => api.analytics(projectId),
+    staleTime: 15_000,
   });
 }

@@ -431,12 +431,24 @@ export function StripItem(props: {
   );
 }
 
-/** A label/value pair in a horizontal metadata row, as the inspector uses. */
-export function MetaCell(props: { label: string; value: ReactNode }): JSX.Element {
+/**
+ * A label/value pair in a horizontal metadata row, as the inspector uses.
+ *
+ * `title` exists for the values that genuinely may not fit — a path, a list of
+ * roles. Truncation with nothing behind it reads as deliberate; truncation with a
+ * tooltip reads as an abbreviation.
+ */
+export function MetaCell(props: {
+  label: string;
+  value: ReactNode;
+  title?: string;
+}): JSX.Element {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="whitespace-nowrap text-micro text-faint">{props.label}</dt>
-      <dd className="truncate text-label text-text">{props.value}</dd>
+      <dd className="truncate text-label text-text" title={props.title}>
+        {props.value}
+      </dd>
     </div>
   );
 }

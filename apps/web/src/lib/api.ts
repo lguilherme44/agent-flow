@@ -1,4 +1,5 @@
 import type {
+  AnalyticsView,
   ArtifactContentView,
   ArtifactView,
   HealthResponse,
@@ -7,6 +8,9 @@ import type {
   RunSummaryView,
   RunnerHealthView,
   RunnerView,
+  PromptContentView,
+  PromptView,
+  RoleRouteView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
@@ -90,4 +94,11 @@ export const api = {
   runners: (projectId?: string) => get<RunnerView[]>('/runners', { projectId }),
   runnerHealth: (projectId?: string) =>
     get<RunnerHealthView[]>('/runners/health', { projectId }),
+
+  agents: (projectId?: string) => get<RoleRouteView[]>('/agents', { projectId }),
+
+  prompts: () => get<PromptView[]>('/prompts'),
+  prompt: (name: string) => get<PromptContentView>(`/prompts/${name}`),
+
+  analytics: (projectId?: string) => get<AnalyticsView>('/analytics', { projectId }),
 };

@@ -6,16 +6,19 @@ import { DashboardPage } from '../pages/DashboardPage';
 import { RunDetailPage } from '../pages/RunDetailPage';
 import { RunsPage } from '../pages/RunsPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
+import { AgentsPage } from '../pages/AgentsPage';
+import { PromptsPage } from '../pages/PromptsPage';
+import { AnalyticsPage } from '../pages/AnalyticsPage';
 
 /**
- * The dashboard, read-only.
+ * The dashboard, still read-only.
  *
- * No mutation is wired anywhere in this app, and that is a design position
- * rather than an unfinished one: approving a plan, starting a run and retrying a
- * task are state transitions the StateStore owns, and the write API that lets
- * the browser ask for one has not been designed. Until it is, the CLI is the
- * only thing that changes a run — which means nothing on this screen can be
- * wrong about what a click did.
+ * Seven destinations now, and no mutation wired to any of them. That remains a
+ * design position rather than an unfinished one: approving a plan, starting a run
+ * and retrying a task are state transitions the StateStore owns, and the write API
+ * that lets the browser ask for one arrives with UI-27. Until it does, the CLI is
+ * the only thing that changes a run — which means nothing on any of these screens
+ * can be wrong about what a click did.
  */
 export function createQueryClient(): QueryClient {
   return new QueryClient({
@@ -43,6 +46,9 @@ export function App(): JSX.Element {
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:runId" element={<RunDetailPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/agents" element={<AgentsPage />} />
+              <Route path="/prompts" element={<PromptsPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Route>
           </Routes>

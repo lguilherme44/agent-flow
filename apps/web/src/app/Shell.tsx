@@ -31,8 +31,9 @@ import { runTone, TONE_DOT } from '../lib/status';
  * The sidebar carries the whole product's navigation, not only the parts that
  * are built. §68 lists seven destinations, and a shell that shows two of them
  * misrepresents the tool: a person cannot tell whether Analytics is missing or
- * merely elsewhere. So the seven are present, and the four with no page yet are
- * visibly disabled — which says "not yet" in the one place someone would look.
+ * merely elsewhere. So all seven are present, and Settings — the one still
+ * without a page — is visibly disabled rather than absent, which says "not yet"
+ * in the one place somebody would look for it.
  */
 export function Shell(): JSX.Element {
   return (
@@ -62,9 +63,9 @@ const NAV: readonly NavEntry[] = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/runs', label: 'Runs', icon: Activity },
   { to: '/projects', label: 'Projects', icon: FolderGit2 },
-  { to: '/agents', label: 'Agents & Models', icon: Cpu, pending: true },
-  { to: '/prompts', label: 'Prompts', icon: FileText, pending: true },
-  { to: '/analytics', label: 'Analytics', icon: BarChart3, pending: true },
+  { to: '/agents', label: 'Agents & Models', icon: Cpu },
+  { to: '/prompts', label: 'Prompts', icon: FileText },
+  { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/settings', label: 'Settings', icon: Settings, pending: true },
 ];
 

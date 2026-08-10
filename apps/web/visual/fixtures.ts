@@ -14,8 +14,13 @@
  */
 
 import type {
+  AnalyticsView,
   ArtifactView,
   ProjectView,
+  PromptContentView,
+  PromptView,
+  RoleRouteView,
+  RunnerView,
   RunDetailView,
   RunSummaryView,
   RunnerHealthView,
@@ -422,6 +427,332 @@ export const RUNS: RunSummaryView[] = [
   },
 ];
 
+
+/**
+ * The routing table (§82), with the three cases worth looking at.
+ *
+ * A run where every role resolves cleanly proves nothing about the layout: the
+ * columns that matter are the ones that only appear when something is off. So one
+ * role has its effort clamped, one points at a runner that does not exist, and the
+ * fallbacks cover all three reasons a role can have none.
+ */
+export const AGENTS: RoleRouteView[] = [
+  {
+    role: 'architect',
+    prompts: ['discovery', 'architecture-impact'],
+    requiresReadOnly: true,
+    requiresNativeStructuredOutput: false,
+    configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
+    resolved: {
+      runner: 'claude',
+      model: 'Claude Opus',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'prompted',
+    },
+    fallback: {
+      runner: 'codex',
+      model: 'GPT-5.6 Sol',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'native',
+    },
+  },
+  {
+    role: 'sdd',
+    prompts: ['sdd'],
+    requiresReadOnly: true,
+    requiresNativeStructuredOutput: false,
+    configured: {
+      runner: 'claude',
+      model: 'Claude Opus',
+      reasoning: 'very_high',
+      timeoutSeconds: 1_200,
+    },
+    resolved: {
+      runner: 'claude',
+      model: 'Claude Opus',
+      reasoning: 'high',
+      reasoningClamped: true,
+      structuredOutput: 'prompted',
+    },
+    fallbackAbsent: 'not_configured',
+  },
+  {
+    role: 'planner',
+    prompts: ['planning'],
+    requiresReadOnly: true,
+    requiresNativeStructuredOutput: true,
+    configured: { runner: 'codex', model: 'GPT-5.6 Sol', reasoning: 'high', timeoutSeconds: 900 },
+    resolved: {
+      runner: 'codex',
+      model: 'GPT-5.6 Sol',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'native',
+    },
+    fallback: {
+      runner: 'claude',
+      model: 'Claude Opus',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'prompted',
+    },
+  },
+  {
+    role: 'planReviewer',
+    prompts: ['plan-review'],
+    requiresReadOnly: true,
+    requiresNativeStructuredOutput: false,
+    configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
+    resolved: {
+      runner: 'claude',
+      model: 'Claude Opus',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'prompted',
+    },
+    fallbackAbsent: 'unusable',
+  },
+  {
+    role: 'executor.trivial',
+    prompts: ['implementation'],
+    requiresReadOnly: false,
+    requiresNativeStructuredOutput: false,
+    configured: {
+      runner: 'codex',
+      model: 'GPT-5.6 Luna',
+      reasoning: 'medium',
+      timeoutSeconds: 600,
+    },
+    resolved: {
+      runner: 'codex',
+      model: 'GPT-5.6 Luna',
+      reasoning: 'medium',
+      reasoningClamped: false,
+      structuredOutput: 'native',
+    },
+    fallbackAbsent: 'disabled',
+  },
+  {
+    role: 'executor.normal',
+    prompts: ['implementation'],
+    requiresReadOnly: false,
+    requiresNativeStructuredOutput: false,
+    configured: {
+      runner: 'codex',
+      model: 'GPT-5.6 Terra',
+      reasoning: 'medium',
+      timeoutSeconds: 900,
+    },
+    resolved: {
+      runner: 'codex',
+      model: 'GPT-5.6 Terra',
+      reasoning: 'medium',
+      reasoningClamped: false,
+      structuredOutput: 'native',
+    },
+    fallbackAbsent: 'disabled',
+  },
+  {
+    role: 'executor.complex',
+    prompts: ['implementation'],
+    requiresReadOnly: false,
+    requiresNativeStructuredOutput: false,
+    configured: { runner: 'codex', model: 'GPT-5.6 Sol', reasoning: 'high', timeoutSeconds: 1_800 },
+    resolved: {
+      runner: 'codex',
+      model: 'GPT-5.6 Sol',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'native',
+    },
+    fallbackAbsent: 'disabled',
+  },
+  {
+    role: 'verification',
+    prompts: ['verification'],
+    requiresReadOnly: true,
+    requiresNativeStructuredOutput: true,
+    configured: { runner: 'nowhere', reasoning: 'high', timeoutSeconds: 900 },
+    error: {
+      kind: 'unknown_runner',
+      message:
+        'Role "verification" is configured to use runner "nowhere", which is not registered.',
+    },
+    fallbackAbsent: 'not_configured',
+  },
+  {
+    role: 'finalReviewer',
+    prompts: ['final-review'],
+    requiresReadOnly: true,
+    requiresNativeStructuredOutput: false,
+    configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
+    resolved: {
+      runner: 'claude',
+      model: 'Claude Opus',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'prompted',
+    },
+    fallback: {
+      runner: 'codex',
+      model: 'GPT-5.6 Sol',
+      reasoning: 'high',
+      reasoningClamped: false,
+      structuredOutput: 'native',
+    },
+  },
+];
+
+export const RUNNERS: RunnerView[] = [
+  {
+    id: 'claude',
+    provider: 'claude-code-cli',
+    reasoningLevels: ['low', 'medium', 'high'],
+    structuredOutput: 'prompted',
+  },
+  {
+    id: 'codex',
+    provider: 'codex-cli',
+    reasoningLevels: ['low', 'medium', 'high', 'very_high'],
+    structuredOutput: 'native',
+  },
+];
+
+const prompt = (
+  name: string,
+  overrides: Partial<PromptView>,
+): PromptView => ({
+  name,
+  source: `prompts/${name}.md`,
+  sizeBytes: 2_800,
+  updatedAt: '2026-08-09T22:56:00.000Z',
+  digest: 'a1b2c3d4e5f6',
+  permissions: 'read-only',
+  outputFormat: 'markdown',
+  requiredVars: ['repositoryMap'],
+  nativeStructuredOutput: false,
+  roles: [],
+  stages: [],
+  ...overrides,
+});
+
+export const PROMPTS: PromptView[] = [
+  prompt('architecture-impact', {
+    digest: '3f1a9c02be71',
+    roles: ['architect'],
+    stages: ['architecture-impact'],
+  }),
+  prompt('discovery', { digest: '7c40e1b9aa02', roles: ['architect'], stages: ['discovery'] }),
+  prompt('final-review', {
+    digest: 'd91b0c4e7712',
+    outputFormat: 'json',
+    nativeStructuredOutput: true,
+    requiredVars: ['sdd', 'plan', 'diff'],
+    roles: ['finalReviewer'],
+    stages: ['final-review'],
+  }),
+  prompt('implementation', {
+    digest: '5b2ae90c1d38',
+    sizeBytes: 3_005,
+    permissions: 'write',
+    outputFormat: 'json',
+    requiredVars: ['task', 'sdd'],
+    roles: ['executor.trivial', 'executor.normal', 'executor.complex'],
+    stages: [],
+  }),
+  prompt('plan-review', {
+    digest: 'ba71cc0e2f45',
+    outputFormat: 'json',
+    nativeStructuredOutput: true,
+    requiredVars: ['sdd', 'plan'],
+    roles: ['planReviewer'],
+    stages: ['plan-review'],
+  }),
+  prompt('planning', {
+    digest: '0f0e0d0c0b0a',
+    sizeBytes: 5_040,
+    outputFormat: 'json',
+    nativeStructuredOutput: true,
+    requiredVars: ['sdd', 'repositoryMap'],
+    roles: ['planner'],
+    stages: ['planning'],
+  }),
+  prompt('sdd', { digest: 'cc19ab7740de', roles: ['sdd'], stages: ['sdd'] }),
+  prompt('verification', {
+    digest: 'e2f0aa910c73',
+    outputFormat: 'json',
+    roles: ['verification'],
+    stages: ['verification'],
+  }),
+];
+
+export const PROMPT_CONTENT: PromptContentView = {
+  ...(PROMPTS[0] as PromptView),
+  content: [
+    '# Architecture Impact',
+    '',
+    'You are given a repository map and a feature request. Report which components',
+    'the change reaches, which contracts it crosses, and what it must not touch.',
+    '',
+    '## Repository',
+    '',
+    '{{repositoryMap}}',
+    '',
+    '## Rules',
+    '',
+    '- Name components that already exist. Do not propose new ones here.',
+    '- A component is affected if its behaviour, its contract or its tests change.',
+    '- Say what you could not determine. A gap named is cheaper than a gap guessed.',
+  ].join('\n'),
+  truncated: false,
+};
+
+/** Aggregates across a history rich enough for every bar to differ. */
+export const ANALYTICS: AnalyticsView = {
+  scope: { projectIds: ['beahub-api', 'bflow'], runsAvailable: 23, runsConsidered: 23, truncated: false },
+  runsByProject: [
+    { projectId: 'beahub-api', total: 16, byStatus: { completed: 11, failed: 3, running: 1, waiting_for_approval: 1 } },
+    { projectId: 'bflow', total: 7, byStatus: { completed: 5, plan_rejected: 2 } },
+  ],
+  tasksByState: { completed: 118, failed: 9, queued: 14, blocked: 3, review_required: 2 },
+  totals: {
+    entries: 238,
+    durationMs: 11_940_000,
+    failures: 9,
+    fallbacks: 4,
+    retries: 13,
+    reasoningClamped: 5,
+  },
+  byRunner: [
+    { key: 'codex', count: 152, durationMs: 7_420_000, failures: 6, fallbacks: 4, retries: 10 },
+    { key: 'claude', count: 86, durationMs: 4_520_000, failures: 3, fallbacks: 0, retries: 3 },
+  ],
+  byModel: [
+    { key: 'GPT-5.6 Terra', count: 88, durationMs: 3_620_000, failures: 3, fallbacks: 1, retries: 6 },
+    { key: 'Claude Opus', count: 86, durationMs: 4_520_000, failures: 3, fallbacks: 0, retries: 3 },
+    { key: 'GPT-5.6 Sol', count: 46, durationMs: 2_980_000, failures: 3, fallbacks: 3, retries: 4 },
+    { key: 'GPT-5.6 Luna', count: 18, durationMs: 820_000, failures: 0, fallbacks: 0, retries: 0 },
+  ],
+  byRole: [
+    { key: 'executor.complex', count: 34, durationMs: 3_480_000, failures: 4, fallbacks: 2, retries: 7 },
+    { key: 'executor.normal', count: 58, durationMs: 2_610_000, failures: 2, fallbacks: 1, retries: 3 },
+    { key: 'architect', count: 46, durationMs: 2_040_000, failures: 0, fallbacks: 0, retries: 0 },
+    { key: 'planner', count: 23, durationMs: 1_180_000, failures: 1, fallbacks: 1, retries: 2 },
+    { key: 'executor.trivial', count: 22, durationMs: 520_000, failures: 0, fallbacks: 0, retries: 0 },
+  ],
+  byStage: [
+    { key: 'discovery', count: 23, durationMs: 1_020_000, failures: 0, fallbacks: 0, retries: 0 },
+    { key: 'architecture-impact', count: 23, durationMs: 1_240_000, failures: 0, fallbacks: 0, retries: 0 },
+    { key: 'sdd', count: 23, durationMs: 2_180_000, failures: 0, fallbacks: 0, retries: 1 },
+    { key: 'planning', count: 23, durationMs: 1_180_000, failures: 1, fallbacks: 1, retries: 2 },
+    { key: 'plan-review', count: 21, durationMs: 640_000, failures: 0, fallbacks: 0, retries: 0 },
+    { key: 'verification', count: 12, durationMs: 380_000, failures: 1, fallbacks: 0, retries: 0 },
+    { key: 'final-review', count: 12, durationMs: 460_000, failures: 0, fallbacks: 0, retries: 0 },
+  ],
+};
+
 /** Path → body. The visual tests answer every call the dashboard makes. */
 export const ROUTES: Record<string, unknown> = {
   '/api/v1/health': { status: 'ok', version: '0.1.0', projects: 4, host: '127.0.0.1', port: 4782 },
@@ -434,6 +765,11 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}/tasks/TASK-003`]: TASK_DETAIL,
   [`/api/v1/runs/${RUN_ID}/artifacts`]: ARTIFACTS,
   [`/api/v1/runs/${RUN_ID}/telemetry`]: TELEMETRY,
+  '/api/v1/runners': RUNNERS,
+  '/api/v1/agents': AGENTS,
+  '/api/v1/prompts': PROMPTS,
+  '/api/v1/prompts/architecture-impact': PROMPT_CONTENT,
+  '/api/v1/analytics': ANALYTICS,
 };
 
 export const FIXTURE_RUN_ID = RUN_ID;

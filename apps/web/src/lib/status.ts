@@ -129,3 +129,19 @@ const RUN_LABELS: Partial<Record<RunStatus, string>> = {
 export function runLabel(status: RunStatus): string {
   return RUN_LABELS[status] ?? status.replace(/_/g, ' ').toUpperCase();
 }
+
+/**
+ * The same mappings, for a status that arrived as an aggregate key.
+ *
+ * Analytics groups by whatever string the run recorded, so its keys are `string`
+ * rather than the unions above. Both switches end in a `default`, so an unknown
+ * key becomes `muted` — which is the honest answer for a status this build does
+ * not recognise, and better than either a crash or a confident colour.
+ */
+export function runToneOf(status: string): Tone {
+  return runTone(status as RunStatus);
+}
+
+export function taskToneOf(state: string): Tone {
+  return taskTone(state as TaskState);
+}

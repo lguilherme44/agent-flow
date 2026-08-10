@@ -218,24 +218,25 @@ test.describe('run detail', () => {
     expect(overflow.scrollWidth).toBe(overflow.clientWidth);
   });
 
-  test('no table clips a value it has room for', async ({ page }) => {
-    // Fixed column widths are measured, not guessed, and a measurement goes
-    // stale the moment a label changes. This is the instrument: any cell whose
-    // text is wider than the box it was given is reported by name, so "WAITING
-    // FOR APPRO…" fails here instead of being noticed in a screenshot months
-    // later — or not noticed at all, because an ellipsis looks deliberate.
+  test('nothing clips a value it has room for', async ({ page }) => {
+    // Fixed widths are measured, not guessed, and a measurement goes stale the
+    // moment a label changes. This is the instrument: anything whose text is wider
+    // than the box it was given is reported by name, so "WAITING FOR APPRO…" fails
+    // here instead of being noticed in a screenshot months later — or not noticed
+    // at all, because an ellipsis looks deliberate.
+    //
+    // Every element on the page, not only table cells: a panel header truncates
+    // the same way, and the first version of this check walked `th, td` only.
     await stubApi(page);
 
-    for (const route of ['/dashboard', '/runs', '/projects']) {
+    for (const route of ['/dashboard', '/runs', '/projects', '/agents', '/prompts', '/analytics']) {
       await page.goto(route);
-      await expect(page.getByRole('table').first()).toBeVisible();
+      await expect(page.getByRole('heading').first()).toBeVisible();
+      // Recharts and the overflow observers both settle on the next frame.
+      await page.waitForTimeout(300);
 
       const clipped = await page.evaluate(() =>
-        // The cells themselves as well as what is inside them: a `truncate` on the
-        // `<td>` clips exactly the same way and was invisible to the first version
-        // of this check, which only looked at the elements one level down.
-        [...document.querySelectorAll('th, td')]
-          .flatMap((cell) => [cell, ...cell.querySelectorAll('span, a, code')])
+        [...document.querySelectorAll('body *')]
           .filter((node) => {
             const style = getComputedStyle(node);
             // Only the elements that promised not to wrap. A `line-clamp` cell is
@@ -314,8 +315,7 @@ test.describe('projects', () => {
     await expect(page).toHaveScreenshot('projects.png', { fullPage: false });
   });
 
-  test('shows runner health once a project is in scope', async ({ page }) => {
-    await stubApi(page);
+  test('shows runner health once a project is in scope', async ({ page }) => {    await stubApi(page);
     await page.goto('/projects');
     await expect(page.getByRole('row')).toHaveCount(5);
 
@@ -328,5 +328,40 @@ test.describe('projects', () => {
 
     await expect(page.getByRole('list', { name: 'Runner health' })).toBeVisible();
     await expect(page).toHaveScreenshot('projects-selected.png', { fullPage: false });
+  });
+});
+
+test.describe('agents and models', () => {
+  test('renders the routing table', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/agents');
+    // Nine roles and a header row. §82 names nine; a page showing eight leaves
+    // somebody wondering which one is missing and whether that is the bug.
+    await expect(page.getByRole('row')).toHaveCount(10);
+    await expect(page.getByText('1 role cannot be resolved')).toBeVisible();
+
+    await expect(page).toHaveScreenshot('agents.png', { fullPage: false });
+  });
+});
+
+test.describe('prompts', () => {
+  test('renders the viewer with the first prompt open', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/prompts');
+    await expect(page.getByText(/A component is affected if/)).toBeVisible();
+
+    await expect(page).toHaveScreenshot('prompts.png', { fullPage: false });
+  });
+});
+
+test.describe('analytics', () => {
+  test('renders the aggregates', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/analytics');
+    await expect(page.getByRole('heading', { name: 'Time per stage' })).toBeVisible();
+    // Recharts measures its container and draws on the next frame.
+    await page.waitForTimeout(300);
+
+    await expect(page).toHaveScreenshot('analytics.png', { fullPage: false });
   });
 });
