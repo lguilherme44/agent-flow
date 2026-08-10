@@ -310,6 +310,69 @@ kind would not have found any of these.
 
 ---
 
+## 10. The whole cycle ran, and the second reviewer earned its keep
+
+The first end-to-end run that reached the Definition of Done was against a real
+repository, with Codex planning, Claude implementing, and Codex doing the final
+review. It ended `NOT DONE`, and that is the result worth reporting.
+
+The feature was a `maxLength` option on a `slugify` function: truncate the slug,
+never leave a trailing dash, never split a word when a dash boundary exists
+inside the limit. The implementation cut at the last dash whenever the slug
+exceeded the limit — including when the cut had already landed exactly on a word
+boundary. `slugify('hello world alpha', { maxLength: 11 })` returned `'hello'`,
+throwing away a whole word, when `'hello-world'` is exactly eleven characters,
+ends in no dash, and splits nothing.
+
+The path that bug took is the entire argument for §3.2:
+
+    SDD (Claude)            described the behaviour correctly
+    plan (Codex)            sequenced it correctly, RED before GREEN
+    implementation (Claude) got it wrong
+    tests (Claude)          passed — written by the same author, against the
+                            same misreading
+    verification (Claude)   PASS
+    final review (Codex)    FAIL, with the failing input named
+
+Five of those six steps agreed. The one that disagreed was the one running on a
+different provider. A same-provider review would have produced six agreements
+and a shipped bug, and every artifact would have looked exactly as green.
+
+The same review caught something about agent-flow itself: `init` appends to
+`.gitignore`, and when that happens after the last commit, the change lands in
+the diff the final review is later asked to judge. The tool contaminated its own
+evidence. It is minor and it is real, and no test would have found it, because
+no test runs `init` and `review` against the same working tree.
+
+**A killed process found a third one.** A background job was terminated during
+discovery, and `agent-flow status` reported `Discovery ✓` for a run whose event
+log held a single `stage_started` and no completion. Two causes: `createRun`
+initialises `stage: 'discovery'` before anything happens, and the marker was
+`index < reached ? '✓' : index === reached ? '✓' : '·'` — a nested ternary whose
+first two branches are the same value, left over from a version that
+distinguished done from in-progress. Underneath both: `state.stage` cannot
+answer the question at all, because "about to start discovery" and "finished
+discovery" are the same byte. Progress now comes from `stage_completed` events.
+There was no test file for `status` — which is why a dead branch survived two
+adversarial reviews.
+
+**The Python run exposed the detector's asymmetry.** `case 'python'` never reads
+the project name from `pyproject.toml`, so a package named `retrykit` was
+configured as its directory name; `rust` has the same gap with `Cargo.toml`,
+while `node`, `flutter` and `go` all read theirs. Python also declares only
+`test: pytest` — no lint, despite `ruff` being declared in the manifest it
+already parsed to identify the stack. The detector is as good as Node and
+shallow everywhere else, and only running a second stack made that visible.
+
+**What this round says about method.** Not one of these came from reading code.
+The truncation bug needed a second provider to judge; the `status` bug needed a
+process to be killed at the wrong moment; the detector gaps needed a repository
+that was not Node. Two adversarial reviews of the source found neither of the
+first two. Running the thing is not a formality after the review — it is a
+different instrument, and it reaches what review cannot.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes
@@ -340,16 +403,17 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 
 ### Not validated
 
-**Verification and final review have never run against a live CLI.** They are
-covered by tests with scripted agents, and the prompts are written, but the one
-real execution stopped at `review_required` before reaching them. Everything
-before that point — discovery, impact, SDD, planning, plan review, approval,
-task execution — has run end to end against Claude Code and Codex.
+**Only Node has been through the whole workflow.** Stack detection handles
+Flutter, Python, Go and Rust and is unit-tested, but only Node has run end to
+end. A Python run is what surfaced §10's detector gaps, and it has not yet
+reached implementation. No Flutter repository has been through it at all —
+there is no Flutter SDK on the machine this was built on, which is a reason and
+not an excuse.
 
-**Only Node projects.** The plan called for validating two different stacks.
-Both real runs were Node. Stack detection handles Flutter, Python, Go and Rust,
-and is unit-tested, but no Flutter or Python repository has been through the
-workflow.
+**No live fallback, and no live reasoning clamp.** Both are covered by tests
+with scripted runners. Forcing them for real would mean exhausting a quota or
+misconfiguring a runner on purpose, and a staged outage proves less than it
+appears to: it exercises the handler, not the condition.
 
 **Cost is sampled, not measured.** One SDD invocation on Opus with a 1M context
 window reported \$1.37. A full feature is four to five such calls before any code

@@ -36,6 +36,13 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
       return ExitCode.OK;
     }
 
+    // What finished, from the log that records completion — see
+    // `renderPlanningProgress` for why `state.stage` cannot answer this.
+    const completedStages = (await store.readEvents(state.runId))
+      .filter((event) => event.type === 'stage_completed')
+      .map((event) => event.detail['stage'])
+      .filter((stage): stage is string => typeof stage === 'string');
+
     const planRaw = await store.readArtifact(state.runId, 'plan');
     const reviewRaw = await store.readArtifact(state.runId, 'planReview');
     const plan = planRaw === null ? null : PlanSchema.safeParse(JSON.parse(planRaw));
@@ -47,6 +54,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
           {
             ...state,
             taskCount: plan?.success ? plan.data.tasks.length : 0,
+            completedStages,
             review: review?.success ? review.data : null,
           },
           null,
@@ -56,7 +64,14 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
       return ExitCode.OK;
     }
 
-    process.stdout.write(`${render(state, plan?.success ? plan.data.tasks.length : 0, review?.success ? review.data : null)}\n`);
+    process.stdout.write(
+      `${render(
+        state,
+        plan?.success ? plan.data.tasks.length : 0,
+        review?.success ? review.data : null,
+        completedStages,
+      )}\n`,
+    );
     return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);
@@ -65,10 +80,42 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
   }
 }
 
+/**
+ * One line per planning stage, marked by what actually finished.
+ *
+ * Derived from `stage_completed` events rather than from `state.stage`, because
+ * `state.stage` cannot answer the question. `createRun` initialises it to
+ * `discovery`, and the stage runner writes the same value again once discovery
+ * succeeds — so "about to start" and "finished" are the identical byte on disk.
+ * A run killed during its first stage reported `Discovery ✓`.
+ *
+ * The third marker matters as much as the other two. A killed process leaves
+ * `status: running` on disk, and a stage that is neither finished nor actually
+ * executing must not be dressed as either.
+ */
+export function renderPlanningProgress(
+  completedStages: readonly string[],
+  currentStage: string,
+  status: RunState['status'],
+): string[] {
+  const done = new Set(completedStages);
+
+  return PLANNING_STAGES.map((stage) => {
+    const label = STAGE_LABELS[stage] ?? stage;
+    const mark = done.has(stage)
+      ? '✓'
+      : stage === currentStage && status === 'running'
+        ? '…'
+        : '·';
+    return `  ${label.padEnd(16)}${mark}`;
+  });
+}
+
 function render(
   state: RunState,
   taskCount: number,
   review: ReturnType<typeof ReviewResultSchema.parse> | null,
+  completedStages: readonly string[],
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -78,12 +125,7 @@ function render(
     '',
   ];
 
-  const reached = PLANNING_STAGES.indexOf(state.stage);
-  for (const [index, stage] of PLANNING_STAGES.entries()) {
-    const label = STAGE_LABELS[stage] ?? stage;
-    const mark = index < reached ? '✓' : index === reached ? '✓' : '·';
-    lines.push(`  ${label.padEnd(16)}${mark}`);
-  }
+  lines.push(...renderPlanningProgress(completedStages, state.stage, state.status));
 
   lines.push(`  ${'Approval'.padEnd(16)}${state.approved ? '✓' : '·'}`);
   lines.push('');
