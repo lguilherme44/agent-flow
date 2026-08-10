@@ -156,7 +156,7 @@ não se sobrescrevem.
 ## Estado atual
 
 O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
-552 testes, e a suíte não invoca nenhuma CLI.
+597 testes, e a suíte não invoca nenhuma CLI.
 
 ### Funcionando
 
@@ -194,8 +194,8 @@ Ordem de correção e severidade:
 
 - [x] **V-01 · crítico** — strings geradas pelo planner chegam ao `/bin/sh -c`; sem allowlist → **corrigido:** `validation` guarda ids resolvidos pela config do projeto
 - [x] **V-09 · alto** — o timeout de processo nunca dispara quando o filho tem filhos → **corrigido:** o filho roda no próprio process group
-- [ ] **V-02 · alto** — `FallbackRunner` nunca é construído em runtime
-- [ ] **V-03 · alto** — uma task interrompida no meio fica `running` para sempre
+- [x] **V-02 · alto** — `FallbackRunner` nunca é construído em runtime → **corrigido:** ligado via `runner-factory`, resolvendo model e effort da própria role de fallback
+- [x] **V-03 · alto** — uma task interrompida no meio fica `running` para sempre → **corrigido:** recuperada como `interrupted` e reenfileirada dentro do limite de tentativas
 - [ ] **V-04 · alto** — planos test-first não conseguem expressar falha esperada
 - [ ] **V-05 · médio** — `agent-flow task` monta um grafo sem as dependências
 - [ ] **V-06 · médio** — `result.json` grava um reasoning level hardcoded

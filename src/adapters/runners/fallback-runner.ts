@@ -5,9 +5,9 @@ import type {
   RunnerCapabilities,
   RunnerHealth,
 } from '../../ports/agent-runner.js';
-import type { FallbackTrigger, ReasoningLevel, RunnerErrorCode } from '../../contracts/index.js';
+import type { FallbackTrigger, RunnerErrorCode } from '../../contracts/index.js';
 import { FALLBACK_TRIGGERS } from '../../contracts/index.js';
-import { clampReasoning } from '../../core/reasoning.js';
+import type { ResolvedAgentConfig } from '../../core/role.js';
 
 /** Recorded when a fallback fires, so `result.json` can explain what happened. */
 export interface FallbackEvent {
@@ -15,11 +15,23 @@ export interface FallbackEvent {
   readonly to: string;
   readonly errorCode: RunnerErrorCode;
   readonly reasoningClamped: boolean;
+  /** The configuration the replacement actually ran with. */
+  readonly config: ResolvedAgentConfig;
 }
 
 export interface FallbackRunnerOptions {
   readonly primary: AgentRunner;
   readonly secondary: AgentRunner;
+  /**
+   * The fallback role's own resolved configuration — its model, effort and
+   * timeout, not the primary's.
+   *
+   * This is the difference between a fallback and a retry pointed elsewhere.
+   * Reusing the primary's input would send its model name to a runner that has
+   * never heard of it: `gpt-5.6-sol` handed to Claude Code fails as an unknown
+   * model, and the failure would look like the fallback itself being broken.
+   */
+  readonly secondaryConfig: ResolvedAgentConfig;
   /**
    * Which failures may be routed around. Constrained to infrastructure causes
    * by the type: `FallbackTrigger` cannot express `execution_failed`.
@@ -62,10 +74,9 @@ export class FallbackRunner implements AgentRunner {
   /**
    * The primary's capabilities.
    *
-   * Roles are resolved against these, and resolution happens before any run. A
-   * fallback that cannot honour the requested reasoning level clamps at the
-   * moment it is used, which is recorded — rather than quietly narrowing what
-   * the whole configuration looks capable of.
+   * Roles are resolved against these, before any run. The fallback's own
+   * capabilities were already checked when its configuration was resolved, so a
+   * fallback that cannot satisfy the stage never reaches this class.
    */
   capabilities(): RunnerCapabilities {
     return this.options.primary.capabilities();
@@ -90,21 +101,29 @@ export class FallbackRunner implements AgentRunner {
     input: AgentRunInput,
     errorCode: RunnerErrorCode,
   ): Promise<AgentRunResult> {
-    const { secondary, primary, onFallback } = this.options;
-
-    // The replacement may not reach as high as the role asked for. Clamping
-    // beats failing, but it is recorded either way — a run that quietly
-    // dropped a level should be able to explain itself afterwards (R-15).
-    const supported = secondary.capabilities().supportedReasoningLevels;
-    const { reasoning, clamped } = clampReasoning(input.reasoning, supported);
+    const { secondary, secondaryConfig, primary, onFallback } = this.options;
 
     await onFallback?.({
       from: primary.id,
       to: secondary.id,
       errorCode,
-      reasoningClamped: clamped,
+      reasoningClamped: secondaryConfig.reasoningClamped,
+      config: secondaryConfig,
     });
 
-    return secondary.run({ ...input, reasoning: reasoning as ReasoningLevel });
+    // The replacement runs on its own terms: its model, its effort, its
+    // timeout. Only the work itself — the prompt, the permissions, the working
+    // directory — carries over.
+    return secondary.run({
+      ...input,
+      reasoning: secondaryConfig.reasoning,
+      timeoutSeconds: secondaryConfig.timeoutSeconds,
+      // Deleted rather than left in place: an absent model means "use whatever
+      // this CLI is configured for", which is right, while the primary's model
+      // name would be wrong.
+      ...(secondaryConfig.model === undefined
+        ? { model: undefined }
+        : { model: secondaryConfig.model }),
+    });
   }
 }

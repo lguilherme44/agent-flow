@@ -8,9 +8,8 @@ import { FakeProcessRunner } from './fakes/fake-process-runner.js';
 import { TaskExecutor } from '../src/app/task-executor.js';
 import { StageRunner } from '../src/app/stage-runner.js';
 import { StateStore } from '../src/app/state-store.js';
+import { buildDag, DagError } from '../src/core/dag.js';
 import { PromptLoader } from '../src/app/prompt-loader.js';
-import { Scheduler } from '../src/app/scheduler.js';
-import { readyTasks, buildDag, DagError } from '../src/core/dag.js';
 import {
   GlobalConfigSchema,
   PlanSchema,
@@ -45,8 +44,6 @@ import {
  *
  * | Finding | Scenario | Destination |
  * |---|---|---|
- * | V-02 | fallback fires at runtime | `test/app/execution-context.test.ts` (new) |
- * | V-03 | interrupted task is recoverable | `test/app/scheduler.test.ts` |
  * | V-05 | single task with dependencies | `test/cli/run.test.ts` (new) |
  * | V-06 | provenance matches execution | `test/app/task-executor.test.ts` |
  * | V-07 | cache invalidation | `test/app/planning-pipeline.test.ts` |
@@ -145,85 +142,6 @@ const task = (overrides: Record<string, unknown> = {}) =>
     validation: [],
     ...overrides,
   });
-
-describe('[DEFECT] V-02 — fallback is not wired into the runtime', () => {
-  it('a quota failure is not routed anywhere, even with fallback configured', async () => {
-    const withFallback = GlobalConfigSchema.parse({
-      ...globalConfig,
-      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
-      fallback: {
-        enabled: true,
-        on: ['quota_exceeded'],
-        roles: { 'executor.normal': { runner: 'codex', effort: 'medium' } },
-      },
-    });
-
-    const fs = new InMemoryFileSystem();
-    const clock = new FixedClock();
-    for (const file of readdirSync(REAL_PROMPTS)) {
-      if (file.endsWith('.md')) {
-        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
-      }
-    }
-
-    const store = new StateStore({ fs, clock, projectDir: PROJECT });
-    const run = await store.createRun('f');
-    const claude = new FakeAgentRunner('claude', CAPS);
-    const codex = new FakeAgentRunner('codex', CAPS);
-
-    const executor = new TaskExecutor({
-      fs,
-      clock,
-      store,
-      stageRunner: new StageRunner({
-        fs,
-        clock,
-        store,
-        config: withFallback,
-        capabilities: { claude: CAPS, codex: CAPS },
-        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
-        // Exactly what execution-context.ts does today.
-        getRunner: (id) => (id === 'claude' ? claude : codex),
-        projectDir: PROJECT,
-      }),
-      processRunner: new FakeProcessRunner().always({ exitCode: 0 }),
-      config: { global: withFallback },
-      projectDir: PROJECT,
-    });
-
-    claude.pushFailure('quota_exceeded');
-
-    const result = await executor.execute(task(), run.runId, 'SDD');
-
-    expect(result.status).toBe('failed');
-    expect(result.errorCode).toBe('quota_exceeded');
-    // The configured fallback runner was never asked.
-    expect(codex.calls).toHaveLength(0);
-  });
-});
-
-describe('[DEFECT] V-03 — an orphaned running task can never be scheduled again', () => {
-  it('readyTasks excludes a task left in running', () => {
-    const dag = buildDag([{ id: 'TASK-001', dependencies: [] }]);
-    expect(readyTasks(dag, { 'TASK-001': 'running' })).toEqual([]);
-  });
-
-  it('a resume with a persisted running state makes no progress', async () => {
-    // The state a real kill leaves behind: the scheduler persists `running`
-    // before invoking the agent, so a crash in between is indistinguishable
-    // from a task that is still in flight.
-    const { store, run, executor } = await harness();
-    const plan = PlanSchema.parse({ feature: 'f', tasks: [task()] });
-
-    const outcome = await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
-      'TASK-001': 'running',
-    });
-
-    expect(outcome.results).toEqual([]);
-    expect(outcome.complete).toBe(false);
-    expect(outcome.states['TASK-001']).toBe('running');
-  });
-});
 
 describe('[DEFECT] V-05 — a single task with dependencies builds an invalid graph', () => {
   it('throws unknown_dependency because the mini-plan omits the dependency', () => {

@@ -306,3 +306,120 @@ describe('progress reporting', () => {
     expect(finished).toEqual(['TASK-001']);
   });
 });
+
+describe('an interrupted task is recoverable (V-03 regression)', () => {
+  // Was a defect: the scheduler persists `running` before invoking an agent, so
+  // a process killed in between left a task looking in-flight forever.
+  // `readyTasks` admits only `queued` and `ready`, so the orphan could never be
+  // scheduled again — the run made no further progress while reporting no
+  // failure at all.
+  //
+  // `interrupted` is a state of its own rather than `failed`, because nothing
+  // failed: the machine stopped. Collapsing the two would make the audit trail
+  // lie about what happened.
+
+  it('requeues a task left behind by a dead process', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
+      'TASK-001': 'running',
+    });
+
+    expect(outcome.recovered).toEqual(['TASK-001']);
+    expect(executed).toEqual(['TASK-001']);
+    expect(outcome.complete).toBe(true);
+  });
+
+  it('records the recovery, so a silent restart is not indistinguishable from never stopping', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
+      'TASK-001': 'running',
+    });
+
+    const events = await store.readEvents(run.runId);
+    const recovery = events.find((event) => event.type === 'task_interrupted');
+
+    expect(recovery?.detail['task']).toBe('TASK-001');
+    expect(recovery?.detail['requeued']).toBe(true);
+  });
+
+  it('leaves work that was already finished alone', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
+      'TASK-001': 'completed',
+      'TASK-002': 'running',
+    });
+
+    expect(executed).toEqual(['TASK-002']);
+  });
+
+  it('stops requeueing once the attempt limit is reached (§23)', async () => {
+    // The bound that keeps recovery from becoming an unbounded retry loop. The
+    // attempt counter moved when the attempt began, so a task that keeps dying
+    // eventually needs a person rather than another try.
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 2 }],
+    }));
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({ store, executor, maxAttempts: 2 }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'running' },
+    );
+
+    expect(executed).toEqual([]);
+    expect(outcome.states['TASK-001']).toBe('interrupted');
+    expect(outcome.recovered).toEqual([]);
+  });
+
+  it('says why it gave up', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 5 }],
+    }));
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor, maxAttempts: 2 }).run(plan, run.runId, 'SDD', {
+      'TASK-001': 'running',
+    });
+
+    const events = await store.readEvents(run.runId);
+    const recovery = events.find((event) => event.type === 'task_interrupted');
+
+    expect(recovery?.detail['requeued']).toBe(false);
+    expect(String(recovery?.detail['reason'])).toContain('attempt limit');
+  });
+
+  it('does nothing when no task was interrupted', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD');
+
+    expect(outcome.recovered).toEqual([]);
+    const events = await store.readEvents(run.runId);
+    expect(events.map((event) => event.type)).not.toContain('task_interrupted');
+  });
+});

@@ -9,10 +9,38 @@ import {
 import { TASK_STATES, type TaskState } from '../../src/contracts/index.js';
 
 describe('task state machine (§22)', () => {
-  it('covers exactly the seven states the spec defines', () => {
+  it('covers the seven states the spec defines, plus interrupted', () => {
+    // `interrupted` is not in §22 and had to be added (V-03). The scheduler
+    // persists `running` before invoking an agent, so a process killed in
+    // between left a task looking in-flight forever, and the DAG would never
+    // schedule it again.
+    //
+    // Not folded into `failed`: nothing failed, the machine stopped. Losing
+    // that distinction would make the audit trail lie.
     expect([...TASK_STATES].sort()).toEqual(
-      ['queued', 'ready', 'running', 'completed', 'failed', 'blocked', 'review_required'].sort(),
+      [
+        'queued',
+        'ready',
+        'running',
+        'interrupted',
+        'completed',
+        'failed',
+        'blocked',
+        'review_required',
+      ].sort(),
     );
+  });
+
+  it('lets a running task become interrupted, and an interrupted one requeue', () => {
+    expect(canTransition('running', 'interrupted')).toBe(true);
+    expect(canTransition('interrupted', 'queued')).toBe(true);
+  });
+
+  it('does not let an interrupted task resume mid-flight', () => {
+    // The agent's work was never observed, so the task starts over rather than
+    // picking up from a state nobody recorded.
+    expect(canTransition('interrupted', 'running')).toBe(false);
+    expect(canTransition('interrupted', 'completed')).toBe(false);
   });
 
   it('allows the normal path', () => {

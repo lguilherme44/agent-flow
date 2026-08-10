@@ -88,7 +88,7 @@ async function harness(reviewerRunner: string) {
     config: global,
     capabilities: { claude: CAPS, codex: CAPS },
     promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
-    getRunner: (id) => runners[id as 'claude' | 'codex'],
+    getRunner: (resolved) => runners[resolved.runner as 'claude' | 'codex'],
     projectDir: PROJECT,
   });
 

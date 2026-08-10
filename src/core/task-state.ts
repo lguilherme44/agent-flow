@@ -17,7 +17,13 @@ import type { TaskState } from '../contracts/task.schema.js';
 const TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   queued: ['ready', 'blocked'],
   ready: ['running', 'blocked', 'queued'],
-  running: ['completed', 'failed', 'blocked', 'review_required'],
+  // `interrupted` is what a killed process leaves behind, recorded when a later
+  // run finds a task still marked `running` that nothing is executing.
+  running: ['completed', 'failed', 'blocked', 'review_required', 'interrupted'],
+  // Requeued rather than resumed: the agent's work was not observed, so the
+  // task starts over. The attempt counter already moved, which is what keeps
+  // this from becoming an unbounded loop.
+  interrupted: ['queued', 'blocked'],
   completed: [],
   failed: ['ready'],
   blocked: ['ready'],

@@ -153,7 +153,7 @@ overwrite each other.
 ## Status
 
 MVP 1 is complete and has been run end to end against Claude Code and Codex.
-552 tests, no CLI invoked by the suite.
+597 tests, no CLI invoked by the suite.
 
 ### Working
 
@@ -191,8 +191,8 @@ Fix order and severity:
 
 - [x] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist → **fixed:** `validation` holds ids resolved against the project config
 - [x] **V-09 · high** — the process timeout never fires when the child has children → **fixed:** the child runs in its own process group
-- [ ] **V-02 · high** — `FallbackRunner` is never constructed at runtime
-- [ ] **V-03 · high** — a task interrupted mid-flight stays `running` forever
+- [x] **V-02 · high** — `FallbackRunner` is never constructed at runtime → **fixed:** wired through `runner-factory`, resolving the fallback role's own model and effort
+- [x] **V-03 · high** — a task interrupted mid-flight stays `running` forever → **fixed:** recovered as `interrupted` and requeued within the attempt limit
 - [ ] **V-04 · high** — test-first plans cannot express an expected failure
 - [ ] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies
 - [ ] **V-06 · medium** — `result.json` records a hardcoded reasoning level

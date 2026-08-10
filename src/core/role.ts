@@ -150,3 +150,59 @@ export function resolveRole(
     structuredOutputStrategy: runnerCapabilities.structuredOutputStrategy,
   };
 }
+
+/**
+ * The configuration a role falls back to, when one is declared and usable.
+ *
+ * Resolved as a role in its own right rather than as "the same request, sent
+ * elsewhere". A fallback entry carries its own runner, model, effort and
+ * timeout, and reusing the primary's would send a model name to a runner that
+ * has never heard of it.
+ *
+ * Returns undefined when fallback is disabled, unconfigured for this role, or
+ * pointing somewhere unusable. That is not an error: it means there is nothing
+ * to fall back to, and the primary failure surfaces as it would have anyway.
+ */
+export function resolveFallback(
+  role: WorkflowRole,
+  config: GlobalConfig,
+  capabilities: RunnerCapabilitiesMap,
+  requirements: RoleRequirements = {},
+): ResolvedAgentConfig | undefined {
+  if (!config.fallback.enabled) return undefined;
+
+  const fallbackConfig = config.fallback.roles[role];
+  if (fallbackConfig === undefined) return undefined;
+
+  const runnerConfig = config.runners[fallbackConfig.runner];
+  const runnerCapabilities = capabilities[fallbackConfig.runner];
+  if (runnerConfig?.enabled !== true || runnerCapabilities === undefined) return undefined;
+
+  // A fallback that cannot satisfy the stage is no fallback. Using it anyway
+  // would quietly break the guarantee the requirement expresses — a read-only
+  // stage has to stay read-only even when the primary runner is down.
+  if (!runnerCapabilities.supportsNonInteractive) return undefined;
+  if (!runnerCapabilities.supportsWorkingDirectory) return undefined;
+  if (requirements.readOnly === true && !runnerCapabilities.supportsReadOnly) return undefined;
+  if (
+    requirements.nativeStructuredOutput === true &&
+    runnerCapabilities.structuredOutputStrategy !== 'native'
+  ) {
+    return undefined;
+  }
+
+  const { reasoning, clamped } = clampReasoning(
+    fallbackConfig.effort,
+    runnerCapabilities.supportedReasoningLevels,
+  );
+
+  return {
+    role,
+    runner: fallbackConfig.runner,
+    ...(fallbackConfig.model === undefined ? {} : { model: fallbackConfig.model }),
+    reasoning,
+    reasoningClamped: clamped,
+    timeoutSeconds: fallbackConfig.timeoutSeconds,
+    structuredOutputStrategy: runnerCapabilities.structuredOutputStrategy,
+  };
+}

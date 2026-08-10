@@ -9,7 +9,7 @@ import {
 } from '../contracts/index.js';
 import type { AgentRunner, Clock, FileSystem } from '../ports/index.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
-import { resolveRole } from '../core/role.js';
+import { resolveRole, type ResolvedAgentConfig } from '../core/role.js';
 import type { PromptLoader } from './prompt-loader.js';
 import type { StateStore } from './state-store.js';
 import { runPaths, type ArtifactName } from './paths.js';
@@ -73,7 +73,14 @@ export interface StageRunnerOptions {
   readonly config: GlobalConfig;
   readonly capabilities: RunnerCapabilitiesMap;
   readonly promptLoader: PromptLoader;
-  readonly getRunner: (id: string) => AgentRunner;
+  /**
+   * Resolves the runner for a role.
+   *
+   * Takes the whole resolution rather than just a runner id, because the caller
+   * may need to wrap it — a fallback has to know which role it is standing in
+   * for in order to resolve that role's replacement configuration.
+   */
+  readonly getRunner: (resolved: ResolvedAgentConfig) => AgentRunner;
   readonly projectDir: string;
 }
 
@@ -117,7 +124,7 @@ export class StageRunner {
       });
     }
 
-    const runner = getRunner(resolved.runner);
+    const runner = getRunner(resolved);
     const startedAt = clock.now();
 
     await store.appendEvent(runId, 'stage_started', {

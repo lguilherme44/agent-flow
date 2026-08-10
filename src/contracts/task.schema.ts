@@ -17,13 +17,24 @@ export const TaskFlagsSchema = z.object({
 export type TaskFlags = z.infer<typeof TaskFlagsSchema>;
 
 /**
- * The seven task states of §22. A task reaches `ready` only once every
- * dependency is `completed`; enforced by the DAG in AF-07, not by convention.
+ * Task states. The seven of §22, plus `interrupted`.
+ *
+ * A task reaches `ready` only once every dependency is `completed`; enforced by
+ * the DAG, not by convention.
+ *
+ * `interrupted` is not in the specification and had to be added. The scheduler
+ * persists `running` before invoking an agent, so a process killed in between
+ * leaves a task that looks in-flight forever: `readyTasks` admits only `queued`
+ * and `ready`, so the task could never be scheduled again and the run made no
+ * further progress. Reusing `failed` would have been wrong — nothing failed, the
+ * machine stopped — and losing that distinction would make the audit trail lie
+ * about what happened.
  */
 export const TASK_STATES = [
   'queued',
   'ready',
   'running',
+  'interrupted',
   'completed',
   'failed',
   'blocked',

@@ -14,6 +14,8 @@ export interface SchedulerOptions {
    * working tree at the same time.
    */
   readonly maxConcurrency?: number;
+  /** Bounds recovery of interrupted tasks. Comes from `retry.maxAttempts`. */
+  readonly maxAttempts?: number;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
@@ -25,6 +27,8 @@ export interface SchedulerOutcome {
   readonly complete: boolean;
   /** Tasks that will never run because something upstream failed. */
   readonly blocked: string[];
+  /** Tasks found orphaned in `running` and put back in the queue. */
+  readonly recovered: string[];
   /** Set when the run stopped before finishing, with the reason. */
   readonly haltedBy?: string;
 }
@@ -57,6 +61,12 @@ export class Scheduler {
 
     const states: Record<string, TaskState> = {};
     for (const id of topologicalOrder(dag)) states[id] = initialStates[id] ?? 'queued';
+
+    // Nothing is executing yet, so anything still marked `running` was left
+    // behind by a process that died. Recovered rather than left alone: the DAG
+    // admits only `queued` and `ready`, so an orphan would sit there forever
+    // and the run would make no further progress while reporting no failure.
+    const recovered = await this.recoverInterrupted(runId, states);
 
     const results: TaskResult[] = [];
     const concurrency = Math.max(1, this.options.maxConcurrency ?? 1);
@@ -108,8 +118,56 @@ export class Scheduler {
       results,
       complete: Object.values(states).every((state) => state === 'completed'),
       blocked,
+      recovered,
       ...(haltedBy === undefined ? {} : { haltedBy }),
     };
+  }
+
+  /**
+   * Brings tasks left `running` by a dead process back into the queue.
+   *
+   * Two things keep this from becoming an automatic retry loop, which §23
+   * forbids. The attempt counter was already incremented when the attempt
+   * began, so `maxAttempts` still bounds it; and a task past that limit is left
+   * `interrupted` for a person to look at rather than tried again.
+   *
+   * Recorded as an event either way — a run that silently restarted work is
+   * indistinguishable from one that never stopped.
+   */
+  private async recoverInterrupted(
+    runId: string,
+    states: Record<string, TaskState>,
+  ): Promise<string[]> {
+    const orphans = Object.entries(states)
+      .filter(([, state]) => state === 'running')
+      .map(([id]) => id);
+
+    if (orphans.length === 0) return [];
+
+    const persisted = await this.options.store.loadRun(runId);
+    const attemptsOf = (id: string): number =>
+      persisted.tasks.find((task) => task.id === id)?.attempts ?? 0;
+
+    const maxAttempts = this.options.maxAttempts ?? Number.POSITIVE_INFINITY;
+    const requeued: string[] = [];
+
+    for (const id of orphans) {
+      const attempts = attemptsOf(id);
+      const exhausted = attempts >= maxAttempts;
+
+      states[id] = exhausted ? 'interrupted' : 'queued';
+      if (!exhausted) requeued.push(id);
+
+      await this.options.store.appendEvent(runId, 'task_interrupted', {
+        task: id,
+        attempts,
+        requeued: !exhausted,
+        ...(exhausted ? { reason: `attempt limit of ${String(maxAttempts)} reached` } : {}),
+      });
+    }
+
+    await this.persist(runId, states);
+    return requeued;
   }
 
   /**

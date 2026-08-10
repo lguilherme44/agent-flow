@@ -9,6 +9,7 @@ import { StageRunner } from '../app/stage-runner.js';
 import { PromptLoader } from '../app/prompt-loader.js';
 import { resolvePromptsDir } from '../app/prompt-paths.js';
 import { PlanningPipeline } from '../app/planning-pipeline.js';
+import { createRunnerFactory } from '../app/runner-factory.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
@@ -79,7 +80,7 @@ export async function runFeatureCommand(
       config: config.global,
       capabilities: registry.capabilities(),
       promptLoader: new PromptLoader({ fs, promptsDir: resolvePromptsDir() }),
-      getRunner: (id) => registry.get(id),
+      getRunner: createRunnerFactory({ registry, config: config.global }),
       projectDir: globals.cwd,
     });
 

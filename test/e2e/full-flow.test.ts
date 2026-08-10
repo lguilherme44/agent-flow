@@ -137,7 +137,7 @@ async function world(options: { globalConfig?: ReturnType<typeof config> } = {})
     config: global,
     capabilities: { claude: CAPS, codex: CAPS },
     promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
-    getRunner: (id) => runners[id as 'claude' | 'codex'],
+    getRunner: (resolved) => runners[resolved.runner as 'claude' | 'codex'],
     projectDir: PROJECT,
   });
 
@@ -330,6 +330,14 @@ describe('quota is exhausted and a fallback exists', () => {
     const runner = new FallbackRunner({
       primary,
       secondary,
+      secondaryConfig: {
+        role: 'executor.normal',
+        runner: 'claude',
+        reasoning: 'high',
+        reasoningClamped: false,
+        timeoutSeconds: 900,
+        structuredOutputStrategy: 'native',
+      },
       onFallback: (event) => {
         events.push(`${event.from}->${event.to}:${event.errorCode}`);
       },

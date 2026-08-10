@@ -3,6 +3,17 @@ import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
 import { FallbackRunner, type FallbackEvent } from '../../src/adapters/runners/fallback-runner.js';
 import type { AgentRunInput } from '../../src/ports/index.js';
 import { RUNNER_ERROR_CODES } from '../../src/contracts/index.js';
+import type { ResolvedAgentConfig } from '../../src/core/role.js';
+
+/** The fallback role's own resolved configuration, as the factory supplies it. */
+const secondaryConfig: ResolvedAgentConfig = {
+  role: 'executor.normal',
+  runner: 'codex',
+  reasoning: 'very_high',
+  reasoningClamped: false,
+  timeoutSeconds: 900,
+  structuredOutputStrategy: 'native',
+};
 
 const input: AgentRunInput = {
   prompt: 'do the thing',
@@ -20,6 +31,7 @@ function pair(options: { primaryUnhealthy?: boolean } = {}) {
   const runner = new FallbackRunner({
     primary,
     secondary,
+    secondaryConfig,
     ...(options.primaryUnhealthy === undefined
       ? {}
       : { primaryUnhealthy: options.primaryUnhealthy }),
@@ -52,9 +64,16 @@ describe('failures a fallback may act on (§55)', () => {
 
     await runner.run(input);
 
-    expect(events).toEqual([
-      { from: 'claude', to: 'codex', errorCode: 'quota_exceeded', reasoningClamped: false },
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      from: 'claude',
+      to: 'codex',
+      errorCode: 'quota_exceeded',
+      reasoningClamped: false,
+    });
+    // The replacement's own configuration travels with the event, so a result
+    // file can say what actually ran.
+    expect(events[0]?.config.runner).toBe('codex');
   });
 });
 
@@ -161,6 +180,7 @@ describe('reasoning clamping on the replacement (R-15)', () => {
     const runner = new FallbackRunner({
       primary,
       secondary,
+      secondaryConfig: { ...secondaryConfig, reasoning: 'high', reasoningClamped: true },
       onFallback: (event) => {
         events.push(event);
       },
