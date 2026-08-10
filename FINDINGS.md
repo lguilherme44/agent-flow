@@ -511,7 +511,7 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 |---|---|
 | `doctor --deep` | Prints that live probing is not implemented. Verifying auth for real means spending quota on each runner; the command exists so the shallow check has somewhere to defer to. |
 | Local telemetry | The schema exists (`TelemetryEntry`); nothing writes it. Per-stage timings are in the run's event log, but there is no aggregated view. |
-| `review --fix` | Reports the corrective tasks the findings *would* produce. Does not create them or feed them back into the pipeline. The generator (`findingsToTasks`) is written and tested; the loop that consumes it is not. |
+| ~~`review --fix`~~ | Closed. Findings at or above `medium` become FIX tasks in the plan, which reopens the approval gate — the plan is no longer the one that was approved. The old generator claimed here to be "written and tested" had no tests at all, and produced tasks with `validation: []`: a fix for a review finding that ran no validation. |
 | Codex strict-mode schemas | Would restore runtime-enforced structured output for Codex. Needs optional→nullable rewriting plus null-stripping on parse. |
 | End-to-end tests against real CLIs | The suite runs entirely on fakes. The real-CLI cycles were run by hand, and their findings are in §7 and §8; nothing reruns them. Automating it means spending quota on every push, which is why it has not been done rather than why it should not be. |
 

@@ -75,34 +75,3 @@ export function buildReview(
     ...(response.summary === undefined ? {} : { summary: response.summary }),
   });
 }
-
-/**
- * Turns review findings into corrective tasks (§29).
- *
- * They re-enter the same pipeline — routed, executed and verified like any
- * other task — rather than being handed straight to a model to patch. A fix
- * that skips the gate is exactly the kind of unreviewed change the workflow
- * exists to prevent.
- */
-export function findingsToTasks(
-  review: ReviewResult,
-  options: { minSeverity?: 'low' | 'medium' | 'high' | 'critical'; startIndex?: number } = {},
-): Array<Record<string, unknown>> {
-  const order = ['low', 'medium', 'high', 'critical'];
-  const threshold = order.indexOf(options.minSeverity ?? 'medium');
-
-  return review.findings
-    .filter((finding) => order.indexOf(finding.severity) >= threshold)
-    .map((finding, index) => ({
-      id: `FIX-${String((options.startIndex ?? 0) + index + 1).padStart(3, '0')}`,
-      title: finding.description.slice(0, 80),
-      description: `${finding.description}\n\nSuggested action: ${finding.suggestedAction}`,
-      complexity: finding.severity === 'critical' || finding.severity === 'high' ? 'complex' : 'normal',
-      risk: finding.severity === 'critical' ? 'high' : finding.severity === 'high' ? 'medium' : 'low',
-      dependencies: [],
-      requirements: finding.requirement === undefined ? ['FR-001'] : [finding.requirement],
-      files: { likely: finding.file === undefined ? [] : [finding.file] },
-      acceptanceCriteria: [finding.suggestedAction],
-      validation: [],
-    }));
-}

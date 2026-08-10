@@ -14,6 +14,7 @@ import {
   buildReviewResult,
 } from './stages/plan-review.js';
 import { assessIndependence, explainIndependence } from '../core/independence.js';
+import { planHash } from './approval.js';
 import {
   ARCHITECTURE_IMPACT_STAGE,
   DISCOVERY_STAGE,
@@ -174,7 +175,7 @@ export class PlanningPipeline {
 
     // ---- Plan review, in a fresh context holding only the artifacts (§27).
     options.onProgress?.('plan-review', 'started');
-    const review = await this.review(runId, plannerRunner, {
+    const review = await this.review(runId, plannerRunner, planHash(plan), {
       sdd,
       architectureImpact,
       plan: JSON.stringify(plan, null, 2),
@@ -194,6 +195,7 @@ export class PlanningPipeline {
   private async review(
     runId: string,
     plannerRunner: string,
+    planHash: string,
     vars: Record<string, string>,
   ): Promise<ReviewResult> {
     const { store, providerOf } = this.options;
@@ -227,6 +229,7 @@ export class PlanningPipeline {
         reasoning: result.execution.reasoning,
       },
       independence,
+      planHash,
     );
 
     await store.writeArtifact(runId, 'planReview', `${JSON.stringify(review, null, 2)}\n`);

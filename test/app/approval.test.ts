@@ -3,10 +3,10 @@ import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { StateStore } from '../../src/app/state-store.js';
 import {
+  planHash,
   approvalCoversPlan,
   approveRun,
   checkApproval,
-  planHash,
 } from '../../src/app/approval.js';
 import { PlanSchema, ReviewResultSchema, RunStateSchema } from '../../src/contracts/index.js';
 
@@ -280,5 +280,53 @@ describe('a forced approval is visible where people look', () => {
     const events = await store.readEvents(run.runId);
     const approved = events.find((event) => event.type === 'run_approved');
     expect(approved?.detail['forced']).toBe(true);
+  });
+})
+
+// Found running the corrective loop end to end. `review --fix` adds FIX tasks
+// and reopens the gate — correct, the plan is no longer the one approved. But
+// the gate then re-read plan-review.json, which describes the *previous* plan,
+// and refused while quoting a finding the FIX task had been created to fix.
+//
+// A review is about a specific document. Once that document changes, the review
+// does not carry over — the same reasoning that makes the approval itself
+// expire. Saying "this plan has not been reviewed" is true and forceable;
+// quoting stale findings is neither.
+describe('a review does not survive the plan it reviewed', () => {
+  const makeStore = () =>
+    new StateStore({ fs: new InMemoryFileSystem(), clock: new FixedClock(), projectDir: '/repo' });
+
+  it('refuses as unreviewed when the plan changed after the review', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+    const current = await store.loadRun(run.runId);
+
+    const check = checkApproval(current, plan('Corrected'), review({ planHash: 'stale' }));
+
+    expect(check.allowed).toBe(false);
+    expect(check.refusal?.kind).toBe('review_missing');
+  });
+
+  it('accepts a review that covers the plan in hand', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+    const current = await store.loadRun(run.runId);
+    const subject = plan('Do it');
+
+    const check = checkApproval(current, subject, review({ planHash: planHash(subject) }));
+
+    expect(check.allowed).toBe(true);
+  });
+
+  it('treats a review with no recorded plan as covering it', async () => {
+    // Reviews written before the field existed. Refusing them all would break
+    // every run in flight to fix a case that cannot be detected anyway.
+    const store = makeStore();
+    const run = await store.createRun('f');
+    const current = await store.loadRun(run.runId);
+
+    const check = checkApproval(current, plan('Do it'), review({}));
+
+    expect(check.allowed).toBe(true);
   });
 })

@@ -7,8 +7,10 @@ import {
   VERIFICATION_STAGE,
   authorsOf,
   buildReview,
-  findingsToTasks,
 } from '../app/stages/final-review.js';
+import { applyFixes } from '../core/corrective-plan.js';
+import { buildValidationRegistry } from '../core/validation-registry.js';
+import { planHash } from '../app/approval.js';
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { runVerification, summariseVerification, failureDetail } from '../app/verification-commands.js';
 import { checkDefinitionOfDone } from '../core/definition-of-done.js';
@@ -171,13 +173,64 @@ export async function runReviewCommand(
     if (doneCheck.done) return ExitCode.OK;
 
     if (options.fix === true) {
-      const fixes = findingsToTasks(finalReview);
-      if (fixes.length > 0) {
-        process.stdout.write(
-          `\n${String(fixes.length)} corrective task(s) would be created from these findings.\n` +
-            'They re-enter the same pipeline — routed, executed and reviewed like any other task.\n',
-        );
+      // The ids a corrective task may cite come from the project's own
+      // configuration, never from the finding text: a fix validated by an id
+      // that does not resolve fails for the wrong reason.
+      const registry = buildValidationRegistry(context.config.project);
+      const next = applyFixes(plan, finalReview, { validation: registry.ids });
+      const added = next.tasks.length - plan.tasks.length;
+
+      if (added === 0) {
+        process.stdout.write('\nNo finding was severe enough to become a task.\n');
+        return ExitCode.GATE_NOT_SATISFIED;
       }
+
+      // Stamp the plan review with what it actually judged, before replacing
+      // the plan under it. Reviews written before this field existed carry no
+      // hash and are treated as covering whatever they are read against — a
+      // deliberate concession for runs in flight, and one that would otherwise
+      // let this exact stale verdict block the corrected plan.
+      const planReviewRaw = await context.store.readArtifact(state.runId, 'planReview');
+      if (planReviewRaw !== null) {
+        const judged = ReviewResultSchema.parse(JSON.parse(planReviewRaw));
+        if (judged.planHash === undefined) {
+          await context.store.writeArtifact(
+            state.runId,
+            'planReview',
+            `${JSON.stringify({ ...judged, planHash: planHash(plan) }, null, 2)}\n`,
+          );
+        }
+      }
+
+      await context.store.writeArtifact(state.runId, 'plan', `${JSON.stringify(next, null, 2)}\n`);
+
+      // The plan changed, so the approval no longer covers it. Reopening the
+      // gate is the point rather than an inconvenience: a person approved a set
+      // of tasks, and this is a different set. `revise` behaves the same way,
+      // and a correction round is no more exempt than a revision.
+      await context.store.updateRun(state.runId, (current) => ({
+        ...current,
+        approved: false,
+        status: 'waiting_for_approval',
+      }));
+
+      process.stdout.write(
+        [
+          '',
+          `${String(added)} corrective task(s) added to the plan.`,
+          '',
+          ...next.tasks.slice(plan.tasks.length).map((task) => `  ${task.id}  ${task.title}`),
+          '',
+          'They re-enter the same pipeline — routed, executed and validated like',
+          'any other task, rather than patched straight into the code.',
+          '',
+          'The approval was reopened, because the plan is no longer the one that',
+          'was approved.',
+          '',
+          'Next: agent-flow approve, then agent-flow run',
+          '',
+        ].join('\n'),
+      );
     }
 
     return ExitCode.GATE_NOT_SATISFIED;

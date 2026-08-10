@@ -37,6 +37,15 @@ export const ReviewResultSchema = z
       reasoning: ReasoningLevelSchema,
     }),
     findings: z.array(FindingSchema).default([]),
+  /**
+   * The plan this verdict is about.
+   *
+   * A review is a statement concerning one specific document. Without this,
+   * a plan that changed after being reviewed still carried its old verdict —
+   * and the approval gate quoted findings about tasks that no longer existed.
+   * Optional so reviews written before the field remain readable.
+   */
+  planHash: z.string().min(1).optional(),
     summary: z.string().optional(),
   })
   .refine((review) => review.verdict === 'PASS' || review.findings.length > 0, {

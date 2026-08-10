@@ -53,7 +53,14 @@ export function checkApproval(
     warnings.push(`${degradation.reason} — ${degradation.impact}`);
   }
 
-  if (review === null) {
+  // A verdict about a different document is not a verdict about this one.
+  // `review --fix` appends corrective tasks, and the previous plan review then
+  // refused the corrected plan while quoting the very finding a FIX task had
+  // been created to resolve.
+  const reviewCoversPlan =
+    review !== null && (review.planHash === undefined || review.planHash === planHash(plan));
+
+  if (review === null || !reviewCoversPlan) {
     return { allowed: false, refusal: { kind: 'review_missing' }, warnings };
   }
 

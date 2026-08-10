@@ -50,12 +50,15 @@ export function buildReviewResult(
   response: z.infer<typeof PlanReviewResponseSchema>,
   provenance: { runner: string; model?: string; reasoning: ReviewResult['reviewer']['reasoning'] },
   independence: Independence,
+  /** The plan this verdict is about, so it cannot outlive it. */
+  planHash?: string,
 ): ReviewResult {
   return ReviewResultSchema.parse({
     verdict: response.verdict,
     independence,
     reviewer: provenance,
     findings: response.findings,
+    ...(planHash === undefined ? {} : { planHash }),
     ...(response.summary === undefined ? {} : { summary: response.summary }),
   });
 }
