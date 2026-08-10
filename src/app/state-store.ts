@@ -1,10 +1,12 @@
 import {
   RunEventSchema,
   RunStateSchema,
+  TaskResultSchema,
   formatValidationError,
   type Degradation,
   type RunEvent,
   type RunState,
+  type TaskResult,
 } from '../contracts/index.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import { agentFlowPaths, artifactPath, runPaths, type ArtifactName } from './paths.js';
@@ -202,6 +204,21 @@ export class StateStore {
     });
 
     return updated;
+  }
+
+  /**
+   * The persisted outcome of one task, or null when it has not run.
+   *
+   * Task results live outside `state.json` because they are large and immutable
+   * once written; reading them still belongs here, so nothing else has to know
+   * the layout on disk.
+   */
+  async readTaskResult(runId: string, taskId: string): Promise<TaskResult | null> {
+    const path = runPaths(this.projectDir, runId).taskResult(taskId);
+    if (!(await this.fs.exists(path))) return null;
+
+    const result = TaskResultSchema.safeParse(JSON.parse(await this.fs.readFile(path)));
+    return result.success ? result.data : null;
   }
 
   async writeArtifact(runId: string, artifact: ArtifactName, content: string): Promise<void> {

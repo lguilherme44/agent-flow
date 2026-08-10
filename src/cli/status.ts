@@ -3,6 +3,8 @@ import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
 import { StateStore } from '../app/state-store.js';
 import { PLANNING_STAGES } from '../app/planning-pipeline.js';
+import { collectTelemetry } from '../app/telemetry.js';
+import { summariseTelemetry } from '../core/telemetry.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
@@ -49,6 +51,11 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     const review = reviewRaw === null ? null : ReviewResultSchema.safeParse(JSON.parse(reviewRaw));
 
     if (globals.json) {
+      // Telemetry rides along with `--json` only. It is operational detail —
+      // where the time went, who actually ran, what fell back — and the human
+      // rendering below is about whether this run can move forward.
+      const telemetry = await collectTelemetry(store, state);
+
       process.stdout.write(
         `${JSON.stringify(
           {
@@ -56,6 +63,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
             taskCount: plan?.success ? plan.data.tasks.length : 0,
             completedStages,
             review: review?.success ? review.data : null,
+            telemetry: { entries: telemetry, summary: summariseTelemetry(telemetry) },
           },
           null,
           2,
