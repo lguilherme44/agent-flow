@@ -1,17 +1,29 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Search, Wrench } from 'lucide-react';
+import { MoreVertical, Search, Wrench } from 'lucide-react';
 import type { TaskSummaryView } from '@contracts/index.js';
-import { Empty, StatusDot, cx } from '../components/ui';
+import { Empty, Panel, SectionHeader, StatusDot, StripItem, cx } from '../components/ui';
 import { formatDuration } from '../lib/format';
-import { taskLabel, taskTone } from '../lib/status';
+import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
+import { countTasks } from './run-overview';
 
 /**
- * Task Table (§72).
+ * The main surface of the screen (§72).
  *
- * Filters and search are local state — they belong to this browser tab, and
- * nothing on the server has an opinion about them. What is *displayed* is
- * whatever the query cache last got from the server, unfiltered by anything the
- * client decided about task state.
+ * Three things changed from the first pass, all of them about weight.
+ *
+ * The metric row moved *into* this panel's header as a hairline-separated strip.
+ * Five bordered cards were the same five numbers at four times the height, and
+ * the height they took came out of the table.
+ *
+ * The model is visible. It was in a `title` attribute — which is to say, it was
+ * not visible — and "which model did this task run on" is among the first
+ * questions anybody asks of a run. Runner and model stack in one column, effort
+ * beside them, exactly as the reference does it.
+ *
+ * And nothing here is a card. Rows are separated by hairlines, the selected row
+ * carries a purple accent, and the surface is one continuous table — because a
+ * table whose rows are boxes stops being scannable, which is the only thing a
+ * table is for.
  */
 
 export type StatusFilter = 'all' | 'completed' | 'running' | 'waiting' | 'failed';
@@ -30,45 +42,62 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
     () => filterTasks(props.tasks, { query, status }),
     [props.tasks, query, status],
   );
+  const counts = countTasks(props.tasks);
 
   return (
-    <div className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-surface">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        <label className="flex min-w-0 flex-1 items-center gap-1.5">
-          <Search className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden />
-          <span className="sr-only">Search tasks</span>
-          <input
-            value={query}
-            onChange={(changed) => {
-              setQuery(changed.target.value);
-            }}
-            placeholder="id, title or requirement"
-            className="w-full bg-transparent text-body text-text placeholder:text-faint focus:outline-none"
-          />
-        </label>
+    <Panel
+      className="min-w-0"
+      header={
+        <>
+          <SectionHeader title="Implementation tasks">
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
+              <label className="flex min-w-0 max-w-56 flex-1 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 py-1">
+                <Search className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden />
+                <span className="sr-only">Search tasks</span>
+                <input
+                  value={query}
+                  onChange={(changed) => {
+                    setQuery(changed.target.value);
+                  }}
+                  placeholder="id, title or requirement"
+                  className="w-full bg-transparent text-label text-text placeholder:text-faint focus:outline-none"
+                />
+              </label>
 
-        <div className="flex shrink-0 gap-0.5" role="group" aria-label="Filter by status">
-          {(['all', 'running', 'waiting', 'completed', 'failed'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={status === option}
-              onClick={() => {
-                setStatus(option);
-              }}
-              className={cx(
-                'rounded-sm px-1.5 py-0.5 text-label capitalize',
-                status === option
-                  ? 'bg-primary-soft text-text'
-                  : 'text-muted hover:bg-surface-2 hover:text-text',
-              )}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-      </div>
+              <div className="flex shrink-0 gap-px" role="group" aria-label="Filter by status">
+                {(['all', 'running', 'waiting', 'completed', 'failed'] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={status === option}
+                    onClick={() => {
+                      setStatus(option);
+                    }}
+                    className={cx(
+                      'rounded-sm px-1.5 py-0.5 text-micro capitalize',
+                      status === option
+                        ? 'bg-primary-soft font-medium text-text'
+                        : 'text-faint hover:bg-surface-2 hover:text-text',
+                    )}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </SectionHeader>
 
+          <div className="flex items-stretch divide-x divide-border px-4 pb-3">
+            <StripItem label="Total" value={counts.total} />
+            <StripItem label="Completed" value={counts.completed} tone="success" />
+            <StripItem label="Running" value={counts.running} tone="info" />
+            <StripItem label="Waiting" value={counts.waiting} tone="warning" />
+            <StripItem label="Failed" value={counts.failed} tone="danger" />
+          </div>
+        </>
+      }
+      divided
+    >
       <div className="min-h-0 flex-1 overflow-auto">
         {visible.length === 0 ? (
           <Empty
@@ -80,20 +109,33 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
             }
           />
         ) : (
-          <table className="w-full border-collapse text-body">
+          // Fixed layout, and Task is the only column without a width. The auto
+          // algorithm gave the title 40px and the fixed columns the rest, which
+          // turned every task into "Cri…" — the one cell nobody can afford to
+          // lose.
+          <table className="w-full table-fixed border-collapse text-body">
             <thead className="sticky top-0 z-10 bg-surface">
-              <tr className="border-b border-border text-label uppercase tracking-wide text-faint">
-                <Th className="w-20">ID</Th>
+              <tr className="border-b border-border text-micro uppercase tracking-wide text-faint">
+                <Th className="w-[108px] pl-4">ID</Th>
                 <Th>Task</Th>
-                <Th className="w-24">Complexity</Th>
-                <Th className="w-32">Agent</Th>
-                <Th className="w-28">Status</Th>
-                <Th className="w-20 text-right">Duration</Th>
+                <Th className="w-[82px]">Complexity</Th>
+                {/* Runner, model and effort in one cell. Effort had its own
+                    column and cost the title 64px it could not spare — and the
+                    reference stacks all three anyway, because they are one fact
+                    about how the task was executed. */}
+                <Th className="w-[132px]">Agent / Model</Th>
+                <Th className="w-[100px]">Status</Th>
+                <Th className="w-[64px] text-right">Duration</Th>
+                <Th className="w-7 pr-2 text-right">
+                  <span className="sr-only">Actions</span>
+                </Th>
               </tr>
             </thead>
             <tbody>
               {visible.map((task) => {
                 const selected = task.id === props.selectedId;
+                const tone = taskTone(task.state);
+
                 return (
                   <tr
                     key={task.id}
@@ -111,39 +153,107 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                     }}
                     aria-selected={selected}
                     className={cx(
-                      'cursor-pointer border-b border-border/60',
+                      'cursor-pointer border-b border-border/70',
                       selected ? 'bg-primary-soft' : 'hover:bg-surface-2',
                     )}
                   >
-                    <Td className="tabular whitespace-nowrap font-medium">
-                      <span className="flex items-center gap-1">
+                    <Td className="pl-4">
+                      {/* The accent rail marks the selected row without needing
+                          a border around it. */}
+                      <span className="relative flex items-center gap-2">
+                        {selected ? (
+                          <span
+                            className="absolute -left-4 h-6 w-0.5 rounded-r bg-primary-bright"
+                            aria-hidden
+                          />
+                        ) : null}
+                        <StatusDot
+                          tone={tone}
+                          label={taskLabel(task.state)}
+                          // The row shows a status chip further along, so this
+                          // marker is decoration — a hidden label here would be
+                          // read out twice.
+                          decorative
+                          solid={task.state === 'completed'}
+                          spin={task.state === 'running'}
+                        />
+                        <span className="tabular whitespace-nowrap text-label font-medium">
+                          {task.id}
+                        </span>
+                      </span>
+                    </Td>
+
+                    <Td>
+                      <span className="flex min-w-0 items-center gap-1.5">
                         {task.correctiveFor === undefined ? null : (
                           <Wrench
                             className="h-3 w-3 shrink-0 text-warning"
                             aria-label="corrective task"
                           />
                         )}
-                        {task.id}
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate text-label text-text" title={task.title}>
+                            {task.title}
+                          </span>
+                          <span className="truncate text-micro text-faint">
+                            {task.correctiveFor === undefined
+                              ? task.requirements.join(', ') || 'no requirement'
+                              : `from a ${task.correctiveFor.findingType} finding`}
+                          </span>
+                        </span>
                       </span>
                     </Td>
-                    <Td className="max-w-0">
-                      <span className="block truncate" title={task.title}>
-                        {task.title}
-                      </span>
-                    </Td>
-                    <Td className="capitalize text-muted">{task.complexity}</Td>
-                    <Td className="truncate text-muted" title={task.model ?? task.runner}>
-                      {task.runner ?? '—'}
-                    </Td>
+
                     <Td>
-                      <StatusDot
-                        tone={taskTone(task.state)}
-                        label={taskLabel(task.state)}
-                        spin={task.state === 'running'}
-                      />
+                      {/* Discreet on purpose: complexity drives routing, it is
+                          not what anybody scans the table for. */}
+                      <span className="rounded-sm border border-border px-1.5 py-px text-micro capitalize text-muted">
+                        {task.complexity}
+                      </span>
                     </Td>
-                    <Td className="tabular text-right text-muted">
+
+                    <Td>
+                      {/* Two lines, not three. The model is what people scan
+                          for; the runner and the effort are the qualifier, and
+                          a third line cost the table two visible rows. */}
+                      <span className="flex min-w-0 flex-col">
+                        <span
+                          className="truncate text-label text-text"
+                          title={task.model ?? 'model not reported'}
+                        >
+                          {task.model ?? 'no model'}
+                        </span>
+                        <span className="truncate text-micro capitalize text-faint">
+                          {task.runner ?? '—'}
+                          {task.reasoning === undefined ? '' : ` · ${task.reasoning}`}
+                        </span>
+                      </span>
+                    </Td>
+
+                    <Td>
+                      <span
+                        className={cx(
+                          'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium',
+                          TONE_BG[tone],
+                          TONE_TEXT[tone],
+                        )}
+                      >
+                        {taskLabel(task.state)}
+                      </span>
+                    </Td>
+
+                    <Td className="tabular text-right text-label text-muted">
                       {formatDuration(task.durationMs)}
+                    </Td>
+
+                    <Td className="pr-2 text-right">
+                      <span
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-faint opacity-50"
+                        title="Per-task actions stay with the CLI in this milestone"
+                        aria-hidden
+                      >
+                        <MoreVertical className="h-3.5 w-3.5" />
+                      </span>
                     </Td>
                   </tr>
                 );
@@ -152,13 +262,13 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
           </table>
         )}
       </div>
-    </div>
+    </Panel>
   );
 }
 
-function Th(props: { children: string; className?: string }): JSX.Element {
+function Th(props: { children: ReactNode; className?: string }): JSX.Element {
   return (
-    <th scope="col" className={cx('px-3 py-1.5 text-left font-medium', props.className)}>
+    <th scope="col" className={cx('px-2 py-1.5 text-left font-medium', props.className)}>
       {props.children}
     </th>
   );
@@ -170,7 +280,7 @@ function Td(props: {
   title?: string | undefined;
 }): JSX.Element {
   return (
-    <td className={cx('px-3 py-1.5', props.className)} title={props.title}>
+    <td className={cx('px-2 py-2', props.className)} title={props.title}>
       {props.children}
     </td>
   );
@@ -213,7 +323,7 @@ function matchesStatus(task: TaskSummaryView, status: StatusFilter): boolean {
       return task.state === 'failed';
     case 'waiting':
       // Everything that is neither done, moving, nor broken — the same grouping
-      // the metric row uses, so the number and the filter agree.
+      // the strip uses, so the number and the filter agree.
       return !['completed', 'running', 'failed'].includes(task.state);
   }
 }

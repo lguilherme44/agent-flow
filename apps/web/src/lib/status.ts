@@ -41,20 +41,31 @@ export const TONE_DOT: Record<Tone, string> = {
   muted: 'bg-faint',
 };
 
+/** Ring colour for an outlined status marker. */
+export const TONE_BORDER: Record<Tone, string> = {
+  success: 'border-success/60',
+  info: 'border-info/60',
+  warning: 'border-warning/60',
+  danger: 'border-danger/60',
+  primary: 'border-primary-border',
+  muted: 'border-border-strong',
+};
+
 export function taskTone(state: TaskState): Tone {
   switch (state) {
     case 'completed':
       return 'success';
     case 'running':
-      return 'primary';
+      // Blue, not purple. Purple is reserved for the *pipeline's* running step,
+      // which is the one thing on the screen that answers "where is this run
+      // right now" — and it only reads as special if nothing else shares it.
+      return 'info';
     case 'failed':
       return 'danger';
     case 'blocked':
     case 'review_required':
     case 'interrupted':
       return 'warning';
-    case 'ready':
-      return 'info';
     default:
       return 'muted';
   }

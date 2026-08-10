@@ -1,49 +1,93 @@
 /**
- * Design tokens (§67).
+ * Design tokens (§67), calibrated against `agent-flow-ui-reference.png`.
  *
  * The only place in the dashboard where a colour is written down. Components
  * reference these through Tailwind's palette, which is generated from this file
- * — so a component cannot invent a shade, and the whole surface can be retuned
- * from one place.
+ * — so a component cannot invent a shade, and the whole surface retunes here.
  *
  * The palette is dark by design, not by preference: this is a tool that sits
- * open beside a terminal, and it should not be the bright rectangle on the
- * screen.
+ * open beside a terminal, and it should not be the bright rectangle on screen.
+ *
+ * What changed from the first pass, and why:
+ *
+ * **Surfaces are nearly indistinguishable, on purpose.** The reference reads as
+ * one dark plane with information on it, not as blue blocks stacked on a page.
+ * The first palette put six points of lightness between `bg` and `surface`,
+ * which made every bordered element also a visibly lighter rectangle — and with
+ * a border on everything, that is what produced the tiling.
+ *
+ * **A fourth level exists for the terminal, going the other way.** The log view
+ * is *darker* than the page. Nothing else in the app is, which is exactly why it
+ * reads as a different kind of thing rather than another panel.
  */
 
 :root {
-  --af-bg: #08111f;
-  --af-surface: #0f1a2a;
-  --af-surface-2: #131f31;
-  /* One step above surface-2, for rows and inputs that need to lift without a
-     border. The spec stops at two; a table with hover states needs a third. */
-  --af-surface-3: #182740;
+  /* Near-black with a blue cast, matching the reference's ground. */
+  --af-bg: #070b14;
 
-  --af-border: rgba(148, 163, 184, 0.14);
-  --af-border-strong: rgba(148, 163, 184, 0.28);
+  /* Content surfaces. The steps between these are deliberately tiny: they
+     separate by border and by shadow of meaning, not by brightness. */
+  --af-surface: #0b111c;
+  --af-surface-2: #0f1622;
+  --af-surface-3: #151d2b;
 
-  --af-text: #f8fafc;
-  --af-text-muted: #94a3b8;
-  --af-text-faint: #64748b;
+  /* Below the page, and only for the terminal. */
+  --af-sunken: #04070d;
+
+  /* Borders carry the structure, so they are the thing that had to get more
+     subtle rather than less: at 0.14 alpha every box shouted. */
+  --af-border: rgba(148, 163, 184, 0.1);
+  --af-border-strong: rgba(148, 163, 184, 0.2);
+
+  --af-text: #f1f5f9;
+  /* Muted must stay readable. The previous #94a3b8 on a lighter surface was
+     fine; on this ground it needed lifting, or a metadata row became decoration. */
+  --af-text-muted: #a3b0c2;
+  --af-text-faint: #6b7a90;
 
   --af-primary: #7c3aed;
-  --af-primary-soft: rgba(124, 58, 237, 0.18);
+  --af-primary-bright: #9366f5;
+  --af-primary-soft: rgba(124, 58, 237, 0.16);
+  --af-primary-border: rgba(147, 102, 245, 0.45);
 
   --af-success: #34d399;
-  --af-success-soft: rgba(52, 211, 153, 0.16);
+  --af-success-soft: rgba(52, 211, 153, 0.12);
   --af-info: #3b82f6;
-  --af-info-soft: rgba(59, 130, 246, 0.16);
+  --af-info-soft: rgba(59, 130, 246, 0.12);
   --af-warning: #fbbf24;
-  --af-warning-soft: rgba(251, 191, 36, 0.16);
+  --af-warning-soft: rgba(251, 191, 36, 0.12);
   --af-danger: #f87171;
-  --af-danger-soft: rgba(248, 113, 113, 0.16);
+  --af-danger-soft: rgba(248, 113, 113, 0.12);
 
-  --af-radius-sm: 8px;
-  --af-radius-md: 10px;
-  --af-radius-lg: 12px;
+  --af-radius-sm: 6px;
+  --af-radius-md: 8px;
+  --af-radius-lg: 10px;
 
   --af-sidebar-width: 216px;
   --af-topbar-height: 56px;
-  --af-inspector-width: 480px;
+  /* The lower end of the 440–480px the brief allows. The table is the surface
+     people read, and every pixel here comes out of the title column. */
+  --af-inspector-width: 448px;
   --af-page-padding: 18px;
+  --af-bottom-height: 164px;
 }
+
+/**
+ * The inspector narrows before the table does (§66).
+ *
+ * Below 1440 the table is what runs out of room first, and it is the surface
+ * people read. A fixed 480px panel at 1280 leaves the table about 530px, which
+ * is not enough for eight columns — the title column starts truncating and the
+ * table stops being scannable, which is the only thing a table is for.
+ */
+@media (max-width: 1439px) {
+  :root {
+    --af-inspector-width: 400px;
+    --af-page-padding: 14px;
+    /* Height is the scarcer axis at 1280×800. This is as low as the row goes
+       before its own content clips — at 132px the summary lost a line and the
+       artifacts list lost an entry, which trades one squeezed region for four. */
+    --af-bottom-height: 148px;
+  }
+}
+

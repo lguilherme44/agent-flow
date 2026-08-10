@@ -3,57 +3,126 @@ import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import {
   AlertTriangle,
   Check,
+  Circle,
   CircleDashed,
   Loader2,
-  Pause,
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { TONE_BG, TONE_DOT, TONE_TEXT, type Tone } from '../lib/status';
+import { TONE_BG, TONE_BORDER, TONE_DOT, TONE_TEXT, type Tone } from '../lib/status';
 
 /**
  * The primitives everything else is built from (UI-07).
  *
- * Small on purpose. A dashboard needs a surface, a label, a status marker and a
- * bar; anything more elaborate here would be a component library nobody asked
- * for, and every extra prop is a decision the pages stop making consistently.
+ * The set is deliberately small, and the important thing about it is that there
+ * are *two* surfaces rather than one. The first pass had a single `Card`, so
+ * every region of the page — the run, the pipeline, each of five metrics, the
+ * table, the inspector, four summaries — arrived as the same bordered rectangle
+ * at the same visual weight. Sixteen boxes of equal importance is not a
+ * hierarchy; it is a grid, and the eye has nothing to land on.
  *
- * None of these take a colour. They take a *tone*, which `lib/status.ts` maps
- * from a real status — so no component can decide for itself that a failed task
- * is amber.
+ * So:
+ *
+ *   `Panel` is a place where work happens. The run, the tasks, the inspector.
+ *   `Card`  is a place where a number lives. Secondary, lighter, quieter.
+ *
+ * Neither takes a colour. They take a *tone*, which `lib/status.ts` maps from a
+ * real status — so no component decides for itself that a failed task is amber.
  */
 
 export function cx(...values: (string | false | undefined | null)[]): string {
   return values.filter(Boolean).join(' ');
 }
 
+/**
+ * A primary work surface.
+ *
+ * Has a border, because it genuinely is a separate region of the page. Its
+ * header is part of the panel rather than a strip on top of it: no second
+ * border, no darker bar, just a title and whatever belongs beside it, separated
+ * from the body by one hairline where the content needs the separation.
+ */
+export function Panel(props: {
+  children: ReactNode;
+  className?: string;
+  /** Rendered flush against the top of the panel, above the body. */
+  header?: ReactNode;
+  /** A single hairline under the header. Omit when the body supplies its own. */
+  divided?: boolean;
+}): JSX.Element {
+  return (
+    <section
+      className={cx(
+        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface',
+        props.className,
+      )}
+    >
+      {props.header === undefined ? null : (
+        <div className={cx('shrink-0', props.divided === true && 'border-b border-border')}>
+          {props.header}
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col">{props.children}</div>
+    </section>
+  );
+}
+
+/**
+ * The header of a section inside a panel.
+ *
+ * Title on the left at 15px, anything else on the right. The reference puts the
+ * task metrics here rather than in their own row of boxes, which is what buys
+ * the table its vertical space back.
+ */
+export function SectionHeader(props: {
+  title: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}): JSX.Element {
+  return (
+    <div className={cx('flex items-center justify-between gap-4 px-4 py-3', props.className)}>
+      <h2 className="shrink-0 text-section font-semibold text-text">{props.title}</h2>
+      {props.children}
+    </div>
+  );
+}
+
+/**
+ * Secondary information. Quieter than a panel on purpose.
+ *
+ * Same border, flatter background, smaller header — so the bottom row reads as
+ * a footnote to the screen rather than as four more things competing with the
+ * table.
+ */
 export function Card(props: {
   children: ReactNode;
   className?: string;
   title?: ReactNode;
   action?: ReactNode;
+  /** A muted link-ish row pinned to the bottom, as in the reference. */
+  footer?: ReactNode;
 }): JSX.Element {
   return (
     <section
       className={cx(
-        'rounded-lg border border-border bg-surface',
-        'flex min-h-0 flex-col',
+        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface',
         props.className,
       )}
     >
       {props.title === undefined ? null : (
-        <header className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
-          {/* Fixed-height header, so the title must never wrap into it. A
-              two-line "Model Usage" pushed the card's own content out of view. */}
-          <h2 className="truncate whitespace-nowrap text-label font-medium uppercase tracking-wide text-muted">
+        <header className="flex shrink-0 items-center justify-between gap-2 px-3 pb-2 pt-3">
+          <h2 className="truncate whitespace-nowrap text-body-lg font-semibold text-text">
             {props.title}
           </h2>
           {props.action}
         </header>
       )}
-      {/* Scrolls rather than clips. A card with more rows than fit used to hide
-          the rest with nothing to indicate they existed. */}
-      <div className="min-h-0 flex-1 overflow-auto">{props.children}</div>
+      <div className="min-h-0 flex-1 overflow-auto px-3">{props.children}</div>
+      {props.footer === undefined ? null : (
+        <footer className="shrink-0 border-t border-border px-3 py-1.5 text-micro text-faint">
+          {props.footer}
+        </footer>
+      )}
     </section>
   );
 }
@@ -62,16 +131,16 @@ export function Badge(props: {
   tone?: Tone;
   children: ReactNode;
   className?: string;
+  /** Small-caps label styling. Off by default: badges carry data too. */
+  caps?: boolean;
 }): JSX.Element {
   const tone = props.tone ?? 'muted';
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-0.5',
-        // Not upper-cased. A badge carries data as often as it carries a label —
-        // `25m04s` became `25M04S`, which is a different unit in every other
-        // context a reader has ever seen.
-        'text-label font-medium tracking-wide',
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-px',
+        'text-micro font-medium',
+        props.caps === true && 'uppercase tracking-wide',
         TONE_BG[tone],
         TONE_TEXT[tone],
         props.className,
@@ -87,35 +156,72 @@ const TONE_ICON: Record<Tone, LucideIcon> = {
   primary: Loader2,
   danger: X,
   warning: AlertTriangle,
-  info: Pause,
+  info: Circle,
   muted: CircleDashed,
 };
 
 /**
- * Status as a dot *and* an icon *and* a word (§97).
+ * A status marker: ring, glyph, and — unless suppressed — a word.
  *
- * The dot alone is the version that fails: for a colour-blind reader, a
- * greyscale screenshot, or a glance from across the desk, colour carries nothing.
+ * The word is not decoration. §97 requires status to be icon plus text as well
+ * as colour, because a greyscale screenshot, a colour-blind reader and a glance
+ * from across the desk all need the same answer.
  */
 export function StatusDot(props: {
   tone: Tone;
   label: string;
   showLabel?: boolean;
   spin?: boolean;
+  /** Filled ring, as the pipeline nodes use. */
+  solid?: boolean;
+  /**
+   * The status is already stated visibly beside this marker.
+   *
+   * Then the marker is decoration and must say nothing: the table row shows a
+   * status chip and the pipeline shows a status word, and a hidden label on top
+   * of either makes a screen reader read the same status twice.
+   */
+  decorative?: boolean;
+  className?: string;
 }): JSX.Element {
   const Icon = TONE_ICON[props.tone];
 
-  return (
-    <span className="inline-flex items-center gap-1.5" title={props.label}>
-      <span className="relative inline-flex h-4 w-4 items-center justify-center">
-        <span className={cx('absolute h-2 w-2 rounded-full', TONE_DOT[props.tone])} aria-hidden />
+  if (props.decorative === true) {
+    return (
+      <span
+        className={cx(
+          'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full',
+          props.solid === true ? TONE_DOT[props.tone] : cx('border', TONE_BORDER[props.tone]),
+          props.className,
+        )}
+        aria-hidden
+      >
         <Icon
           className={cx(
-            'relative h-3 w-3',
-            TONE_TEXT[props.tone],
+            'h-2.5 w-2.5',
+            props.solid === true ? 'text-bg' : TONE_TEXT[props.tone],
             props.spin === true && 'animate-spin',
           )}
-          aria-hidden
+        />
+      </span>
+    );
+  }
+
+  return (
+    <span className={cx('inline-flex items-center gap-1.5', props.className)} title={props.label}>
+      <span
+        className={cx(
+          'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
+          props.solid === true ? TONE_DOT[props.tone] : cx('border', TONE_BORDER[props.tone]),
+        )}
+        aria-hidden
+      >
+        <Icon
+          className={cx(
+            'h-2.5 w-2.5',
+            props.solid === true ? 'text-bg' : TONE_TEXT[props.tone],
+            props.spin === true && 'animate-spin',
+          )}
         />
       </span>
       <span className={cx('text-label', props.showLabel === false && 'sr-only')}>
@@ -145,11 +251,11 @@ export function Button(props: {
       title={props.title}
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-sm font-medium',
-        'transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-        props.size === 'sm' ? 'h-7 px-2 text-label' : 'h-8 px-3 text-body',
-        variant === 'primary' && 'bg-primary text-white hover:brightness-110',
+        'transition-colors disabled:cursor-not-allowed disabled:opacity-45',
+        props.size === 'sm' ? 'h-6 px-2 text-micro' : 'h-7 px-2.5 text-label',
+        variant === 'primary' && 'bg-primary text-white hover:bg-primary-bright',
         variant === 'surface' &&
-          'border border-border bg-surface-2 text-text hover:bg-surface-3',
+          'border border-border bg-surface-2 text-text hover:border-border-strong hover:bg-surface-3',
         variant === 'ghost' && 'text-muted hover:bg-surface-2 hover:text-text',
         props.className,
       )}
@@ -192,7 +298,7 @@ export function Tooltip(props: { content: ReactNode; children: ReactNode }): JSX
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           sideOffset={6}
-          className="z-50 max-w-xs rounded-sm border border-border bg-surface-2 px-2 py-1 text-label text-text shadow-lg"
+          className="z-50 max-w-xs rounded-sm border border-border-strong bg-surface-3 px-2 py-1 text-micro text-text shadow-xl"
         >
           {props.content}
         </TooltipPrimitive.Content>
@@ -214,26 +320,54 @@ export function Empty(props: {
       )}
     >
       <p className="text-body text-muted">{props.title}</p>
-      {props.hint === undefined ? null : (
-        <p className="text-label text-faint">{props.hint}</p>
-      )}
+      {props.hint === undefined ? null : <p className="text-micro text-faint">{props.hint}</p>}
     </div>
   );
 }
 
-export function Metric(props: {
+/**
+ * One entry in a strip of counts, separated by hairlines rather than boxed.
+ *
+ * This is what replaced five bordered metric cards. The information is the same
+ * and it occupies a fifth of the height, which the table gets instead.
+ */
+export function StripItem(props: {
   label: string;
   value: ReactNode;
   tone?: Tone;
+  icon?: ReactNode;
 }): JSX.Element {
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-label uppercase tracking-wide text-faint">{props.label}</span>
+    <div className="flex flex-col gap-0.5 px-4 first:pl-0 last:pr-0">
       <span
-        className={cx('tabular text-metric font-semibold', TONE_TEXT[props.tone ?? 'muted'], props.tone === undefined && 'text-text')}
+        className={cx(
+          'whitespace-nowrap text-micro',
+          props.tone === undefined ? 'text-faint' : TONE_TEXT[props.tone],
+        )}
       >
-        {props.value}
+        {props.label}
       </span>
+      <span className="flex items-center gap-1">
+        {props.icon}
+        <span
+          className={cx(
+            'tabular text-metric font-semibold',
+            props.tone === undefined ? 'text-text' : TONE_TEXT[props.tone],
+          )}
+        >
+          {props.value}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** A label/value pair in a horizontal metadata row, as the inspector uses. */
+export function MetaCell(props: { label: string; value: ReactNode }): JSX.Element {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <dt className="whitespace-nowrap text-micro text-faint">{props.label}</dt>
+      <dd className="truncate text-label text-text">{props.value}</dd>
     </div>
   );
 }

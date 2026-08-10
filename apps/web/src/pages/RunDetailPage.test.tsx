@@ -219,7 +219,7 @@ describe('the run detail composition', () => {
     // Bottom cards. "Approval" appears twice on purpose — once as a pipeline
     // stage and once as the card — so the card is matched by its heading role.
     expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Approval' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Plan approval' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Execution summary' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Model usage' })).toBeInTheDocument();
   });
@@ -246,7 +246,7 @@ describe('the run detail composition', () => {
     renderPage();
 
     await userEvent.click(await screen.findByText('Add recurrence types'));
-    await userEvent.click(screen.getByRole('tab', { name: 'Tests' }));
+    await userEvent.click(screen.getByRole('tab', { name: /^Tests/ }));
 
     // A test-first task is done correctly when its commands fail, so the raw
     // exit code has to be visible rather than translated into pass/fail.
@@ -259,7 +259,7 @@ describe('the run detail composition', () => {
 
     // Common in practice: adapters omit the flag when nothing is configured. A
     // donut labelled "unknown 100%" would be worse than saying what it knows.
-    expect(await screen.findByText('No model was reported by any runner.')).toBeInTheDocument();
+    expect(await screen.findByText('by runner')).toBeInTheDocument();
     expect(screen.getByText('2 retries')).toBeInTheDocument();
     expect(screen.getByText('1 fallbacks')).toBeInTheDocument();
   });

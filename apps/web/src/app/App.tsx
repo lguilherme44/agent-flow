@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Shell } from './Shell';
+import { DashboardPage } from '../pages/DashboardPage';
 import { RunDetailPage } from '../pages/RunDetailPage';
 import { RunsPage } from '../pages/RunsPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
@@ -37,11 +38,12 @@ export function App(): JSX.Element {
         <BrowserRouter>
           <Routes>
             <Route element={<Shell />}>
-              <Route path="/" element={<Navigate to="/runs" replace />} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:runId" element={<RunDetailPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
-              <Route path="*" element={<Navigate to="/runs" replace />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Route>
           </Routes>
         </BrowserRouter>

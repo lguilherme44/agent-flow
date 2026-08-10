@@ -1,61 +1,135 @@
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Clock, GitBranch, ListTree, ScrollText, Timer, User } from 'lucide-react';
 import type {
   RunDetailView,
   StageViewResponse,
   TaskSummaryView,
 } from '@contracts/index.js';
-import { Progress, StatusDot, Tooltip, cx } from '../components/ui';
+import { Badge, Button, Progress, StatusDot, Tooltip, cx } from '../components/ui';
 import { formatDuration, formatPercent, formatWhen, humanise } from '../lib/format';
-import { TONE_BG, runLabel, runTone, stageTone } from '../lib/status';
+import { TONE_BG, TONE_TEXT, runLabel, runTone, stageTone } from '../lib/status';
 
 /**
- * Run Header (§70) — what this run is, and how far it got.
+ * The run, as one surface (§70, §71).
  *
- * Duration is the run's own elapsed time as the server computed it. Recomputing
- * it in the browser from `createdAt` would tick upward forever on a run that
- * finished hours ago, because a stopped run has no clock.
+ * Header and pipeline live in the same panel with a hairline between them,
+ * because they answer one question together: what is this run and how far has it
+ * got. The first pass made them two bordered cards, which read as two unrelated
+ * widgets that happened to be stacked.
+ *
+ * This is the hero of the screen. The run id is the largest type on the page at
+ * 24px, the feature title sits beside it rather than under it, and the metadata
+ * is a single row of icon-and-value pairs — the composition the reference uses,
+ * and the reason it reads as a tool rather than as a report.
  */
+export function RunPanel(props: {
+  run: RunDetailView;
+  stages: StageViewResponse[] | undefined;
+}): JSX.Element {
+  return (
+    <section className="shrink-0 overflow-hidden rounded-lg border border-border bg-surface">
+      <RunHeader run={props.run} />
+      {props.stages === undefined ? null : (
+        <div className="border-t border-border px-4 py-3">
+          <StagePipeline stages={props.stages} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function RunHeader(props: { run: RunDetailView }): JSX.Element {
   const { run } = props;
 
   return (
-    <header className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="tabular text-body font-medium text-muted">{run.runId}</span>
-            <StatusDot tone={runTone(run.status)} label={runLabel(run.status)} />
+    <header className="flex flex-col gap-2.5 px-4 pb-3 pt-3.5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-2">
+          {/* One line, always. Wrapping pushed the feature under the run id and
+              cost the header a row of height for no information. */}
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h1 className="tabular shrink-0 text-hero font-bold tracking-tight">{run.runId}</h1>
+            <Badge tone={runTone(run.status)} caps className="shrink-0 px-2 py-0.5 text-label">
+              {runLabel(run.status)}
+            </Badge>
+            <span className="min-w-0 truncate text-title font-medium text-text" title={run.feature}>
+              {run.feature}
+            </span>
           </div>
-          <h1 className="line-clamp-2 max-w-3xl text-title font-semibold" title={run.feature}>
-            {run.feature}
-          </h1>
+
+          {/* One row, hairline-separated. Six stacked label/value pairs was the
+              same information at four times the height. */}
+          <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-label text-muted">
+            {/* Dropped below 1440, where the row would otherwise wrap and cost
+                the table 20px. It is also the least informative of the four:
+                in local mode it always says "you". */}
+            <span className="hidden items-center gap-4 wide:flex">
+              <Fact icon={<User className="h-3.5 w-3.5" />} label="Started by" value="you" />
+              <Divider />
+            </span>
+            <Fact icon={<Clock className="h-3.5 w-3.5" />} value={formatWhen(run.startedAt)} />
+            <Divider />
+            <Fact
+              icon={<Timer className="h-3.5 w-3.5" />}
+              label="Duration"
+              value={formatDuration(run.durationMs)}
+            />
+            <Divider />
+            <Fact
+              icon={<ListTree className="h-3.5 w-3.5" />}
+              label="Tasks"
+              value={`${String(run.completedTasks)} / ${String(run.taskCount)}`}
+            />
+          </dl>
         </div>
 
-        <dl className="flex shrink-0 gap-6">
-          <Fact label="Started" value={formatWhen(run.startedAt)} />
-          <Fact label="Duration" value={formatDuration(run.durationMs)} />
-          <Fact label="Tasks" value={`${String(run.completedTasks)} / ${String(run.taskCount)}`} />
-        </dl>
-      </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <div className="flex w-52 flex-col gap-1">
+            <div className="flex items-baseline justify-between">
+              <span className="text-micro text-faint">Overall progress</span>
+              <span className="tabular text-label font-medium text-text">
+                {formatPercent(run.progress)}
+              </span>
+            </div>
+            <Progress
+              value={run.progress}
+              tone={run.progress === 100 ? 'success' : 'primary'}
+              label="Overall progress"
+            />
+          </div>
 
-      <div className="flex items-center gap-3">
-        <Progress value={run.progress} label="Overall progress" className="flex-1" />
-        <span className="tabular w-10 shrink-0 text-right text-label text-muted">
-          {formatPercent(run.progress)}
-        </span>
+          {/* Composition now, behaviour later. A button that silently did
+              nothing would be worse than one that says it cannot yet. */}
+          <div className="flex items-center gap-1.5">
+            <Button disabled title="The DAG view is not implemented yet">
+              <GitBranch className="h-3.5 w-3.5" aria-hidden />
+              View as DAG
+            </Button>
+            <Button disabled title="A run-wide log view is not implemented yet">
+              <ScrollText className="h-3.5 w-3.5" aria-hidden />
+              Logs
+            </Button>
+            <Button
+              variant="primary"
+              disabled
+              title="Approve, run and retry stay with the CLI in this milestone"
+            >
+              Actions
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Degradations are not a footnote. A run that reviewed itself, ran below
           its configured effort, or had its gate forced reached its verdict on
-          weaker terms, and this is where somebody is reading the verdict. */}
+          weaker terms, and this is where somebody reads the verdict. */}
       {run.degradationDetail.length === 0 ? null : (
-        <ul className="flex flex-col gap-1 rounded-sm border border-warning/30 bg-warning-soft p-2">
+        <ul className="flex flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-2.5 py-2">
           {run.degradationDetail.map((degradation) => (
             <li key={`${degradation.kind}:${degradation.reason}`} className="flex gap-2">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
-              <div className="flex flex-col">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+              <div className="flex min-w-0 flex-col">
                 <span className="text-label text-text">{degradation.reason}</span>
-                <span className="text-label text-muted">{degradation.impact}</span>
+                <span className="text-micro text-muted">{degradation.impact}</span>
               </div>
             </li>
           ))}
@@ -65,31 +139,48 @@ export function RunHeader(props: { run: RunDetailView }): JSX.Element {
   );
 }
 
-function Fact(props: { label: string; value: string }): JSX.Element {
+function Fact(props: { icon: JSX.Element; label?: string; value: string }): JSX.Element {
   return (
-    <div className="flex flex-col">
-      <dt className="text-label uppercase tracking-wide text-faint">{props.label}</dt>
-      <dd className="tabular text-body text-text">{props.value}</dd>
+    <div className="flex items-center gap-1.5">
+      <span className="text-faint" aria-hidden>
+        {props.icon}
+      </span>
+      {props.label === undefined ? null : (
+        <dt className="text-faint">{props.label}</dt>
+      )}
+      <dd className="tabular text-text">{props.value}</dd>
     </div>
   );
 }
 
+function Divider(): JSX.Element {
+  return <span className="h-3 w-px bg-border-strong" aria-hidden />;
+}
+
 /**
- * The horizontal pipeline (§71).
+ * A connected stepper, not nine cards (§71).
  *
- * Nine stages, including approval, which is a step in the workflow but not a
- * `RunStage` — the server decides that, from the run's own record. Nothing here
- * infers a status; a display that computed stage state would be a second state
- * machine, and it would be the wrong one.
+ * The change that matters most on this screen. Nine equal filled rectangles read
+ * as a collection of widgets; the eye has to be told this is a *sequence*, and a
+ * connector between nodes is what does that in one glance.
+ *
+ * Each step is an outlined chip on the page ground rather than a lifted surface,
+ * so colour marks status without painting a block. The running step is the one
+ * exception: it gets a purple border and a soft fill, because "where is this run
+ * right now" is the single most-asked question on the page.
+ *
+ * Nothing here decides a status. The server derives the timeline from the run's
+ * own record; a display that computed it would be a second state machine, and it
+ * would be the wrong one.
  */
 export function StagePipeline(props: { stages: StageViewResponse[] }): JSX.Element {
   return (
-    <ol
-      className="flex items-stretch gap-1 overflow-x-auto rounded-lg border border-border bg-surface p-2"
-      aria-label="Pipeline"
-    >
-      {props.stages.map((stage) => {
+    <ol className="flex items-stretch" aria-label="Pipeline">
+      {props.stages.map((stage, index) => {
         const tone = stageTone(stage.status);
+        const running = stage.status === 'running';
+        const pending = stage.status === 'pending';
+
         const detail = [
           stage.runner === undefined ? undefined : `runner ${stage.runner}`,
           stage.model === undefined ? undefined : `model ${stage.model}`,
@@ -101,37 +192,79 @@ export function StagePipeline(props: { stages: StageViewResponse[] }): JSX.Eleme
         ].filter((value): value is string => value !== undefined);
 
         return (
-          <li key={stage.stage} className="min-w-0 flex-1">
+          <li
+            key={stage.stage}
+            // The running step is wider. Partly because it is the answer to
+            // "where is this run right now" and deserves the emphasis, and
+            // partly because "Implementation" is the longest single unbreakable
+            // word in the pipeline and an equal share clips it.
+            className={cx('flex min-w-0 items-stretch', running ? 'flex-[1.4]' : 'flex-1')}
+          >
             <Tooltip
               content={
-                detail.length === 0 ? (
-                  <span>{humanise(stage.stage)} — {stage.status.replace(/_/g, ' ')}</span>
-                ) : (
-                  <span>{detail.join(' · ')}</span>
-                )
+                <span>
+                  {humanise(stage.stage)} — {stage.status.replace(/_/g, ' ')}
+                  {detail.length === 0 ? '' : ` · ${detail.join(' · ')}`}
+                </span>
               }
             >
               <div
                 className={cx(
-                  'flex h-full min-w-0 cursor-default flex-col gap-1 rounded-sm border px-2 py-1.5',
-                  'border-transparent',
-                  TONE_BG[tone],
+                  // Tight padding and a small gap, because nine steps across
+                  // ~1180px leave each chip about 130px and "Implementation" is
+                  // a single unbreakable word that needs nearly all of it.
+                  'flex min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-md border px-1.5 py-1.5',
+                  running
+                    ? 'border-primary-border bg-primary-soft'
+                    : pending
+                      ? 'border-border bg-transparent'
+                      : cx('border-border', TONE_BG[tone]),
                 )}
               >
                 <StatusDot
                   tone={tone}
                   label={stage.status.replace(/_/g, ' ')}
-                  showLabel={false}
-                  spin={stage.status === 'running'}
+                  // A step with no duration prints its status underneath, and
+                  // then this marker is decoration; a step with a duration
+                  // prints that instead, so the marker carries the status.
+                  {...(stage.durationMs === undefined
+                    ? { decorative: true }
+                    : { showLabel: false })}
+                  solid={stage.status === 'completed'}
+                  spin={running}
                 />
-                <span className="truncate text-label text-text" title={humanise(stage.stage)}>
-                  {humanise(stage.stage)}
-                </span>
-                <span className="tabular text-label text-faint">
-                  {stage.durationMs === undefined ? '—' : formatDuration(stage.durationMs)}
+                <span className="flex min-w-0 flex-col">
+                  {/* Wraps to a second line rather than truncating. Nine steps
+                      across 1200px cannot all fit on one line, and
+                      "Architectu…" beside "Implemen…" is a pipeline nobody can
+                      read — the reference wraps for exactly this reason. */}
+                  <span
+                    className={cx(
+                      'line-clamp-2 text-label leading-tight',
+                      running ? 'font-medium text-text' : pending ? 'text-muted' : 'text-text',
+                    )}
+                    title={humanise(stage.stage)}
+                  >
+                    {humanise(stage.stage)}
+                  </span>
+                  <span className={cx('tabular text-micro', running ? TONE_TEXT[tone] : 'text-faint')}>
+                    {stage.durationMs === undefined
+                      ? stage.status === 'pending'
+                        ? 'pending'
+                        : stage.status.replace(/_/g, ' ')
+                      : formatDuration(stage.durationMs)}
+                  </span>
                 </span>
               </div>
             </Tooltip>
+
+            {/* The connector. Everything else here could be a widget; this is
+                what makes the row a flow. */}
+            {index < props.stages.length - 1 ? (
+              <span className="flex w-2 shrink-0 items-center" aria-hidden>
+                <span className="h-px w-full bg-border-strong" />
+              </span>
+            ) : null}
           </li>
         );
       })}
@@ -139,33 +272,14 @@ export function StagePipeline(props: { stages: StageViewResponse[] }): JSX.Eleme
   );
 }
 
-/** Task Metrics (§72), counted from the states the run actually holds. */
-export function TaskMetrics(props: { tasks: TaskSummaryView[] }): JSX.Element {
-  const counts = countTasks(props.tasks);
-
-  const cells: { label: string; value: number; tone?: string }[] = [
-    { label: 'Total', value: counts.total },
-    { label: 'Completed', value: counts.completed },
-    { label: 'Running', value: counts.running },
-    { label: 'Waiting', value: counts.waiting },
-    { label: 'Failed', value: counts.failed },
-  ];
-
-  return (
-    <div className="grid grid-cols-5 gap-2">
-      {cells.map((cell) => (
-        <div
-          key={cell.label}
-          className="flex flex-col gap-0.5 rounded-md border border-border bg-surface px-3 py-2"
-        >
-          <span className="text-label uppercase tracking-wide text-faint">{cell.label}</span>
-          <span className="tabular text-metric font-semibold">{cell.value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
+/**
+ * The five counts of §72, as a strip rather than a row of boxes.
+ *
+ * `waiting` deliberately gathers everything that is neither done, moving, nor
+ * broken — queued, ready, blocked, needing review. A run stalled on a blocked
+ * task is waiting for a person, and giving that its own column would leave the
+ * strip summing to less than the total.
+ */
 export interface TaskCounts {
   total: number;
   completed: number;
@@ -174,16 +288,14 @@ export interface TaskCounts {
   failed: number;
 }
 
-/**
- * The five numbers of §72.
- *
- * `waiting` deliberately gathers everything that is neither done, moving, nor
- * broken — queued, ready, blocked, needing review. A run stalled on a blocked
- * task is waiting for a person, and putting that in its own column would leave
- * the top row summing to less than the total.
- */
 export function countTasks(tasks: readonly TaskSummaryView[]): TaskCounts {
-  const counts: TaskCounts = { total: tasks.length, completed: 0, running: 0, waiting: 0, failed: 0 };
+  const counts: TaskCounts = {
+    total: tasks.length,
+    completed: 0,
+    running: 0,
+    waiting: 0,
+    failed: 0,
+  };
 
   for (const task of tasks) {
     switch (task.state) {

@@ -15,3 +15,9 @@ agent-flow-mvp1-plan.md
 .agent-flow/runs/
 .agent-flow/cache/
 .agent-flow/current-run
+
+# Playwright's per-run output. The baselines under
+# apps/web/visual/__screenshots__ are committed; this is the scratch space
+# where a failing run writes its actual and diff images.
+apps/web/visual/.results/
+apps/web/playwright-report/
