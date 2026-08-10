@@ -66,8 +66,10 @@ export async function runApproveCommand(
       [
         `Approved ${state.runId} — ${String(plan.tasks.length)} tasks.`,
         '',
-        'Implementation arrives in the next milestone; the approval is recorded and',
-        'will be checked against this exact plan when it does.',
+        'The approval is bound to this exact plan: revise it and the gate closes',
+        'again.',
+        '',
+        'Next: agent-flow run',
         '',
       ].join('\n'),
     );

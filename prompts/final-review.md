@@ -1,5 +1,4 @@
 ---
-role: finalReviewer
 permissions: read-only
 outputFormat: json
 requiredVars: [sdd, plan, diffStat, changedFiles, commandResults]

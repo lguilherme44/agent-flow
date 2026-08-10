@@ -12,7 +12,6 @@ function makeLoader(files: Record<string, string>) {
 }
 
 const VALID = `---
-role: sdd
 permissions: read-only
 outputFormat: markdown
 requiredVars: [featureRequest, architecture]
@@ -28,7 +27,6 @@ Architecture:
 describe('loading', () => {
   it('parses front matter and body', async () => {
     const prompt = await makeLoader({ 'sdd.md': VALID }).load('sdd');
-    expect(prompt.meta.role).toBe('sdd');
     expect(prompt.meta.permissions).toBe('read-only');
     expect(prompt.body).toContain('# SDD');
     expect(prompt.body).not.toContain('---');
@@ -47,13 +45,25 @@ describe('loading', () => {
   });
 
   it('rejects front matter that fails validation', async () => {
-    const loader = makeLoader({ 'sdd.md': '---\nrole: not-a-real-role\n---\nbody\n' });
-    await expect(loader.load('sdd')).rejects.toThrow(/role/);
+    const loader = makeLoader({ 'sdd.md': '---\npermissions: sideways\n---\nbody\n' });
+    await expect(loader.load('sdd')).rejects.toThrow(/permissions/);
+  });
+
+  it('carries no role, because nothing would enforce it (V-11 regression)', async () => {
+    // The front matter used to declare a role that the StageRunner never read:
+    // it resolves the role from the StageDefinition. So the value could name a
+    // different role and nothing would notice — and for the implementation
+    // prompt, which serves all three executor roles, any single value was a lie
+    // about two of them.
+    const loader = makeLoader({ 'x.md': '---\nrole: executor.normal\n---\nbody\n' });
+    const prompt = await loader.load('x');
+
+    expect(prompt.meta).not.toHaveProperty('role');
   });
 
   it('defaults permissions to read-only', async () => {
     // The safe default. A prompt that needs to write has to say so explicitly.
-    const loader = makeLoader({ 'x.md': '---\nrole: sdd\n---\nbody\n' });
+    const loader = makeLoader({ 'x.md': '---\noutputFormat: markdown\n---\nbody\n' });
     expect((await loader.load('x')).meta.permissions).toBe('read-only');
   });
 });
@@ -92,7 +102,7 @@ describe('rendering', () => {
 
   it('leaves an undeclared placeholder alone rather than guessing', async () => {
     const loader2 = makeLoader({
-      'x.md': '---\nrole: sdd\nrequiredVars: [a]\n---\n{{a}} and {{b}}\n',
+      'x.md': '---\nrequiredVars: [a]\n---\n{{a}} and {{b}}\n',
     });
     const prompt = await loader2.load('x');
     expect(prompt.render({ a: 'A' })).toContain('{{b}}');
@@ -100,7 +110,7 @@ describe('rendering', () => {
 
   it('substitutes every occurrence of a variable', async () => {
     const loader2 = makeLoader({
-      'x.md': '---\nrole: sdd\nrequiredVars: [a]\n---\n{{a}} {{a}} {{a}}\n',
+      'x.md': '---\nrequiredVars: [a]\n---\n{{a}} {{a}} {{a}}\n',
     });
     expect((await loader2.load('x')).render({ a: 'z' })).toContain('z z z');
   });
@@ -109,7 +119,7 @@ describe('rendering', () => {
     // A repository file containing {{...}} must not be re-expanded. Otherwise
     // project content could inject placeholders into the prompt.
     const loader2 = makeLoader({
-      'x.md': '---\nrole: sdd\nrequiredVars: [a, b]\n---\n{{a}}|{{b}}\n',
+      'x.md': '---\nrequiredVars: [a, b]\n---\n{{a}}|{{b}}\n',
     });
     const rendered = (await loader2.load('x')).render({ a: '{{b}}', b: 'REAL' });
     expect(rendered.trim()).toBe('{{b}}|REAL');

@@ -1,5 +1,4 @@
 ---
-role: executor.normal
 permissions: write
 outputFormat: markdown
 requiredVars: [task, sdd, projectConfig, agentsMd]
@@ -50,7 +49,14 @@ project. They outrank your preferences.
 2. Confirm how similar things are already done here.
 3. Decide the exact set of files to change.
 4. Make the change.
-5. Run the task's validation commands if it lists any.
+
+**Do not run the task's validation commands.** Agent Flow runs them itself once
+you are done, from the project's own configuration, and that run is the one that
+counts. Running them here costs time and context and decides nothing.
+
+You may run narrow diagnostic commands when you genuinely need to understand
+something — reading a type error, checking one test while working out a
+signature. That is you working, not you passing a gate.
 
 ## When to stop
 
@@ -77,15 +83,15 @@ STATUS: COMPLETED | BLOCKED
 FILES CHANGED:
 - path/to/file.ts
 
-VALIDATION:
-- <command>: passed | failed | not run
-
 DEVIATIONS:
 - <anything you did differently from the SDD, and why — or "none">
 
 NOTES:
 - <anything the reviewer should know — or "none">
 ```
+
+There is no validation section: Agent Flow has the exit codes, and asking you to
+report them would only invite running the commands to fill the field in.
 
 If STATUS is BLOCKED, use NOTES to say precisely what decision is missing and
 what you would need in order to continue.

@@ -1,5 +1,4 @@
 ---
-role: verification
 permissions: read-only
 outputFormat: json
 requiredVars: [sdd, changedFiles, commandResults, agentsMd]

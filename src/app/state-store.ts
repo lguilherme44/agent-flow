@@ -48,6 +48,11 @@ export class StateStore {
     this.projectDir = options.projectDir;
   }
 
+  /** The current instant, from the injected clock. */
+  now(): string {
+    return this.clock.now();
+  }
+
   async createRun(feature: string): Promise<RunState> {
     const runId = await this.nextRunId();
     const paths = runPaths(this.projectDir, runId);

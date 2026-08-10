@@ -1,5 +1,4 @@
 ---
-role: sdd
 permissions: read-only
 outputFormat: markdown
 requiredVars: [featureRequest, architecture, architectureImpact, projectConfig, agentsMd]

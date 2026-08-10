@@ -1,5 +1,4 @@
 ---
-role: planReviewer
 permissions: read-only
 outputFormat: json
 requiredVars: [sdd, plan, architectureImpact]

@@ -130,8 +130,10 @@ export async function runFeatureCommand(
         `  SDD   ${paths.sdd}`,
         `  Plan  ${paths.plan}`,
         '',
-        'Read both before approving. The plan review and approval gate arrive in the',
-        'next milestone; until then the judgement is yours.',
+        'Read both before approving — the automated review checks the plan against',
+        'the SDD, but it is not the one accountable for it.',
+        '',
+        'Then: agent-flow approve',
         '',
       ].join('\n'),
     );

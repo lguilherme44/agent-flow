@@ -1,5 +1,4 @@
 ---
-role: architect
 permissions: read-only
 outputFormat: markdown
 requiredVars: [featureRequest, architecture, projectConfig, agentsMd]

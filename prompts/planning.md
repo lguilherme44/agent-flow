@@ -1,5 +1,4 @@
 ---
-role: planner
 permissions: read-only
 outputFormat: json
 requiredVars: [featureRequest, sdd, architectureImpact, projectConfig, validationCommands]

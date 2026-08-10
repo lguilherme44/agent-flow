@@ -80,10 +80,14 @@ export async function approveRun(
 ): Promise<RunState> {
   const hash = planHash(plan);
 
+  // Recorded, not left undefined. The moment a human opened the gate is the
+  // one fact an audit trail cannot reconstruct from anything else.
+  const approvedAt = store.now();
+
   const state = await store.updateRun(runId, (current) => ({
     ...current,
     approved: true,
-    approvedAt: undefined,
+    approvedAt,
     approvedPlanHash: hash,
     status: 'approved',
   }));
@@ -92,6 +96,7 @@ export async function approveRun(
     planHash: hash,
     taskCount: plan.tasks.length,
     forced: options.forced === true,
+    approvedAt,
   });
 
   return state;

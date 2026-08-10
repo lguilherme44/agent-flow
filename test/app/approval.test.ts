@@ -158,6 +158,38 @@ describe('approveRun', () => {
     expect(approved.status).toBe('approved');
   });
 
+  it('records when the gate was opened (V-10 regression)', async () => {
+    // Was written as `approvedAt: undefined` with a Clock already in reach.
+    // The moment a human approved is the one fact an audit trail cannot
+    // reconstruct from anything else.
+    const { store: s, run } = await store();
+    const approved = await approveRun(s, run.runId, plan());
+
+    expect(approved.approvedAt).toBe('2026-08-09T20:00:00.000Z');
+  });
+
+  it('stamps a new time on re-approval', async () => {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const s = new StateStore({ fs, clock, projectDir: '/repo' });
+    const run = await s.createRun('f');
+
+    await approveRun(s, run.runId, plan());
+    clock.advance(3_600_000);
+
+    // A revise clears the approval; approving again is a new decision.
+    await s.updateRun(run.runId, (state) => ({
+      ...state,
+      approved: false,
+      approvedAt: undefined,
+      approvedPlanHash: undefined,
+      status: 'waiting_for_approval',
+    }));
+    const reapproved = await approveRun(s, run.runId, plan());
+
+    expect(reapproved.approvedAt).toBe('2026-08-09T21:00:00.000Z');
+  });
+
   it('logs the approval as an event', async () => {
     const { store: s, run } = await store();
     await approveRun(s, run.runId, plan());

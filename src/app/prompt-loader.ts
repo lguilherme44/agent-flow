@@ -1,6 +1,6 @@
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { WorkflowRoleSchema, formatValidationError } from '../contracts/index.js';
+import { formatValidationError } from '../contracts/index.js';
 import type { FileSystem } from '../ports/index.js';
 
 export class PromptError extends Error {
@@ -19,7 +19,18 @@ export class PromptError extends Error {
  * spawning anything.
  */
 export const PromptMetaSchema = z.object({
-  role: WorkflowRoleSchema,
+  /**
+   * No `role` here on purpose.
+   *
+   * It used to be declared and never read: the StageRunner resolves the role
+   * from the StageDefinition, so the front matter could name a different one
+   * and nothing would notice. Worse, it could not be right — the implementation
+   * prompt serves all three executor roles, so any single value it declared was
+   * a lie about two of them.
+   *
+   * Metadata that cannot be enforced and is not consulted is worse than absent:
+   * it reads as a constraint and is a comment.
+   */
   /** Read-only is the default; a prompt that writes must say so (§35). */
   permissions: z.enum(['read-only', 'write']).default('read-only'),
   outputFormat: z.enum(['markdown', 'json', 'text']).default('markdown'),

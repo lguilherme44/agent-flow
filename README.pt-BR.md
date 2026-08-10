@@ -156,7 +156,7 @@ não se sobrescrevem.
 ## Estado atual
 
 O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
-625 testes, e a suíte não invoca nenhuma CLI.
+628 testes, e a suíte não invoca nenhuma CLI.
 
 ### Funcionando
 
@@ -187,9 +187,9 @@ O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
 
 ### Defeitos conhecidos — revisão de validação
 
-Uma revisão estruturada após o MVP 1 confirmou 17 findings, reproduzidos em
-[`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts).
-Ordem de correção e severidade:
+Uma revisão estruturada após o MVP 1 confirmou 17 findings. Os doze defeitos de
+código estão corrigidos; cada reprodução foi invertida e movida para a suíte da
+funcionalidade correspondente.
 
 - [x] **V-01 · crítico** — strings geradas pelo planner chegam ao `/bin/sh -c`; sem allowlist → **corrigido:** `validation` guarda ids resolvidos pela config do projeto
 - [x] **V-09 · alto** — o timeout de processo nunca dispara quando o filho tem filhos → **corrigido:** o filho roda no próprio process group
@@ -199,8 +199,8 @@ Ordem de correção e severidade:
 - [x] **V-05 · médio** — `agent-flow task` monta um grafo sem as dependências → **corrigido:** o grafo fica inteiro, a execução é que é restrita
 - [x] **V-06 · médio** — `result.json` grava um reasoning level hardcoded → **corrigido:** a proveniência vem de quem executou de fato
 - [x] **V-07 · médio** — o cache de discovery é reusado sem invalidação → **corrigido:** fingerprint de HEAD, working tree, AGENTS.md e config
-- [ ] **V-08 · médio** — comandos de validação rodam duas vezes, uma delas pelo agente
-- [ ] **V-10/11/12 · baixo** — `approvedAt` não gravado, metadata de role do prompt sem uso, textos desatualizados
+- [x] **V-08 · médio** — comandos de validação rodam duas vezes, uma delas pelo agente → **corrigido:** o prompt diz que o Agent Flow é o dono da execução
+- [x] **V-10/11/12 · baixo** — `approvedAt` gravado, metadata morta de role removida, textos da CLI corrigidos
 
 Veja [FINDINGS §8](FINDINGS.md#8-a-structured-review-found-things-the-build-did-not).
 

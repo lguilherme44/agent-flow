@@ -153,7 +153,7 @@ overwrite each other.
 ## Status
 
 MVP 1 is complete and has been run end to end against Claude Code and Codex.
-625 tests, no CLI invoked by the suite.
+628 tests, no CLI invoked by the suite.
 
 ### Working
 
@@ -184,9 +184,9 @@ MVP 1 is complete and has been run end to end against Claude Code and Codex.
 
 ### Known defects — validation review
 
-A structured review after MVP 1 confirmed 17 findings, reproduced in
-[`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts).
-Fix order and severity:
+A structured review after MVP 1 confirmed 17 findings. All twelve code-level
+defects are fixed; each reproduction was inverted and moved into the suite of
+the feature it belongs to.
 
 - [x] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist → **fixed:** `validation` holds ids resolved against the project config
 - [x] **V-09 · high** — the process timeout never fires when the child has children → **fixed:** the child runs in its own process group
@@ -196,8 +196,8 @@ Fix order and severity:
 - [x] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies → **fixed:** the graph stays whole, execution is restricted
 - [x] **V-06 · medium** — `result.json` records a hardcoded reasoning level → **fixed:** provenance travels from the runner that actually ran
 - [x] **V-07 · medium** — the discovery cache is reused without invalidation → **fixed:** fingerprinted on HEAD, working tree, AGENTS.md and config
-- [ ] **V-08 · medium** — validation commands run twice, once by the agent
-- [ ] **V-10/11/12 · low** — `approvedAt` unset, prompt role metadata unused, stale CLI copy
+- [x] **V-08 · medium** — validation commands run twice, once by the agent → **fixed:** the prompt says Agent Flow owns the run
+- [x] **V-10/11/12 · low** — `approvedAt` now recorded, dead prompt role metadata removed, CLI copy corrected
 
 See [FINDINGS §8](FINDINGS.md#8-a-structured-review-found-things-the-build-did-not).
 
