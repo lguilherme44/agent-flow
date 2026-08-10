@@ -87,7 +87,7 @@ async function detectFor(
         },
       };
     case 'python':
-      return { type, name: directoryName, commands: { test: 'pytest' } };
+      return detectPython(fs, projectDir, directoryName);
     case 'go':
       return {
         type,
@@ -97,7 +97,7 @@ async function detectFor(
     case 'rust':
       return {
         type,
-        name: directoryName,
+        name: (await readTomlName(fs, `${projectDir}/Cargo.toml`, 'package')) ?? directoryName,
         commands: { lint: 'cargo clippy', test: 'cargo test', build: 'cargo build' },
       };
     default:
@@ -143,6 +143,90 @@ async function packageManager(fs: FileSystem, projectDir: string): Promise<strin
   if (await fs.exists(`${projectDir}/yarn.lock`)) return 'yarn';
   if (await fs.exists(`${projectDir}/bun.lockb`)) return 'bun';
   return 'npm';
+}
+
+/**
+ * Python, read the way Node is read.
+ *
+ * The manifest was already parsed to identify the stack; not looking at what it
+ * declares was the gap. It matters more than a wrong name in a config file: the
+ * set of commands here becomes the set of validation ids a plan may cite, and a
+ * plan whose only id is `test` will happily carry acceptance criteria that
+ * `pytest` cannot check. A live plan review caught exactly that.
+ *
+ * Nothing is invented. A linter appears only if the project declares one — the
+ * Node detector's rule, for the same reason: a command that does not exist is
+ * worse than a missing one, because tasks get planned against it.
+ */
+async function detectPython(
+  fs: FileSystem,
+  projectDir: string,
+  directoryName: string,
+): Promise<Omit<DetectedStack, 'paths'>> {
+  // A bare `pytest` reaches whatever is on PATH, which need not be the
+  // environment the project pins — the same reasoning as `packageManager`.
+  const prefix = (await fs.exists(`${projectDir}/uv.lock`))
+    ? 'uv run '
+    : (await fs.exists(`${projectDir}/poetry.lock`))
+      ? 'poetry run '
+      : '';
+
+  const commands: DetectedStack['commands'] = { test: `${prefix}pytest` };
+  let name = directoryName;
+
+  try {
+    const manifest = await fs.readFile(`${projectDir}/pyproject.toml`);
+
+    name = readNameFrom(manifest, 'project') ?? directoryName;
+
+    if (/\bruff\b/.test(manifest)) commands.lint = `${prefix}ruff check .`;
+    if (/\bmypy\b/.test(manifest)) commands.typecheck = `${prefix}mypy .`;
+    else if (/\bpyright\b/.test(manifest)) commands.typecheck = `${prefix}pyright`;
+  } catch {
+    // An unreadable manifest is a reason to fall back, not to fail `init`.
+  }
+
+  return { type: 'python', name, commands };
+}
+
+/**
+ * The `name` of one TOML table, without a TOML parser.
+ *
+ * Scoped to the table deliberately: `name = ` also appears under
+ * `[dependencies]` entries, and the first match in the file is not necessarily
+ * the package's own.
+ */
+function readNameFrom(source: string, table: string): string | undefined {
+  const lines = source.split('\n');
+  let inTable = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith('[')) {
+      inTable = trimmed === `[${table}]`;
+      continue;
+    }
+
+    if (!inTable) continue;
+
+    const match = /^name\s*=\s*["']([^"']+)["']/.exec(trimmed);
+    if (match?.[1] !== undefined) return match[1];
+  }
+
+  return undefined;
+}
+
+async function readTomlName(
+  fs: FileSystem,
+  path: string,
+  table: string,
+): Promise<string | undefined> {
+  try {
+    return readNameFrom(await fs.readFile(path), table);
+  } catch {
+    return undefined;
+  }
 }
 
 async function readYamlName(fs: FileSystem, path: string): Promise<string | undefined> {

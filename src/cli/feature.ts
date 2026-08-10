@@ -141,7 +141,7 @@ export async function runFeatureCommand(
         'Read both before approving — the automated review checks the plan against',
         'the SDD, but it is not the one accountable for it.',
         '',
-        'Then: agent-flow approve',
+        nextStepAfterPlanning(result.review?.verdict),
         '',
       ].join('\n'),
     );
@@ -244,4 +244,27 @@ function printExecutionPlan(
   }
 
   process.stdout.write('\nNo runner was invoked.\n');
+}
+
+/**
+ * What to do next, given what the review actually said.
+ *
+ * Written as one function because the previous version was a constant string:
+ * a run whose plan review returned FAIL still closed with "Then: agent-flow
+ * approve", and following that advice hits a gate that refuses. The verdict was
+ * printed three lines above and never consulted.
+ *
+ * `--force` is named rather than hidden. It exists, it is recorded on the run,
+ * and someone who has read the findings is entitled to overrule them; omitting
+ * it would be its own kind of misdirection.
+ */
+export function nextStepAfterPlanning(verdict: 'PASS' | 'FAIL' | undefined): string {
+  if (verdict !== 'FAIL') return 'Then: agent-flow approve';
+
+  return [
+    'The automated review rejected this plan. Its findings are above.',
+    '',
+    'Fix the plan with: agent-flow revise "<instruction>"',
+    'Or approve anyway with: agent-flow approve --force  (recorded on the run)',
+  ].join('\n');
 }

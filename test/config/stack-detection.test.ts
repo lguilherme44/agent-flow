@@ -127,3 +127,86 @@ describe('source paths', () => {
     expect(stack.paths.source).toEqual([]);
   });
 });
+
+// Found by running the workflow on a real Python repository. Node, Flutter and
+// Go all read the project name from the manifest they used to identify the
+// stack; Python and Rust ignored theirs and used the directory name. Python
+// also declared `test: pytest` and nothing else, while the same file it had
+// already parsed declared ruff.
+//
+// The consequence is not cosmetic. `test` being the only configured validation
+// id meant a planned task could carry four acceptance criteria about the diff
+// and still pass, because pytest cannot check any of them — the live plan
+// review caught exactly that.
+describe('Python and Rust read their manifests too', () => {
+  it('takes the Python project name from pyproject.toml', async () => {
+    const stack = await detect({
+      'pyproject.toml': '[project]\nname = "retrykit"\nversion = "0.1.0"\n',
+    });
+
+    expect(stack.type).toBe('python');
+    expect(stack.name).toBe('retrykit');
+  });
+
+  it('falls back to the directory when the manifest declares no name', async () => {
+    const stack = await detect({ 'pyproject.toml': '[build-system]\nrequires = ["hatchling"]\n' });
+
+    expect(stack.name).toBe('repo');
+  });
+
+  it('declares a lint command when the project declares a linter', async () => {
+    const stack = await detect({
+      'pyproject.toml': '[project]\nname = "x"\n\n[dependency-groups]\ndev = ["pytest>=8", "ruff>=0.8"]\n',
+    });
+
+    expect(stack.commands.lint).toBe('ruff check .');
+  });
+
+  it('declares a typecheck command when the project declares a type checker', async () => {
+    const stack = await detect({
+      'pyproject.toml': '[project]\nname = "x"\n\n[tool.mypy]\nstrict = true\n',
+    });
+
+    expect(stack.commands.typecheck).toBe('mypy .');
+  });
+
+  it('invents nothing when the manifest declares no tooling', async () => {
+    // The Node detector's rule, applied here: a command that does not exist is
+    // worse than a missing one, because a task will be planned against it.
+    const stack = await detect({ 'pyproject.toml': '[project]\nname = "x"\n' });
+
+    expect(stack.commands.lint).toBeUndefined();
+    expect(stack.commands.typecheck).toBeUndefined();
+    expect(stack.commands.test).toBe('pytest');
+  });
+
+  it('prefixes commands with the runner the lockfile implies', async () => {
+    // The same reasoning as `packageManager` for Node: a bare `pytest` reaches
+    // whatever happens to be on PATH, which is not necessarily the environment
+    // the project pins.
+    const stack = await detect({
+      'pyproject.toml': '[project]\nname = "x"\n\n[dependency-groups]\ndev = ["ruff"]\n',
+      'uv.lock': 'version = 1\n',
+    });
+
+    expect(stack.commands.test).toBe('uv run pytest');
+    expect(stack.commands.lint).toBe('uv run ruff check .');
+  });
+
+  it('takes the Rust package name from Cargo.toml', async () => {
+    const stack = await detect({ 'Cargo.toml': '[package]\nname = "slugkit"\nedition = "2021"\n' });
+
+    expect(stack.type).toBe('rust');
+    expect(stack.name).toBe('slugkit');
+  });
+
+  it('does not mistake a dependency name for the package name', async () => {
+    // `name = ` appears under [dependencies] entries too, and the first match
+    // in the file is not necessarily the package.
+    const stack = await detect({
+      'Cargo.toml': '[dependencies]\nserde = { version = "1", package = "serde_core" }\n\n[package]\nname = "slugkit"\n',
+    });
+
+    expect(stack.name).toBe('slugkit');
+  });
+});
