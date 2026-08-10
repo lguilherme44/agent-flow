@@ -374,3 +374,135 @@ describe('error normalisation (§22.1)', () => {
     if (!result.ok) expect(result.raw).toContain('not-a-real-model');
   });
 });
+
+// Regression suite — the §6 misclassification, back in a different adapter.
+//
+// The stderr in this fixture is real, captured from codex 0.147.0 on a
+// successful run. It is not an error channel: it is the session transcript,
+// containing the prompt that was sent and the answer that came back. Two rules
+// read it as diagnosis, and both were wrong.
+describe('a successful run is not reclassified by what the prompt said', () => {
+  const transcript = fixture('session-transcript-stderr.txt');
+
+  it('does not report quota_exceeded because the prompt discussed rate limits', async () => {
+    // The prompt is echoed into stderr verbatim. A plan for a retry helper —
+    // or any SDD about throttling, billing, or backoff — put the words
+    // "rate limit" in the channel the error rules scanned. The content of the
+    // work decided the classification of the run.
+    const proc = new FakeProcessRunner();
+    const { runner, fs } = makeRunner({ process: proc });
+    proc.always((spawn) => {
+      const outIndex = spawn.args.indexOf('-o');
+      const path = spawn.args[outIndex + 1];
+      if (path) fs.seed(path, '{"answer":"OK"}');
+      return { exitCode: 0, stderr: transcript };
+    });
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not mistake the echoed answer for an error envelope', async () => {
+    // stderr contains `{"answer":"OK"}` on its own line — the reply, echoed.
+    // The envelope parser took the first parseable object it found anywhere in
+    // stderr, so a successful reply disarmed the success guard, which is what
+    // let the text rules run at all.
+    const proc = new FakeProcessRunner();
+    const { runner, fs } = makeRunner({ process: proc });
+    proc.always((spawn) => {
+      const outIndex = spawn.args.indexOf('-o');
+      const path = spawn.args[outIndex + 1];
+      if (path) fs.seed(path, '{"answer":"OK"}');
+      return { exitCode: 0, stderr: transcript };
+    });
+
+    const result = await runner.run({ ...baseInput, outputSchema: { type: 'object' } });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.json).toEqual({ answer: 'OK' });
+  });
+
+  it('still reports a genuine quota failure', async () => {
+    // The rule has to keep working when the CLI actually says so — on a
+    // non-zero exit, which is what a real refusal looks like.
+    const proc = new FakeProcessRunner();
+    const { runner } = makeRunner({ process: proc });
+    proc.always(() => ({
+      exitCode: 1,
+      stderr: 'ERROR: You have hit your usage limit. Try again later.',
+    }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
+  });
+
+  it('still reports a structured quota failure that exits zero', async () => {
+    // Status codes are evidence in a way that prose is not, so they outrank
+    // the exit code — but only when they arrive in an actual error envelope.
+    const proc = new FakeProcessRunner();
+    const { runner } = makeRunner({ process: proc });
+    proc.always(() => ({
+      exitCode: 0,
+      stderr: 'ERROR: {"status":429,"message":"rate limited"}',
+    }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
+  });
+});
+
+describe('the prompt cannot decide how the run is classified', () => {
+  const transcript = fixture('session-transcript-stderr.txt');
+
+  it('ignores rate-limit wording echoed from the prompt on a failed exit', async () => {
+    // The envelope fix covers the exit-zero case. This is the other half: a run
+    // that fails for an unrelated reason still has the prompt sitting in its
+    // stderr, and a plan about throttling would be reported as a throttled
+    // runner — and, with fallback enabled, would spend the other provider's
+    // quota to escape a limit nobody hit.
+    const proc = new FakeProcessRunner();
+    const { runner } = makeRunner({ process: proc });
+    proc.always(() => ({ exitCode: 1, stderr: transcript }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    // Unclassified rather than misclassified: `execution_failed` is not
+    // fallback-eligible, so an unknown failure stays visible instead of being
+    // routed around.
+    if (!result.ok) expect(result.errorCode).toBe('execution_failed');
+  });
+
+  it('reads the wording when the CLI is the one saying it', async () => {
+    const proc = new FakeProcessRunner();
+    const { runner } = makeRunner({ process: proc });
+    proc.always(() => ({
+      exitCode: 1,
+      stderr: `${transcript}\nERROR: usage limit reached for this account.`,
+    }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
+  });
+
+  it('applies the same rule to authentication', async () => {
+    const proc = new FakeProcessRunner();
+    const { runner } = makeRunner({ process: proc });
+    proc.always(() => ({
+      exitCode: 1,
+      stderr: 'A design note: users who are not logged in see the banner.',
+    }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('execution_failed');
+  });
+});

@@ -373,6 +373,64 @@ different instrument, and it reaches what review cannot.
 
 ---
 
+## 11. The prompt could set the error code
+
+The Python run failed at planning with `quota_exceeded`. Codex had plenty of
+quota — it answered a test prompt seconds later — and the log of the failed
+stage showed it had produced a complete, valid plan.
+
+The feature under development was a retry helper with exponential backoff. Its
+SDD explained, correctly, that retry exists to survive *rate limits*. The
+planning prompt embeds the whole SDD. And `codex exec` echoes its prompt into
+stderr, because stderr is not an error channel at all — it is the session
+transcript:
+
+    user
+    Return {"answer":"OK"}. Context to ignore: ... rate limit failures.
+    hook: UserPromptSubmit
+    codex
+    {"answer":"OK"}
+
+Two rules read that transcript as diagnosis, and both were wrong.
+
+`parseEnvelope` took the first parseable JSON object anywhere in stderr, on the
+assumption that JSON there means an error envelope. The transcript echoes the
+*answer* too, so a successful structured reply parsed as an error envelope. That
+disarmed the success guard, whose condition is "exit zero and no envelope" —
+which means the guard was never armed for exactly the four stages that request
+structured output, the same four whose prompts carry the SDD.
+
+With the guard down, the text rule ran and matched `rate limit` in the echoed
+prompt.
+
+So the subject matter of the work set the error code. Any SDD about throttling,
+billing, quotas or backoff would do it. And the consequence is worse than a
+wrong label: `quota_exceeded` is one of the three fallback-eligible codes, so
+with fallback configured this spends the *other* provider's quota to escape a
+limit nobody hit — and the run records a substitution that had no cause.
+
+Both halves are fixed. Envelopes are read only from lines the CLI marked
+`ERROR:`, and the prose rules read only those lines too. An unmarked failure now
+lands on `execution_failed`, which is deliberately not fallback-eligible: an
+unknown failure should stay visible rather than be routed around.
+
+The Claude adapter had the same shape from a different angle — its text rule
+read `envelope.result`, which is the model's own answer whenever the envelope is
+not an error. Its structural success guard made that unreachable in practice,
+but "unreachable because another check happens to hold" is how the codex bug
+worked too. The rule now names its evidence: `result` counts only when the
+envelope calls itself an error.
+
+**The principle this belongs to.** The project already refuses to let a
+model-authored string become a shell command. This is the same boundary one step
+over: a model-authored string must not become a *classification* either.
+Deciding what went wrong is a control-flow decision, and control flow may not be
+sourced from content. §6 found the first instance and fixed the instance. What
+was missing was the rule — which is why it came back in the other adapter, in a
+form the first fix did not cover.
+
+---
+
 ## Open problems
 
 Things we found and did not solve. Listed because a README that only describes

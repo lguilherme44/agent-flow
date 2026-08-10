@@ -390,3 +390,56 @@ describe('error normalisation (§22.1)', () => {
     if (!result.ok) expect(result.raw).toContain('definitely-not-a-model');
   });
 });
+
+// The Codex adapter was caught letting the prompt decide the error code (the
+// live Python run: an SDD about retry backoff reported the runner as rate
+// limited). This adapter's success guard is structural and stronger, but the
+// text rule underneath it still read `envelope.result` — the model's own
+// answer. Defence in depth: prose written by the model is never diagnosis.
+describe('the model answer is not read as a diagnosis', () => {
+  const envelope = (over: Record<string, unknown>) =>
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'ok',
+      ...over,
+    });
+
+  it('does not report quota when only the answer mentions rate limits', async () => {
+    // `subtype` is deliberately unfamiliar: the guard depends on recognising
+    // it, and a CLI release that adds a new one must not turn every design
+    // document about throttling into a quota failure.
+    const { runner, proc } = makeRunner();
+    proc.always(() => ({
+      exitCode: 0,
+      stdout: envelope({
+        subtype: 'success_with_warnings',
+        result: 'The retry helper exists to survive rate limit failures.',
+      }),
+    }));
+
+    const result = await runner.run(baseInput);
+
+    if (!result.ok) expect(result.errorCode).not.toBe('quota_exceeded');
+  });
+
+  it('still reads the message when the envelope says it is an error', async () => {
+    // When `is_error` is true, `result` holds the CLI's explanation rather than
+    // the model's answer — and then its wording is exactly the right evidence.
+    const { runner, proc } = makeRunner();
+    proc.always(() => ({
+      exitCode: 1,
+      stdout: envelope({
+        subtype: 'error',
+        is_error: true,
+        result: 'Usage limit reached. Try again later.',
+      }),
+    }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
+  });
+})

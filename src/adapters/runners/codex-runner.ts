@@ -205,11 +205,19 @@ export class CodexRunner extends BaseRunner {
   }
 
   protected override parseEnvelope(result: ProcessResult): unknown {
-    // Errors arrive as JSON on stderr, prefixed by "ERROR:" and colour codes.
-    // Scan for the first parseable object rather than assuming a fixed shape.
+    // Errors arrive as JSON on stderr prefixed by "ERROR:". The prefix is the
+    // whole point of looking for it: codex's stderr is not an error channel but
+    // the session transcript — it echoes the prompt that was sent and the
+    // answer that came back, both of which parse as JSON when the stage asked
+    // for structured output. Taking the first parseable object anywhere in
+    // stderr meant a successful reply was read as an error envelope.
     for (const line of result.stderr.split('\n')) {
-      const start = line.indexOf('{');
+      const marker = line.indexOf('ERROR:');
+      if (marker === -1) continue;
+
+      const start = line.indexOf('{', marker);
       if (start === -1) continue;
+
       try {
         return JSON.parse(line.slice(start)) as unknown;
       } catch {
@@ -222,7 +230,8 @@ export class CodexRunner extends BaseRunner {
   protected override isDefiniteSuccess(result: ProcessResult, parsed: unknown): boolean {
     // Exit 0 with no error envelope. Guards the text rules below from matching
     // a response that merely discusses failure — the way an SDD about rate
-    // limits was once reported as a rate limit by the other adapter.
+    // limits was once reported as a rate limit by the other adapter, and then
+    // by this one, because the prompt is echoed into the channel they scan.
     return result.exitCode === 0 && parsed === undefined;
   }
 
@@ -235,13 +244,22 @@ export class CodexRunner extends BaseRunner {
       { code: 'auth_required', when: (_result, parsed) => statusOf(parsed) === 401 },
       { code: 'auth_required', when: (_result, parsed) => statusOf(parsed) === 403 },
       { code: 'quota_exceeded', when: (_result, parsed) => statusOf(parsed) === 429 },
+      // The two below read prose, and prose is the weakest evidence there is.
+      // They are confined to lines the CLI marked as errors because codex's
+      // stderr is the session transcript: it echoes the prompt verbatim, and
+      // the prompt carries the SDD. Scanning the whole channel let the *subject
+      // matter* of the work set the error code — a plan for a retry helper
+      // reported the runner as rate limited. With fallback enabled that spends
+      // the other provider's quota to escape a limit nobody hit, which is worse
+      // than the misreport.
       {
         code: 'quota_exceeded',
-        when: (result) => /usage limit|rate limit|quota exceeded/i.test(result.stderr),
+        when: (result) => /usage limit|rate limit|quota exceeded/i.test(errorLinesOf(result)),
       },
       {
         code: 'auth_required',
-        when: (result) => /not (logged in|authenticated)|run `?codex login/i.test(result.stderr),
+        when: (result) =>
+          /not (logged in|authenticated)|run `?codex login/i.test(errorLinesOf(result)),
       },
     ];
   }
@@ -276,3 +294,17 @@ function stripFences(text: string): string {
   return fenced?.[1] ?? text;
 }
 
+/**
+ * Only the lines codex marked as errors.
+ *
+ * Everything else in stderr is transcript — the prompt that was sent, the hooks
+ * that fired, the answer that came back. None of it is the CLI reporting a
+ * problem, and treating it as such hands control of the error code to whoever
+ * wrote the prompt.
+ */
+function errorLinesOf(result: ProcessResult): string {
+  return result.stderr
+    .split('\n')
+    .filter((line) => line.includes('ERROR:'))
+    .join('\n');
+}

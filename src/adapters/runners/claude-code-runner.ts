@@ -168,17 +168,11 @@ export class ClaudeCodeRunner extends BaseRunner {
         // so a wording change degrades this to execution_failed rather than
         // silently mislabelling something else as a quota problem.
         code: 'quota_exceeded',
-        when: (result, parsed) => {
-          const text = `${asEnvelope(parsed)?.result ?? ''} ${result.stdout} ${result.stderr}`;
-          return /usage limit reached|rate limit|quota/i.test(text);
-        },
+        when: (result, parsed) => /usage limit reached|rate limit|quota/i.test(diagnosisOf(result, parsed)),
       },
       {
         code: 'auth_required',
-        when: (result, parsed) => {
-          const text = `${asEnvelope(parsed)?.result ?? ''} ${result.stdout} ${result.stderr}`;
-          return /please run \/login|invalid api key|not authenticated/i.test(text);
-        },
+        when: (result, parsed) => /please run \/login|invalid api key|not authenticated/i.test(diagnosisOf(result, parsed)),
       },
       {
         code: 'execution_failed',
@@ -214,4 +208,20 @@ export class ClaudeCodeRunner extends BaseRunner {
       throw new Error('a structured response was requested but the output is not valid JSON');
     }
   }
+}
+
+/**
+ * The text that counts as the CLI reporting a problem.
+ *
+ * `envelope.result` is included only when the envelope calls itself an error.
+ * Otherwise it is the model's answer, and reading it as diagnosis lets the
+ * subject matter of the work decide the error code — an SDD about rate limits
+ * classified as a rate limit. That happened here once (§6) and again in the
+ * codex adapter, from a different direction, which is why the rule is now
+ * stated rather than left to the success guard alone.
+ */
+function diagnosisOf(result: ProcessResult, parsed: unknown): string {
+  const envelope = asEnvelope(parsed);
+  const message = envelope?.is_error === true ? (envelope.result ?? '') : '';
+  return `${String(message)} ${result.stderr}`;
 }
