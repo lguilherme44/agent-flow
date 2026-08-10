@@ -28,6 +28,23 @@ export interface LoadConfigOptions {
   readonly projectDir: string;
 }
 
+/**
+ * Global-level keys a project is allowed to override (§38).
+ *
+ * Exported because the Settings page reports *where* each effective value came
+ * from, and "can a project override this" is half that answer. A second copy of
+ * this list would be a copy that can disagree with the merge it describes.
+ */
+export const OVERRIDABLE_KEYS = [
+  'roles',
+  'runners',
+  'fallback',
+  'parallelism',
+  'retry',
+  'git',
+  'approval',
+] as const;
+
 /** `.agent-flow/config.yaml` under the project — the only versioned artifact. */
 export function projectConfigPath(projectDir: string): string {
   return `${projectDir}/.agent-flow/config.yaml`;
@@ -76,9 +93,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<EffectiveC
 
   let merged = deepMerge(defaults, globalRaw ?? {});
 
-  // Global-level keys a project is allowed to override. Anything outside this
-  // list belongs to the project schema and is validated separately.
-  const OVERRIDABLE = ['roles', 'runners', 'fallback', 'parallelism', 'retry', 'git', 'approval'];
+  const OVERRIDABLE = OVERRIDABLE_KEYS;
   if (projectRaw) {
     const overrides: Record<string, unknown> = {};
     for (const key of OVERRIDABLE) {

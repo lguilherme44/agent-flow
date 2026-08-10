@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ReasoningLevel } from './common.schema.js';
+import type { Finding } from './review.schema.js';
 import type {
   Degradation,
   PipelineStage,
@@ -81,6 +82,55 @@ export const PromptParamsSchema = z.object({ prompt: PromptNameSchema });
 
 /** Every read endpoint is scoped to one project. */
 export const ProjectQuerySchema = z.object({ projectId: ProjectIdSchema.optional() });
+
+// ---------------------------------------------------------------------------
+// Write requests (§86, UI-27)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a client may say when asking for an action.
+ *
+ * Read the absences. There is no `planHash` on the approve body, and there could
+ * not be: approval is granted to a specific plan, and a caller that named the plan
+ * it wanted credited could open the gate for something nobody read (§90). The
+ * server reads the plan on disk and hashes it.
+ *
+ * There is no path, no command and no runner executable anywhere in this section
+ * either. The browser's whole vocabulary is an id the server issued and a sentence
+ * a person typed.
+ */
+export const ApproveRequestSchema = z.object({
+  /**
+   * Overrides a *review* refusal, and only those.
+   *
+   * Recorded on the run as a degradation, which is the point: a gate opened over a
+   * failed review has to look different afterwards from one that passed.
+   */
+  force: z.boolean().default(false),
+});
+
+export const RejectRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(2_000).optional(),
+});
+
+export const ReviseRequestSchema = z.object({
+  /** What should change. Free text a person wrote; never interpreted as a command. */
+  instruction: z.string().trim().min(1).max(4_000),
+});
+
+export const StartRequestSchema = z.object({
+  /** Restricts execution to one task, as `agent-flow task` does. */
+  taskId: TaskIdParamSchema.optional(),
+});
+
+export const RetryRequestSchema = z.object({
+  /** Retries a BLOCKED task, or one past its attempt limit. Deliberate either way. */
+  force: z.boolean().default(false),
+});
+
+export const JobParamsSchema = z.object({
+  jobId: z.string().regex(/^job-\d{4,}$/, 'expected a job id'),
+});
 
 /**
  * How much history an aggregate covers.
@@ -374,6 +424,118 @@ export interface AnalyticsView {
   readonly byModel: MetricBucketView[];
   readonly byRole: MetricBucketView[];
   readonly byStage: MetricBucketView[];
+}
+
+/**
+ * The approval gate as the server computes it (§90).
+ *
+ * `planHash` is shown so a person can see what they are about to approve. It is
+ * never accepted back — the approve endpoint recomputes it, so a value that
+ * arrived from a browser has nowhere to go.
+ *
+ * No `sddVersion` or `planVersion`, because neither artifact declares one.
+ * `sddDigest` is a digest and says so; inventing a version number would be
+ * metadata nothing maintains, presented as if somebody did.
+ */
+export interface ApprovalGateView {
+  readonly runId: string;
+  readonly approved: boolean;
+  readonly approvedAt?: string;
+  readonly canApprove: boolean;
+  readonly refusal?: { readonly kind: string; readonly forcible: boolean };
+  /** What the person should know before deciding — degradations, mostly (R-16). */
+  readonly warnings: string[];
+  readonly planHash: string;
+  readonly taskCount: number;
+  readonly sddDigest?: string;
+  readonly review?: {
+    readonly verdict: string;
+    readonly independence: string;
+    readonly planHash?: string;
+    /** Whether the verdict is about the plan currently on disk. */
+    readonly coversThisPlan: boolean;
+    readonly findings: Finding[];
+  };
+  readonly degradations: Degradation[];
+}
+
+/** A long action in flight (UI-27). Never a second channel for run state. */
+export interface ActionJobView {
+  readonly id: string;
+  readonly kind: string;
+  readonly projectId: string;
+  readonly runId: string;
+  readonly startedAt: string;
+  readonly status: string;
+  readonly finishedAt?: string;
+  readonly summary?: string;
+  readonly error?: ActionErrorView;
+}
+
+/**
+ * A refused action, as §95 requires it: what happened, and what to do about it.
+ *
+ * `error` is a code a client may branch on; `message` and `action` are for the
+ * person. No stack trace crosses this boundary, ever.
+ */
+export interface ActionErrorView {
+  readonly error: string;
+  readonly message: string;
+  readonly action?: string;
+  /** True when a deliberate override could get past this refusal. */
+  readonly forcible?: boolean;
+  readonly detail?: Record<string, unknown>;
+}
+
+/** A completed synchronous action. Warnings ride along even on success (R-16). */
+export interface ActionResultView {
+  readonly runId: string;
+  readonly warnings: string[];
+  readonly detail?: Record<string, unknown>;
+}
+
+/**
+ * One effective setting, with the layer that produced it (§85).
+ *
+ * The origin is the point. A value alone invites an edit to whichever file the
+ * reader happens to open; a value plus "this project overrides it" says which file
+ * will actually take effect.
+ */
+export interface ConfigSettingView {
+  /** Dotted path into the merged config. Stable, and what a person would grep. */
+  readonly key: string;
+  readonly label: string;
+  /** Rendered for reading. Never a secret, never an environment variable. */
+  readonly value: string;
+  readonly origin: 'default' | 'global' | 'project';
+  /** Present when the value has a consequence worth stating beside it. */
+  readonly note?: string;
+}
+
+export interface ConfigSectionView {
+  readonly id: string;
+  readonly title: string;
+  /** Present when the section exists in the spec and has nothing behind it. */
+  readonly note?: string;
+  readonly settings: ConfigSettingView[];
+}
+
+export interface ConfigView {
+  readonly sources: {
+    readonly globalPath: string;
+    readonly globalPresent: boolean;
+    readonly projectPath: string;
+    readonly projectPresent: boolean;
+  };
+  readonly sections: ConfigSectionView[];
+  /**
+   * Present when the configuration would not load at all.
+   *
+   * Returned with the sources rather than as a failed request: a broken config is a
+   * state the page must show, and the paths are exactly what somebody needs to fix
+   * it (§95).
+   */
+  readonly configError?: string;
 }
 
 /** The SSE envelope of §87. */

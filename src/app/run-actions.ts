@@ -1,0 +1,722 @@
+import { createHash } from 'node:crypto';
+import {
+  ReviewResultSchema,
+  type Plan,
+  type ReviewResult,
+  type RunState,
+  type TaskState,
+} from '../contracts/index.js';
+import {
+  FORCIBLE_REFUSALS,
+  approvalCoversPlan,
+  approveRun as recordApproval,
+  checkApproval,
+  planHash,
+  type ApprovalRefusal,
+} from './approval.js';
+import {
+  buildExecutionContext,
+  buildPlanningPipeline,
+  loadPlan,
+  type BuildContextOptions,
+  type ExecutionContext,
+} from './execution-context.js';
+import type { SchedulerOutcome } from './scheduler.js';
+import type { StateStore } from './state-store.js';
+
+/**
+ * Every state transition a person can ask for, as use cases (UI-27).
+ *
+ * The reason this file exists is a rule rather than a convenience: the CLI and the
+ * local server must be two adapters over one implementation, not two
+ * implementations of one workflow. Approving a plan involves a hash, a review
+ * verdict, a forcible-refusal policy and a degradation record; if an HTTP handler
+ * did any of that itself, the browser and the terminal would be enforcing the gate
+ * separately, and the first time they disagreed the disagreement would be silent.
+ *
+ * So the decisions live here, and both adapters only translate. The CLI turns an
+ * outcome into stdout and an exit code; the server turns it into a status code and
+ * a JSON body. Neither one decides anything.
+ *
+ * Three properties this file is responsible for keeping:
+ *
+ *   **The plan hash is computed, never received.** `approve` takes no hash. It
+ *   reads the plan on disk and hashes it, so there is no request shape in which a
+ *   caller could name the plan it wants credited with an approval.
+ *   **Refusals are structured.** An outcome carries a code, a message and the
+ *   suggested next step, because "gate not satisfied" is not something a person
+ *   can act on and a stack trace is not something they should see.
+ *   **Nothing here writes state directly.** Every mutation goes through
+ *   `StateStore.updateRun`, which is where the §22 task machine is enforced.
+ */
+
+export type ActionErrorCode =
+  | 'no_run'
+  | 'no_such_run'
+  | 'not_current_run'
+  | 'no_plan'
+  | 'no_sdd'
+  | 'already_approved'
+  | 'already_rejected'
+  | 'run_completed'
+  | 'review_missing'
+  | 'review_stale'
+  | 'review_unverifiable'
+  | 'review_failed'
+  | 'approval_required'
+  | 'approval_stale'
+  | 'no_such_task'
+  | 'task_blocked'
+  | 'attempts_exhausted'
+  | 'unmet_dependencies'
+  | 'invalid_input';
+
+export interface ActionError {
+  readonly code: ActionErrorCode;
+  /** What happened, in the words a person needs. Never a stack trace. */
+  readonly message: string;
+  /** What to do about it. Absent only when there is genuinely nothing. */
+  readonly action?: string;
+  /**
+   * True when `--force` (or its deliberate equivalent) could override this.
+   *
+   * Reported rather than inferred: a caller must not have to keep its own copy of
+   * which refusals are forcible, because a copy is a thing that can be wrong.
+   */
+  readonly forcible?: boolean;
+  /** Structured extras a renderer may use. Never a credential, never a path. */
+  readonly detail?: Record<string, unknown>;
+}
+
+/**
+ * Warnings ride on both branches, and that is deliberate (R-16).
+ *
+ * A degraded run is still approvable, and the person approving should know what
+ * was lost *while they still have the choice*. Attaching warnings only to success
+ * would drop them exactly when the answer is "no, unless you insist" — which is
+ * the moment they matter most.
+ */
+export type ActionOutcome<T> =
+  | { readonly ok: true; readonly value: T; readonly warnings: readonly string[] }
+  | { readonly ok: false; readonly error: ActionError; readonly warnings: readonly string[] };
+
+function failed(error: ActionError, warnings: readonly string[] = []): ActionOutcome<never> {
+  return { ok: false, error, warnings };
+}
+
+function done<T>(value: T, warnings: readonly string[] = []): ActionOutcome<T> {
+  return { ok: true, value, warnings };
+}
+
+/** Everything a use case needs, as ports. Nothing concrete, nothing global. */
+export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFinish'>;
+
+// ---------------------------------------------------------------------------
+// approve
+// ---------------------------------------------------------------------------
+
+export interface ApprovalGate {
+  readonly runId: string;
+  readonly approved: boolean;
+  readonly approvedAt?: string;
+  readonly canApprove: boolean;
+  readonly refusal?: { readonly kind: string; readonly forcible: boolean };
+  readonly warnings: readonly string[];
+  /**
+   * The hash the server computed from the plan on disk, right now.
+   *
+   * Shown so a person can see what they are approving. Never accepted back: the
+   * approve use case recomputes it, so a stale or crafted value has nowhere to go.
+   */
+  readonly planHash: string;
+  readonly taskCount: number;
+  /** Digest of the SDD, since neither artifact declares a version. */
+  readonly sddDigest?: string;
+  readonly review?: {
+    readonly verdict: 'PASS' | 'FAIL';
+    readonly independence: string;
+    readonly planHash?: string;
+    readonly coversThisPlan: boolean;
+    readonly findings: ReviewResult['findings'];
+  };
+  readonly degradations: RunState['degradations'];
+}
+
+/**
+ * The gate as the server sees it (§90).
+ *
+ * A read, so the modal can show the verdict, the findings and the hash before
+ * anybody clicks anything — and so the thing it shows is the same computation the
+ * approve action will perform, rather than a second guess at it.
+ */
+export async function describeApprovalGate(
+  deps: RunActionDeps,
+  runId: string,
+): Promise<ActionOutcome<ApprovalGate>> {
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const plan = await loadPlanArtifact(context.store, runId);
+  const review = await loadReview(context.store, runId);
+  const check = checkApproval(state, plan, review);
+
+  if (plan === null) {
+    return failed({
+      code: 'no_plan',
+      message: `${runId} has no plan yet, so there is nothing to approve.`,
+      action: 'Finish planning first.',
+    });
+  }
+
+  const hash = planHash(plan);
+  const sdd = await context.store.readArtifact(runId, 'sdd');
+
+  return done({
+    runId,
+    approved: state.approved,
+    ...(state.approvedAt === undefined ? {} : { approvedAt: state.approvedAt }),
+    canApprove: check.allowed,
+    ...(check.refusal === undefined
+      ? {}
+      : {
+          refusal: {
+            kind: check.refusal.kind,
+            forcible: FORCIBLE_REFUSALS.has(check.refusal.kind),
+          },
+        }),
+    warnings: check.warnings,
+    planHash: hash,
+    taskCount: plan.tasks.length,
+    ...(sdd === null ? {} : { sddDigest: digest(sdd) }),
+    ...(review === null
+      ? {}
+      : {
+          review: {
+            verdict: review.verdict,
+            independence: review.independence,
+            ...(review.planHash === undefined ? {} : { planHash: review.planHash }),
+            // Whether the verdict is about *this* plan. A review of a different
+            // document is not a verdict about the one in hand (§17).
+            coversThisPlan: review.planHash === hash,
+            findings: review.findings,
+          },
+        }),
+    degradations: state.degradations,
+  });
+}
+
+export interface ApproveResult {
+  readonly runId: string;
+  readonly planHash: string;
+  readonly taskCount: number;
+  readonly forced: boolean;
+}
+
+/**
+ * Opens the gate for the plan currently on disk (§17, §90).
+ *
+ * Takes no hash, and that is the load-bearing part. Approval is granted to a
+ * specific plan, so the identity of that plan has to be established by whoever is
+ * granting it — a caller that supplied its own hash could approve a plan nobody
+ * read, which is precisely the failure the gate exists to prevent.
+ */
+export async function approve(
+  deps: RunActionDeps,
+  runId: string,
+  options: { force?: boolean } = {},
+): Promise<ActionOutcome<ApproveResult>> {
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const plan = await loadPlanArtifact(context.store, runId);
+  const review = await loadReview(context.store, runId);
+  const check = checkApproval(state, plan, review);
+
+  if (!check.allowed) {
+    const refusal = check.refusal;
+    const forcible = refusal !== undefined && FORCIBLE_REFUSALS.has(refusal.kind);
+
+    if (!(forcible && options.force === true)) {
+      return failed(explainRefusal(refusal, forcible), check.warnings);
+    }
+  }
+
+  if (plan === null) {
+    return failed({
+      code: 'no_plan',
+      message: 'There is no plan to approve.',
+      action: 'Finish planning first.',
+    });
+  }
+
+  const forced = !check.allowed && options.force === true;
+  await recordApproval(context.store, runId, plan, { forced });
+
+  return done(
+    { runId, planHash: planHash(plan), taskCount: plan.tasks.length, forced },
+    check.warnings,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// reject
+// ---------------------------------------------------------------------------
+
+export async function reject(
+  deps: RunActionDeps,
+  runId: string,
+  reason: string | undefined,
+): Promise<ActionOutcome<{ readonly runId: string }>> {
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  // Two refusals the CLI did not have, and both are about not writing nonsense
+  // into the state file. `updateRun` guards *task* transitions; nothing guarded
+  // the run's own status, so rejecting a finished run used to succeed and record
+  // that its plan had been turned down.
+  if (state.status === 'plan_rejected') {
+    return failed({
+      code: 'already_rejected',
+      message: `${runId} was already rejected.`,
+    });
+  }
+
+  if (state.status === 'completed') {
+    return failed({
+      code: 'run_completed',
+      message: `${runId} has already completed. Its plan cannot be rejected after the fact.`,
+      action: 'Start a new run if the work needs revisiting.',
+    });
+  }
+
+  await context.store.updateRun(runId, (current) => ({ ...current, status: 'plan_rejected' }));
+  await context.store.appendEvent(runId, 'run_rejected', {
+    reason: reason ?? '(no reason given)',
+  });
+
+  return done({ runId });
+}
+
+// ---------------------------------------------------------------------------
+// retry
+// ---------------------------------------------------------------------------
+
+export interface RetryResult {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly attempts: number;
+  readonly forced: boolean;
+}
+
+/**
+ * Puts a finished-badly task back in the queue (§23).
+ *
+ * Explicit and bounded. The scheduler never retries on its own, because an
+ * automatic loop would keep paying for the same failure — so this is the only way
+ * a task gets another attempt, and both refusals below are deliberate friction.
+ */
+export async function retryTask(
+  deps: RunActionDeps,
+  runId: string,
+  taskId: string,
+  options: { force?: boolean } = {},
+): Promise<ActionOutcome<RetryResult>> {
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const entry = state.tasks.find((task) => task.id === taskId);
+  if (entry === undefined) {
+    return failed({
+      code: 'no_such_task',
+      message: `${taskId} has not run in ${runId}.`,
+      action: 'Only a task that has already been attempted can be retried.',
+    });
+  }
+
+  if (entry.state === 'blocked' && options.force !== true) {
+    return failed({
+      code: 'task_blocked',
+      message:
+        `${taskId} is BLOCKED: it stopped because of something the SDD does not answer. ` +
+        'Retrying will not supply that answer, or it will produce a guess.',
+      action: 'Fix the SDD or the plan — or force the retry deliberately.',
+      forcible: true,
+    });
+  }
+
+  const maxAttempts = context.config.global.retry.maxAttempts;
+  if (entry.attempts >= maxAttempts && options.force !== true) {
+    return failed({
+      code: 'attempts_exhausted',
+      message:
+        `${taskId} has already been attempted ${String(entry.attempts)} times ` +
+        `(limit ${String(maxAttempts)}).`,
+      action: 'Force the retry to try again beyond the limit.',
+      forcible: true,
+      detail: { attempts: entry.attempts, maxAttempts },
+    });
+  }
+
+  await context.store.updateRun(runId, (current) => ({
+    ...current,
+    tasks: current.tasks.map((task) =>
+      task.id === taskId ? { ...task, state: 'queued' as const } : task,
+    ),
+  }));
+  await context.store.appendEvent(runId, 'task_requeued', {
+    task: taskId,
+    forced: options.force === true,
+  });
+
+  return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
+}
+
+// ---------------------------------------------------------------------------
+// start
+// ---------------------------------------------------------------------------
+
+export interface StartResult {
+  readonly runId: string;
+  readonly outcome: SchedulerOutcome;
+  readonly taskCount: number;
+}
+
+export interface StartOptions {
+  readonly taskId?: string;
+  readonly onTaskStart?: (taskId: string) => void;
+  readonly onTaskFinish?: BuildContextOptions['onTaskFinish'];
+}
+
+/**
+ * Executes the approved plan (§18) — the long one.
+ *
+ * Long enough that the two adapters treat it differently: the CLI awaits it, and
+ * the server runs it as a background job and answers immediately. That difference
+ * is entirely in the adapters. This function is the same code either way, which is
+ * the whole point — "the UI may only start execution through the same logic
+ * `agent-flow run` uses" is a property of *this* being the only implementation.
+ *
+ * Every gate is checked before a single runner is spawned, and the second one is
+ * the one that matters: approval applies to a specific plan, so a plan changed
+ * after approval has not been through the gate and running it would execute work
+ * no human read.
+ */
+export async function start(
+  deps: RunActionDeps,
+  runId: string,
+  options: StartOptions = {},
+): Promise<ActionOutcome<StartResult>> {
+  const context = await buildExecutionContext({
+    ...deps,
+    ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),
+    ...(options.onTaskFinish === undefined ? {} : { onTaskFinish: options.onTaskFinish }),
+  });
+
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const current = await requireCurrent(context, runId);
+  if (current !== undefined) return failed(current);
+
+  const plan = await loadPlanArtifact(context.store, runId);
+  if (plan === null) {
+    return failed({
+      code: 'no_plan',
+      message: `${runId} has no plan yet.`,
+      action: 'Finish planning before starting implementation.',
+    });
+  }
+
+  if (context.config.global.approval.requiredBeforeImplementation) {
+    if (!state.approved) {
+      return failed({
+        code: 'approval_required',
+        message: `The plan for ${runId} has not been approved.`,
+        action: 'Review and approve the current plan before starting.',
+      });
+    }
+
+    if (!approvalCoversPlan(state, plan)) {
+      return failed({
+        code: 'approval_stale',
+        message:
+          'The plan changed after it was approved. Approval applies to a specific plan, ' +
+          'not to the run.',
+        action: 'Read the current plan and approve it again.',
+        detail: { approvedPlanHash: state.approvedPlanHash, currentPlanHash: planHash(plan) },
+      });
+    }
+  }
+
+  const sdd = await context.store.readArtifact(runId, 'sdd');
+  if (sdd === null) {
+    return failed({
+      code: 'no_sdd',
+      message: `${runId} has no SDD, which the implementation agent requires.`,
+      action: 'Re-run the SDD stage before starting implementation.',
+    });
+  }
+
+  // Resumed from what was persisted, so work already completed is not paid for
+  // twice — a killed terminal, or a closed browser tab, is a normal event.
+  const previous = Object.fromEntries(
+    state.tasks.map((task) => [task.id, task.state as TaskState]),
+  );
+
+  const target =
+    options.taskId === undefined
+      ? undefined
+      : plan.tasks.find((task) => task.id === options.taskId);
+
+  if (options.taskId !== undefined && target === undefined) {
+    return failed({
+      code: 'no_such_task',
+      message: `No task ${options.taskId} in the plan for ${runId}.`,
+    });
+  }
+
+  if (target !== undefined) {
+    // Refused up front so the message names the missing work, rather than letting
+    // the scheduler quietly find nothing to do.
+    const unmet = target.dependencies.filter((dep) => previous[dep] !== 'completed');
+    if (unmet.length > 0) {
+      return failed({
+        code: 'unmet_dependencies',
+        message: `${target.id} depends on ${unmet.join(', ')}, which has not completed.`,
+        action: 'Run the plan in order, or run the dependencies first.',
+        detail: { unmet },
+      });
+    }
+  }
+
+  const outcome = await context.scheduler.run(plan, runId, sdd, previous, {
+    ...(target === undefined ? {} : { only: new Set([target.id]) }),
+  });
+
+  // Only a complete plan may advance the stage. `complete` describes the
+  // invocation; `planComplete` describes the run, and this is the run's record.
+  if (outcome.planComplete) {
+    await context.store.updateRun(runId, (entry) => ({ ...entry, stage: 'implementation' }));
+  }
+
+  return done({
+    runId,
+    outcome,
+    taskCount: target === undefined ? plan.tasks.length : 1,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// revise
+// ---------------------------------------------------------------------------
+
+export interface ReviseResult {
+  readonly runId: string;
+  readonly taskCount: number;
+  readonly reviewVerdict?: 'PASS' | 'FAIL';
+  readonly approvalCleared: boolean;
+}
+
+/**
+ * Re-plans with an extra instruction (§91) — the other long one.
+ *
+ * Invalidates any approval first, and that ordering is not cosmetic: the gate is
+ * granted to a specific plan, so a plan produced after approval has not been
+ * through it. Leaving the flag set for even the duration of the re-plan would give
+ * a window in which unreviewed work could execute.
+ *
+ * The new plan comes out of the existing planning pipeline, writing the same
+ * artifacts through the same StateStore. Nothing here edits `plan.json`.
+ */
+export async function revise(
+  deps: RunActionDeps,
+  runId: string,
+  instruction: string,
+): Promise<ActionOutcome<ReviseResult>> {
+  const trimmed = instruction.trim();
+  if (trimmed.length === 0) {
+    return failed({
+      code: 'invalid_input',
+      message: 'A revision needs an instruction saying what should change.',
+    });
+  }
+
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const notCurrent = await requireCurrent(context, runId);
+  if (notCurrent !== undefined) return failed(notCurrent);
+
+  let approvalCleared = false;
+  if (state.approved) {
+    await context.store.updateRun(runId, (entry) => ({
+      ...entry,
+      approved: false,
+      approvedPlanHash: undefined,
+      approvedAt: undefined,
+      status: 'running',
+    }));
+    await context.store.appendEvent(runId, 'approval_invalidated', { reason: 'revise' });
+    approvalCleared = true;
+  }
+
+  await context.store.appendEvent(runId, 'revision_requested', { instruction: trimmed });
+
+  const request = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
+  const pipeline = buildPlanningPipeline(context);
+
+  const result = await pipeline.run(
+    runId,
+    `${request.trim()}\n\n---\n\nRevision requested by the reviewer:\n${trimmed}`,
+    { from: 'planning' },
+  );
+
+  return done({
+    runId,
+    taskCount: result.plan.tasks.length,
+    ...(result.review === undefined ? {} : { reviewVerdict: result.review.verdict }),
+    approvalCleared,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// shared
+// ---------------------------------------------------------------------------
+
+function noSuchRun(runId: string): ActionError {
+  return {
+    code: 'no_such_run',
+    message: `There is no run ${runId} in this project.`,
+  };
+}
+
+/**
+ * Refuses to act on a run that is not the one in flight.
+ *
+ * The CLI has always operated on `.agent-flow/current-run`, and the write API can
+ * name any run the dashboard can show. Executing or re-planning an older run would
+ * write into a directory the rest of the tool has moved on from — and the person
+ * clicking would have no way to tell that had happened.
+ */
+async function requireCurrent(
+  context: ExecutionContext,
+  runId: string,
+): Promise<ActionError | undefined> {
+  const current = await context.store.currentRunId();
+  if (current === runId) return undefined;
+
+  return {
+    code: 'not_current_run',
+    message:
+      current === null
+        ? `${runId} is not the active run, and this project has none.`
+        : `${runId} is not the active run — ${current} is.`,
+    action: 'Only the active run can be started or re-planned.',
+    ...(current === null ? {} : { detail: { currentRunId: current } }),
+  };
+}
+
+async function loadRun(store: StateStore, runId: string): Promise<RunState | null> {
+  try {
+    return await store.loadRun(runId);
+  } catch {
+    return null;
+  }
+}
+
+async function loadPlanArtifact(store: StateStore, runId: string): Promise<Plan | null> {
+  try {
+    return await loadPlan(store, runId);
+  } catch {
+    // A plan that will not parse is not a plan to approve. Treated as absent so
+    // the refusal names the plan rather than surfacing a Zod error to a browser.
+    return null;
+  }
+}
+
+async function loadReview(store: StateStore, runId: string): Promise<ReviewResult | null> {
+  const raw = await store.readArtifact(runId, 'planReview');
+  if (raw === null) return null;
+
+  try {
+    return ReviewResultSchema.parse(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/** Short digest of an artifact's bytes. Neither the SDD nor the plan has a version. */
+function digest(content: string): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 12);
+}
+
+/** The refusal, phrased for whoever is about to be told no. */
+function explainRefusal(
+  refusal: ApprovalRefusal | undefined,
+  forcible: boolean,
+): ActionError {
+  const base = { forcible };
+
+  switch (refusal?.kind) {
+    case 'no_run':
+      return { ...base, code: 'no_run', message: 'There is no active run.' };
+    case 'no_plan':
+      return {
+        ...base,
+        code: 'no_plan',
+        message: 'This run has no plan yet.',
+        action: 'Finish planning first.',
+      };
+    case 'review_missing':
+      return {
+        ...base,
+        code: 'review_missing',
+        message: 'This plan has not been reviewed.',
+        action: 'Run the review, or approve deliberately over it.',
+      };
+    case 'review_stale':
+      return {
+        ...base,
+        code: 'review_stale',
+        message:
+          'The plan review on file judged a different version of this plan. A verdict ' +
+          'about another document is not a verdict about this one.',
+        action: 'Request a revision, or approve deliberately — which is recorded on the run.',
+      };
+    case 'review_unverifiable':
+      return {
+        ...base,
+        code: 'review_unverifiable',
+        message:
+          'The plan review on file does not say which plan it judged, so nothing ' +
+          'connects it to the plan in hand.',
+        action: 'Request a revision, or approve deliberately — which is recorded on the run.',
+      };
+    case 'review_failed':
+      return {
+        ...base,
+        code: 'review_failed',
+        message: `The plan review returned FAIL with ${String(
+          refusal.review.findings.length,
+        )} finding(s).`,
+        action: 'Request a revision addressing them, or approve over the verdict deliberately.',
+        detail: { findings: refusal.review.findings },
+      };
+    case 'already_approved':
+      return { ...base, code: 'already_approved', message: 'This run is already approved.' };
+    default:
+      return {
+        ...base,
+        code: 'no_run',
+        message: 'Approval is not possible in the current state.',
+      };
+  }
+}
+
+/** Re-exported so an adapter can render a plan hash without recomputing one. */
+export { planHash };

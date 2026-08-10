@@ -1,18 +1,10 @@
 import { RunStageSchema, type RunStage } from '../contracts/index.js';
-import { loadConfig } from '../config/loader.js';
-import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
-import { SystemClock } from '../adapters/clock/system-clock.js';
-import { NodeProcessRunner } from '../adapters/process/node-process-runner.js';
-import { buildRegistry } from '../adapters/runners/registry.js';
-import { StateStore } from '../app/state-store.js';
-import { StageRunner } from '../app/stage-runner.js';
-import { PromptLoader } from '../app/prompt-loader.js';
-import { resolvePromptsDir } from '../app/prompt-paths.js';
-import { PlanningPipeline } from '../app/planning-pipeline.js';
-import { createRunnerFactory } from '../app/runner-factory.js';
-import { recordFallback } from '../app/fallback-audit.js';
+import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
+import { revise } from '../app/run-actions.js';
+import { actionDeps, currentRunId, render } from './approve.js';
+import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
@@ -21,8 +13,6 @@ export interface FeatureOptions {
   readonly cache?: boolean;
   readonly from?: string;
   readonly skipReview?: boolean;
-  /** Extra instruction appended to the feature request by `revise`. */
-  readonly revision?: string;
 }
 
 /**
@@ -36,82 +26,43 @@ export async function runFeatureCommand(
   options: FeatureOptions,
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
-  const fs = new NodeFileSystem();
-  const clock = new SystemClock();
-
   try {
-    const config = await loadConfig({
-      fs,
-      globalConfigPath: globals.globalConfigPath,
-      projectDir: globals.cwd,
-    });
-
-    const processRunner = new NodeProcessRunner();
-    const registry = buildRegistry(config.global, { processRunner, fs });
-    // Fails here rather than three expensive stages in: a role pointing at a
-    // runner that is not registered is a configuration mistake, and finding it
-    // late would waste everything already spent.
-    registry.validateRoles(config.global);
-
     const from = options.from === undefined ? undefined : parseStage(options.from);
 
+    // Assembles the whole graph, and validates the roles while doing it — a role
+    // pointing at a runner that is not registered is a configuration mistake, and
+    // finding it three expensive stages in would waste everything already spent.
+    const context = await buildExecutionContext({
+      ...nodeAdapters(),
+      projectDir: globals.cwd,
+      globalConfigPath: globals.globalConfigPath,
+    });
+
     if (globals.dryRun) {
-      printExecutionPlan(config.global, registry.capabilities(), globals);
+      printExecutionPlan(context.config.global, context.capabilities, globals);
       return ExitCode.OK;
     }
-
-    const store = new StateStore({ fs, clock, projectDir: globals.cwd });
 
     // Resuming must continue the existing run, not start a fresh one. Creating a
     // new run here would leave its artifacts empty and silently re-run the very
     // stages `--from` exists to skip — the opposite of the intent, at full cost.
     const run =
       from === undefined
-        ? await store.createRun(description)
-        : ((await store.loadCurrentRun()) ??
+        ? await context.store.createRun(description)
+        : ((await context.store.loadCurrentRun()) ??
           (() => {
             throw new Error(
               'No run to resume. Start one with `agent-flow feature "<description>"` first.',
             );
           })());
 
-    const stageRunner = new StageRunner({
-      fs,
-      clock,
-      store,
-      config: config.global,
-      capabilities: registry.capabilities(),
-      promptLoader: new PromptLoader({ fs, promptsDir: resolvePromptsDir() }),
-      // Planning stages fall back too, and a run that quietly produced its SDD
-      // on a different provider has to be able to say so.
-      getRunner: createRunnerFactory({
-        registry,
-        config: config.global,
-        onFallback: recordFallback(store),
-      }),
-      projectDir: globals.cwd,
-    });
-
-    const pipeline = new PlanningPipeline({
-      fs,
-      clock,
-      store,
-      stageRunner,
-      processRunner,
-      config,
-      capabilities: registry.capabilities(),
-      providerOf: (id) => registry.providerOf(id),
-      projectDir: globals.cwd,
-    });
+    // The same pipeline the revise use case builds, from the same helper. Two
+    // wirings of one pipeline is how the two stop being identical.
+    const pipeline = buildPlanningPipeline(context);
 
     process.stdout.write(`Run ${run.runId} — ${description}\n\n`);
 
-    const request =
-      options.revision === undefined
-        ? description
-        : `${description}\n\n---\n\nRevision requested by the reviewer:\n${options.revision}`;
-
-    const result = await pipeline.run(run.runId, request, {
+    const result = await pipeline.run(run.runId, description, {
       ...(options.cache === false ? { noCache: true } : {}),
       ...(from === undefined ? {} : { from }),
       ...(options.skipReview === true ? { skipReview: true } : {}),
@@ -165,36 +116,35 @@ export async function runReviseCommand(
   instruction: string,
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
-  const fs = new NodeFileSystem();
-  const clock = new SystemClock();
-  const store = new StateStore({ fs, clock, projectDir: globals.cwd });
-
   try {
-    const state = await store.loadCurrentRun();
-    if (state === null) {
+    const deps = actionDeps(globals);
+    const runId = await currentRunId(deps);
+    if (runId === null) {
       process.stderr.write('No active run to revise.\n');
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    if (state.approved) {
-      await store.updateRun(state.runId, (current) => ({
-        ...current,
-        approved: false,
-        approvedPlanHash: undefined,
-        approvedAt: undefined,
-        status: 'running',
-      }));
-      await store.appendEvent(state.runId, 'approval_invalidated', { reason: 'revise' });
+    const outcome = await revise(deps, runId, instruction);
+
+    if (!outcome.ok) {
+      process.stderr.write(`${render(outcome.error)}\n`);
+      return ExitCode.GATE_NOT_SATISFIED;
+    }
+
+    if (outcome.value.approvalCleared) {
       process.stdout.write('The previous approval no longer applies and has been cleared.\n\n');
     }
 
-    const request = (await store.readArtifact(state.runId, 'request')) ?? state.feature;
-
-    return await runFeatureCommand(
-      request.trim(),
-      { from: 'planning', revision: instruction },
-      globals,
+    process.stdout.write(
+      [
+        `${String(outcome.value.taskCount)} tasks planned.`,
+        '',
+        nextStepAfterPlanning(outcome.value.reviewVerdict),
+        '',
+      ].join('\n'),
     );
+
+    return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);
     process.stderr.write(`${rendered.message}\n`);

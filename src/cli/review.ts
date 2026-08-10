@@ -1,5 +1,6 @@
 import { ReviewResultSchema, type ReviewResult } from '../contracts/index.js';
 import { buildExecutionContext, loadPlan } from '../app/execution-context.js';
+import { nodeAdapters } from './adapters.js';
 import { GitClient, renderChanges } from '../adapters/git/git-client.js';
 import {
   FINAL_REVIEW_STAGE,
@@ -30,6 +31,7 @@ export async function runReviewCommand(
 ): Promise<ExitCodeValue> {
   try {
     const context = await buildExecutionContext({
+      ...nodeAdapters(),
       projectDir: globals.cwd,
       globalConfigPath: globals.globalConfigPath,
     });
