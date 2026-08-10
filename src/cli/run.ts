@@ -90,26 +90,29 @@ export async function runRunCommand(
       return ExitCode.OK;
     }
 
-    const selected =
+    // The plan is never narrowed. Filtering it down to one task used to leave
+    // the scheduler building a graph whose dependencies did not exist, so a
+    // perfectly valid plan failed with `unknown_dependency`. Instead the whole
+    // graph is kept and execution is restricted to the chosen task, which means
+    // dependency rules are still applied by the DAG rather than re-implemented
+    // here.
+    const target =
       options.taskId === undefined
-        ? plan
-        : { ...plan, tasks: plan.tasks.filter((task) => task.id === options.taskId) };
+        ? undefined
+        : plan.tasks.find((task) => task.id === options.taskId);
 
-    if (selected.tasks.length === 0) {
-      process.stderr.write(`No task ${options.taskId ?? ''} in this plan.\n`);
+    if (options.taskId !== undefined && target === undefined) {
+      process.stderr.write(`No task ${options.taskId} in this plan.\n`);
       return ExitCode.EXECUTION_ERROR;
     }
 
-    if (options.taskId !== undefined) {
-      // A single task still respects its dependencies: running one on top of
-      // work that was never done produces a result nobody can trust.
-      const target = selected.tasks[0];
-      const unmet = (target?.dependencies ?? []).filter(
-        (dep) => previous[dep] !== 'completed',
-      );
+    if (target !== undefined) {
+      // Refused up front so the message names the missing work, rather than
+      // letting the scheduler silently find nothing to do.
+      const unmet = target.dependencies.filter((dep) => previous[dep] !== 'completed');
       if (unmet.length > 0) {
         process.stderr.write(
-          `${options.taskId} depends on ${unmet.join(', ')}, which ${
+          `${target.id} depends on ${unmet.join(', ')}, which ${
             unmet.length === 1 ? 'has' : 'have'
           } not completed.\n`,
         );
@@ -117,14 +120,12 @@ export async function runRunCommand(
       }
     }
 
-    process.stdout.write(`Running ${state.runId} — ${String(selected.tasks.length)} task(s)\n\n`);
+    const count = target === undefined ? plan.tasks.length : 1;
+    process.stdout.write(`Running ${state.runId} — ${String(count)} task(s)\n\n`);
 
-    const outcome = await context.scheduler.run(
-      options.taskId === undefined ? plan : selected,
-      state.runId,
-      sdd,
-      previous,
-    );
+    const outcome = await context.scheduler.run(plan, state.runId, sdd, previous, {
+      ...(target === undefined ? {} : { only: new Set([target.id]) }),
+    });
 
     process.stdout.write('\n');
 

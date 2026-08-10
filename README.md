@@ -153,7 +153,7 @@ overwrite each other.
 ## Status
 
 MVP 1 is complete and has been run end to end against Claude Code and Codex.
-597 tests, no CLI invoked by the suite.
+605 tests, no CLI invoked by the suite.
 
 ### Working
 
@@ -194,9 +194,9 @@ Fix order and severity:
 - [x] **V-02 · high** — `FallbackRunner` is never constructed at runtime → **fixed:** wired through `runner-factory`, resolving the fallback role's own model and effort
 - [x] **V-03 · high** — a task interrupted mid-flight stays `running` forever → **fixed:** recovered as `interrupted` and requeued within the attempt limit
 - [ ] **V-04 · high** — test-first plans cannot express an expected failure
-- [ ] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies
-- [ ] **V-06 · medium** — `result.json` records a hardcoded reasoning level
-- [ ] **V-07 · medium** — the discovery cache is reused without invalidation
+- [x] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies → **fixed:** the graph stays whole, execution is restricted
+- [x] **V-06 · medium** — `result.json` records a hardcoded reasoning level → **fixed:** provenance travels from the runner that actually ran
+- [x] **V-07 · medium** — the discovery cache is reused without invalidation → **fixed:** fingerprinted on HEAD, working tree, AGENTS.md and config
 - [ ] **V-08 · medium** — validation commands run twice, once by the agent
 - [ ] **V-10/11/12 · low** — `approvedAt` unset, prompt role metadata unused, stale CLI copy
 

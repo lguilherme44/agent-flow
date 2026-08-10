@@ -156,7 +156,7 @@ não se sobrescrevem.
 ## Estado atual
 
 O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
-597 testes, e a suíte não invoca nenhuma CLI.
+605 testes, e a suíte não invoca nenhuma CLI.
 
 ### Funcionando
 
@@ -197,9 +197,9 @@ Ordem de correção e severidade:
 - [x] **V-02 · alto** — `FallbackRunner` nunca é construído em runtime → **corrigido:** ligado via `runner-factory`, resolvendo model e effort da própria role de fallback
 - [x] **V-03 · alto** — uma task interrompida no meio fica `running` para sempre → **corrigido:** recuperada como `interrupted` e reenfileirada dentro do limite de tentativas
 - [ ] **V-04 · alto** — planos test-first não conseguem expressar falha esperada
-- [ ] **V-05 · médio** — `agent-flow task` monta um grafo sem as dependências
-- [ ] **V-06 · médio** — `result.json` grava um reasoning level hardcoded
-- [ ] **V-07 · médio** — o cache de discovery é reusado sem invalidação
+- [x] **V-05 · médio** — `agent-flow task` monta um grafo sem as dependências → **corrigido:** o grafo fica inteiro, a execução é que é restrita
+- [x] **V-06 · médio** — `result.json` grava um reasoning level hardcoded → **corrigido:** a proveniência vem de quem executou de fato
+- [x] **V-07 · médio** — o cache de discovery é reusado sem invalidação → **corrigido:** fingerprint de HEAD, working tree, AGENTS.md e config
 - [ ] **V-08 · médio** — comandos de validação rodam duas vezes, uma delas pelo agente
 - [ ] **V-10/11/12 · baixo** — `approvedAt` não gravado, metadata de role do prompt sem uso, textos desatualizados
 

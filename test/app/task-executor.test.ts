@@ -11,6 +11,7 @@ import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, ProjectConfigSchema, TaskSchema } from '../../src/contracts/index.js';
 import { runPaths } from '../../src/app/paths.js';
+import { createRunnerFactory } from '../../src/app/runner-factory.js';
 
 const PROJECT = '/repo';
 const PROMPTS = '/pkg/prompts';
@@ -299,5 +300,199 @@ describe('events', () => {
     const types = (await store.readEvents(run.runId)).map((event) => event.type);
     expect(types).toContain('task_started');
     expect(types).toContain('task_finished');
+  });
+});
+
+describe('recorded provenance is what actually ran (V-06 regression)', () => {
+  // Was a defect: `reasoning: 'medium'` was hardcoded at three points and the
+  // model was never recorded at all, so `result.json` described the request
+  // rather than the execution. Anything reading those files — telemetry, a
+  // future dashboard, a person debugging — would have been quietly wrong.
+
+  it('records the effort the role actually resolved to', async () => {
+    // executor.complex is configured at `high`; the old code wrote `medium`.
+    const { executor, runner, run } = await harness();
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ complexity: 'complex', risk: 'high' }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(runner.lastCall?.reasoning).toBe('high');
+    expect(result.reasoning).toBe('high');
+  });
+
+  it('records the effort for a trivial task too', async () => {
+    const { executor, runner, run } = await harness();
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ complexity: 'trivial', risk: 'low' }),
+      run.runId,
+      'SDD',
+    );
+    expect(result.reasoning).toBe('low');
+  });
+
+  it('records a clamp when the runner could not reach the configured level', async () => {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const narrow = { ...CAPS, supportedReasoningLevels: ['low', 'medium'] } as const;
+    const runner = new FakeAgentRunner('claude', narrow);
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f');
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: globalConfig,
+        capabilities: { claude: narrow },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner: new FakeProcessRunner().always({ exitCode: 0 }),
+      config: { global: globalConfig },
+      projectDir: PROJECT,
+    });
+
+    runner.pushText(COMPLETED);
+    const result = await executor.execute(
+      task({ complexity: 'complex', risk: 'high' }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(result.reasoning).toBe('medium');
+    expect(result.reasoningClamped).toBe(true);
+  });
+
+  it('records the model when the role configures one', async () => {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude', CAPS);
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const withModel = GlobalConfigSchema.parse({
+      ...globalConfig,
+      roles: {
+        ...globalConfig.roles,
+        executors: {
+          ...globalConfig.roles.executors,
+          normal: { runner: 'claude', model: 'sonnet', effort: 'medium' },
+        },
+      },
+    });
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f');
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: withModel,
+        capabilities: { claude: CAPS },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner: new FakeProcessRunner().always({ exitCode: 0 }),
+      config: { global: withModel },
+      projectDir: PROJECT,
+    });
+
+    runner.pushText(COMPLETED);
+    const result = await executor.execute(task(), run.runId, 'SDD');
+
+    expect(result.model).toBe('sonnet');
+  });
+
+  it('records the substitution when a fallback ran the work', async () => {
+    // The case the request could never describe: the role asked for one runner
+    // and a different one did the job.
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const claude = new FakeAgentRunner('claude', CAPS);
+    const codex = new FakeAgentRunner('codex', CAPS);
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const withFallback = GlobalConfigSchema.parse({
+      ...globalConfig,
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      fallback: {
+        enabled: true,
+        roles: { 'executor.normal': { runner: 'codex', effort: 'high' } },
+      },
+    });
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f');
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: withFallback,
+        capabilities: { claude: CAPS, codex: CAPS },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: createRunnerFactory({
+          registry: {
+            ids: () => ['claude', 'codex'],
+            get: (id) => (id === 'claude' ? claude : codex),
+            has: () => true,
+            capabilities: () => ({ claude: CAPS, codex: CAPS }),
+            health: async () => ({}),
+            validateRoles: () => undefined,
+          },
+          config: withFallback,
+        }),
+        projectDir: PROJECT,
+      }),
+      processRunner: new FakeProcessRunner().always({ exitCode: 0 }),
+      config: { global: withFallback },
+      projectDir: PROJECT,
+    });
+
+    claude.pushFailure('quota_exceeded');
+    codex.pushText(COMPLETED);
+
+    const result = await executor.execute(task(), run.runId, 'SDD');
+
+    expect(result.runner).toBe('codex');
+    expect(result.reasoning).toBe('high');
+    expect(result.fallback).toEqual({ from: 'claude', errorCode: 'quota_exceeded' });
   });
 });

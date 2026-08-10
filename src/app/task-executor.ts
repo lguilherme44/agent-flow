@@ -48,6 +48,15 @@ export class TaskExecutor {
 
     let text: string;
     let runner = 'unknown';
+    // What actually ran. Populated from the stage result rather than from the
+    // resolution, because a fallback may have sent the work elsewhere.
+    let execution: {
+      runner: string;
+      model?: string;
+      reasoning: TaskResult['reasoning'];
+      reasoningClamped: boolean;
+      fallback?: { from: string; errorCode: NonNullable<TaskResult['errorCode']> };
+    } = { runner: 'unknown', reasoning: 'medium', reasoningClamped: false };
 
     try {
       const result = await stageRunner.run(
@@ -66,13 +75,13 @@ export class TaskExecutor {
       );
       text = result.text;
       runner = result.runner;
+      execution = result.execution;
     } catch (error) {
       const failure = error instanceof StageFailure ? error : undefined;
       return this.persist(runId, {
         task: task.id,
         status: 'failed',
-        runner,
-        reasoning: 'medium',
+        ...provenanceOf(execution, runner),
         startedAt,
         finishedAt: clock.now(),
         validation: { passed: false, commands: [] },
@@ -89,8 +98,7 @@ export class TaskExecutor {
       return this.persist(runId, {
         task: task.id,
         status: 'blocked',
-        runner,
-        reasoning: 'medium',
+        ...provenanceOf(execution, runner),
         startedAt,
         finishedAt: clock.now(),
         filesChanged: report.filesChanged,
@@ -118,8 +126,7 @@ export class TaskExecutor {
       return this.persist(runId, {
         task: task.id,
         status: 'review_required',
-        runner,
-        reasoning: 'medium',
+        ...provenanceOf(execution, runner),
         startedAt,
         finishedAt: clock.now(),
         filesChanged: report.filesChanged,
@@ -149,8 +156,7 @@ export class TaskExecutor {
     return this.persist(runId, {
       task: task.id,
       status,
-      runner,
-      reasoning: 'medium',
+      ...provenanceOf(execution, runner),
       startedAt,
       finishedAt: clock.now(),
       filesChanged: report.filesChanged,
@@ -218,5 +224,31 @@ export function parseResultBlock(text: string): ParsedReport {
     filesChanged: section('FILES CHANGED'),
     deviations: section('DEVIATIONS'),
     notes: section('NOTES'),
+  };
+}
+
+/**
+ * Flattens the recorded execution into the shape `TaskResult` persists.
+ *
+ * Nothing here is a default standing in for the truth: when the stage never
+ * ran — the runner failed before producing anything — the fields describe that
+ * absence rather than inventing a plausible value.
+ */
+function provenanceOf(
+  execution: {
+    runner: string;
+    model?: string;
+    reasoning: TaskResult['reasoning'];
+    reasoningClamped: boolean;
+    fallback?: { from: string; errorCode: NonNullable<TaskResult['errorCode']> };
+  },
+  fallbackRunner: string,
+): Pick<TaskResult, 'runner' | 'model' | 'reasoning' | 'reasoningClamped' | 'fallback'> {
+  return {
+    runner: execution.runner === 'unknown' ? fallbackRunner : execution.runner,
+    ...(execution.model === undefined ? {} : { model: execution.model }),
+    reasoning: execution.reasoning,
+    reasoningClamped: execution.reasoningClamped,
+    ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
   };
 }

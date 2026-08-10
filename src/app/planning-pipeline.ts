@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { stringify as toYaml } from 'yaml';
 import type { EffectiveConfig, Plan, ReviewResult, RunStage } from '../contracts/index.js';
 import { PlanSchema } from '../contracts/index.js';
-import type { Clock, FileSystem } from '../ports/index.js';
+import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import type { StageRunner } from './stage-runner.js';
 import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -22,6 +22,13 @@ import {
 } from './stages/definitions.js';
 import { checkPlan } from './stages/planning-checks.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
+import {
+  computeFingerprint,
+  fingerprintDifferences,
+  fingerprintsMatch,
+  readFingerprint,
+  writeFingerprint,
+} from './discovery-cache.js';
 
 /** Ordered stages of the planning half of the workflow. */
 export const PLANNING_STAGES: readonly RunStage[] = [
@@ -35,6 +42,8 @@ export const PLANNING_STAGES: readonly RunStage[] = [
 export interface PlanningPipelineOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
+  /** Used to fingerprint the repository for cache invalidation. */
+  readonly processRunner: ProcessRunner;
   readonly store: StateStore;
   readonly stageRunner: StageRunner;
   readonly config: EffectiveConfig;
@@ -49,7 +58,10 @@ export interface PipelineOptions {
   readonly from?: RunStage;
   /** Stops after planning, without the automated review. */
   readonly skipReview?: boolean;
-  readonly onProgress?: (stage: RunStage, status: 'started' | 'completed' | 'cached') => void;
+  readonly onProgress?: (
+    stage: RunStage,
+    status: 'started' | 'completed' | 'cached' | 'stale',
+  ) => void;
 }
 
 export interface PipelineResult {
@@ -219,14 +231,35 @@ export class PlanningPipeline {
       stagesRun: RunStage[];
     },
   ): Promise<string> {
-    const { fs } = this.options;
-    const cachePath = agentFlowPaths(this.options.projectDir).architectureCache;
+    const { fs, projectDir } = this.options;
+    const cachePath = agentFlowPaths(projectDir).architectureCache;
 
     // The repository map does not change because a different feature was
-    // requested, so reusing it saves one expensive call per feature.
+    // requested, so reusing it saves one expensive call per feature. It very
+    // much does change when the repository does — and the cache used to be
+    // reused on existence alone, so a rewritten codebase kept being planned
+    // against a map of what it used to be.
+    const fingerprint = await computeFingerprint({
+      fs,
+      processRunner: this.options.processRunner,
+      projectDir,
+      projectConfig: context.projectConfig,
+    });
+
     if (context.useCache && (await fs.exists(cachePath))) {
-      context.onProgress?.('discovery', 'cached');
-      return fs.readFile(cachePath);
+      const cached = await readFingerprint(fs, projectDir);
+
+      if (cached !== null && fingerprintsMatch(cached, fingerprint)) {
+        context.onProgress?.('discovery', 'cached');
+        return fs.readFile(cachePath);
+      }
+
+      context.onProgress?.('discovery', 'stale');
+      if (cached !== null) {
+        await this.options.store.appendEvent(runId, 'discovery_cache_invalidated', {
+          changed: fingerprintDifferences(cached, fingerprint),
+        });
+      }
     }
 
     context.onProgress?.('discovery', 'started');
@@ -236,8 +269,9 @@ export class PlanningPipeline {
       agentsMd: context.agentsMd,
     });
 
-    await fs.mkdirp(agentFlowPaths(this.options.projectDir).cacheDir);
+    await fs.mkdirp(agentFlowPaths(projectDir).cacheDir);
     await fs.writeFileAtomic(cachePath, result.text);
+    await writeFingerprint(fs, projectDir, fingerprint);
 
     context.stagesRun.push('discovery');
     context.onProgress?.('discovery', 'completed');

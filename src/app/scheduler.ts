@@ -20,6 +20,19 @@ export interface SchedulerOptions {
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
 
+export interface RunOptions {
+  /**
+   * Restricts execution to these tasks, without narrowing the graph.
+   *
+   * `agent-flow task TASK-004` used to filter the plan down to one task and
+   * hand that to the scheduler, which then built a DAG over a plan whose
+   * dependencies did not exist — `unknown_dependency`, on a plan that was
+   * perfectly valid. The graph stays whole so dependency rules are still
+   * applied by the DAG; only the set of tasks allowed to *start* is narrowed.
+   */
+  readonly only?: ReadonlySet<string>;
+}
+
 export interface SchedulerOutcome {
   readonly states: Record<string, TaskState>;
   readonly results: TaskResult[];
@@ -53,6 +66,7 @@ export class Scheduler {
     runId: string,
     sdd: string,
     initialStates: Record<string, TaskState> = {},
+    options: RunOptions = {},
   ): Promise<SchedulerOutcome> {
     const dag = buildDag(
       plan.tasks.map((task) => ({ id: task.id, dependencies: task.dependencies })),
@@ -73,7 +87,11 @@ export class Scheduler {
     let haltedBy: string | undefined;
 
     while (haltedBy === undefined) {
-      const ready = readyTasks(dag, states).filter((id) => states[id] !== 'completed');
+      const ready = readyTasks(dag, states)
+        .filter((id) => states[id] !== 'completed')
+        // Dependency rules were already applied against the complete graph;
+        // this only decides which of the eligible tasks we are willing to run.
+        .filter((id) => options.only?.has(id) ?? true);
       if (ready.length === 0) break;
 
       const batch = ready.slice(0, concurrency);

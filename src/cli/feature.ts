@@ -45,7 +45,8 @@ export async function runFeatureCommand(
       projectDir: globals.cwd,
     });
 
-    const registry = buildRegistry(config.global, { processRunner: new NodeProcessRunner(), fs });
+    const processRunner = new NodeProcessRunner();
+    const registry = buildRegistry(config.global, { processRunner, fs });
     // Fails here rather than three expensive stages in: a role pointing at a
     // runner that is not registered is a configuration mistake, and finding it
     // late would waste everything already spent.
@@ -89,6 +90,7 @@ export async function runFeatureCommand(
       clock,
       store,
       stageRunner,
+      processRunner,
       config,
       capabilities: registry.capabilities(),
       projectDir: globals.cwd,

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
+import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { PlanningPipeline } from '../../src/app/planning-pipeline.js';
 import { StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
@@ -9,6 +10,7 @@ import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, ReviewResultSchema } from '../../src/contracts/index.js';
 import { reviewIndependence } from '../../src/app/stages/plan-review.js';
 import { runPaths } from '../../src/app/paths.js';
+import { computeFingerprint, writeFingerprint } from '../../src/app/discovery-cache.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -65,6 +67,7 @@ const goodPlan = {
 async function harness(reviewerRunner: string) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
+  const processRunner = new FakeProcessRunner().always({ exitCode: 1 });
 
   for (const file of readdirSync(REAL_PROMPTS)) {
     if (file.endsWith('.md')) {
@@ -97,13 +100,26 @@ async function harness(reviewerRunner: string) {
     clock,
     store,
     stageRunner,
+    processRunner,
     config: { global },
     capabilities: { claude: CAPS, codex: CAPS },
     projectDir: PROJECT,
   });
 
   // Everything up to planning is pre-seeded; these tests are about the review.
+  // The cache needs its fingerprint too — a map with nothing recording what it
+  // describes is treated as untrusted and re-run.
   fs.seed(`${PROJECT}/.agent-flow/cache/architecture.md`, '# Architecture');
+  await writeFingerprint(
+    fs,
+    PROJECT,
+    await computeFingerprint({
+      fs,
+      processRunner,
+      projectDir: PROJECT,
+      projectConfig: 'No project configuration found. Infer conventions from the repository itself.',
+    }),
+  );
   await store.writeArtifact(run.runId, 'architectureImpact', '# Impact');
   await store.writeArtifact(run.runId, 'sdd', SDD_TEXT);
 

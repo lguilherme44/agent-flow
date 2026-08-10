@@ -151,6 +151,7 @@ async function world(options: { globalConfig?: ReturnType<typeof config> } = {})
     clock,
     store,
     stageRunner,
+    processRunner,
     config: { global, project: projectConfig },
     capabilities: { claude: CAPS, codex: CAPS },
     projectDir: PROJECT,

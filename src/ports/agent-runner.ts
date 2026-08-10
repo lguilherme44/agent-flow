@@ -43,6 +43,23 @@ export interface AgentRunInput {
   readonly additionalReadPaths?: readonly string[];
 }
 
+/**
+ * What actually ran, when it differs from what was asked for.
+ *
+ * Set by a decorator that redirected the work — today, the fallback runner. The
+ * caller resolved a role and knows what it *requested*; only the layer that
+ * substituted knows what was *executed*, and a result file recording the former
+ * as though it were the latter is a lie an audit trail cannot survive.
+ */
+export interface RunProvenance {
+  readonly runner: string;
+  readonly model?: string;
+  readonly reasoning: ReasoningLevel;
+  readonly reasoningClamped: boolean;
+  /** The runner this replaced, and why. */
+  readonly substitutedFor: { readonly runner: string; readonly errorCode: RunnerErrorCode };
+}
+
 export interface AgentRunSuccess {
   readonly ok: true;
   /** Raw text output, always present even when `json` is populated. */
@@ -50,6 +67,8 @@ export interface AgentRunSuccess {
   /** Populated when an output schema was requested and parsing succeeded. */
   readonly json?: unknown;
   readonly durationMs: number;
+  /** Absent when the run happened on the runner that was asked. */
+  readonly provenance?: RunProvenance;
 }
 
 export interface AgentRunFailure {

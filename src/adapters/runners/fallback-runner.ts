@@ -114,7 +114,7 @@ export class FallbackRunner implements AgentRunner {
     // The replacement runs on its own terms: its model, its effort, its
     // timeout. Only the work itself — the prompt, the permissions, the working
     // directory — carries over.
-    return secondary.run({
+    const result = await secondary.run({
       ...input,
       reasoning: secondaryConfig.reasoning,
       timeoutSeconds: secondaryConfig.timeoutSeconds,
@@ -125,5 +125,21 @@ export class FallbackRunner implements AgentRunner {
         ? { model: undefined }
         : { model: secondaryConfig.model }),
     });
+
+    if (!result.ok) return result;
+
+    // The caller resolved a role and knows what it asked for; only this layer
+    // knows what ran. Attaching it here is what lets `result.json` record the
+    // truth rather than the intention.
+    return {
+      ...result,
+      provenance: {
+        runner: secondary.id,
+        ...(secondaryConfig.model === undefined ? {} : { model: secondaryConfig.model }),
+        reasoning: secondaryConfig.reasoning,
+        reasoningClamped: secondaryConfig.reasoningClamped,
+        substitutedFor: { runner: primary.id, errorCode },
+      },
+    };
   }
 }

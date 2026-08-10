@@ -2,12 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
+import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { PlanningPipeline } from '../../src/app/planning-pipeline.js';
 import { StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../../src/contracts/index.js';
 import { agentFlowPaths, runPaths } from '../../src/app/paths.js';
+import { computeFingerprint, writeFingerprint } from '../../src/app/discovery-cache.js';
+import { stringify as toYaml } from 'yaml';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -124,9 +127,10 @@ const goodPlan = {
   ],
 };
 
-async function harness() {
+async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
+  const processRunner = options.processRunner ?? new FakeProcessRunner().always({ exitCode: 1 });
   const runner = new FakeAgentRunner('claude');
 
   seedRealPrompts(fs);
@@ -150,21 +154,46 @@ async function harness() {
     clock,
     store,
     stageRunner,
-    config: {
-      global: globalConfig,
-      project: ProjectConfigSchema.parse({
-        project: { name: 'demo', type: 'node' },
-        commands: { test: 'npm test' },
-      }),
-    },
+    processRunner,
+    config: { global: globalConfig, project: PROJECT_CONFIG },
     capabilities: CAPABILITIES,
     projectDir: PROJECT,
   });
 
-  return { fs, clock, store, run, runner, pipeline };
+  return { fs, clock, store, run, runner, pipeline, processRunner };
 }
 
+const PROJECT_CONFIG = ProjectConfigSchema.parse({
+  project: { name: 'demo', type: 'node' },
+  commands: { test: 'npm test' },
+});
+
 const PASSING_REVIEW = { verdict: 'PASS', summary: 'Sound plan.', findings: [] };
+
+/**
+ * Seeds a cached map together with a fingerprint that matches the current
+ * repository. Writing only the file leaves a cache that cannot be trusted, and
+ * the pipeline correctly refuses it — see the orphaned-cache test below.
+ */
+async function seedValidCache(
+  fs: InMemoryFileSystem,
+  processRunner: FakeProcessRunner,
+  content: string,
+): Promise<void> {
+  fs.seed(agentFlowPaths(PROJECT).architectureCache, content);
+  await writeFingerprint(
+    fs,
+    PROJECT,
+    await computeFingerprint({
+      fs,
+      processRunner,
+      projectDir: PROJECT,
+      // Must match what the pipeline renders, or the fingerprints differ and
+      // the cache is correctly treated as stale.
+      projectConfig: toYaml(PROJECT_CONFIG).trim(),
+    }),
+  );
+}
 
 /** Queues one good response per stage, in pipeline order. */
 function scriptHappyPath(runner: FakeAgentRunner): void {
@@ -248,8 +277,8 @@ describe('happy path', () => {
 describe('discovery cache (R-07)', () => {
   it('skips discovery when a cached map exists', async () => {
     // One expensive call saved per feature.
-    const { pipeline, run, runner, fs } = await harness();
-    fs.seed(agentFlowPaths(PROJECT).architectureCache, '# Architecture\n\nCached.');
+    const { pipeline, run, runner, fs, processRunner } = await harness();
+    await seedValidCache(fs, processRunner, '# Architecture\n\nCached.');
 
     runner.pushText('# Impact');
     runner.pushText(SDD_TEXT);
@@ -292,8 +321,8 @@ describe('checkpointing (R-08)', () => {
   });
 
   it('resumes from a stage without redoing the earlier ones', async () => {
-    const { pipeline, run, runner, store, fs } = await harness();
-    fs.seed(agentFlowPaths(PROJECT).architectureCache, '# Architecture');
+    const { pipeline, run, runner, store, fs, processRunner } = await harness();
+    await seedValidCache(fs, processRunner, '# Architecture');
     await store.writeArtifact(run.runId, 'architectureImpact', '# Impact');
     await store.writeArtifact(run.runId, 'sdd', SDD_TEXT);
 
@@ -388,5 +417,128 @@ describe('AGENTS.md', () => {
 
     await pipeline.run(run.runId, 'x');
     expect(runner.calls[0]?.prompt).toContain('No AGENTS.md');
+  });
+});
+
+describe('the discovery cache is invalidated when the repository changes (V-07 regression)', () => {
+  // Was a defect: the cache decision was `exists()`. Nothing about HEAD, the
+  // working tree, AGENTS.md or the project config participated, so a repository
+  // could be rewritten and every later feature would still be planned against a
+  // map of what it used to be. That failure is silent and expensive — the SDD
+  // and the plan look reasonable and describe a codebase that is gone.
+
+  /** Drives `git rev-parse` / `git status` for the fingerprint. */
+  const gitReturning = (head: string, status = '') =>
+    new FakeProcessRunner().always((spawn) =>
+      spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: head } : { exitCode: 0, stdout: status },
+    );
+
+  it('reuses the cache when nothing relevant changed', async () => {
+    const { pipeline, run, runner, fs } = await harness({ processRunner: gitReturning('abc123') });
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'first feature');
+
+    const callsAfterFirst = runner.calls.length;
+    expect(await fs.exists(agentFlowPaths(PROJECT).architectureCache)).toBe(true);
+
+    // Second feature, same repository state: discovery must not run again.
+    runner.pushText('# Impact').pushText(SDD_TEXT).pushJson(goodPlan).pushJson(PASSING_REVIEW);
+    const second = await pipeline.run(run.runId, 'second feature');
+
+    expect(second.stagesRun).not.toContain('discovery');
+    expect(runner.calls.length - callsAfterFirst).toBe(4);
+  });
+
+  it('re-runs discovery when HEAD moved', async () => {
+    const proc = gitReturning('abc123');
+    const { pipeline, run, runner } = await harness({ processRunner: proc });
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'first feature');
+
+    // A commit landed.
+    proc.always((spawn) =>
+      spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: 'def456' } : { exitCode: 0, stdout: '' },
+    );
+
+    scriptHappyPath(runner);
+    const second = await pipeline.run(run.runId, 'second feature');
+
+    expect(second.stagesRun).toContain('discovery');
+  });
+
+  it('re-runs discovery when tracked files were modified', async () => {
+    const proc = gitReturning('abc123');
+    const { pipeline, run, runner } = await harness({ processRunner: proc });
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'first feature');
+
+    proc.always((spawn) =>
+      spawn.args[0] === 'rev-parse'
+        ? { exitCode: 0, stdout: 'abc123' }
+        : { exitCode: 0, stdout: ' M src/notes.js' },
+    );
+
+    scriptHappyPath(runner);
+    expect((await pipeline.run(run.runId, 'second')).stagesRun).toContain('discovery');
+  });
+
+  it('re-runs discovery when AGENTS.md changed', async () => {
+    // The standing rules shape what discovery reports, so a map built before
+    // them is answering a different question.
+    const { pipeline, run, runner, fs } = await harness({ processRunner: gitReturning('abc123') });
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'first feature');
+
+    fs.seed(`${PROJECT}/AGENTS.md`, '# Rules\n\nControllers stay thin.');
+
+    scriptHappyPath(runner);
+    expect((await pipeline.run(run.runId, 'second')).stagesRun).toContain('discovery');
+  });
+
+  it('records what invalidated the cache', async () => {
+    const proc = gitReturning('abc123');
+    const { pipeline, run, runner, store } = await harness({ processRunner: proc });
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'first feature');
+
+    proc.always((spawn) =>
+      spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: 'zzz' } : { exitCode: 0, stdout: '' },
+    );
+
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'second');
+
+    const events = await store.readEvents(run.runId);
+    const invalidated = events.find((e) => e.type === 'discovery_cache_invalidated');
+
+    expect(invalidated).toBeDefined();
+    expect(String(invalidated?.detail['changed'])).toContain('commit');
+  });
+
+  it('still honours --no-cache regardless of the fingerprint', async () => {
+    const { pipeline, run, runner } = await harness({ processRunner: gitReturning('abc123') });
+    scriptHappyPath(runner);
+    await pipeline.run(run.runId, 'first feature');
+
+    scriptHappyPath(runner);
+    const second = await pipeline.run(run.runId, 'second', { noCache: true });
+
+    expect(second.stagesRun).toContain('discovery');
+  });
+});
+
+describe('a cache with no fingerprint is not trusted', () => {
+  it('re-runs discovery when the map exists but its fingerprint does not', async () => {
+    // Surfaced by the fix itself: two older tests seeded the cache file alone
+    // and started failing. That is the right behaviour — a map with nothing
+    // recording what it describes cannot be validated, so it is treated the
+    // same as having no cache at all rather than being used on faith.
+    const { pipeline, run, runner, fs } = await harness();
+    fs.seed(agentFlowPaths(PROJECT).architectureCache, '# Architecture\n\nUnverifiable.');
+
+    scriptHappyPath(runner);
+    const result = await pipeline.run(run.runId, 'a feature');
+
+    expect(result.stagesRun).toContain('discovery');
   });
 });

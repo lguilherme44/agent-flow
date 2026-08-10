@@ -3,6 +3,7 @@ import {
   formatValidationError,
   toJsonSchema,
   type GlobalConfig,
+  type ReasoningLevel,
   type RunStage,
   type RunnerErrorCode,
   type WorkflowRole,
@@ -64,6 +65,21 @@ export interface StageResult {
   readonly data?: unknown;
   readonly runner: string;
   readonly attempts: number;
+  /**
+   * What actually ran.
+   *
+   * The resolved role says what was *requested*; a fallback may have sent the
+   * work somewhere else, on a different model and effort. Recording the request
+   * as though it were the execution makes every downstream artifact — result
+   * files, telemetry, a future dashboard — quietly wrong.
+   */
+  readonly execution: {
+    readonly runner: string;
+    readonly model?: string;
+    readonly reasoning: ReasoningLevel;
+    readonly reasoningClamped: boolean;
+    readonly fallback?: { readonly from: string; readonly errorCode: RunnerErrorCode };
+  };
 }
 
 export interface StageRunnerOptions {
@@ -195,13 +211,37 @@ export class StageRunner {
           finishedAt: clock.now(),
         });
 
+        // Prefer what the runner reported over what was resolved: they differ
+        // exactly when a fallback fired, which is the case worth recording.
+        const provenance = result.provenance;
+
         return {
           text: result.text,
           ...(stage.outputSchema === undefined
             ? {}
             : { data: stage.outputSchema.parse(result.json ?? safeJson(result.text)) }),
-          runner: resolved.runner,
+          runner: provenance?.runner ?? resolved.runner,
           attempts: attempt,
+          execution: {
+            runner: provenance?.runner ?? resolved.runner,
+            ...(provenance !== undefined
+              ? provenance.model === undefined
+                ? {}
+                : { model: provenance.model }
+              : resolved.model === undefined
+                ? {}
+                : { model: resolved.model }),
+            reasoning: provenance?.reasoning ?? resolved.reasoning,
+            reasoningClamped: provenance?.reasoningClamped ?? resolved.reasoningClamped,
+            ...(provenance === undefined
+              ? {}
+              : {
+                  fallback: {
+                    from: provenance.substitutedFor.runner,
+                    errorCode: provenance.substitutedFor.errorCode,
+                  },
+                }),
+          },
         };
       }
 
