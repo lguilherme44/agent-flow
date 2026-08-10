@@ -60,6 +60,37 @@ export function formatWhen(iso: string | undefined, now = new Date()): string {
 }
 
 /**
+ * The same instant, for a dense table: "Today 19:34", "Aug 8 09:15".
+ *
+ * Not a second date format for its own sake. `formatWhen` spells out "Today at
+ * 19:34:00" because the run header has room for it and a run in flight is worth
+ * knowing to the second. A history column has neither: at the width a list can
+ * spare, "Yesterday at 14:02:1…" is a timestamp truncated mid-second, which
+ * reads as broken rather than as abbreviated.
+ */
+export function formatWhenCompact(iso: string | undefined, now = new Date()): string {
+  if (iso === undefined) return '—';
+
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  const time = date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  if (date.toDateString() === now.toDateString()) return `Today ${time}`;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+
+  const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${day} ${time}`;
+}
+
+/**
  * Acronyms this project uses as words, and that title-casing would mangle.
  *
  * `sdd` is a stage name everywhere else in the tool — in the CLI, in the file on

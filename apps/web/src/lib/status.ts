@@ -105,11 +105,27 @@ export function runTone(status: RunStatus): Tone {
   }
 }
 
-/** Short, upper-case, and the same words the CLI prints. */
+/** Short, upper-case, and derived from the status rather than chosen per screen. */
 export function taskLabel(state: TaskState): string {
   return state.replace(/_/g, ' ').toUpperCase();
 }
 
+/**
+ * One label per run status, used everywhere a run status is written.
+ *
+ * Mostly mechanical, with one deliberate exception: `waiting_for_approval` reads
+ * "WAITING APPROVAL". Spelled out it is twenty characters, which is wider than
+ * any status column a dense list can afford — and a chip reading "WAITING FOR…"
+ * is not a status, it is a status you have to hover to learn. Dropping the
+ * preposition is the smallest change that keeps the whole word visible, and it is
+ * made here rather than in the table so the run header, the runs list, the
+ * projects list and the filter menu cannot end up with three vocabularies for
+ * one state.
+ */
+const RUN_LABELS: Partial<Record<RunStatus, string>> = {
+  waiting_for_approval: 'WAITING APPROVAL',
+};
+
 export function runLabel(status: RunStatus): string {
-  return status.replace(/_/g, ' ').toUpperCase();
+  return RUN_LABELS[status] ?? status.replace(/_/g, ' ').toUpperCase();
 }

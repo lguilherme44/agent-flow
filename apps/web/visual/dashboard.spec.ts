@@ -77,6 +77,11 @@ test.describe('run detail', () => {
     await page.goto('/dashboard');
     await settle(page);
 
+    // The header, the metric strip and the execution summary all count the same
+    // tasks. They read from different responses, so a fixture — or a server —
+    // that let them drift would put two different truths on one screen.
+    await expect(page.getByText('3 / 9')).toHaveCount(2);
+
     await expect(page).toHaveScreenshot('run-detail.png', { fullPage: false });
   });
 
@@ -126,6 +131,78 @@ test.describe('run detail', () => {
     await expect(page.getByText('Recurrence Repository')).toHaveCount(width >= 1200 ? 2 : 1);
   });
 
+  test('the drawer traps focus, closes on the overlay, and hands focus back', async ({
+    page,
+  }, info) => {
+    // UI-P01, and only meaningful where layout and hit testing are real. Radix
+    // supplies the trap; the focus *return* is ours, because a modal Radix dialog
+    // restores focus to a `Trigger` and this drawer opens from a table row.
+    const width = info.project.use.viewport?.width ?? 0;
+    test.skip(width >= 1200, 'the drawer only exists below 1200');
+
+    await stubApi(page);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    const row = page.getByRole('row').filter({ hasText: 'Recurrence Repository' });
+    await row.scrollIntoViewIfNeeded();
+    await row.click();
+
+    const drawer = page.getByRole('dialog', { name: 'Task inspector' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer).toHaveAttribute('aria-modal', 'true');
+
+    // Tab all the way round the panel. Every stop has to be inside it: the table
+    // is still on screen behind the overlay, and to a keyboard it is still there.
+    for (let stop = 0; stop < 12; stop += 1) {
+      await page.keyboard.press('Tab');
+      const inside = await drawer.evaluate((panel) =>
+        panel.contains(document.activeElement),
+      );
+      expect(inside, `focus left the drawer after ${String(stop + 1)} tabs`).toBe(true);
+    }
+
+    // The overlay is the region outside the panel. Clicking the top-left corner
+    // of the viewport lands on it at every width the drawer exists at.
+    await page.mouse.click(8, 8);
+    await expect(drawer).toHaveCount(0);
+
+    // And focus is back on the row, not on the body.
+    await expect(row).toBeFocused();
+  });
+
+  test('the pipeline says when a stage is scrolled out of sight', async ({ page }, info) => {
+    // UI-P02. Nine stages fit on one line at 1440 and do not below it, so the
+    // affordance has to appear at exactly the widths where content is hidden —
+    // which is why it is measured rather than driven by a breakpoint.
+    await stubApi(page);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    const pipeline = page.getByRole('list', { name: 'Pipeline' });
+    const hidden = await pipeline.evaluate((row) => row.scrollWidth - row.clientWidth);
+    const width = info.project.use.viewport?.width ?? 0;
+
+    // The fade is the sibling gradient, identified by what it is for rather than
+    // by a test id: it is the only absolutely-positioned decoration in the panel.
+    const fades = page.locator('[aria-label="Pipeline"] ~ span[aria-hidden="true"]');
+
+    if (hidden <= 1) {
+      expect(width, 'a row that fits should only fit at the full layout width').toBe(1440);
+      await expect(fades).toHaveCount(0);
+      return;
+    }
+
+    // At the start: one fade, on the right, because that is where the content is.
+    await expect(fades).toHaveCount(1);
+
+    await pipeline.evaluate((row) => {
+      row.scrollLeft = row.scrollWidth;
+    });
+    // At the end: one fade, on the left. Never a fade pointing at nothing.
+    await expect(fades).toHaveCount(1);
+  });
+
   test('no region scrolls the page sideways', async ({ page }) => {
     // The failure this catches is not subtle in a screenshot and is invisible
     // in a DOM assertion: a column that overflows pushes the whole layout.
@@ -139,6 +216,41 @@ test.describe('run detail', () => {
     }));
 
     expect(overflow.scrollWidth).toBe(overflow.clientWidth);
+  });
+
+  test('no table clips a value it has room for', async ({ page }) => {
+    // Fixed column widths are measured, not guessed, and a measurement goes
+    // stale the moment a label changes. This is the instrument: any cell whose
+    // text is wider than the box it was given is reported by name, so "WAITING
+    // FOR APPRO…" fails here instead of being noticed in a screenshot months
+    // later — or not noticed at all, because an ellipsis looks deliberate.
+    await stubApi(page);
+
+    for (const route of ['/dashboard', '/runs', '/projects']) {
+      await page.goto(route);
+      await expect(page.getByRole('table').first()).toBeVisible();
+
+      const clipped = await page.evaluate(() =>
+        // The cells themselves as well as what is inside them: a `truncate` on the
+        // `<td>` clips exactly the same way and was invisible to the first version
+        // of this check, which only looked at the elements one level down.
+        [...document.querySelectorAll('th, td')]
+          .flatMap((cell) => [cell, ...cell.querySelectorAll('span, a, code')])
+          .filter((node) => {
+            const style = getComputedStyle(node);
+            // Only the elements that promised not to wrap. A `line-clamp` cell is
+            // designed to run out of room; a `truncate` cell is designed to fit.
+            if (style.textOverflow !== 'ellipsis') return false;
+            // A title attribute is an explicit "this may not fit, here is the
+            // rest" — the feature title and the path are both that on purpose.
+            if (node.hasAttribute('title')) return false;
+            return node.scrollWidth > node.clientWidth + 1;
+          })
+          .map((node) => `${node.tagName.toLowerCase()}: ${node.textContent ?? ''}`),
+      );
+
+      expect(clipped, `clipped cells on ${route}`).toEqual([]);
+    }
   });
 
   test('nothing logs an error while rendering', async ({ page }) => {
@@ -161,8 +273,30 @@ test.describe('runs list', () => {
     await stubApi(page);
     await page.goto('/runs');
     await expect(page.getByRole('link', { name: FIXTURE_RUN_ID })).toBeVisible();
+    // Five runs and a header. Waiting on the last row rather than the first, so
+    // the shot cannot catch a table that is still filling in.
+    await expect(page.getByRole('row')).toHaveCount(6);
 
     await expect(page).toHaveScreenshot('runs-list.png', { fullPage: false });
+  });
+
+  test('filters narrow the list without going back to the server', async ({ page }) => {
+    const requests: string[] = [];
+    await stubApi(page);
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith('/api/v1/runs')) requests.push(url.pathname + url.search);
+    });
+
+    await page.goto('/runs');
+    await expect(page.getByRole('row')).toHaveCount(6);
+    const before = requests.length;
+
+    await page.getByLabel('Status').selectOption('failed');
+    await expect(page.getByRole('row')).toHaveCount(2);
+    expect(requests.length, 'a local filter must not cost a round trip').toBe(before);
+
+    await expect(page).toHaveScreenshot('runs-list-filtered.png', { fullPage: false });
   });
 });
 
@@ -170,8 +304,29 @@ test.describe('projects', () => {
   test('renders the registry', async ({ page }) => {
     await stubApi(page);
     await page.goto('/projects');
-    await expect(page.getByRole('heading', { name: 'beahub-api' })).toBeVisible();
+    // Four projects and a header row, one of them never run — the row that has
+    // to read as a project rather than as a broken one.
+    await expect(page.getByRole('row')).toHaveCount(5);
+    const fresh = page.getByRole('row').filter({ hasText: 'company-project' });
+    await expect(fresh.getByText('idle')).toBeVisible();
+    await expect(fresh.getByText('none finished')).toBeVisible();
 
     await expect(page).toHaveScreenshot('projects.png', { fullPage: false });
+  });
+
+  test('shows runner health once a project is in scope', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/projects');
+    await expect(page.getByRole('row')).toHaveCount(5);
+
+    // Nothing selected: there is no project this would be the health of, and the
+    // page does not ask the server for it either.
+    await expect(page.getByRole('list', { name: 'Runner health' })).toHaveCount(0);
+
+    const project = page.getByRole('row').filter({ hasText: 'beahub-api' });
+    await project.getByRole('button', { name: 'Select' }).click();
+
+    await expect(page.getByRole('list', { name: 'Runner health' })).toBeVisible();
+    await expect(page).toHaveScreenshot('projects-selected.png', { fullPage: false });
   });
 });

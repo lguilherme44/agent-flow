@@ -143,12 +143,23 @@ export function useTelemetry(
   });
 }
 
-export function useRunnerHealth(projectId?: string): UseQueryResult<RunnerHealthView[]> {
+/**
+ * Runner health for one project.
+ *
+ * `enabled` exists because this query is not free: the server spawns each
+ * runner's CLI with `--version`. The sidebar wants it unconditionally — that is
+ * the one place the answer is always worth having — while a page that will not
+ * display it should not be paying for it.
+ */
+export function useRunnerHealth(
+  projectId?: string,
+  options: { enabled?: boolean } = {},
+): UseQueryResult<RunnerHealthView[]> {
   return useQuery({
     queryKey: keys.runnerHealth(projectId),
     queryFn: () => api.runnerHealth(projectId),
-    // Health spawns a CLI with `--version` per runner. Worth knowing, not worth
-    // re-asking every time a component mounts.
+    enabled: options.enabled ?? true,
+    // Worth knowing, not worth re-asking every time a component mounts.
     staleTime: 30_000,
   });
 }

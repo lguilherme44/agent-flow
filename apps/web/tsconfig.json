@@ -27,5 +27,9 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "vite.config.ts"]
+  // `visual` is in here so the Playwright fixtures are held to the server's own
+  // response types. Playwright compiles its specs with esbuild, which strips
+  // types without checking them, so a fixture that stopped matching a contract
+  // used to fail by rendering `undefined` into a screenshot nobody reads twice.
+  "include": ["src", "visual", "vite.config.ts", "playwright.config.ts"]
 }

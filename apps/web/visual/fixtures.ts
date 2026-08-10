@@ -13,10 +13,22 @@
  * The clock is pinned by the test, so "Today at 19:34" is stable.
  */
 
+import type {
+  ArtifactView,
+  ProjectView,
+  RunDetailView,
+  RunSummaryView,
+  RunnerHealthView,
+  StageViewResponse,
+  TaskDetailView,
+  TaskSummaryView,
+} from '@contracts/index.js';
+import type { TelemetryResponse } from '../src/lib/api';
+
 const RUN_ID = 'AF-2026-104';
 const STARTED = '2026-08-10T19:34:00.000Z';
 
-export const PROJECTS = [
+export const PROJECTS: ProjectView[] = [
   {
     id: 'beahub-api',
     name: 'beahub-api',
@@ -24,6 +36,14 @@ export const PROJECTS = [
     stack: 'node',
     currentRunId: RUN_ID,
     status: 'running',
+    lastRun: {
+      runId: 'AF-2026-103',
+      feature: 'Adicionar cache de disponibilidade por profissional',
+      status: 'completed',
+      stage: 'final-review',
+      updatedAt: '2026-08-09T15:30:00.000Z',
+    },
+    runCount: 12,
   },
   {
     id: 'beahub-web',
@@ -32,6 +52,14 @@ export const PROJECTS = [
     stack: 'node',
     currentRunId: 'AF-2026-097',
     status: 'completed',
+    lastRun: {
+      runId: 'AF-2026-097',
+      feature: 'Migrar a listagem de profissionais para o novo endpoint',
+      status: 'completed',
+      stage: 'final-review',
+      updatedAt: '2026-08-08T11:04:00.000Z',
+    },
+    runCount: 7,
   },
   {
     id: 'bflow',
@@ -40,18 +68,29 @@ export const PROJECTS = [
     stack: 'python',
     currentRunId: 'AF-2026-088',
     status: 'waiting_for_approval',
+    lastRun: {
+      runId: 'AF-2026-087',
+      feature: 'Retry com backoff exponencial na fila de webhooks',
+      status: 'failed',
+      stage: 'implementation',
+      updatedAt: '2026-08-07T18:22:00.000Z',
+    },
+    runCount: 4,
   },
   {
+    // A project that has been initialised and never run. The row every list has
+    // to render honestly, and the one a card layout makes look broken.
     id: 'company-project',
     name: 'company-project',
     path: '/Users/dev/wk/company-project',
     stack: 'go',
     currentRunId: null,
     status: null,
+    runCount: 0,
   },
 ];
 
-export const RUN = {
+export const RUN: RunDetailView = {
   projectId: 'beahub-api',
   runId: RUN_ID,
   feature: 'Implementar Agendamentos Recorrentes com expansão semanal e limite de ocorrências',
@@ -63,16 +102,20 @@ export const RUN = {
   createdAt: STARTED,
   updatedAt: '2026-08-10T20:15:22.000Z',
   taskCount: 9,
-  completedTasks: 4,
+  // Three of the nine tasks below are completed, and `progress` is
+  // round(3/9 × 100) — the only value the server can produce for this run. The
+  // fixture used to say four and 78%, so the header, the task strip and the
+  // execution summary contradicted each other in the reference screenshot.
+  completedTasks: 3,
   degradations: 0,
   degradationDetail: [],
-  progress: 78,
+  progress: 33,
   startedAt: STARTED,
   durationMs: 2_482_000,
 };
 
 /** Six done, one in flight, two ahead — the shape the brief asks for. */
-export const STAGES = [
+export const STAGES: StageViewResponse[] = [
   { stage: 'discovery', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'high', durationMs: 133_000 },
   { stage: 'architecture-impact', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'high', durationMs: 188_000 },
   { stage: 'sdd', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'very_high', durationMs: 271_000 },
@@ -87,8 +130,8 @@ export const STAGES = [
 const task = (
   id: string,
   title: string,
-  overrides: Record<string, unknown>,
-): Record<string, unknown> => ({
+  overrides: Partial<TaskSummaryView>,
+): TaskSummaryView => ({
   id,
   title,
   complexity: 'normal',
@@ -100,7 +143,19 @@ const task = (
   ...overrides,
 });
 
-export const TASKS = [
+/** The task the inspector opens. Named, so the detail below need not index. */
+const RUNNING_TASK = task('TASK-003', 'Recurrence Repository', {
+  state: 'running',
+  attempts: 1,
+  requirements: ['FR-002', 'FR-003'],
+  dependencies: ['TASK-002'],
+  runner: 'codex',
+  model: 'GPT-5.6 Terra',
+  reasoning: 'medium',
+  durationMs: 222_000,
+});
+
+export const TASKS: TaskSummaryView[] = [
   task('TASK-001', 'Criar entidade Recurrence', {
     complexity: 'trivial',
     state: 'completed',
@@ -123,16 +178,7 @@ export const TASKS = [
     durationMs: 92_000,
     validationPassed: true,
   }),
-  task('TASK-003', 'Recurrence Repository', {
-    state: 'running',
-    attempts: 1,
-    requirements: ['FR-002', 'FR-003'],
-    dependencies: ['TASK-002'],
-    runner: 'codex',
-    model: 'GPT-5.6 Terra',
-    reasoning: 'medium',
-    durationMs: 222_000,
-  }),
+  RUNNING_TASK,
   task('TASK-004', 'Recurrence Service', {
     complexity: 'complex',
     risk: 'high',
@@ -192,8 +238,8 @@ export const TASKS = [
   }),
 ];
 
-export const TASK_DETAIL = {
-  ...TASKS[2],
+export const TASK_DETAIL: TaskDetailView = {
+  ...RUNNING_TASK,
   description: 'Implementar repositório para recorrências, com expansão por janela.',
   acceptanceCriteria: [
     'findByAppointmentId retorna as ocorrências ordenadas.',
@@ -235,7 +281,7 @@ export const TASK_DETAIL = {
   ],
 };
 
-export const ARTIFACTS = [
+export const ARTIFACTS: ArtifactView[] = [
   { name: 'sdd', label: 'SDD', available: true, sizeBytes: 12_400, updatedAt: STARTED },
   { name: 'plan', label: 'Plan', available: true, sizeBytes: 8_100, updatedAt: STARTED },
   {
@@ -260,7 +306,7 @@ const bucket = (count: number, durationMs: number, extra = {}) => ({
   ...extra,
 });
 
-export const TELEMETRY = {
+export const TELEMETRY: TelemetryResponse = {
   entries: [],
   summary: {
     entries: 13,
@@ -284,12 +330,21 @@ export const TELEMETRY = {
   },
 };
 
-export const RUNNER_HEALTH = [
+export const RUNNER_HEALTH: RunnerHealthView[] = [
   { id: 'claude', installed: true, executable: true, auth: 'available', version: '2.1.226' },
   { id: 'codex', installed: true, executable: true, auth: 'available', version: '0.147.0' },
 ];
 
-export const RUNS = [
+/**
+ * History across every status the page can filter by, and two projects.
+ *
+ * An all-completed list is the one shape the Runs page cannot be wrong about:
+ * every chip the same colour, every progress bar full, nothing degraded. The
+ * statuses below are the ones the filter offers, so the screenshot shows what
+ * each of them actually looks like — including a rejected plan, which is the only
+ * row where a full-looking bar would be a lie.
+ */
+export const RUNS: RunSummaryView[] = [
   {
     projectId: 'beahub-api',
     runId: RUN_ID,
@@ -300,8 +355,10 @@ export const RUNS = [
     createdAt: STARTED,
     updatedAt: RUN.updatedAt,
     taskCount: 9,
-    completedTasks: 4,
+    completedTasks: 3,
     degradations: 0,
+    progress: 33,
+    durationMs: 2_482_000,
   },
   {
     projectId: 'beahub-api',
@@ -315,6 +372,53 @@ export const RUNS = [
     taskCount: 6,
     completedTasks: 6,
     degradations: 1,
+    progress: 100,
+    durationMs: 5_280_000,
+  },
+  {
+    projectId: 'beahub-api',
+    runId: 'AF-2026-102',
+    feature: 'Recomendação de produtos na home do marketplace',
+    stage: 'implementation',
+    status: 'failed',
+    approved: true,
+    createdAt: '2026-08-08T09:15:00.000Z',
+    updatedAt: '2026-08-08T10:41:00.000Z',
+    taskCount: 8,
+    completedTasks: 3,
+    degradations: 2,
+    progress: 38,
+    durationMs: 5_160_000,
+  },
+  {
+    projectId: 'bflow',
+    runId: 'AF-2026-088',
+    feature: 'Expor métricas de fila no endpoint de health',
+    stage: 'plan-review',
+    status: 'waiting_for_approval',
+    approved: false,
+    createdAt: '2026-08-08T08:00:00.000Z',
+    updatedAt: '2026-08-08T08:26:00.000Z',
+    taskCount: 5,
+    completedTasks: 0,
+    degradations: 0,
+    progress: 0,
+    durationMs: 1_560_000,
+  },
+  {
+    projectId: 'bflow',
+    runId: 'AF-2026-087',
+    feature: 'Retry com backoff exponencial na fila de webhooks',
+    stage: 'planning',
+    status: 'plan_rejected',
+    approved: false,
+    createdAt: '2026-08-07T17:40:00.000Z',
+    updatedAt: '2026-08-07T18:22:00.000Z',
+    taskCount: 4,
+    completedTasks: 0,
+    degradations: 0,
+    progress: 0,
+    durationMs: 2_520_000,
   },
 ];
 

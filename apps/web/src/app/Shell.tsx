@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { NavLink, Outlet, useMatch, useParams } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useMatch, useParams } from 'react-router-dom';
 import {
   Activity,
   BookOpen,
@@ -254,9 +254,12 @@ function SidebarFooter(): JSX.Element {
 /**
  * A context bar, not a page title (§69).
  *
- * The breadcrumb is real: it reads workspace / project / Runs / run, and each
- * segment is the actual thing rather than a hardcoded string. On the runs list
- * the trailing segment is absent instead of being faked.
+ * The breadcrumb is real: it reads workspace / project / section / run, and each
+ * segment is the actual thing rather than a hardcoded string. It used to hardcode
+ * "Runs" as the third segment, which was true of the two pages that existed and
+ * became a lie the moment there were seven — the Projects page announced itself as
+ * Runs. The section now comes from the same `NAV` table the sidebar highlights, so
+ * a destination cannot be lit in one place and named something else in the other.
  */
 function Topbar(): JSX.Element {
   const { projectId } = useProjectSelection();
@@ -266,6 +269,7 @@ function Topbar(): JSX.Element {
   const onRunRoute = useMatch('/runs/:runId') !== null;
   const onDashboard = useMatch('/dashboard') !== null;
   const { runId } = useParams<{ runId: string }>();
+  const section = useSectionLabel();
 
   // The dashboard resolves a run rather than naming one in the URL, and the
   // breadcrumb has to say which — "workspace / all projects / Runs" describes
@@ -286,7 +290,7 @@ function Topbar(): JSX.Element {
         <Separator />
         <Crumb>{projectName}</Crumb>
         <Separator />
-        <Crumb current={shownRun === undefined}>Runs</Crumb>
+        <Crumb current={shownRun === undefined}>{section}</Crumb>
         {shownRun === undefined ? null : (
           <>
             <Separator />
@@ -335,6 +339,27 @@ function Topbar(): JSX.Element {
 /** The directory the server was started in, as far as the browser can tell. */
 function workspaceName(): string {
   return 'workspace';
+}
+
+/**
+ * The section the current route belongs to, named exactly as the sidebar names it.
+ *
+ * The run detail lives under Runs even though its path is `/runs/:runId`, and the
+ * dashboard resolves a run without naming one — both read "Runs", because that is
+ * the section a reader is in.
+ */
+function useSectionLabel(): string {
+  const { pathname } = useLocation();
+
+  const entry = NAV.find(
+    (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
+  );
+
+  // The dashboard shows a run, so its section is Runs rather than "Dashboard":
+  // the crumb after it is a run id, and "Dashboard / AF-2026-104" describes a
+  // relationship that does not exist.
+  if (entry === undefined || entry.to === '/dashboard') return 'Runs';
+  return entry.label;
 }
 
 function Crumb(props: { children: ReactNode; current?: boolean }): JSX.Element {

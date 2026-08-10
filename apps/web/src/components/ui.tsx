@@ -6,6 +6,7 @@ import {
   Circle,
   CircleDashed,
   Loader2,
+  Search,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -262,6 +263,74 @@ export function Button(props: {
     >
       {props.children}
     </button>
+  );
+}
+
+/**
+ * A filter control, on a native `<select>`.
+ *
+ * Deliberately not a Radix listbox. Keyboard driving, type-ahead, screen-reader
+ * announcement and the platform's own popover come free and cannot regress; the
+ * only thing a custom widget would buy here is a matching chevron, and these are
+ * filters on a developer tool, not a brand surface.
+ */
+export function Select<T extends string>(props: {
+  label: string;
+  value: T;
+  options: readonly { readonly value: T; readonly label: string }[];
+  onChange: (value: T) => void;
+  className?: string;
+}): JSX.Element {
+  return (
+    <label className={cx('flex shrink-0 items-center gap-1.5', props.className)}>
+      <span className="whitespace-nowrap text-micro text-faint">{props.label}</span>
+      <select
+        value={props.value}
+        onChange={(changed) => {
+          props.onChange(changed.target.value as T);
+        }}
+        className={cx(
+          'h-6 max-w-[168px] rounded-sm border border-border bg-surface-2 px-1.5 text-label text-text',
+          'hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-primary-bright',
+        )}
+      >
+        {props.options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** A search box. The same shape the task table already uses, in one place. */
+export function SearchInput(props: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  className?: string;
+}): JSX.Element {
+  return (
+    <label
+      className={cx(
+        'flex min-w-0 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 py-1',
+        'focus-within:border-border-strong',
+        props.className,
+      )}
+    >
+      <Search className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden />
+      <span className="sr-only">{props.label}</span>
+      <input
+        value={props.value}
+        onChange={(changed) => {
+          props.onChange(changed.target.value);
+        }}
+        placeholder={props.placeholder}
+        className="w-full bg-transparent text-label text-text placeholder:text-faint focus:outline-none"
+      />
+    </label>
   );
 }
 

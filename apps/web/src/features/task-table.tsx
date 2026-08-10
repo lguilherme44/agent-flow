@@ -198,7 +198,19 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                           <span className="truncate text-label text-text" title={task.title}>
                             {task.title}
                           </span>
-                          <span className="truncate text-micro text-faint">
+                          {/* Titled, because this line genuinely may not fit:
+                              a task covering five requirements, or a finding
+                              type spelled out, is wider than the column at every
+                              width. An ellipsis with nothing behind it reads as
+                              deliberate; one with a tooltip is an abbreviation. */}
+                          <span
+                            className="truncate text-micro text-faint"
+                            title={
+                              task.correctiveFor === undefined
+                                ? task.requirements.join(', ') || 'no requirement'
+                                : `from a ${task.correctiveFor.findingType} finding in ${task.correctiveFor.stage.replace(/-/g, ' ')}`
+                            }
+                          >
                             {task.correctiveFor === undefined
                               ? task.requirements.join(', ') || 'no requirement'
                               : `from a ${task.correctiveFor.findingType} finding`}
