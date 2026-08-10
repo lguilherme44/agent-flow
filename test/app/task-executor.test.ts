@@ -496,3 +496,78 @@ describe('recorded provenance is what actually ran (V-06 regression)', () => {
     expect(result.fallback).toEqual({ from: 'claude', errorCode: 'quota_exceeded' });
   });
 });
+
+describe('test-first tasks are judged by what they expected (V-04 regression)', () => {
+  // The contradiction the tool itself caught in a real run: a task written to
+  // produce failing tests carried a validation command that could not pass at
+  // that moment, and the executor marked it review_required.
+
+  it('completes a RED task when its tests fail', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 1, stdout: 'not ok 1 - tags default' });
+    const { executor, runner, run } = await harness({ processRunner: proc });
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ validation: ['test'], validationExpectation: 'fail' }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(result.status).toBe('completed');
+    // The command result is still recorded honestly: it did not pass.
+    expect(result.validation.passed).toBe(false);
+    expect(result.validation.expectation).toBe('fail');
+  });
+
+  it('sends a RED task that went green to review', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 0 });
+    const { executor, runner, run } = await harness({ processRunner: proc });
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ validation: ['test'], validationExpectation: 'fail' }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(result.status).toBe('review_required');
+    expect(result.notes.join(' ')).toMatch(/asserts nothing|already exists/i);
+  });
+
+  it('still reviews an ordinary task whose validation failed', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 1 });
+    const { executor, runner, run } = await harness({ processRunner: proc });
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ validation: ['test'] }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(result.status).toBe('review_required');
+  });
+
+  it('runs nothing at all when the task expects none', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 1 });
+    const { executor, runner, run } = await harness({ processRunner: proc });
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ validation: ['test'], validationExpectation: 'none' }),
+      run.runId,
+      'SDD',
+    );
+
+    expect(proc.calls).toHaveLength(0);
+    expect(result.status).toBe('completed');
+  });
+
+  it('defaults to expecting a pass, so existing plans behave as before', async () => {
+    const { executor, runner, run } = await harness();
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(task({ validation: ['test'] }), run.runId, 'SDD');
+    expect(result.validation.expectation).toBe('pass');
+  });
+});

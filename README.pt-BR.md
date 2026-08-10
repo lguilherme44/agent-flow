@@ -156,7 +156,7 @@ não se sobrescrevem.
 ## Estado atual
 
 O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
-605 testes, e a suíte não invoca nenhuma CLI.
+625 testes, e a suíte não invoca nenhuma CLI.
 
 ### Funcionando
 
@@ -178,7 +178,6 @@ O MVP 1 está completo e já rodou de ponta a ponta contra Claude Code e Codex.
 - [ ] `doctor --deep` — probe real de autenticação (hoje apenas avisa que não está implementado)
 - [ ] `review --fix` — gera as tasks corretivas, mas não as reinjeta no pipeline
 - [ ] Telemetria local — o schema existe, nada escreve nele
-- [ ] Planos test-first — veja [FINDINGS §7](FINDINGS.md#7-the-tool-caught-a-contradiction-three-reviews-had-missed)
 
 ### Ainda não validado
 
@@ -196,7 +195,7 @@ Ordem de correção e severidade:
 - [x] **V-09 · alto** — o timeout de processo nunca dispara quando o filho tem filhos → **corrigido:** o filho roda no próprio process group
 - [x] **V-02 · alto** — `FallbackRunner` nunca é construído em runtime → **corrigido:** ligado via `runner-factory`, resolvendo model e effort da própria role de fallback
 - [x] **V-03 · alto** — uma task interrompida no meio fica `running` para sempre → **corrigido:** recuperada como `interrupted` e reenfileirada dentro do limite de tentativas
-- [ ] **V-04 · alto** — planos test-first não conseguem expressar falha esperada
+- [x] **V-04 · alto** — planos test-first não conseguem expressar falha esperada → **corrigido:** `validationExpectation: pass | fail | none`
 - [x] **V-05 · médio** — `agent-flow task` monta um grafo sem as dependências → **corrigido:** o grafo fica inteiro, a execução é que é restrita
 - [x] **V-06 · médio** — `result.json` grava um reasoning level hardcoded → **corrigido:** a proveniência vem de quem executou de fato
 - [x] **V-07 · médio** — o cache de discovery é reusado sem invalidação → **corrigido:** fingerprint de HEAD, working tree, AGENTS.md e config

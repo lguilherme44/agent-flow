@@ -37,6 +37,34 @@ written where an id belongs will be rejected too.
 
 If nothing above fits a task, use an empty list.
 
+### What the validation is expected to do
+
+Every task also declares `validationExpectation`:
+
+- `pass` — the default. The commands should succeed.
+- `fail` — the commands are **expected not to pass**. This is for a test-first
+  task: one whose job is to write a failing test. A green suite there means the
+  task did not do its job.
+- `none` — do not run validation for this task at all.
+
+This matters more than it looks. If you plan test-first work — a task that
+writes the RED tests, then a task that makes them pass — the first task's tests
+*cannot* pass at the moment it runs. Marking it `pass` will send a correctly
+completed task to review.
+
+```json
+{ "id": "TASK-001", "title": "Write failing tests for weekly expansion",
+  "validation": ["test"], "validationExpectation": "fail" }
+
+{ "id": "TASK-002", "title": "Implement weekly expansion",
+  "dependencies": ["TASK-001"],
+  "validation": ["test"], "validationExpectation": "pass" }
+```
+
+`fail` is not a way to silence a check. A task expecting failure whose commands
+pass is reported too — either the test asserts nothing, or the behaviour already
+exists.
+
 ## What makes a good task
 
 A task is one unit of work with one purpose, implementable on its own, and
@@ -117,7 +145,8 @@ Return **only** a JSON object, no prose, no code fences:
         "externalIntegration": false
       },
       "acceptanceCriteria": ["Checkable statement."],
-      "validation": ["test"]
+      "validation": ["test"],
+      "validationExpectation": "pass"
     }
   ]
 }

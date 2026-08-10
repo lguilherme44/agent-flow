@@ -504,3 +504,115 @@ describe('artifacts', () => {
     expect(events).toContain('stage_completed');
   });
 });
+
+describe('a test-first plan runs RED then GREEN (V-04 regression)', () => {
+  // The scenario the tool itself exposed in a real run, now executable.
+  //
+  // TASK-001 writes failing tests; its validation is *expected* to fail.
+  // TASK-002 makes them pass. Under the old rule the first task was marked
+  // review_required for doing exactly what it was asked to do, and the run
+  // halted before the second one ever started.
+
+  const TDD_PLAN = {
+    feature: 'weekly-recurrence',
+    tasks: [
+      {
+        id: 'TASK-001',
+        title: 'Write failing tests for weekly expansion',
+        description: 'RED: assert the behaviour before it exists.',
+        complexity: 'normal',
+        risk: 'low',
+        dependencies: [],
+        requirements: ['FR-001'],
+        acceptanceCriteria: ['The new tests fail for the right reason.'],
+        validation: ['test'],
+        validationExpectation: 'fail',
+      },
+      {
+        id: 'TASK-002',
+        title: 'Implement weekly expansion',
+        description: 'GREEN: make the failing tests pass.',
+        complexity: 'normal',
+        risk: 'medium',
+        dependencies: ['TASK-001'],
+        requirements: ['FR-001'],
+        acceptanceCriteria: ['The tests written in TASK-001 pass.'],
+        validation: ['test'],
+        validationExpectation: 'pass',
+      },
+    ],
+  };
+
+  it('completes both, with the suite red in between and green at the end', async () => {
+    const w = await world();
+    const run = await w.store.createRun('weekly recurrence');
+
+    w.runners.claude.pushText('# Architecture').pushText('# Impact').pushText(SDD);
+    w.runners.codex.pushJson(TDD_PLAN);
+    w.runners.claude.pushJson({ verdict: 'PASS', findings: [] });
+
+    const planning = await w.pipeline.run(run.runId, 'Add weekly recurrence');
+    await approveRun(w.store, run.runId, planning.plan);
+
+    // The suite is red while the RED task runs, green once the GREEN task has.
+    let implemented = false;
+    w.processRunner.always(() => ({ exitCode: implemented ? 0 : 1 }));
+
+    w.runners.codex.push(() => {
+      // The second invocation is the implementation task.
+      const response = { ok: true as const, text: IMPLEMENTED, durationMs: 1 };
+      return response;
+    });
+    w.runners.codex.push(() => {
+      implemented = true;
+      return { ok: true as const, text: IMPLEMENTED, durationMs: 1 };
+    });
+
+    const outcome = await new Scheduler({ store: w.store, executor: w.executor }).run(
+      planning.plan,
+      run.runId,
+      SDD,
+    );
+
+    expect(outcome.complete).toBe(true);
+    expect(outcome.results.map((r) => r.status)).toEqual(['completed', 'completed']);
+
+    // The RED task completed while its commands were failing — recorded
+    // honestly, and judged against what it expected.
+    const red = outcome.results[0];
+    expect(red?.validation.passed).toBe(false);
+    expect(red?.validation.expectation).toBe('fail');
+
+    const green = outcome.results[1];
+    expect(green?.validation.passed).toBe(true);
+  });
+
+  it('halts when the RED task fails to go red', async () => {
+    // The other half of the guarantee: `fail` narrows what correct means, it
+    // does not stop anyone looking.
+    const w = await world();
+    const run = await w.store.createRun('weekly recurrence');
+
+    w.runners.claude.pushText('# Architecture').pushText('# Impact').pushText(SDD);
+    w.runners.codex.pushJson(TDD_PLAN);
+    w.runners.claude.pushJson({ verdict: 'PASS', findings: [] });
+
+    const planning = await w.pipeline.run(run.runId, 'Add weekly recurrence');
+    await approveRun(w.store, run.runId, planning.plan);
+
+    // The suite is green from the start: the new test asserts nothing, or the
+    // behaviour was already there.
+    w.processRunner.always({ exitCode: 0 });
+    w.runners.codex.pushText(IMPLEMENTED);
+
+    const outcome = await new Scheduler({ store: w.store, executor: w.executor }).run(
+      planning.plan,
+      run.runId,
+      SDD,
+    );
+
+    expect(outcome.complete).toBe(false);
+    expect(outcome.results[0]?.status).toBe('review_required');
+    expect(outcome.results[0]?.notes.join(' ')).toMatch(/asserts nothing|already exists/i);
+  });
+});

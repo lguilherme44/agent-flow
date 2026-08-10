@@ -4,7 +4,6 @@ import {
   type EffectiveConfig,
   type Task,
   type TaskResult,
-  type TaskState,
 } from '../contracts/index.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
@@ -13,6 +12,7 @@ import type { StateStore } from './state-store.js';
 import { runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
+import { judgeValidation } from '../core/validation-outcome.js';
 
 /** Marker the implementation prompt asks the agent to end with. */
 const RESULT_BLOCK = /##\s*RESULT\s*([\s\S]*)$/i;
@@ -140,7 +140,7 @@ export class TaskExecutor {
     }
 
     const verification =
-      commands.length === 0
+      commands.length === 0 || task.validationExpectation === 'none'
         ? { passed: true, results: [] }
         : await runCommands({
             processRunner: this.options.processRunner,
@@ -148,20 +148,34 @@ export class TaskExecutor {
             cwd: projectDir,
           });
 
-    // A failed check sends the task to review, never to another model (§55):
-    // the failure is information about the work, and hiding it behind a retry
-    // elsewhere is exactly what fallback is forbidden to do.
-    const status: TaskState = verification.passed ? 'completed' : 'review_required';
+    // Judged against what the task expected, not against exit zero. A test-first
+    // task is done when its new tests *fail*; the previous rule sent exactly
+    // that task to review. Anything unexpected — in either direction — goes to
+    // review rather than to another model (§55): a failure is information about
+    // the work, and rerouting it would replace a visible problem with a quiet
+    // one.
+    const judgement = judgeValidation(task.validationExpectation, {
+      passed: verification.passed,
+      ran: verification.results.length,
+    });
 
     return this.persist(runId, {
       task: task.id,
-      status,
+      status: judgement.state,
       ...provenanceOf(execution, runner),
       startedAt,
       finishedAt: clock.now(),
       filesChanged: report.filesChanged,
-      validation: { passed: verification.passed, commands: verification.results },
-      notes: [...report.notes, ...report.deviations.map((d) => `deviation: ${d}`)],
+      validation: {
+        passed: verification.passed,
+        expectation: task.validationExpectation,
+        commands: verification.results,
+      },
+      notes: [
+        ...report.notes,
+        ...report.deviations.map((d) => `deviation: ${d}`),
+        ...(judgement.note === undefined ? [] : [judgement.note]),
+      ],
     });
   }
 

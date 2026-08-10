@@ -166,10 +166,24 @@ test` to it anyway, and neither the plan review nor the human reading it noticed
 
 What caught it was the refusal to take the agent's word for it.
 
-**Still open.** The planning prompt does not tell the planner that a
-test-first task needs empty validation, or validation that expects failure.
-Until it does, any TDD plan will hit this. The fix is a prompt change plus
-probably a task-level flag (`expectsFailingValidation`), and it is not written.
+**Fixed.** A task now declares `validationExpectation: pass | fail | none`, and
+the result is judged against it rather than against exit zero. A test-first task
+declares `fail` and completes when its commands fail.
+
+The half that was easy to miss: a task expecting failure whose commands *pass*
+is also sent to review. The obvious implementation reads "expected fail, did not
+fail — fine, carry on", and it is not fine. Either the test asserts nothing, or
+the behaviour it describes already exists, and both deserve a person's
+attention. `fail` narrows what correct means; it does not silence the check.
+
+The judgement lives in `core/validation-outcome.ts` as a pure function with the
+full truth table under test, because the asymmetric cases are exactly the ones a
+plausible implementation gets backwards.
+
+One accepted limitation: `fail` applies to the validation as a whole. It does
+not distinguish a new test failing (intended) from a lint error in the same run
+(not). Telling them apart would need per-command expectations, and a task whose
+lint is broken is caught by the verification stage anyway.
 
 ---
 

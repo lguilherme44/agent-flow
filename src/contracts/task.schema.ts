@@ -77,6 +77,24 @@ export const TaskSchema = z
      * output, and model output must not reach a shell.
      */
     validation: z.array(ValidationIdSchema).default([]),
+
+    /**
+     * What the validation is expected to do.
+     *
+     * `pass` is the ordinary case. `fail` exists because test-first development
+     * has a step where a green suite is the failure: the task that writes the
+     * RED tests is done correctly when they fail, and the previous model — exit
+     * code zero means success — marked exactly that task `review_required`.
+     *
+     * A real plan hit this. Three reviews had asked for test-first work and none
+     * noticed that the resulting task carried a validation command that could
+     * not pass at that point.
+     *
+     * `fail` is not permission to ignore the result: a RED task whose tests
+     * *pass* is also reported, because either the test asserts nothing or the
+     * behaviour already exists. Both are worth a person's attention.
+     */
+    validationExpectation: z.enum(['pass', 'fail', 'none']).default('pass'),
   })
   .refine((task) => !task.dependencies.includes(task.id), {
     message: 'a task cannot depend on itself',

@@ -39,7 +39,13 @@ export const TaskResultSchema = z.object({
 
   filesChanged: z.array(z.string()).default([]),
   validation: z.object({
+    /** Whether the commands exited zero — not whether the task succeeded. */
     passed: z.boolean(),
+    /**
+     * What was expected of them. Recorded because `passed: false` on its own
+     * is ambiguous once test-first tasks exist: it may be the intended result.
+     */
+    expectation: z.enum(['pass', 'fail', 'none']).default('pass'),
     commands: z.array(CommandResultSchema).default([]),
   }),
 

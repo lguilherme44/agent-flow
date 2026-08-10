@@ -153,7 +153,7 @@ overwrite each other.
 ## Status
 
 MVP 1 is complete and has been run end to end against Claude Code and Codex.
-605 tests, no CLI invoked by the suite.
+625 tests, no CLI invoked by the suite.
 
 ### Working
 
@@ -175,7 +175,6 @@ MVP 1 is complete and has been run end to end against Claude Code and Codex.
 - [ ] `doctor --deep` — live auth probing (currently reports that it is unimplemented)
 - [ ] `review --fix` — generates corrective tasks but does not feed them back
 - [ ] Local telemetry — schema exists, nothing writes it
-- [ ] Test-first plans — see [FINDINGS §7](FINDINGS.md#7-the-tool-caught-a-contradiction-three-reviews-had-missed)
 
 ### Not yet validated
 
@@ -193,7 +192,7 @@ Fix order and severity:
 - [x] **V-09 · high** — the process timeout never fires when the child has children → **fixed:** the child runs in its own process group
 - [x] **V-02 · high** — `FallbackRunner` is never constructed at runtime → **fixed:** wired through `runner-factory`, resolving the fallback role's own model and effort
 - [x] **V-03 · high** — a task interrupted mid-flight stays `running` forever → **fixed:** recovered as `interrupted` and requeued within the attempt limit
-- [ ] **V-04 · high** — test-first plans cannot express an expected failure
+- [x] **V-04 · high** — test-first plans cannot express an expected failure → **fixed:** `validationExpectation: pass | fail | none`
 - [x] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies → **fixed:** the graph stays whole, execution is restricted
 - [x] **V-06 · medium** — `result.json` records a hardcoded reasoning level → **fixed:** provenance travels from the runner that actually ran
 - [x] **V-07 · medium** — the discovery cache is reused without invalidation → **fixed:** fingerprinted on HEAD, working tree, AGENTS.md and config
