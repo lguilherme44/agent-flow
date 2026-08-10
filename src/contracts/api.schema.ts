@@ -64,8 +64,36 @@ export const ArtifactParamsSchema = z.object({
   ]),
 });
 
+/**
+ * A prompt is named, never located.
+ *
+ * The same rule as project ids: the client supplies a name, the server looks it
+ * up in the set it found in its own installation directory. There is no request
+ * shape that can address a file outside `prompts/`, so path traversal has nothing
+ * to traverse — and the pattern is enforced here as well, so a later handler that
+ * forgets cannot be the whole defence.
+ */
+export const PromptNameSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]{0,63}$/, 'expected a prompt name, not a path');
+
+export const PromptParamsSchema = z.object({ prompt: PromptNameSchema });
+
 /** Every read endpoint is scoped to one project. */
 export const ProjectQuerySchema = z.object({ projectId: ProjectIdSchema.optional() });
+
+/**
+ * How much history an aggregate covers.
+ *
+ * Bounded, because analytics over an unbounded history reads every run's event
+ * log to draw one bar. The bound is reported rather than applied quietly — a
+ * chart that silently describes twenty of two hundred runs is a chart that lies
+ * about its own scope.
+ */
+export const AnalyticsQuerySchema = z.object({
+  projectId: ProjectIdSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
 
 export const EventsQuerySchema = z.object({
   projectId: ProjectIdSchema.optional(),
@@ -226,6 +254,126 @@ export interface RunnerHealthView {
   readonly auth: string;
   readonly version?: string;
   readonly detail?: string;
+}
+
+/** One end of a configured route: a runner, a model, an effort. */
+export interface RoutedAgentView {
+  readonly runner: string;
+  /** Absent when the role pins no model and the runner's own default applies. */
+  readonly model?: string;
+  readonly reasoning: ReasoningLevel;
+  /** True when the runner cannot do the configured effort and ran below it. */
+  readonly reasoningClamped: boolean;
+  readonly structuredOutput: string;
+}
+
+/**
+ * What one logical role would run (§82).
+ *
+ * Three layers, deliberately not collapsed: the role the workflow asks for, the
+ * route a human configured, and the route that would actually resolve. They agree
+ * most of the time, and the times they do not are the only times this page matters.
+ */
+export interface RoleRouteView {
+  readonly role: string;
+  /** The prompts this role runs, and therefore what its runner must support. */
+  readonly prompts: string[];
+  readonly requiresReadOnly: boolean;
+  readonly requiresNativeStructuredOutput: boolean;
+  readonly configured: {
+    readonly runner: string;
+    readonly model?: string;
+    readonly reasoning: ReasoningLevel;
+    readonly timeoutSeconds: number;
+  };
+  readonly resolved?: RoutedAgentView;
+  /** Present when the configured route cannot be resolved at all. */
+  readonly error?: { readonly kind: string; readonly message: string };
+  readonly fallback?: RoutedAgentView;
+  /** Why there is no fallback. Absent by choice is not the same as unusable. */
+  readonly fallbackAbsent?: 'disabled' | 'not_configured' | 'unusable';
+}
+
+/**
+ * A prompt as an asset (§83).
+ *
+ * No version field, because prompts declare none — and inventing one would be
+ * metadata nothing enforces and nothing reads, which this codebase already
+ * decided is worse than absent. `digest` is the identity instead: it changes when
+ * the prompt changes, which is the property a version number is wanted for.
+ */
+export interface PromptView {
+  readonly name: string;
+  /** Relative to the installed package. Never an absolute path. */
+  readonly source: string;
+  readonly sizeBytes: number;
+  readonly updatedAt: string;
+  /** Short digest of the file's bytes. */
+  readonly digest: string;
+  readonly permissions: string;
+  readonly outputFormat: string;
+  readonly requiredVars: string[];
+  readonly nativeStructuredOutput: boolean;
+  /** Logical roles that run this prompt. */
+  readonly roles: string[];
+  /** Pipeline stages that run it. Empty for the per-task implementation prompt. */
+  readonly stages: string[];
+  /** Present when the front matter would not parse. */
+  readonly error?: string;
+}
+
+export interface PromptContentView extends PromptView {
+  readonly content: string;
+  readonly truncated: boolean;
+}
+
+/** One bucket of an aggregate, keyed by whatever it groups on. */
+export interface MetricBucketView {
+  readonly key: string;
+  readonly count: number;
+  readonly durationMs: number;
+  readonly failures: number;
+  readonly fallbacks: number;
+  readonly retries: number;
+}
+
+/**
+ * Operational analytics (§84), derived and never stored.
+ *
+ * Every number here is a projection of the same state and event files the CLI
+ * reads. Nothing is recorded for analytics' sake, so there is no third writer to
+ * disagree with the two that exist — and nothing here can be stale in a way
+ * `status` is not.
+ *
+ * No monetary figure appears, at any level. Duration and counts are facts this
+ * tool observed; a price is a guess about somebody else's contract.
+ */
+export interface AnalyticsView {
+  readonly scope: {
+    readonly projectIds: string[];
+    readonly runsAvailable: number;
+    readonly runsConsidered: number;
+    /** True when older runs were excluded from every number below. */
+    readonly truncated: boolean;
+  };
+  readonly runsByProject: {
+    readonly projectId: string;
+    readonly total: number;
+    readonly byStatus: Record<string, number>;
+  }[];
+  readonly tasksByState: Record<string, number>;
+  readonly totals: {
+    readonly entries: number;
+    readonly durationMs: number;
+    readonly failures: number;
+    readonly fallbacks: number;
+    readonly retries: number;
+    readonly reasoningClamped: number;
+  };
+  readonly byRunner: MetricBucketView[];
+  readonly byModel: MetricBucketView[];
+  readonly byRole: MetricBucketView[];
+  readonly byStage: MetricBucketView[];
 }
 
 /** The SSE envelope of §87. */

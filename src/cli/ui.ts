@@ -5,6 +5,7 @@ import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
 import { NodeProcessRunner } from '../adapters/process/node-process-runner.js';
 import { buildServer } from '../server/server.js';
+import { resolvePromptsDir } from '../app/prompt-paths.js';
 import {
   DEFAULT_WORKSPACE_DEPTH,
   discoverProjects,
@@ -78,6 +79,10 @@ export async function runUiCommand(
       version: readVersion(),
       host,
       port,
+      // Resolved by the CLI, which already has to work this out for the planning
+      // pipeline. The server takes it as an argument rather than discovering it
+      // again, so there is one answer to "where are the prompts".
+      promptsDir: resolvePromptsDir(),
       ...(webDir === undefined ? {} : { webDir }),
     });
 

@@ -1,18 +1,25 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
+  AnalyticsQuerySchema,
   ArtifactParamsSchema,
   EventsQuerySchema,
   ProjectQuerySchema,
+  PromptParamsSchema,
   RunParamsSchema,
   TaskParamsSchema,
+  type AnalyticsView,
   type HealthResponse,
   type ProjectView,
+  type PromptView,
+  type RoleRouteView,
   type RunSummaryView,
   type RunnerHealthView,
   type RunnerView,
   type ServerEvent,
 } from '../contracts/index.js';
 import { StateStore } from '../app/state-store.js';
+import { PromptLoader } from '../app/prompt-loader.js';
+import { describeRoleRoutes } from '../app/role-routes.js';
 import { loadConfig } from '../config/loader.js';
 import { buildRegistry } from '../adapters/runners/registry.js';
 import { referencedRunners } from '../core/health.js';
@@ -20,6 +27,8 @@ import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import { RunReader } from './run-reader.js';
+import { PromptReader } from './prompt-reader.js';
+import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
 import { createEventBus, RunWatcher, type EventBus } from './event-bridge.js';
 import type { ProjectRegistry, RegisteredProject } from './project-registry.js';
 
@@ -53,6 +62,14 @@ export interface ServerOptions {
   readonly version: string;
   readonly host: string;
   readonly port: number;
+  /**
+   * Where the shipped prompts live.
+   *
+   * Passed in rather than resolved here: the resolution depends on how agent-flow
+   * was installed, which the CLI already works out, and a server that discovered
+   * it independently would be a second answer to the same question.
+   */
+  readonly promptsDir: string;
   /** Where the built dashboard lives. Omitted when only the API is wanted. */
   readonly webDir?: string;
   readonly pollIntervalMs?: number;
@@ -69,6 +86,8 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   const app = Fastify({ logger: false });
   const bus = createEventBus();
   const reader = new RunReader({ fs: options.fs, clock: options.clock });
+  const prompts = new PromptReader({ fs: options.fs, promptsDir: options.promptsDir });
+  const analytics = new AnalyticsReader({ fs: options.fs, clock: options.clock });
 
   const watcher = new RunWatcher({
     fs: options.fs,
@@ -287,6 +306,74 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       });
     },
   );
+
+  /**
+   * What each logical role would run (§82).
+   *
+   * Resolution only — nothing here contacts a runner. The page joins this with
+   * `/runners` and `/runners/health`, both of which it already holds, rather than
+   * this route re-reporting a provider and a health check per role: nine roles
+   * pointing at two runners would mean nine copies of two answers.
+   */
+  app.get('/api/v1/agents', async (request, reply): Promise<RoleRouteView[] | undefined> => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const config = await loadConfig({
+      fs: options.fs,
+      globalConfigPath: options.globalConfigPath,
+      projectDir: project.path,
+    });
+    const registry = buildRegistry(config.global, {
+      processRunner: options.processRunner,
+      fs: options.fs,
+    });
+
+    const routes = await describeRoleRoutes({
+      config: config.global,
+      capabilities: registry.capabilities(),
+      promptLoader: new PromptLoader({ fs: options.fs, promptsDir: options.promptsDir }),
+    });
+
+    return routes.map((route) => ({
+      role: route.role,
+      prompts: [...route.prompts],
+      requiresReadOnly: route.requirements.readOnly === true,
+      requiresNativeStructuredOutput: route.requirements.nativeStructuredOutput === true,
+      configured: route.configured,
+      ...(route.resolved === undefined ? {} : { resolved: route.resolved }),
+      ...(route.error === undefined ? {} : { error: route.error }),
+      ...(route.fallback === undefined ? {} : { fallback: route.fallback }),
+      ...(route.fallbackAbsent === undefined ? {} : { fallbackAbsent: route.fallbackAbsent }),
+    }));
+  });
+
+  app.get('/api/v1/prompts', async (): Promise<PromptView[]> => prompts.list());
+
+  app.get('/api/v1/prompts/:prompt', async (request, reply) => {
+    const params = PromptParamsSchema.safeParse(request.params);
+    if (!params.success) return badRequest(reply, 'unknown prompt');
+
+    const content = await prompts.read(params.data.prompt);
+    return content === null ? notFound(reply, 'no such prompt') : content;
+  });
+
+  app.get('/api/v1/analytics', async (request, reply): Promise<AnalyticsView | undefined> => {
+    const query = AnalyticsQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) return badRequest(reply, 'invalid analytics scope');
+
+    // The same scoping rule as `/runs`: no project named means the workspace.
+    const scoped =
+      query.data.projectId === undefined
+        ? options.registry.all()
+        : [options.registry.get(query.data.projectId)].filter(
+            (project): project is RegisteredProject => project !== undefined,
+          );
+
+    if (scoped.length === 0) return notFound(reply, 'no such project');
+
+    return analytics.aggregate(scoped, query.data.limit ?? DEFAULT_ANALYTICS_RUNS);
+  });
 
   app.get('/api/v1/events', (request, reply) => {
     const query = EventsQuerySchema.safeParse(request.query ?? {});
