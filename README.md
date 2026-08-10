@@ -1,5 +1,7 @@
 # Agent Flow
 
+**English** · [Português (BR)](README.pt-BR.md)
+
 Turn a feature request into a reviewed design document, a task breakdown, a
 human approval gate — and only then code.
 
