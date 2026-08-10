@@ -17,6 +17,42 @@ export const RUN_STAGES = [
 export const RunStageSchema = z.enum(RUN_STAGES);
 export type RunStage = z.infer<typeof RunStageSchema>;
 
+/**
+ * The pipeline as a person sees it (§71).
+ *
+ * Nine entries where `RUN_STAGES` has eight: `approval` is a step in the user's
+ * mental model and in the specification's pipeline, but nothing *executes* for
+ * it — so it has no events and can never appear in `state.stage`. Keeping the
+ * two lists separate is what stops a display concern from becoming a stage the
+ * state machine has to pretend to run.
+ */
+export const PIPELINE_STAGES = [
+  'discovery',
+  'architecture-impact',
+  'sdd',
+  'planning',
+  'plan-review',
+  'approval',
+  'implementation',
+  'verification',
+  'final-review',
+] as const;
+
+export const PipelineStageSchema = z.enum(PIPELINE_STAGES);
+export type PipelineStage = z.infer<typeof PipelineStageSchema>;
+
+export const PIPELINE_STATUSES = [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'blocked',
+  'waiting_approval',
+] as const;
+
+export const PipelineStatusSchema = z.enum(PIPELINE_STATUSES);
+export type PipelineStatus = z.infer<typeof PipelineStatusSchema>;
+
 export const RUN_STATUSES = [
   'running',
   'waiting_for_approval',

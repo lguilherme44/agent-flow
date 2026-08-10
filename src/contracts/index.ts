@@ -7,3 +7,4 @@ export * from './review.schema.js';
 export * from './result.schema.js';
 export * from './health.schema.js';
 export * from './json-schema.js';
+export * from './api.schema.js';

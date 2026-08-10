@@ -96,6 +96,84 @@ describe('src/core knows no provider (§3, §58)', () => {
   });
 });
 
+describe('the dashboard depends on the core, never the reverse (§63)', () => {
+  // The rule the monorepo layout of §63 exists to enforce. The directory split
+  // is not done yet — it would mean rewriting every import in a validated CLI
+  // for no functional gain — so the guarantee it was meant to provide is
+  // enforced here instead, where it holds today rather than after a refactor.
+  const CORE_SIDE = [
+    'src/core',
+    'src/ports',
+    'src/contracts',
+    'src/config',
+    'src/adapters',
+    'src/app',
+  ];
+
+  it('keeps the core side free of the server', () => {
+    const offenders: string[] = [];
+
+    for (const dir of CORE_SIDE) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (importSpecifiers(text).some((specifier) => specifier.includes('server/'))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the server out of the CLI', () => {
+    // `cli` may start the server; the server must not reach back into command
+    // handlers, or the two grow a shared notion of "the current run" that only
+    // one of them owns.
+    const offenders = sourceFiles('src/server')
+      .map(read)
+      .filter(({ text }) => importSpecifiers(text).some((s) => s.includes('cli/')))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps contracts free of every layer above them', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src/contracts')) {
+      const { path, text } = read(file);
+      const bad = importSpecifiers(text).filter((specifier) =>
+        ['core/', 'app/', 'adapters/', 'cli/', 'server/', 'config/'].some((layer) =>
+          specifier.includes(layer),
+        ),
+      );
+      if (bad.length > 0) offenders.push(`${path}: ${bad.join(', ')}`);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('the local server exposes no credentials (§93)', () => {
+  // The server reads a project's `.agent-flow/` directory and nothing else.
+  // Runner authentication is reported as a status the adapters already compute
+  // for `doctor`; no handler opens the file behind it.
+  const SECRETS = ['auth.json', 'credentials', '.netrc', 'process.env', 'id_rsa'];
+
+  it('never names an auth file or reads the environment', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src/server')) {
+      const { path, text } = read(file);
+      const haystack = codeOnly(text);
+      const hits = SECRETS.filter((needle) => haystack.includes(needle));
+      if (hits.length > 0) offenders.push(`${path}: ${hits.join(', ')}`);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('src/ports declares contracts only (AD-03)', () => {
   it('imports no adapters', () => {
     const offenders = sourceFiles('src/ports')

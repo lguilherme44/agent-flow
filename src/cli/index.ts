@@ -1,7 +1,5 @@
 import { Command } from 'commander';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
@@ -13,20 +11,13 @@ import { runApproveCommand, runRejectCommand } from './approve.js';
 import { runRunCommand, runRetryCommand } from './run.js';
 import { runReviewCommand } from './review.js';
 import { runCleanCommand } from './clean.js';
-
-/** Resolved from package.json so `--version` cannot drift from what is installed. */
-function readVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const candidate of ['../../package.json', '../../../package.json']) {
-    try {
-      const raw = readFileSync(join(here, candidate), 'utf8');
-      return (JSON.parse(raw) as { version?: string }).version ?? '0.0.0';
-    } catch {
-      continue;
-    }
-  }
-  return '0.0.0';
-}
+import {
+  DEFAULT_UI_HOST,
+  DEFAULT_UI_PORT,
+  runUiCommand,
+  type UiOptions,
+} from './ui.js';
+import { readVersion } from './version.js';
 
 export interface GlobalOptions {
   readonly cwd: string;
@@ -171,6 +162,17 @@ export async function main(argv: string[]): Promise<number> {
     .option('--fix', 'report the corrective tasks the findings would produce')
     .action(async (options: { fix?: boolean }, command: Command) => {
       exitCode = await runReviewCommand(options, globalOptions(command));
+    });
+
+  program
+    .command('ui')
+    .description('Serve the local dashboard for this project (read-only)')
+    .option('--port <port>', `port to listen on (default ${String(DEFAULT_UI_PORT)})`)
+    .option('--host <host>', `address to bind (default ${DEFAULT_UI_HOST})`)
+    .option('--no-open', 'do not open a browser')
+    .option('--depth <n>', 'how deep to look for projects (default 2)')
+    .action(async (options: UiOptions, command: Command) => {
+      exitCode = await runUiCommand(options, globalOptions(command));
     });
 
   program
