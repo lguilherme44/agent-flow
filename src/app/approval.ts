@@ -17,8 +17,20 @@ export type ApprovalRefusal =
   | { kind: 'no_run' }
   | { kind: 'no_plan' }
   | { kind: 'review_missing' }
+  /** A review exists, but it names a different plan. */
+  | { kind: 'review_stale'; review: ReviewResult }
+  /** A review exists and does not say which plan it judged. */
+  | { kind: 'review_unverifiable'; review: ReviewResult }
   | { kind: 'review_failed'; review: ReviewResult }
   | { kind: 'already_approved' };
+
+/** Refusals `--force` may override. Every one of them is about the review. */
+export const FORCIBLE_REFUSALS: ReadonlySet<ApprovalRefusal['kind']> = new Set([
+  'review_missing',
+  'review_stale',
+  'review_unverifiable',
+  'review_failed',
+]);
 
 export interface ApprovalCheck {
   readonly allowed: boolean;
@@ -57,11 +69,23 @@ export function checkApproval(
   // `review --fix` appends corrective tasks, and the previous plan review then
   // refused the corrected plan while quoting the very finding a FIX task had
   // been created to resolve.
-  const reviewCoversPlan =
-    review !== null && (review.planHash === undefined || review.planHash === planHash(plan));
-
-  if (review === null || !reviewCoversPlan) {
+  //
+  // An *absent* hash used to mean "covers whatever it is shown", as a courtesy
+  // to reviews written before the field existed. That courtesy is a fabricated
+  // relationship: nothing connects such a review to the plan in hand, and the
+  // one case it silently permits is precisely the one worth catching. Unverifiable
+  // is now its own refusal — forceable, like every other review refusal, but
+  // never automatic.
+  if (review === null) {
     return { allowed: false, refusal: { kind: 'review_missing' }, warnings };
+  }
+
+  if (review.planHash === undefined) {
+    return { allowed: false, refusal: { kind: 'review_unverifiable', review }, warnings };
+  }
+
+  if (review.planHash !== planHash(plan)) {
+    return { allowed: false, refusal: { kind: 'review_stale', review }, warnings };
   }
 
   if (review.independence === 'same-provider-fresh-context') {

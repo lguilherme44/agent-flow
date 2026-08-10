@@ -3,6 +3,7 @@ import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { StateStore } from '../../src/app/state-store.js';
 import {
+  FORCIBLE_REFUSALS,
   planHash,
   approvalCoversPlan,
   approveRun,
@@ -28,12 +29,14 @@ const plan = (taskTitle = 'Do it') =>
     ],
   });
 
+/** Bound by default to the plan above: a review always names what it judged. */
 const review = (overrides: Record<string, unknown> = {}) =>
   ReviewResultSchema.parse({
     verdict: 'PASS',
     independence: 'cross-provider',
     reviewer: { runner: 'codex', reasoning: 'high' },
     findings: [],
+    planHash: planHash(plan()),
     ...overrides,
   });
 
@@ -296,7 +299,7 @@ describe('a review does not survive the plan it reviewed', () => {
   const makeStore = () =>
     new StateStore({ fs: new InMemoryFileSystem(), clock: new FixedClock(), projectDir: '/repo' });
 
-  it('refuses as unreviewed when the plan changed after the review', async () => {
+  it('refuses as stale when the plan changed after the review', async () => {
     const store = makeStore();
     const run = await store.createRun('f');
     const current = await store.loadRun(run.runId);
@@ -304,7 +307,7 @@ describe('a review does not survive the plan it reviewed', () => {
     const check = checkApproval(current, plan('Corrected'), review({ planHash: 'stale' }));
 
     expect(check.allowed).toBe(false);
-    expect(check.refusal?.kind).toBe('review_missing');
+    expect(check.refusal?.kind).toBe('review_stale');
   });
 
   it('accepts a review that covers the plan in hand', async () => {
@@ -318,15 +321,32 @@ describe('a review does not survive the plan it reviewed', () => {
     expect(check.allowed).toBe(true);
   });
 
-  it('treats a review with no recorded plan as covering it', async () => {
-    // Reviews written before the field existed. Refusing them all would break
-    // every run in flight to fix a case that cannot be detected anyway.
+  // AF-H02. An absent `planHash` used to mean "this review covers whatever it
+  // is shown", as a courtesy to reviews written before the field existed. That
+  // courtesy invents the one relationship the gate is supposed to verify: a
+  // verdict about some earlier document silently validated a plan that had
+  // changed since. Pre-release, a break in flight costs a re-review; a review
+  // that validates a plan nobody read costs the guarantee itself.
+  it('refuses a review that does not say which plan it judged', async () => {
     const store = makeStore();
     const run = await store.createRun('f');
     const current = await store.loadRun(run.runId);
 
-    const check = checkApproval(current, plan('Do it'), review({}));
+    const check = checkApproval(current, plan('Do it'), review({ planHash: undefined }));
 
-    expect(check.allowed).toBe(true);
+    expect(check.allowed).toBe(false);
+    expect(check.refusal?.kind).toBe('review_unverifiable');
+  });
+
+  it('keeps every review refusal forceable, and nothing else', () => {
+    // `--force` is for a guarantee deliberately given up, which is exactly what
+    // each of these is. A missing run or a missing plan is not a guarantee
+    // anybody can waive.
+    expect([...FORCIBLE_REFUSALS].sort()).toEqual([
+      'review_failed',
+      'review_missing',
+      'review_stale',
+      'review_unverifiable',
+    ]);
   });
 })

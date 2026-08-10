@@ -2,7 +2,12 @@ import { PlanSchema, ReviewResultSchema } from '../contracts/index.js';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
 import { StateStore } from '../app/state-store.js';
-import { approveRun, checkApproval, type ApprovalRefusal } from '../app/approval.js';
+import {
+  FORCIBLE_REFUSALS,
+  approveRun,
+  checkApproval,
+  type ApprovalRefusal,
+} from '../app/approval.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
@@ -45,7 +50,7 @@ export async function runApproveCommand(
 
     if (!check.allowed) {
       const forcible =
-        check.refusal?.kind === 'review_failed' || check.refusal?.kind === 'review_missing';
+        check.refusal !== undefined && FORCIBLE_REFUSALS.has(check.refusal.kind);
 
       if (!(forcible && options.force === true)) {
         process.stderr.write(`${explain(check.refusal)}\n`);
@@ -93,6 +98,22 @@ function explain(refusal: ApprovalRefusal | undefined): string {
         'This plan has not been reviewed.',
         '',
         'Run the review, or approve deliberately with --force.',
+      ].join('\n');
+    case 'review_stale':
+      return [
+        'The plan review on file judged a different version of this plan.',
+        '',
+        'A verdict about another document is not a verdict about this one.',
+        'Re-plan with: agent-flow revise "<instruction>"',
+        'Or approve deliberately with --force, which is recorded on the run.',
+      ].join('\n');
+    case 'review_unverifiable':
+      return [
+        'The plan review on file does not say which plan it judged.',
+        '',
+        'Nothing connects it to the plan in hand, so it cannot be relied on.',
+        'Re-plan with: agent-flow revise "<instruction>"',
+        'Or approve deliberately with --force, which is recorded on the run.',
       ].join('\n');
     case 'review_failed':
       return [
