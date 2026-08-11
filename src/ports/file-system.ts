@@ -8,11 +8,16 @@
  * left half-written, since it is read back on resume and a truncated `state.json`
  * would lose work that was actually completed (AD-06).
  *
- * `createExclusive` and `rename` are what makes an inter-process lock possible.
- * `exists()` followed by `writeFileAtomic()` cannot be a lock — two processes both
- * see "absent" and both write, which is the TOCTOU race the whole mechanism exists
- * to avoid. The kernel has to be the one deciding who won, so acquisition is a
- * single syscall that either creates the file or fails because someone else did.
+ * `createExclusive` is what makes an inter-process lock possible. `exists()` followed
+ * by `writeFileAtomic()` cannot be a lock — two processes both see "absent" and both
+ * write, which is the TOCTOU race the whole mechanism exists to avoid. The kernel has
+ * to be the one deciding who won, so acquisition is a single syscall that either
+ * creates the file or fails because someone else did.
+ *
+ * There is deliberately no `rename` here. An earlier version of the lock reclaimed a
+ * stale claim by moving it aside, and that design is gone: the race it lost is written
+ * up in `run-execution-lock.ts`. A port kept for a mechanism nothing uses is an
+ * invitation to rebuild it.
  */
 export interface FileSystem {
   readFile(path: string): Promise<string>;
@@ -32,13 +37,4 @@ export interface FileSystem {
    * whole value of this member is that the answer is decided by the kernel.
    */
   createExclusive(path: string, content: string): Promise<boolean>;
-
-  /**
-   * Moves a path, atomically, failing if the source is gone.
-   *
-   * Returns false when the source did not exist. That is how a stale lock is
-   * claimed without a race: several processes may all decide a lock is stale, and
-   * exactly one of them can succeed in moving it aside.
-   */
-  rename(from: string, to: string): Promise<boolean>;
 }

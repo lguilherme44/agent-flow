@@ -87,18 +87,6 @@ export class NodeFileSystem implements FileSystem {
     }
   }
 
-  async rename(from: string, to: string): Promise<boolean> {
-    try {
-      await fs.rename(from, to);
-      return true;
-    } catch (error) {
-      // The source was already claimed by somebody else. Not an error here: it is
-      // the answer, and it is how exactly one claimant wins.
-      if ((error as { code?: string }).code === 'ENOENT') return false;
-      throw error;
-    }
-  }
-
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
     try {
       const stats = await fs.stat(path);

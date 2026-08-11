@@ -110,16 +110,6 @@ export class InMemoryFileSystem implements FileSystem {
     return true;
   }
 
-  async rename(from: string, to: string): Promise<boolean> {
-    const content = this.files.get(from);
-    if (content === undefined) return false;
-
-    this.files.delete(from);
-    this.ensureParents(to);
-    this.files.set(to, content);
-    return true;
-  }
-
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
     if (this.dirs.has(path)) return { isDirectory: true, mtimeMs: 0, size: 0 };
     const content = this.files.get(path);

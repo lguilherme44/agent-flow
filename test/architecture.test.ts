@@ -463,6 +463,19 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
     expect(codeOnly(state)).not.toMatch(/\block(ed)?\s*:/i);
   });
 
+  it('keeps the superseded rename mechanism out of the ports (AF-L01.1)', () => {
+    // The lock's first design reclaimed a stale claim by moving it aside, lost a race
+    // doing it, and was replaced by generations. `FileSystem.rename` existed only for
+    // that mechanism and had no consumer left. A port kept for a design nothing uses is
+    // how the design comes back — the next person to need "move a file" finds it
+    // declared, assumes it is load-bearing, and builds on the thing that failed.
+    const port = codeOnly(read(join(ROOT, 'src/ports/file-system.ts')).text);
+
+    expect(port).not.toMatch(/\brename\s*\(/);
+    // The one primitive acquisition is allowed to rest on is still declared.
+    expect(port).toMatch(/\bcreateExclusive\s*\(/);
+  });
+
   it('emits no heartbeat or polling event', () => {
     // There is no heartbeat, so there is nothing to poll and no event to emit for it.
     // Three lock events exist and all three describe a transition.
