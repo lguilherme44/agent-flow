@@ -27,10 +27,17 @@ export function RunPanel(props: {
   run: RunDetailView;
   stages: StageViewResponse[] | undefined;
   projectId: string | undefined;
+  asGraph: boolean;
+  onToggleGraph: () => void;
 }): JSX.Element {
   return (
     <section className="relative shrink-0 overflow-visible rounded-lg border border-border bg-surface">
-      <RunHeader run={props.run} projectId={props.projectId} />
+      <RunHeader
+        run={props.run}
+        projectId={props.projectId}
+        asGraph={props.asGraph}
+        onToggleGraph={props.onToggleGraph}
+      />
       {props.stages === undefined ? null : (
         <div className="border-t border-border px-4 py-3">
           <StagePipeline stages={props.stages} />
@@ -43,6 +50,8 @@ export function RunPanel(props: {
 export function RunHeader(props: {
   run: RunDetailView;
   projectId: string | undefined;
+  asGraph: boolean;
+  onToggleGraph: () => void;
 }): JSX.Element {
   const { run } = props;
 
@@ -122,8 +131,18 @@ export function RunHeader(props: {
           <div className="flex items-center gap-1.5">
             {/* Labels collapse to icons below 1440, where the title needs the
                 width more than these need their words. The word stays in the
-                tooltip and in the accessible name. */}
-            <Button disabled title="View as DAG — not implemented yet">
+                tooltip and in the accessible name.
+
+                A toggle, not a destination: the graph and the table are two
+                renderings of the same task list, with the same filter and the
+                same selection, so leaving the page to see one of them would be
+                the thing that loses the reader's place. */}
+            <Button
+              variant={props.asGraph ? 'primary' : 'surface'}
+              onClick={props.onToggleGraph}
+              title={props.asGraph ? 'Back to the task table' : 'Show the tasks as a graph'}
+              pressed={props.asGraph}
+            >
               <GitBranch className="h-3.5 w-3.5" aria-hidden />
               <span className="sr-only wide:not-sr-only">View as DAG</span>
             </Button>

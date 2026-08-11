@@ -276,6 +276,40 @@ export interface TaskDetailView extends TaskSummaryView {
   readonly log: string[];
 }
 
+/**
+ * The plan's dependency graph, and nothing else (§92, UI-28).
+ *
+ * Structure only: ids, edges and a drawing rank. Every fact *about* a task — its
+ * title, its status, which model ran it — comes from `/tasks`, which the same
+ * screen already holds. That split is not tidiness. The graph changes when the
+ * plan changes, which is rare; statuses change constantly, and a view that
+ * carried both would re-run its layout every time a task moved.
+ *
+ * `depth` is a column index, not a schedule. It is the longest dependency chain
+ * reaching a task. Two tasks at the same depth are not a parallel wave — the
+ * scheduler runs one at a time, in topological order.
+ */
+export interface RunDagView {
+  readonly runId: string;
+  readonly projectId: string;
+  readonly nodes: { readonly taskId: string; readonly depth: number }[];
+  readonly edges: { readonly from: string; readonly to: string }[];
+  /**
+   * Dependencies naming a task the plan does not contain.
+   *
+   * Reported instead of drawn. A phantom node would put a task on screen that
+   * nothing describes, and dropping the edge in silence would show a waiting task
+   * as a root.
+   */
+  readonly unresolved: { readonly taskId: string; readonly dependsOn: string }[];
+  /** Present when the plan's graph is not acyclic. Then `depth` means nothing. */
+  readonly invalid?: {
+    readonly kind: string;
+    readonly message: string;
+    readonly cycle?: string[];
+  };
+}
+
 export interface ArtifactView {
   readonly name: string;
   readonly label: string;

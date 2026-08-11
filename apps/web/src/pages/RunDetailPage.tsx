@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { useProjectSelection } from '../app/project-context';
@@ -7,13 +7,14 @@ import {
   useArtifact,
   useArtifacts,
   useRun,
+  useRunDag,
   useStages,
   useTask,
   useTasks,
   useTelemetry,
 } from '../lib/queries';
 import { RunPanel } from '../features/run-overview';
-import { TaskTable } from '../features/task-table';
+import { NO_FILTER, TaskTable, filterTasks, type TaskFilter } from '../features/task-table';
 import { TaskInspector } from '../features/task-inspector';
 import {
   ApprovalCard,
@@ -24,6 +25,15 @@ import {
 import { Empty } from '../components/ui';
 import { INSPECTOR_PANE, useMediaQuery } from '../hooks/use-media-query';
 import type { TaskDetailView } from '@contracts/index.js';
+
+/**
+ * The graph arrives when somebody asks for it.
+ *
+ * It brings a rendering library with it — a third of the bundle — and the table
+ * is what opens by default. §96 asks for a first paint under a second and a half,
+ * and the cheapest way to keep that is not to ship the part nobody has opened.
+ */
+const DagView = lazy(async () => ({ default: (await import('../features/dag-view')).DagView }));
 
 /**
  * Run detail (UI-20) — the composition of the reference.
@@ -47,7 +57,18 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
 
   const [selectedTask, setSelectedTask] = useState<string | undefined>(undefined);
   const [openArtifact, setOpenArtifact] = useState<string | undefined>(undefined);
+  // One filter, both views. Lifted here rather than owned by the table, because
+  // narrowing the table and leaving the graph showing everything would be two
+  // answers to the question the filter asks.
+  const [filter, setFilter] = useState<TaskFilter>(NO_FILTER);
   const asPane = useMediaQuery(INSPECTOR_PANE);
+
+  // Which rendering is open lives in the URL, so it survives a reload and can be
+  // linked to. It is a *view* of one page rather than a route of its own: the
+  // graph and the table share the run, the filter and the selection, and moving
+  // between them must not feel like navigating away (§88 — local UI state).
+  const [search, setSearch] = useSearchParams();
+  const asGraph = search.get('view') === 'dag';
 
   const run = useRun(projectId, runId);
   const stages = useStages(projectId, runId);
@@ -55,6 +76,9 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   const artifacts = useArtifacts(projectId, runId);
   const telemetry = useTelemetry(projectId, runId);
   const task = useTask(projectId, runId, selectedTask);
+  // Fetched only when the graph is open. Structure is cheap to serve and free to
+  // skip, and a table nobody has switched away from should not pay for it.
+  const dag = useRunDag(projectId, runId, { enabled: asGraph });
 
   // Selecting a task a later plan no longer contains would leave the inspector
   // showing a task the run does not have.
@@ -62,6 +86,14 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
     if (selectedTask === undefined || tasks.data === undefined) return;
     if (!tasks.data.some((entry) => entry.id === selectedTask)) setSelectedTask(undefined);
   }, [selectedTask, tasks.data]);
+
+  // The graph dims what the filter excludes rather than removing it: a node
+  // vanishing takes its edges with it, and a chain with a hole in the middle
+  // describes a dependency that does not exist.
+  const visible = useMemo(
+    () => new Set(filterTasks(tasks.data ?? [], filter).map((entry) => entry.id)),
+    [tasks.data, filter],
+  );
 
   if (run.isError) {
     return (
@@ -78,16 +110,31 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <RunPanel run={run.data} stages={stages.data} projectId={projectId} />
+      <RunPanel
+        run={run.data}
+        stages={stages.data}
+        projectId={projectId}
+        asGraph={asGraph}
+        onToggleGraph={() => {
+          const next = new URLSearchParams(search);
+          if (asGraph) next.delete('view');
+          else next.set('view', 'dag');
+          setSearch(next, { replace: true });
+        }}
+      />
 
       {/* Below 1200 the inspector leaves the grid and becomes a drawer (§66).
           Side by side it would take 400px from a table that only has ~740, and
           a task title rendered as "Criar en…" is a table nobody can scan.
           Chosen in JavaScript rather than with `hidden`, so only one inspector
           is ever in the document — see `use-media-query`. */}
+      {/* In graph mode the inspector only takes its column once there is a task
+          in it. A 448px "Select a task" placeholder beside a graph costs the
+          graph nearly 40% of its width, and width is the axis a left-to-right
+          dependency chain is actually short of. */}
       <div
         className={
-          asPane
+          asPane && (!asGraph || selectedTask !== undefined)
             ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
             : 'flex min-h-0 flex-1'
         }
@@ -96,8 +143,26 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
           tasks={tasks.data ?? []}
           selectedId={selectedTask}
           onSelect={setSelectedTask}
+          filter={filter}
+          onFilterChange={setFilter}
+          {...(asGraph
+            ? {
+                graph: (
+                  <Suspense fallback={<Empty title="Loading the graph…" />}>
+                    <DagView
+                      dag={dag.data}
+                      tasks={tasks.data ?? []}
+                      visible={visible}
+                      selectedId={selectedTask}
+                      onSelect={setSelectedTask}
+                      isLoading={dag.isLoading}
+                    />
+                  </Suspense>
+                ),
+              }
+            : {})}
         />
-        {asPane ? (
+        {asPane && (!asGraph || selectedTask !== undefined) ? (
           <TaskInspector
             task={task.data}
             projectId={projectId}
@@ -126,13 +191,20 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
       )}
 
       {/* Token-driven, because height is the scarce axis at 1280×800 and this
-          row is the part of the screen that can afford to give some back. */}
-      <div className="grid h-bottom shrink-0 grid-cols-4 gap-3">
-        <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
-        <ApprovalCard run={run.data} />
-        <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
-        <ModelUsageCard telemetry={telemetry.data} />
-      </div>
+          row is the part of the screen that can afford to give some back.
+
+          Hidden while the graph is open, and that is the whole reason the graph
+          is a view rather than a panel: 164px is a quarter of the canvas at
+          1280×800, and a graph squeezed into what is left is one nobody can
+          follow. The four summaries are one click away, on the same page. */}
+      {asGraph ? null : (
+        <div className="grid h-bottom shrink-0 grid-cols-4 gap-3">
+          <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
+          <ApprovalCard run={run.data} />
+          <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
+          <ModelUsageCard telemetry={telemetry.data} />
+        </div>
+      )}
 
       <ArtifactDialog
         projectId={projectId}

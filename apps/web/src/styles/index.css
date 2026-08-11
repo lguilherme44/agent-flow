@@ -47,3 +47,71 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/**
+ * React Flow, in this palette (UI-28).
+ *
+ * The library ships a light theme and a set of chrome elements — the zoom
+ * buttons, the connection ports — drawn for it. Retuning them here rather than
+ * inline keeps the rule of §67 intact: a colour is written down in one place, and
+ * a component never picks a shade of its own.
+ *
+ * Not inside `@layer utilities`: these override the library's own rules, which
+ * Tailwind's layers do not order against.
+ */
+.af-dag {
+  background: var(--af-bg);
+}
+
+/* The graph draws its own selection. React Flow's default ring would sit
+   underneath a node that is already outlined in purple, doubling it. */
+.af-dag .react-flow__node.selected {
+  box-shadow: none;
+}
+
+.af-dag .react-flow__node:focus-visible {
+  outline: 2px solid var(--af-primary);
+  outline-offset: 2px;
+}
+
+/* The ports exist so an edge has somewhere to attach. Nothing in this graph is
+   connectable by hand, so they are anchors rather than controls. */
+.af-dag .af-dag-port {
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  border: 0;
+}
+
+.af-dag .react-flow__controls {
+  box-shadow: none;
+}
+
+.af-dag .react-flow__controls-button {
+  background: var(--af-surface-2);
+  border-bottom: 1px solid var(--af-border);
+  color: var(--af-text-muted);
+  width: 26px;
+  height: 26px;
+}
+
+.af-dag .react-flow__controls-button:hover {
+  background: var(--af-surface-3);
+  color: var(--af-text);
+}
+
+.af-dag .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.af-dag .react-flow__attribution {
+  background: transparent;
+}
+
+.af-dag .react-flow__attribution a {
+  color: var(--af-text-faint);
+  font-size: 10px;
+}

@@ -138,6 +138,16 @@ const ROUTES: Record<string, unknown> = {
     content: '# SDD\n\nFR-001 — weekly recurrence.',
     truncated: false,
   },
+  '/api/v1/runs/AF-2026-001/dag': {
+    runId: 'AF-2026-001',
+    projectId: 'demo',
+    nodes: [
+      { taskId: 'TASK-001', depth: 0 },
+      { taskId: 'TASK-002', depth: 1 },
+    ],
+    edges: [{ from: 'TASK-001', to: 'TASK-002' }],
+    unresolved: [],
+  },
 };
 
 let calls: string[] = [];
@@ -286,6 +296,74 @@ describe('the run detail composition', () => {
       expect(call).toMatch(/^\/api\/v1\//);
       expect(call).not.toMatch(/\.\.|\/Users\/|\/etc\//);
     }
+  });
+});
+
+describe('UI-28 — the dependency graph', () => {
+  it('does not read the graph until somebody asks for it', async () => {
+    renderPage();
+    await screen.findByText('Implement generation');
+
+    expect(calls.filter((call) => call.endsWith('/dag'))).toEqual([]);
+  });
+
+  it('swaps the table for the graph, and says so in the URL', async () => {
+    renderPage();
+    await screen.findByText('Implement generation');
+
+    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+
+    expect(await screen.findByText('Task dependencies')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).toBeNull();
+    await waitFor(() => {
+      expect(calls.filter((call) => call.endsWith('/dag')).length).toBe(1);
+    });
+    expect(screen.getByRole('button', { name: 'View as DAG' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('carries the selection between the table and the graph', async () => {
+    // The rule of UI-28: one selection. A task chosen in the table is the task
+    // the graph highlights, and the inspector never changes what it is showing
+    // because the reader changed how they are looking at it.
+    renderPage();
+
+    await userEvent.click(await screen.findByText('Add recurrence types'));
+    expect(await screen.findByText('Domain types for recurrence.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+
+    // Still the same task in the inspector, and the graph knows which one it is.
+    expect(screen.getByText('Domain types for recurrence.')).toBeInTheDocument();
+    const node = await screen.findByRole('button', { name: /TASK-001/ });
+    expect(node).toBeInTheDocument();
+  });
+
+  it('draws a node per task and an edge per dependency', async () => {
+    renderPage();
+    await screen.findByText('Implement generation');
+    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+
+    // The accessible name carries the status in words, not only in colour (§97).
+    expect(await screen.findByRole('button', { name: /TASK-001.*completed/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /TASK-002.*running/i })).toBeInTheDocument();
+  });
+
+  it('keeps the filter when the view changes', async () => {
+    renderPage();
+    await screen.findByText('Implement generation');
+
+    await userEvent.click(screen.getByRole('button', { name: 'running' }));
+    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+
+    // The filter button is still pressed: filtering the table and then finding
+    // the graph showing everything would be two answers to one question.
+    expect(screen.getByRole('button', { name: 'running' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 });
 

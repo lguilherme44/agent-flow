@@ -20,6 +20,7 @@ import type {
   PromptContentView,
   PromptView,
   RoleRouteView,
+  RunDagView,
   RunDetailView,
   RunSummaryView,
   RunnerHealthView,
@@ -455,6 +456,134 @@ describe('UI-04 — the run read API', () => {
     ).json<{ entries: unknown[]; summary: { entries: number } }>();
 
     expect(telemetry.summary.entries).toBe(1);
+  });
+});
+
+describe('UI-28 — the dependency graph', () => {
+  /** A plan with a chain, a fan-out and a fan-in, replacing the fixture's two tasks. */
+  const GRAPH_PLAN = {
+    feature: 'weekly-recurrence',
+    tasks: ['TASK-001', 'TASK-002', 'TASK-003', 'TASK-004'].map((id, index) => ({
+      id,
+      title: `task ${id}`,
+      description: 'a task.',
+      complexity: 'normal',
+      risk: 'low',
+      dependencies:
+        index === 0 ? [] : index === 3 ? ['TASK-002', 'TASK-003'] : ['TASK-001'],
+      requirements: ['FR-001'],
+      acceptanceCriteria: ['it works.'],
+      validation: ['test'],
+    })),
+  };
+
+  async function withGraph(plan: unknown = GRAPH_PLAN) {
+    const context = await serve();
+    await context.store.writeArtifact(
+      context.run.runId,
+      'plan',
+      JSON.stringify(plan, null, 2),
+    );
+    return context;
+  }
+
+  it('answers with the plan’s edges and a drawing rank', async () => {
+    const { server, run } = await withGraph();
+
+    const dag = (await server.app.inject(`/api/v1/runs/${run.runId}/dag`)).json<RunDagView>();
+
+    expect(dag.runId).toBe(run.runId);
+    expect(dag.edges).toContainEqual({ from: 'TASK-001', to: 'TASK-002' });
+    expect(dag.edges).toContainEqual({ from: 'TASK-003', to: 'TASK-004' });
+    // The fan-in sits behind its slowest branch, not its first.
+    expect(dag.nodes.find((node) => node.taskId === 'TASK-004')?.depth).toBe(2);
+    expect(dag.invalid).toBeUndefined();
+  });
+
+  it('carries no status, model or duration', async () => {
+    // Structure only. Folding the runtime metadata in here would mean re-laying
+    // out a graph every time a task ticked over — and would put a second answer
+    // to "what state is this task in" on the wire.
+    const { server, run } = await withGraph();
+
+    const dag = (await server.app.inject(`/api/v1/runs/${run.runId}/dag`)).json<RunDagView>();
+
+    expect(Object.keys(dag.nodes[0] ?? {}).sort()).toEqual(['depth', 'taskId']);
+  });
+
+  it('reports a dependency the plan does not contain instead of inventing a node', async () => {
+    const { server, run } = await withGraph({
+      feature: 'weekly-recurrence',
+      tasks: [
+        {
+          ...GRAPH_PLAN.tasks[0],
+          id: 'TASK-002',
+          dependencies: ['TASK-000'],
+        },
+      ],
+    });
+
+    const dag = (await server.app.inject(`/api/v1/runs/${run.runId}/dag`)).json<RunDagView>();
+
+    expect(dag.nodes.map((node) => node.taskId)).not.toContain('TASK-000');
+    expect(dag.unresolved).toEqual([{ taskId: 'TASK-002', dependsOn: 'TASK-000' }]);
+  });
+
+  it('names a cycle rather than drawing a ranking that cannot exist', async () => {
+    const { server, run } = await withGraph({
+      feature: 'weekly-recurrence',
+      tasks: [
+        { ...GRAPH_PLAN.tasks[0], id: 'TASK-001', dependencies: ['TASK-002'] },
+        { ...GRAPH_PLAN.tasks[0], id: 'TASK-002', dependencies: ['TASK-001'] },
+      ],
+    });
+
+    const dag = (await server.app.inject(`/api/v1/runs/${run.runId}/dag`)).json<RunDagView>();
+
+    expect(dag.invalid?.kind).toBe('cycle');
+    // Both tasks are still there. A blank screen explains nothing, and the point
+    // of the view is to show what the plan says — including that it is impossible.
+    expect(dag.nodes.map((node) => node.taskId)).toEqual(
+      expect.arrayContaining(['TASK-001', 'TASK-002']),
+    );
+  });
+
+  it('agrees with the task list about every task’s state', async () => {
+    // The rule this endpoint exists to keep: one derivation, two views. A table
+    // saying QUEUED beside a graph saying READY is two answers about one task.
+    const { server, run, store } = await withGraph();
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: [
+        { id: 'TASK-001', state: 'completed', attempts: 1 },
+        { id: 'TASK-002', state: 'failed', attempts: 1 },
+        { id: 'TASK-003', state: 'queued', attempts: 0 },
+        { id: 'TASK-004', state: 'queued', attempts: 0 },
+      ],
+    }));
+
+    const tasks = (
+      await server.app.inject(`/api/v1/runs/${run.runId}/tasks`)
+    ).json<TaskSummaryView[]>();
+    const dag = (await server.app.inject(`/api/v1/runs/${run.runId}/dag`)).json<RunDagView>();
+
+    const stateOf = (id: string) => tasks.find((task) => task.id === id)?.state;
+
+    // TASK-003's dependency finished, so the graph calls it ready; TASK-004 sits
+    // behind a failure and will never start, which is not the same as "queued".
+    expect(stateOf('TASK-003')).toBe('ready');
+    expect(stateOf('TASK-004')).toBe('blocked');
+    expect(dag.nodes.map((node) => node.taskId).sort()).toEqual(
+      tasks.map((task) => task.id).sort(),
+    );
+  });
+
+  it('refuses a run nobody has', async () => {
+    const { server } = await serve();
+
+    const response = await server.app.inject('/api/v1/runs/AF-2026-999/dag');
+
+    expect(response.statusCode).toBe(404);
   });
 });
 

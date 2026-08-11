@@ -244,6 +244,22 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return tasks === null ? notFound(reply, 'no such run') : tasks;
   });
 
+  /**
+   * The dependency graph, as structure (§92).
+   *
+   * Separate from `/tasks` on purpose rather than folded into it. This response
+   * changes when the plan changes; `/tasks` changes every few seconds. A browser
+   * holding them as one query would re-lay-out a five-hundred-node graph each time
+   * a task ticked over.
+   */
+  app.get('/api/v1/runs/:runId/dag', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const dag = await reader.dag(scope.project, scope.runId);
+    return dag === null ? notFound(reply, 'no such run') : dag;
+  });
+
   app.get('/api/v1/runs/:runId/tasks/:taskId', async (request, reply) => {
     const params = TaskParamsSchema.safeParse(request.params);
     if (!params.success) return badRequest(reply, 'invalid run or task id');

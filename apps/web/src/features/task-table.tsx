@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { MoreVertical, Search, Wrench } from 'lucide-react';
 import type { TaskSummaryView } from '@contracts/index.js';
 import { Empty, Panel, SectionHeader, StatusDot, StripItem, cx } from '../components/ui';
@@ -28,36 +28,63 @@ import { countTasks } from './run-overview';
 
 export type StatusFilter = 'all' | 'completed' | 'running' | 'waiting' | 'failed';
 
+/**
+ * What the reader has narrowed the tasks down to.
+ *
+ * Owned by the page rather than by this panel, because the graph shows the same
+ * tasks and filtering one view while the other kept everything would be two
+ * answers to one question. The *state* is lifted; the *rule* never moved — both
+ * views run `filterTasks` below.
+ */
+export interface TaskFilter {
+  readonly query: string;
+  readonly status: StatusFilter;
+}
+
+export const NO_FILTER: TaskFilter = { query: '', status: 'all' };
+
 export interface TaskTableProps {
   readonly tasks: TaskSummaryView[];
   readonly selectedId: string | undefined;
   readonly onSelect: (taskId: string) => void;
+  readonly filter: TaskFilter;
+  readonly onFilterChange: (filter: TaskFilter) => void;
+  /**
+   * Rendered in place of the table when the reader asked for the graph (§92).
+   *
+   * A slot rather than an import: the graph pulls in a rendering library, and the
+   * panel — header, filters, counts — has no business knowing that exists.
+   */
+  readonly graph?: ReactNode;
 }
 
 export function TaskTable(props: TaskTableProps): JSX.Element {
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<StatusFilter>('all');
+  const { filter, onFilterChange } = props;
+  const asGraph = props.graph !== undefined;
 
   const visible = useMemo(
-    () => filterTasks(props.tasks, { query, status }),
-    [props.tasks, query, status],
+    () => filterTasks(props.tasks, filter),
+    [props.tasks, filter],
   );
   const counts = countTasks(props.tasks);
 
   return (
     <Panel
-      className="min-w-0"
+      // `flex-1` matters only when the inspector is not beside it — in graph
+      // mode with nothing selected, where the panel is the sole flex child and
+      // would otherwise size to its content and leave the rest of the row blank.
+      className="min-w-0 flex-1"
       header={
         <>
-          <SectionHeader title="Implementation tasks">
+          <SectionHeader title={asGraph ? 'Task dependencies' : 'Implementation tasks'}>
             <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
               <label className="flex min-w-0 max-w-56 flex-1 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 py-1">
                 <Search className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden />
                 <span className="sr-only">Search tasks</span>
                 <input
-                  value={query}
+                  value={filter.query}
                   onChange={(changed) => {
-                    setQuery(changed.target.value);
+                    onFilterChange({ ...filter, query: changed.target.value });
                   }}
                   placeholder="id, title or requirement"
                   className="w-full bg-transparent text-label text-text placeholder:text-faint focus:outline-none"
@@ -69,13 +96,13 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                   <button
                     key={option}
                     type="button"
-                    aria-pressed={status === option}
+                    aria-pressed={filter.status === option}
                     onClick={() => {
-                      setStatus(option);
+                      onFilterChange({ ...filter, status: option });
                     }}
                     className={cx(
                       'rounded-sm px-1.5 py-0.5 text-micro capitalize',
-                      status === option
+                      filter.status === option
                         ? 'bg-primary-soft font-medium text-text'
                         : 'text-faint hover:bg-surface-2 hover:text-text',
                     )}
@@ -98,6 +125,12 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
       }
       divided
     >
+      {/* The graph replaces the body, not the panel. Same header, same counts,
+          same filter, same selection — one surface showing the tasks two ways,
+          rather than two surfaces that could disagree about which one is open. */}
+      {asGraph ? (
+        props.graph
+      ) : (
       <div className="min-h-0 flex-1 overflow-auto">
         {visible.length === 0 ? (
           <Empty
@@ -281,6 +314,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
           </table>
         )}
       </div>
+      )}
     </Panel>
   );
 }
@@ -314,7 +348,7 @@ function Td(props: {
  */
 export function filterTasks(
   tasks: readonly TaskSummaryView[],
-  filter: { query: string; status: StatusFilter },
+  filter: TaskFilter,
 ): TaskSummaryView[] {
   const needle = filter.query.trim().toLowerCase();
 

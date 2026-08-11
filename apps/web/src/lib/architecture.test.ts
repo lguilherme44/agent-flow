@@ -31,12 +31,15 @@ function sources(): { path: string; text: string }[] {
 
 /** Strips comments and string literals, so prose cannot trip an identifier scan. */
 function codeOnly(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+  return withoutComments(text)
     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+}
+
+/** Comments gone, strings kept — for rules about what the screen says. */
+function withoutComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
 }
 
 describe('server state lives in the query cache and nowhere else (§88)', () => {
@@ -77,6 +80,52 @@ describe('server state lives in the query cache and nowhere else (§88)', () => 
     );
 
     expect(timers.map((entry) => entry.path)).toEqual(['hooks/use-live-events.ts']);
+  });
+});
+
+describe('the graph is drawn from the server’s answer, never derived (UI-28)', () => {
+  it('works out no readiness of its own', () => {
+    // `ready` and `blocked` are §22's rules, computed by `core/dag` and served
+    // through the application layer. A browser that decided either would be a
+    // second scheduler — one that is never wrong on screen and never right on
+    // disk, because nothing would ever compare them.
+    const offenders = sources()
+      .filter(({ text }) =>
+        /readyTasks|blockedByFailure|topologicalOrder|buildDag/.test(codeOnly(text)),
+      )
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('builds its adjacency from the served edges, not from a task’s own field', () => {
+    // `TaskSummaryView.dependencies` is there to be *displayed* — the inspector
+    // lists them. Building the picture from it would mean the graph and the
+    // server could disagree about which edges exist, and the server is the one
+    // that validated them against the plan.
+    for (const file of ['lib/dag-layout.ts', 'features/dag-view.tsx']) {
+      const source = sources().find((entry) => entry.path === file);
+      expect(source, `${file} is missing`).toBeDefined();
+      expect(codeOnly(source?.text ?? ''), `${file} reads a task's dependencies`).not.toMatch(
+        /\.dependencies\b/,
+      );
+    }
+  });
+
+  it('claims no critical path', () => {
+    // §92 defers it, and the highlight this view has answers a different, much
+    // cheaper question: what a task waits for and what waits on it. Calling that
+    // a critical path would be a claim about duration the view cannot support.
+    //
+    // Comments are stripped and strings are kept — the opposite of `codeOnly`.
+    // A doc comment explaining why this is *not* a critical path is the thing
+    // that keeps somebody from renaming it into one; a label on screen saying it
+    // is one is the failure.
+    const offenders = sources()
+      .filter(({ text }) => /critical[\s_-]?path/i.test(withoutComments(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
   });
 });
 

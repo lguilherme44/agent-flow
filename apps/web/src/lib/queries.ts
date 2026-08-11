@@ -13,6 +13,7 @@ import type {
   PromptContentView,
   PromptView,
   RoleRouteView,
+  RunDagView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
@@ -51,6 +52,8 @@ export const keys = {
     ['stages', { runId, projectId }] as const,
   tasks: (projectId: string | undefined, runId: string) =>
     ['tasks', { runId, projectId }] as const,
+  dag: (projectId: string | undefined, runId: string) =>
+    ['dag', { runId, projectId }] as const,
   task: (projectId: string | undefined, runId: string, taskId: string) =>
     ['task', { runId, taskId, projectId }] as const,
   artifacts: (projectId: string | undefined, runId: string) =>
@@ -109,6 +112,31 @@ export function useTasks(
     queryKey: keys.tasks(projectId, runId ?? ''),
     queryFn: () => api.tasks(runId as string, projectId),
     enabled: runId !== undefined,
+  });
+}
+
+/**
+ * The plan's dependency graph (§92).
+ *
+ * A separate query from `useTasks` because it changes on a different clock. The
+ * graph moves when the plan does — a re-plan, a corrective round — and the task
+ * list moves every few seconds. Held together they would re-lay-out the graph on
+ * every status tick; held apart, the layout survives until the structure itself
+ * changes.
+ *
+ * `staleTime` is long for the same reason, and the stream still invalidates this
+ * when a stage completes, which is when a plan can have been replaced.
+ */
+export function useRunDag(
+  projectId: string | undefined,
+  runId: string | undefined,
+  options: { enabled?: boolean } = {},
+): UseQueryResult<RunDagView> {
+  return useQuery({
+    queryKey: keys.dag(projectId, runId ?? ''),
+    queryFn: () => api.dag(runId as string, projectId),
+    enabled: runId !== undefined && (options.enabled ?? true),
+    staleTime: 60_000,
   });
 }
 

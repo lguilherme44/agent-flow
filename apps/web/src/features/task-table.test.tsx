@@ -1,9 +1,36 @@
 import { describe, it, expect, vi } from 'vitest';
+import { useState, type ReactNode } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { TaskSummaryView } from '@contracts/index.js';
-import { TaskTable, filterTasks } from './task-table';
+import { NO_FILTER, TaskTable, filterTasks, type TaskFilter } from './task-table';
 import { countTasks } from './run-overview';
+
+/**
+ * The filter belongs to the page now, because the graph shares it (UI-28).
+ *
+ * This holds it so the panel can still be driven the way a person drives it —
+ * type, click, see fewer rows — rather than asserted against a prop.
+ */
+function Table(props: {
+  tasks: TaskSummaryView[];
+  selectedId?: string;
+  onSelect?: (taskId: string) => void;
+  graph?: ReactNode;
+}): JSX.Element {
+  const [filter, setFilter] = useState<TaskFilter>(NO_FILTER);
+
+  return (
+    <TaskTable
+      tasks={props.tasks}
+      selectedId={props.selectedId}
+      onSelect={props.onSelect ?? (() => undefined)}
+      filter={filter}
+      onFilterChange={setFilter}
+      {...(props.graph === undefined ? {} : { graph: props.graph })}
+    />
+  );
+}
 
 const task = (overrides: Partial<TaskSummaryView> = {}): TaskSummaryView => ({
   id: 'TASK-001',
@@ -60,7 +87,7 @@ describe('filterTasks', () => {
 
 describe('TaskTable', () => {
   it('renders a row per task with its status in words', () => {
-    render(<TaskTable tasks={TASKS} selectedId={undefined} onSelect={() => undefined} />);
+    render(<Table tasks={TASKS} />);
 
     // Status is text as well as colour (§97): a greyscale screenshot and a
     // colour-blind reader must get the same answer.
@@ -70,14 +97,14 @@ describe('TaskTable', () => {
   });
 
   it('marks a corrective task as one', () => {
-    render(<TaskTable tasks={TASKS} selectedId={undefined} onSelect={() => undefined} />);
+    render(<Table tasks={TASKS} />);
 
     expect(screen.getByLabelText('corrective task')).toBeInTheDocument();
   });
 
   it('selects on click', async () => {
     const onSelect = vi.fn();
-    render(<TaskTable tasks={TASKS} selectedId={undefined} onSelect={onSelect} />);
+    render(<Table tasks={TASKS} onSelect={onSelect} />);
 
     await userEvent.click(screen.getByText('Implement generation'));
 
@@ -88,7 +115,7 @@ describe('TaskTable', () => {
     // A table nobody can drive without a mouse is not navigable, whatever it
     // looks like (§97).
     const onSelect = vi.fn();
-    render(<TaskTable tasks={TASKS} selectedId={undefined} onSelect={onSelect} />);
+    render(<Table tasks={TASKS} onSelect={onSelect} />);
 
     const row = screen.getByText('Implement generation').closest('tr');
     row?.focus();
@@ -98,7 +125,7 @@ describe('TaskTable', () => {
   });
 
   it('filters by status from the toolbar', async () => {
-    render(<TaskTable tasks={TASKS} selectedId={undefined} onSelect={() => undefined} />);
+    render(<Table tasks={TASKS} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'failed' }));
 
@@ -108,7 +135,7 @@ describe('TaskTable', () => {
   });
 
   it('searches as you type', async () => {
-    render(<TaskTable tasks={TASKS} selectedId={undefined} onSelect={() => undefined} />);
+    render(<Table tasks={TASKS} />);
 
     await userEvent.type(screen.getByLabelText('Search tasks'), 'redact');
 
@@ -117,8 +144,21 @@ describe('TaskTable', () => {
   });
 
   it('says so when a filter matches nothing', () => {
-    render(<TaskTable tasks={[]} selectedId={undefined} onSelect={() => undefined} />);
+    render(<Table tasks={[]} />);
 
     expect(screen.getByText('No tasks yet.')).toBeInTheDocument();
+  });
+
+  it('swaps the body for the graph and keeps the header (UI-28)', () => {
+    // The graph replaces the rows, not the panel. Same search box, same status
+    // filter, same counts — one surface showing the tasks two ways rather than
+    // two surfaces that could disagree about which tasks they are showing.
+    render(<Table tasks={TASKS} graph={<p>the graph</p>} />);
+
+    expect(screen.getByText('Task dependencies')).toBeInTheDocument();
+    expect(screen.getByText('the graph')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.getByLabelText('Search tasks')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Filter by status' })).toBeInTheDocument();
   });
 });

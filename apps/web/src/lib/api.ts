@@ -15,6 +15,7 @@ import type {
   PromptContentView,
   PromptView,
   RoleRouteView,
+  RunDagView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
@@ -151,6 +152,10 @@ export const api = {
     get<StageViewResponse[]>(`/runs/${runId}/stages`, { projectId }),
   tasks: (runId: string, projectId?: string) =>
     get<TaskSummaryView[]>(`/runs/${runId}/tasks`, { projectId }),
+  // Structure only. The nodes' titles, statuses and models come from `tasks`
+  // above — the same list the table renders, so the two views cannot disagree.
+  dag: (runId: string, projectId?: string) =>
+    get<RunDagView>(`/runs/${runId}/dag`, { projectId }),
   task: (runId: string, taskId: string, projectId?: string) =>
     get<TaskDetailView>(`/runs/${runId}/tasks/${taskId}`, { projectId }),
   artifacts: (runId: string, projectId?: string) =>

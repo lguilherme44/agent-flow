@@ -241,6 +241,13 @@ export function Button(props: {
   disabled?: boolean;
   title?: string;
   type?: 'button' | 'submit';
+  /**
+   * Marks a button that turns something on and leaves it on.
+   *
+   * A toggle that only looked different is a toggle a screen reader cannot
+   * report the state of, and colour alone is not a state (§97).
+   */
+  pressed?: boolean;
   className?: string;
 }): JSX.Element {
   const variant = props.variant ?? 'surface';
@@ -251,6 +258,7 @@ export function Button(props: {
       onClick={props.onClick}
       disabled={props.disabled}
       title={props.title}
+      aria-pressed={props.pressed}
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-sm font-medium',
         'transition-colors disabled:cursor-not-allowed disabled:opacity-45',

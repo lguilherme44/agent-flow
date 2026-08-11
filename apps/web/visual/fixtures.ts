@@ -22,6 +22,7 @@ import type {
   PromptContentView,
   PromptView,
   RoleRouteView,
+  RunDagView,
   RunnerView,
   RunDetailView,
   RunSummaryView,
@@ -244,6 +245,44 @@ export const TASKS: TaskSummaryView[] = [
     validationPassed: true,
   }),
 ];
+
+/**
+ * The graph the server would derive from the plan behind `TASKS` (UI-28).
+ *
+ * Written out rather than computed here: computing it would be a second
+ * implementation of `describeRunGraph`, and a fixture that agrees with itself
+ * proves nothing. `dag.spec.ts` checks these edges against the tasks' own
+ * `dependencies`, so a fixture that drifts fails rather than draws.
+ *
+ * The shape is deliberate — a chain, a fan-out at TASK-005, a fan-in at
+ * TASK-008, and a second root — because a straight line would prove nothing
+ * about columns, rows or crossings.
+ */
+export const DAG: RunDagView = {
+  runId: RUN_ID,
+  projectId: 'beahub-api',
+  nodes: [
+    { taskId: 'TASK-001', depth: 0 },
+    { taskId: 'FIX-001', depth: 0 },
+    { taskId: 'TASK-002', depth: 1 },
+    { taskId: 'TASK-003', depth: 2 },
+    { taskId: 'TASK-004', depth: 3 },
+    { taskId: 'TASK-005', depth: 4 },
+    { taskId: 'TASK-006', depth: 5 },
+    { taskId: 'TASK-007', depth: 5 },
+    { taskId: 'TASK-008', depth: 6 },
+  ],
+  edges: [
+    { from: 'TASK-001', to: 'TASK-002' },
+    { from: 'TASK-002', to: 'TASK-003' },
+    { from: 'TASK-003', to: 'TASK-004' },
+    { from: 'TASK-004', to: 'TASK-005' },
+    { from: 'TASK-005', to: 'TASK-006' },
+    { from: 'TASK-005', to: 'TASK-007' },
+    { from: 'TASK-007', to: 'TASK-008' },
+  ],
+  unresolved: [],
+};
 
 export const TASK_DETAIL: TaskDetailView = {
   ...RUNNING_TASK,
@@ -910,6 +949,7 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}`]: RUN,
   [`/api/v1/runs/${RUN_ID}/stages`]: STAGES,
   [`/api/v1/runs/${RUN_ID}/tasks`]: TASKS,
+  [`/api/v1/runs/${RUN_ID}/dag`]: DAG,
   [`/api/v1/runs/${RUN_ID}/tasks/TASK-003`]: TASK_DETAIL,
   [`/api/v1/runs/${RUN_ID}/artifacts`]: ARTIFACTS,
   [`/api/v1/runs/${RUN_ID}/telemetry`]: TELEMETRY,

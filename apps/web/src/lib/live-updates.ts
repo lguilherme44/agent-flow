@@ -26,19 +26,31 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
     ['telemetry', { runId }],
   ];
 
+  // A task moving changes its state, never the plan it came from. The graph is
+  // deliberately not in this list: re-fetching structure on every tick would
+  // re-lay-out a five-hundred-node view because one duration changed (§96).
   if (event.type.startsWith('task.')) {
     return [...runScoped, ['tasks', { runId }], ['task', { runId }]];
   }
 
+  // A stage finishing can have replaced the plan — planning writes one, and a
+  // corrective round appends to it — so this is where the graph is re-read.
   if (event.type.startsWith('stage.')) {
-    return [...runScoped, ['artifacts', { runId }]];
+    return [...runScoped, ['artifacts', { runId }], ['dag', { runId }]];
   }
 
   // A job's own lifecycle. Published by the server rather than derived from the
   // run, because a refused action never touches `state.json` — and invalidating the
   // run alongside it, since a job that finished may well have changed one.
   if (event.type.startsWith('job.')) {
-    return [...runScoped, ['job', { runId }], ['tasks', { runId }], ['artifacts', { runId }]];
+    return [
+      ...runScoped,
+      ['job', { runId }],
+      ['tasks', { runId }],
+      ['artifacts', { runId }],
+      // `revise` is a job, and it re-plans. Nothing else would tell the graph.
+      ['dag', { runId }],
+    ];
   }
 
   if (event.type.startsWith('approval.')) {
@@ -52,7 +64,14 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
   // `run.updated` and anything this table has never seen. Broad on purpose: a
   // new event type must refresh too much rather than too little, because too
   // little looks exactly like nothing happening.
-  return [...runScoped, ['tasks', { runId }], ['artifacts', { runId }], ['runs'], ['projects']];
+  return [
+    ...runScoped,
+    ['tasks', { runId }],
+    ['artifacts', { runId }],
+    ['dag', { runId }],
+    ['runs'],
+    ['projects'],
+  ];
 }
 
 export function applyServerEvent(client: QueryClient, event: ServerEvent): void {

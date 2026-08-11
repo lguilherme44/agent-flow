@@ -3,6 +3,7 @@ import {
   type ArtifactContentView,
   type ArtifactView,
   type Plan,
+  type RunDagView,
   type RunDetailView,
   type RunRefView,
   type RunStatus,
@@ -11,10 +12,12 @@ import {
   type StageViewResponse,
   type Task,
   type TaskDetailView,
+  type TaskState,
   type TaskSummaryView,
 } from '../contracts/index.js';
 import { StateStore } from '../app/state-store.js';
 import { runPaths, type ArtifactName } from '../app/paths.js';
+import { describeRunGraph, effectiveTaskStates, type GraphTask } from '../app/run-graph.js';
 import { buildStageTimeline } from '../core/stage-timeline.js';
 import { stripAnsi } from './ansi.js';
 import type { Clock, FileSystem } from '../ports/index.js';
@@ -192,6 +195,11 @@ export class RunReader {
     // plan was replaced under it, which is worth seeing rather than hiding.
     const ids = [...new Set([...planned.keys(), ...state.tasks.map((task) => task.id)])];
 
+    // `ready` and `blocked` are conditions over the graph, not records — §22 is
+    // explicit that neither is persisted. Derived through the same function the
+    // DAG view uses, so the table and the graph cannot describe one task two ways.
+    const effective = effectiveTaskStates(graphTasks(ids, planned), storedStates(state));
+
     for (const id of ids) {
       const task = planned.get(id);
       const progress = state.tasks.find((entry) => entry.id === id);
@@ -202,7 +210,7 @@ export class RunReader {
         title: task?.title ?? id,
         complexity: task?.complexity ?? 'normal',
         risk: task?.risk ?? 'low',
-        state: progress?.state ?? 'queued',
+        state: effective[id] ?? progress?.state ?? 'queued',
         attempts: progress?.attempts ?? 0,
         requirements: [...(task?.requirements ?? [])],
         dependencies: [...(task?.dependencies ?? [])],
@@ -230,6 +238,45 @@ export class RunReader {
     }
 
     return views;
+  }
+
+  /**
+   * The plan's dependency graph (§92).
+   *
+   * Structure only, and derived rather than stored: the plan's `dependencies` are
+   * the truth, and the ranking comes from the same `core/dag` the scheduler runs
+   * on — through the application service, so this file holds no graph logic of its
+   * own. A second serialisation of "what may run" is precisely what §60 forbids.
+   */
+  async dag(project: RegisteredProject, runId: string): Promise<RunDagView | null> {
+    const state = await this.loadState(project, runId);
+    if (state === null) return null;
+
+    const plan = await this.loadPlan(this.storeFor(project), runId);
+    const planned = new Map((plan?.tasks ?? []).map((task) => [task.id, task]));
+    const ids = [...new Set([...planned.keys(), ...state.tasks.map((task) => task.id)])];
+
+    const graph = describeRunGraph(graphTasks(ids, planned));
+
+    return {
+      runId,
+      projectId: project.id,
+      nodes: graph.nodes.map((node) => ({ taskId: node.taskId, depth: node.depth })),
+      edges: graph.edges.map((edge) => ({ from: edge.from, to: edge.to })),
+      unresolved: graph.unresolved.map((entry) => ({
+        taskId: entry.taskId,
+        dependsOn: entry.dependsOn,
+      })),
+      ...(graph.invalid === undefined
+        ? {}
+        : {
+            invalid: {
+              kind: graph.invalid.kind,
+              message: graph.invalid.message,
+              ...(graph.invalid.cycle === undefined ? {} : { cycle: [...graph.invalid.cycle] }),
+            },
+          }),
+    };
   }
 
   async taskDetail(
@@ -385,4 +432,21 @@ export class RunReader {
       .split('\n')
       .filter((line) => line.length > 0);
   }
+}
+
+/**
+ * The graph's view of the run's tasks: an id and what it waits for.
+ *
+ * A task the run knows about but the plan does not gets no dependencies — the
+ * plan is where dependencies are declared, and a task that outlived its plan has
+ * nowhere to declare them.
+ */
+function graphTasks(ids: readonly string[], planned: ReadonlyMap<string, Task>): GraphTask[] {
+  return ids.map((id) => ({ id, dependencies: planned.get(id)?.dependencies ?? [] }));
+}
+
+function storedStates(state: RunState): Record<string, TaskState> {
+  const states: Record<string, TaskState> = {};
+  for (const task of state.tasks) states[task.id] = task.state;
+  return states;
 }

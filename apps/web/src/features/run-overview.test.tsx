@@ -101,7 +101,7 @@ describe('countTasks', () => {
 
 describe('RunHeader', () => {
   it('leads with the run id, its status and the feature', () => {
-    render(withTooltips(<RunHeader run={run()} projectId="demo" />));
+    render(withTooltips(<RunHeader run={run()} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('AF-2026-001');
     expect(screen.getByText('Add weekly recurrence')).toBeInTheDocument();
@@ -115,7 +115,7 @@ describe('RunHeader', () => {
     // a run that finished hours ago — a stopped run has no clock.
     render(
       withTooltips(
-        <RunHeader run={run({ status: 'completed', durationMs: 2_482_000 })} projectId="demo" />,
+        <RunHeader run={run({ status: 'completed', durationMs: 2_482_000 })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />,
       ),
     );
 
@@ -126,18 +126,21 @@ describe('RunHeader', () => {
     // An approved run mid-execution: it can be resumed and it can be revised. It
     // cannot be approved again, and it is not offered a Reject button, because a
     // control whose only outcome is a refusal teaches people to ignore refusals.
-    render(withTooltips(<RunHeader run={run({ approved: true })} projectId="demo" />));
+    render(withTooltips(<RunHeader run={run({ approved: true })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
 
     expect(screen.getByRole('button', { name: 'Resume run' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Revise' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
 
-    // The one still genuinely absent. Composition present, behaviour honest.
-    expect(screen.getByRole('button', { name: 'View as DAG' })).toBeDisabled();
+    // Real as of UI-28, and a toggle rather than a link: the graph is another
+    // rendering of the task list on this page, not a place to go.
+    const graph = screen.getByRole('button', { name: 'View as DAG' });
+    expect(graph).toBeEnabled();
+    expect(graph).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('asks for approval before it offers to start', () => {
-    render(withTooltips(<RunHeader run={run({ approved: false, progress: 0 })} projectId="demo" />));
+    render(withTooltips(<RunHeader run={run({ approved: false, progress: 0 })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
 
     expect(screen.getByRole('button', { name: 'Review & approve' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: /run$/ })).toBeNull();
@@ -148,7 +151,7 @@ describe('RunHeader', () => {
   it('offers nothing to change on a finished run', () => {
     render(
       withTooltips(
-        <RunHeader run={run({ status: 'completed', approved: true, progress: 100 })} projectId="demo" />,
+        <RunHeader run={run({ status: 'completed', approved: true, progress: 100 })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />,
       ),
     );
 
@@ -173,6 +176,8 @@ describe('RunHeader', () => {
             ],
           })}
           projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -217,7 +222,7 @@ describe('RunPanel', () => {
   it('is one surface holding the run and its pipeline', () => {
     // The composition change that matters: header and pipeline answer one
     // question together, and two bordered cards read as two unrelated widgets.
-    const { container } = render(withTooltips(<RunPanel run={run()} stages={STAGES} projectId="demo" />));
+    const { container } = render(withTooltips(<RunPanel run={run()} stages={STAGES} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
 
     const panel = container.querySelector('section');
     expect(panel).not.toBeNull();
@@ -228,7 +233,7 @@ describe('RunPanel', () => {
   });
 
   it('renders without a pipeline the server has not produced yet', () => {
-    render(withTooltips(<RunPanel run={run()} stages={undefined} projectId="demo" />));
+    render(withTooltips(<RunPanel run={run()} stages={undefined} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
 
     expect(screen.queryByRole('list', { name: 'Pipeline' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
