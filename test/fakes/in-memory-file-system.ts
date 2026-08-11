@@ -26,9 +26,38 @@ export class InMemoryFileSystem implements FileSystem {
   /** Every path handed to writeFileAtomic, in order. Includes temp files. */
   readonly writes: string[] = [];
 
+  /** Symbolic links, as link path → what it really is. */
+  private readonly links = new Map<string, string>();
+
   seed(path: string, content: string): void {
     this.ensureParents(path);
     this.files.set(path, content);
+  }
+
+  /**
+   * Declares `path` to be a symbolic link to `target`.
+   *
+   * Reads go through it, which is the point: a fake where a link resolved but
+   * nothing behind it was reachable would let a discovery test pass by finding
+   * nothing, for the wrong reason. Every read below resolves the longest declared
+   * link that prefixes the path, so `/wk/current/.agent-flow/config.yaml` is the
+   * file at the target — exactly the situation UI-29's containment rule exists
+   * for.
+   */
+  link(path: string, target: string): void {
+    this.links.set(path, target);
+    this.mkdirpSync(path);
+  }
+
+  /** The longest declared link that prefixes `path`, applied. */
+  private resolve(path: string): string {
+    const longest = [...this.links.keys()]
+      .filter((link) => path === link || path.startsWith(`${link}/`))
+      .sort((a, b) => b.length - a.length)[0];
+
+    return longest === undefined
+      ? path
+      : `${this.links.get(longest) ?? longest}${path.slice(longest.length)}`;
   }
 
   snapshot(): Record<string, string> {
@@ -45,7 +74,7 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async readFile(path: string): Promise<string> {
-    const content = this.files.get(path);
+    const content = this.files.get(this.resolve(path));
     if (content === undefined) throw new Error(`ENOENT: ${path}`);
     return content;
   }
@@ -78,10 +107,15 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async exists(path: string): Promise<boolean> {
-    return this.files.has(path) || this.dirs.has(path);
+    const resolved = this.resolve(path);
+    return this.files.has(resolved) || this.dirs.has(resolved);
   }
 
   async mkdirp(path: string): Promise<void> {
+    this.mkdirpSync(path);
+  }
+
+  private mkdirpSync(path: string): void {
     const parts = path.split('/').filter(Boolean);
     let current = '';
     for (const part of parts) {
@@ -91,10 +125,11 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async readDir(path: string): Promise<string[]> {
-    const prefix = path.endsWith('/') ? path : `${path}/`;
+    const resolved = this.resolve(path);
+    const prefix = resolved.endsWith('/') ? resolved : `${resolved}/`;
     const entries = new Set<string>();
     for (const key of [...this.files.keys(), ...this.dirs]) {
-      if (!key.startsWith(prefix) || key === path) continue;
+      if (!key.startsWith(prefix) || key === resolved) continue;
       const rest = key.slice(prefix.length);
       const head = rest.split('/')[0];
       if (head) entries.add(head);
@@ -126,9 +161,14 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
-    if (this.dirs.has(path)) return { isDirectory: true, mtimeMs: 0, size: 0 };
-    const content = this.files.get(path);
+    const resolved = this.resolve(path);
+    if (this.dirs.has(resolved)) return { isDirectory: true, mtimeMs: 0, size: 0 };
+    const content = this.files.get(resolved);
     if (content === undefined) return null;
     return { isDirectory: false, mtimeMs: 0, size: content.length };
+  }
+
+  async realPath(path: string): Promise<string | null> {
+    return (await this.exists(path)) ? this.resolve(path) : null;
   }
 }

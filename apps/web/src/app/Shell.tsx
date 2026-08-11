@@ -20,7 +20,7 @@ import { useLiveEvents, type ConnectionState } from '../hooks/use-live-events';
 import { useProjects, useRunnerHealth, useRuns } from '../lib/queries';
 import { pickRun } from '../pages/DashboardPage';
 import { cx } from '../components/ui';
-import { runTone, TONE_DOT } from '../lib/status';
+import { runLabel, runTone, TONE_DOT } from '../lib/status';
 
 /**
  * The frame (§66, §68, §69).
@@ -97,7 +97,11 @@ function Sidebar(): JSX.Element {
 
         {projects.data === undefined || projects.data.length === 0 ? (
           <p className="px-2 text-micro text-faint">
-            {projects.isLoading ? 'Loading…' : 'None found.'}
+            {projects.isLoading
+              ? 'Loading…'
+              : projects.isError
+                ? 'The registry could not be read.'
+                : 'No Agent Flow project found.'}
           </p>
         ) : (
           <ul className="flex flex-col gap-px">
@@ -116,17 +120,28 @@ function Sidebar(): JSX.Element {
                     }}
                     aria-current={active ? 'true' : undefined}
                     className={cx(
-                      'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left',
+                      'flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left',
                       active
                         ? 'bg-primary-soft text-text'
                         : 'text-muted hover:bg-surface-2 hover:text-text',
                     )}
                   >
                     <span
-                      className={cx('h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[tone])}
+                      className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[tone])}
                       aria-hidden
                     />
-                    <span className="truncate text-label">{project.name}</span>
+                    {/* Two lines, as §65 draws it: the project, and what it is
+                        doing. A workspace of six repositories where every row is
+                        a name and a coloured dot answers "which of these needs
+                        me" only by hovering each one in turn. */}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate text-label">{project.name}</span>
+                      <span className="truncate text-micro text-faint">
+                        {project.currentRunId === null || project.status === null
+                          ? 'idle'
+                          : `${project.currentRunId} ${runLabel(project.status).toLowerCase()}`}
+                      </span>
+                    </span>
                   </button>
                 </li>
               );

@@ -37,4 +37,18 @@ export interface FileSystem {
    * whole value of this member is that the answer is decided by the kernel.
    */
   createExclusive(path: string, content: string): Promise<boolean>;
+
+  /**
+   * The path with every symbolic link resolved, or null when it does not exist.
+   *
+   * Declared here rather than solved at each call site because it answers a
+   * security question, not a convenience one (§93, UI-29). Workspace discovery
+   * walks directories the operator pointed it at, and a symlink inside one of
+   * them can point anywhere on the machine — including at a repository the
+   * operator has no idea they just published on a local HTTP port. Comparing
+   * resolved paths is the only way to tell whether a directory is really under
+   * the root, and `stat` cannot: it follows the link and reports a perfectly
+   * ordinary directory.
+   */
+  realPath(path: string): Promise<string | null>;
 }

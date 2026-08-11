@@ -109,6 +109,21 @@ export class NodeFileSystem implements FileSystem {
       return null;
     }
   }
+
+  /**
+   * Separators are normalised to `/`, because callers compare these to each other.
+   *
+   * Everything in this codebase builds paths with `/`, and on Windows `realpath`
+   * hands back `\`. A containment check between one of each would decide that
+   * nothing is inside anything — which fails safe, but silently and wrongly.
+   */
+  async realPath(path: string): Promise<string | null> {
+    try {
+      return (await fs.realpath(path)).replace(/\\/g, '/');
+    } catch {
+      return null;
+    }
+  }
 }
 
 function basename(path: string): string {

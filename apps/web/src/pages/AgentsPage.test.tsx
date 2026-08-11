@@ -147,11 +147,11 @@ function renderPage(): void {
   render(
     <QueryClientProvider client={createQueryClient()}>
       <TooltipPrimitive.Provider>
-        <ProjectProvider>
-          <MemoryRouter initialEntries={['/agents']}>
+        <MemoryRouter initialEntries={['/agents']}>
+            <ProjectProvider>
             <AgentsPage />
-          </MemoryRouter>
-        </ProjectProvider>
+            </ProjectProvider>
+        </MemoryRouter>
       </TooltipPrimitive.Provider>
     </QueryClientProvider>,
   );

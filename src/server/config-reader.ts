@@ -12,13 +12,16 @@ import type { RegisteredProject } from './project-registry.js';
  * worth having: "parallelism is 1" invites an edit to the wrong file, while
  * "parallelism is 1, from this project's override" says where to look.
  *
- * Three sections the spec names have no keys behind them, and each says so rather
+ * Two sections the spec names have no keys behind them, and each says so rather
  * than showing a plausible blank. **Models** is the routing table, which has its
- * own page and would be a second place to read the same thing. **UI** has no
- * persisted settings at all — the dashboard keeps its preferences in the browser
- * and the server has none to report. **Retention** is a flag on `agent-flow clean`
- * rather than configuration, so there is nothing here to show or to change.
- * Inventing rows for them would present three settings nothing reads.
+ * own page and would be a second place to read the same thing. **Retention** is a
+ * flag on `agent-flow clean` rather than configuration, so there is nothing here
+ * to show or to change. Inventing rows for them would present settings nothing
+ * reads.
+ *
+ * **UI** used to be the third, and stopped being one with UI-29: `ui.workspaceDepth`
+ * decides how far `agent-flow ui ~/wk` looks for projects, which is to say what
+ * this server will serve at all. That belongs on a page about what is configured.
  *
  * Nothing here opens an auth file, reads an environment variable, or reports a
  * secret. The only files it touches are the two config YAMLs and the defaults
@@ -196,8 +199,15 @@ function sectionsOf(
     {
       id: 'ui',
       title: 'UI',
-      note: 'The dashboard keeps its preferences in the browser. There is no server-side UI configuration to show.',
-      settings: [],
+      note: 'Everything else the dashboard remembers — filters, tabs, which task is open — lives in the browser.',
+      settings: [
+        setting(
+          'ui.workspaceDepth',
+          'Workspace scan depth',
+          String(global.ui.workspaceDepth),
+          'how far under a workspace root `agent-flow ui ~/wk` looks for projects; a directory beyond it is not discovered and not served',
+        ),
+      ],
     },
     {
       id: 'retention',

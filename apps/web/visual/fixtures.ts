@@ -928,8 +928,16 @@ export const CONFIG: ConfigView = {
     {
       id: 'ui',
       title: 'UI',
-      note: 'The dashboard keeps its preferences in the browser. There is no server-side UI configuration to show.',
-      settings: [],
+      note: 'Everything else the dashboard remembers — filters, tabs, which task is open — lives in the browser.',
+      settings: [
+        {
+          key: 'ui.workspaceDepth',
+          label: 'Workspace scan depth',
+          value: '2',
+          origin: 'default',
+          note: 'how far under a workspace root `agent-flow ui ~/wk` looks for projects; a directory beyond it is not discovered and not served',
+        },
+      ],
     },
     {
       id: 'retention',

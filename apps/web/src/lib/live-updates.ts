@@ -74,8 +74,33 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
   ];
 }
 
+/**
+ * Whether a cached question is one this project's events can answer (UI-29).
+ *
+ * Run ids are only unique inside a project: two repositories in one workspace
+ * will both have an `AF-2026-001`, and `['run', { runId }]` matches every one of
+ * them. Without this, a task finishing in one project refetched another project's
+ * run — quietly, correctly-looking, and wrong.
+ *
+ * A key that names no project still matches, and deliberately. That is the
+ * single-project view, which fetches without naming one while every event names
+ * it; excluding it would restore the exact bug the object-shaped keys were
+ * introduced to fix, where the screen goes quiet and looks like an idle run.
+ * Over-invalidating costs a refetch. Under-invalidating costs the truth.
+ */
+export function belongsToProject(queryKey: readonly unknown[], projectId: string): boolean {
+  const scope = queryKey[1];
+  if (typeof scope !== 'object' || scope === null) return true;
+
+  const cached = (scope as { projectId?: unknown }).projectId;
+  return cached === undefined || cached === projectId;
+}
+
 export function applyServerEvent(client: QueryClient, event: ServerEvent): void {
-  for (const key of invalidationsFor(event)) {
-    void client.invalidateQueries({ queryKey: key });
+  for (const queryKey of invalidationsFor(event)) {
+    void client.invalidateQueries({
+      queryKey,
+      predicate: (query) => belongsToProject(query.queryKey, event.projectId),
+    });
   }
 }

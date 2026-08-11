@@ -78,6 +78,20 @@ export const GlobalConfigSchema = z.object({
   retry: z.object({ maxAttempts: z.number().int().min(1).default(2) }).prefault({}),
   git: z.object({ useWorktrees: z.boolean().default(false) }).prefault({}),
   approval: z.object({ requiredBeforeImplementation: z.boolean().default(true) }).prefault({}),
+  /**
+   * The local dashboard (§65).
+   *
+   * Global only, and deliberately absent from `OVERRIDABLE_KEYS`: how deep
+   * `agent-flow ui ~/wk` looks for projects is a fact about the machine and the
+   * directory it was pointed at, and letting one discovered project change it
+   * would let a repository decide what else the server publishes.
+   *
+   * Bounded at six for the same reason the default is two — an unbounded scan of
+   * a home directory reads places nobody asked it to and takes minutes to start.
+   */
+  ui: z
+    .object({ workspaceDepth: z.number().int().min(0).max(6).default(2) })
+    .prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

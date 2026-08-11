@@ -166,13 +166,14 @@ export async function main(argv: string[]): Promise<number> {
 
   program
     .command('ui')
-    .description('Serve the local dashboard for this project (read-only)')
+    .description('Serve the local dashboard for this project, or for a workspace of them')
+    .argument('[root]', 'directory to scan for projects (defaults to the current one)')
     .option('--port <port>', `port to listen on (default ${String(DEFAULT_UI_PORT)})`)
     .option('--host <host>', `address to bind (default ${DEFAULT_UI_HOST})`)
     .option('--no-open', 'do not open a browser')
-    .option('--depth <n>', 'how deep to look for projects (default 2)')
-    .action(async (options: UiOptions, command: Command) => {
-      exitCode = await runUiCommand(options, globalOptions(command));
+    .option('--depth <n>', 'how deep to look for projects (default: ui.workspaceDepth, or 2)')
+    .action(async (root: string | undefined, options: UiOptions, command: Command) => {
+      exitCode = await runUiCommand(root, options, globalOptions(command));
     });
 
   program

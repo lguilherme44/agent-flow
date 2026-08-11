@@ -9,9 +9,12 @@ import { resolvePromptsDir } from '../app/prompt-paths.js';
 import { NodeHost } from '../adapters/host/node-host.js';
 import {
   DEFAULT_WORKSPACE_DEPTH,
+  MAX_WORKSPACE_DEPTH,
   discoverProjects,
   registryOf,
 } from '../server/project-registry.js';
+import { loadConfig } from '../config/loader.js';
+import type { FileSystem } from '../ports/index.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { readVersion } from './version.js';
@@ -29,7 +32,16 @@ export interface UiOptions {
 }
 
 /**
- * `agent-flow ui` — the local dashboard (§64).
+ * `agent-flow ui [root]` — the local dashboard (§64, §65).
+ *
+ * With no argument it serves the current project. With one it serves a
+ * *workspace*: the directory is scanned, to a bounded depth, for repositories
+ * that have been through `agent-flow init`, and the sidebar lists all of them.
+ *
+ * The root is chosen here and nowhere else. Once the server is up, the browser's
+ * whole vocabulary for a project is the id the registry issued — there is no
+ * request shape that carries a directory, which is what makes "the operator
+ * chose what this server can see" true rather than aspirational (§93).
  *
  * Binds to loopback by default and says so. Binding to `0.0.0.0` is possible and
  * loud: the server has no authentication, so anything that can reach the port
@@ -38,6 +50,7 @@ export interface UiOptions {
  * thing to do by accident, which is the difference a warning makes.
  */
 export async function runUiCommand(
+  root: string | undefined,
   options: UiOptions,
   globals: GlobalOptions,
   hooks: { readonly onListening?: (url: string) => void } = {},
@@ -49,26 +62,44 @@ export async function runUiCommand(
   try {
     const port = parsePort(options.port);
     const host = options.host ?? DEFAULT_UI_HOST;
-    const depth = parseDepth(options.depth);
+    // Relative to where the command was typed, as every shell path is. The
+    // global `--cwd` still decides the single-project case, so the two ways of
+    // naming a directory do not compete.
+    const workspace = root === undefined ? globals.cwd : resolve(globals.cwd, root);
 
-    const discovered = await discoverProjects({ fs, roots: [globals.cwd], depth });
+    const depth = await resolveDepth(options.depth, {
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: workspace,
+    });
 
-    if (discovered.length === 0) {
+    const discovered = await discoverProjects({ fs, roots: [workspace], depth });
+
+    if (discovered.projects.length === 0) {
       process.stderr.write(
         [
-          `No Agent Flow project found under ${globals.cwd}.`,
+          `No Agent Flow project found under ${workspace}.`,
           '',
           'Run `agent-flow init` in a repository first, or point the UI at a',
           'directory that contains one:',
           '',
-          '  agent-flow ui --cwd ~/work',
+          '  agent-flow ui ~/work',
           '',
+          ...(discovered.skipped.length === 0
+            ? []
+            : [
+                `${String(discovered.skipped.length)} director${discovered.skipped.length === 1 ? 'y was' : 'ies were'} skipped for resolving outside ${workspace}:`,
+                ...discovered.skipped.map((entry) => `  ${entry.path} → ${entry.resolved}`),
+                '',
+                'Point the UI at a directory that contains them instead.',
+                '',
+              ]),
         ].join('\n'),
       );
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const registry = registryOf(discovered);
+    const registry = registryOf(discovered.projects);
 
     const webDir = resolveWebDir();
     const server = await buildServer({
@@ -95,10 +126,22 @@ export async function runUiCommand(
     const lines = [
       `Agent Flow UI on ${url}`,
       '',
-      `${String(discovered.length)} project(s):`,
-      ...discovered.map((project) => `  ${project.id.padEnd(24)}${project.path}`),
+      `${String(discovered.projects.length)} project(s) under ${workspace}:`,
+      ...discovered.projects.map((project) => `  ${project.id.padEnd(24)}${project.path}`),
       '',
     ];
+
+    if (discovered.skipped.length > 0) {
+      // Named rather than dropped in silence. A workspace of symlinks into
+      // repositories elsewhere is a normal way to work, and somebody who
+      // arranged one would otherwise see their projects missing and conclude
+      // the scan is broken.
+      lines.push(
+        `${String(discovered.skipped.length)} skipped for resolving outside the workspace:`,
+        ...discovered.skipped.map((entry) => `  ${entry.path} → ${entry.resolved}`),
+        '',
+      );
+    }
 
     if (webDir === undefined) {
       // Said plainly rather than served as a blank page: the API is up and the
@@ -153,23 +196,61 @@ export async function runUiCommand(
 export function parsePort(raw: string | undefined): number {
   if (raw === undefined) return DEFAULT_UI_PORT;
 
-  const port = Number.parseInt(raw, 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  const port = wholeNumber(raw);
+  if (port === undefined || port < 1 || port > 65_535) {
     throw new Error(`Invalid --port "${raw}". Expected a number between 1 and 65535.`);
   }
   return port;
 }
 
-export function parseDepth(raw: string | undefined): number {
-  if (raw === undefined) return DEFAULT_WORKSPACE_DEPTH;
+/**
+ * A string that is entirely a number, or nothing.
+ *
+ * `parseInt` reads a prefix and discards the rest, so `--port 80.5` became 80 and
+ * `--depth 2.7` became 2 — the command ran, with a value the person did not type
+ * and no sign that anything was ignored.
+ */
+function wholeNumber(raw: string): number | undefined {
+  return /^\d+$/.test(raw.trim()) ? Number.parseInt(raw, 10) : undefined;
+}
 
-  const depth = Number.parseInt(raw, 10);
-  if (!Number.isInteger(depth) || depth < 0 || depth > 6) {
+export function parseDepth(raw: string): number {
+  const depth = wholeNumber(raw);
+  if (depth === undefined || depth > MAX_WORKSPACE_DEPTH) {
     // Bounded on purpose. An unbounded scan of a home directory reads places
     // nobody asked it to and takes minutes to start.
-    throw new Error(`Invalid --depth "${raw}". Expected a number between 0 and 6.`);
+    throw new Error(
+      `Invalid --depth "${raw}". Expected a number between 0 and ${String(MAX_WORKSPACE_DEPTH)}.`,
+    );
   }
   return depth;
+}
+
+/**
+ * How deep to scan: the flag, then `ui.workspaceDepth`, then the default (§65).
+ *
+ * The flag wins because it was typed for this run. Config comes second because
+ * somebody who keeps their repositories three levels down should not have to say
+ * so every time. Both are bounded by the schema and by `parseDepth`, so neither
+ * path can ask for an unbounded walk.
+ *
+ * A configuration that will not load is not fatal here. `agent-flow ui` is often
+ * exactly what somebody opens *because* something is wrong, and refusing to start
+ * over a malformed global file would take away the tool that shows them why —
+ * the Settings page reports the same error where it can be read (§95).
+ */
+export async function resolveDepth(
+  flag: string | undefined,
+  options: { fs: FileSystem; globalConfigPath: string; projectDir: string },
+): Promise<number> {
+  if (flag !== undefined) return parseDepth(flag);
+
+  try {
+    const config = await loadConfig(options);
+    return Math.min(config.global.ui.workspaceDepth, MAX_WORKSPACE_DEPTH);
+  } catch {
+    return DEFAULT_WORKSPACE_DEPTH;
+  }
 }
 
 /**

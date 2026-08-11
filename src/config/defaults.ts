@@ -89,6 +89,12 @@ git:
 
 approval:
   requiredBeforeImplementation: true
+
+ui:
+  # How far under a workspace root \`agent-flow ui ~/wk\` looks for projects.
+  # Bounded on purpose: an unbounded scan of a home directory reads places
+  # nobody asked it to, and takes minutes before the first page renders.
+  workspaceDepth: 2
 `;
 
 export const DEFAULT_PROJECT_CONFIG_YAML = `# agent-flow project configuration

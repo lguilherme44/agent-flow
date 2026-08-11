@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import type { ServerEvent } from '@contracts/index.js';
-import { invalidationsFor } from './live-updates';
+import { applyServerEvent, belongsToProject, invalidationsFor } from './live-updates';
 import { keys } from './queries';
 
 const event = (type: string, projectId = 'demo'): ServerEvent => ({
@@ -74,5 +74,73 @@ describe('an event invalidates, it never patches', () => {
 
   it('always refreshes telemetry, which every event changes', () => {
     expect(reaches('task.completed', keys.telemetry('demo', 'AF-2026-001'))).toBe(true);
+  });
+
+  it('leaves the graph alone when only a task moved', () => {
+    // The plan is what the graph is of, and a task finishing does not change it.
+    // Re-reading structure on every tick is a five-hundred-node re-layout because
+    // one duration ticked over (§96).
+    expect(reaches('task.completed', keys.dag('demo', 'AF-2026-001'))).toBe(false);
+    // A stage finishing can have replaced the plan — planning writes one, and a
+    // corrective round appends to it.
+    expect(reaches('stage.completed', keys.dag('demo', 'AF-2026-001'))).toBe(true);
+    // So can a job: `revise` re-plans, and nothing else would say so.
+    expect(reaches('job.finished', keys.dag('demo', 'AF-2026-001'))).toBe(true);
+  });
+});
+
+/**
+ * UI-29 — a workspace holds several projects, and run ids repeat across them.
+ *
+ * Two repositories under one root will both have an `AF-2026-001`. Every filter
+ * above matches on the run alone, so without a project guard a task finishing in
+ * one project refetches the other's run — quietly, and looking entirely correct.
+ */
+describe('an event stays inside its own project', () => {
+  const stale = (
+    keysToCache: readonly (readonly unknown[])[],
+    eventProject: string,
+  ): unknown[][] => {
+    const client = new QueryClient();
+    for (const key of keysToCache) client.setQueryData(key, 'cached');
+
+    applyServerEvent(client, {
+      type: 'task.completed',
+      projectId: eventProject,
+      runId: 'AF-2026-001',
+      timestamp: '2026-08-10T20:00:00.000Z',
+      payload: {},
+    });
+
+    return client
+      .getQueryCache()
+      .findAll()
+      .filter((query) => query.state.isInvalidated)
+      .map((query) => [...query.queryKey]);
+  };
+
+  it('does not touch the same run id in another project', () => {
+    const invalidated = stale(
+      [keys.tasks('alpha', 'AF-2026-001'), keys.tasks('beta', 'AF-2026-001')],
+      'alpha',
+    );
+
+    expect(invalidated).toEqual([['tasks', { runId: 'AF-2026-001', projectId: 'alpha' }]]);
+  });
+
+  it('still reaches a query cached without a project', () => {
+    // The single-project view fetches without naming one. Excluding it would
+    // restore the bug the object-shaped keys were introduced to fix: the screen
+    // goes quiet and looks exactly like an idle run.
+    const invalidated = stale([keys.tasks(undefined, 'AF-2026-001')], 'alpha');
+
+    expect(invalidated).toHaveLength(1);
+  });
+
+  it('still refreshes what belongs to no project at all', () => {
+    // `['projects']` is the whole workspace, and one project's run moving does
+    // change what the sidebar should say about it.
+    expect(belongsToProject(keys.projects, 'alpha')).toBe(true);
+    expect(belongsToProject(keys.prompt('planning'), 'alpha')).toBe(true);
   });
 });

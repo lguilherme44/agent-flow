@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Check, FolderGit2, Plus, TriangleAlert, X } from 'lucide-react';
 import type { ProjectView, RunnerHealthView } from '@contracts/index.js';
-import { useProjectSelection } from '../app/project-context';
+import { PROJECT_PARAM, useProjectSelection } from '../app/project-context';
 import { useProjects, useRunnerHealth } from '../lib/queries';
 import {
   Button,
@@ -218,14 +218,13 @@ function ProjectRow(props: {
           <span className="text-label text-faint">idle</span>
         ) : (
           <span className="flex min-w-0 flex-col gap-0.5">
+            {/* The project rides in the link, not in a click handler beside it.
+                The run belongs to this project — without it the breadcrumb reads
+                "all projects" while showing one project's run, and in a workspace
+                the run would be looked up under whichever project happened to be
+                selected. One navigation, carrying both facts. */}
             <Link
-              to={`/runs/${project.currentRunId}`}
-              onClick={() => {
-                // The run belongs to this project, so opening it selects the
-                // project too — otherwise the breadcrumb reads "all projects"
-                // while looking at one project's run.
-                props.onSelect(project.id);
-              }}
+              to={runHref(project.currentRunId, project.id)}
               className="tabular truncate text-label font-medium text-text hover:text-primary-bright"
             >
               {project.currentRunId}
@@ -250,10 +249,7 @@ function ProjectRow(props: {
         ) : (
           <span className="flex min-w-0 flex-col gap-0.5">
             <Link
-              to={`/runs/${project.lastRun.runId}`}
-              onClick={() => {
-                props.onSelect(project.id);
-              }}
+              to={runHref(project.lastRun.runId, project.id)}
               className="tabular truncate text-label text-muted hover:text-primary-bright"
               title={project.lastRun.feature}
             >
@@ -336,4 +332,15 @@ function RunnerHealthStrip(props: { runners: RunnerHealthView[] | undefined }): 
       })}
     </ul>
   );
+}
+
+/**
+ * A run, named together with the project it belongs to.
+ *
+ * Both facts in one href rather than a navigation plus a click handler racing it:
+ * the link used to select the project and navigate separately, and the navigation
+ * dropped the search parameter the selection had just written.
+ */
+function runHref(runId: string, projectId: string): string {
+  return `/runs/${runId}?${new URLSearchParams({ [PROJECT_PARAM]: projectId }).toString()}`;
 }

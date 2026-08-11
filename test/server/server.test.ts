@@ -587,6 +587,73 @@ describe('UI-28 — the dependency graph', () => {
   });
 });
 
+describe('UI-29 — a workspace of several projects', () => {
+  /** Two projects, each with a run of its own. */
+  async function workspace() {
+    const context = await serve({ projects: [PROJECT, OTHER] });
+    const other = new StateStore({ fs: context.fs, clock: context.clock, projectDir: '/other' });
+    const otherRun = await other.createRun('a feature in the other project');
+
+    return { ...context, other, otherRun };
+  }
+
+  it('lists every project the operator pointed the server at', async () => {
+    const { server, run, otherRun } = await workspace();
+
+    const projects = (await server.app.inject('/api/v1/projects')).json<ProjectView[]>();
+
+    expect(projects.map((project) => project.id)).toEqual(['demo', 'other']);
+    expect(projects.map((project) => project.currentRunId)).toEqual([run.runId, otherRun.runId]);
+  });
+
+  it('spans the workspace with no project named, and narrows with one', async () => {
+    const { server } = await workspace();
+
+    const all = (await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>();
+    const scoped = (
+      await server.app.inject('/api/v1/runs?projectId=other')
+    ).json<RunSummaryView[]>();
+
+    expect(new Set(all.map((entry) => entry.projectId))).toEqual(new Set(['demo', 'other']));
+    expect(scoped.every((entry) => entry.projectId === 'other')).toBe(true);
+  });
+
+  it('never answers for a project id it did not issue', async () => {
+    // The whole filesystem security model (§93): the browser names a project,
+    // the registry resolves it, and there is no request shape that addresses a
+    // directory the operator did not register.
+    const { server } = await workspace();
+
+    for (const url of [
+      '/api/v1/runs?projectId=nowhere',
+      '/api/v1/config?projectId=nowhere',
+      '/api/v1/agents?projectId=nowhere',
+      '/api/v1/runners/health?projectId=nowhere',
+    ]) {
+      expect((await server.app.inject(url)).statusCode, url).toBe(404);
+    }
+  });
+
+  it('keeps one project’s events out of another’s stream', async () => {
+    // Run ids repeat across projects — two repositories will both have an
+    // AF-2026-001 — so a stream that ignored the project would tell one
+    // dashboard about the other's work.
+    const { server, other, otherRun } = await workspace();
+
+    const received: string[] = [];
+    server.bus.subscribe((event) => received.push(event.projectId));
+
+    await other.appendEvent(otherRun.runId, 'task_started', {
+      task: 'TASK-001',
+      role: 'executor.normal',
+    });
+    await server.watcher.sweep({ publish: true });
+
+    expect(received).toContain('other');
+    expect(received).not.toContain('demo');
+  });
+});
+
 describe('UI-23 — the role routing table', () => {
   it('describes every logical role, with its configured and resolved route', async () => {
     const { server } = await serve();
@@ -981,14 +1048,28 @@ describe('UI-26 — the effective configuration', () => {
 
     const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
 
-    // Models, UI and Retention. Empty with a reason rather than empty with a
+    // Models and Retention. Empty with a reason rather than empty with a
     // plausible-looking blank row — a settings page that showed a control for a
     // setting nothing reads is worse than one that says there is none.
-    for (const id of ['models', 'ui', 'retention']) {
+    for (const id of ['models', 'retention']) {
       const section = config.sections.find((entry) => entry.id === id);
       expect(section?.settings).toEqual([]);
       expect(section?.note).toBeTruthy();
     }
+  });
+
+  it('reports the workspace depth, which decides what this server can serve (UI-29)', async () => {
+    // UI used to be a third empty section saying the dashboard keeps its
+    // preferences in the browser. `ui.workspaceDepth` decides how far
+    // `agent-flow ui ~/wk` looks for projects — which is to say what exists at
+    // all — and that belongs on a page about what is configured.
+    const { server } = await serve();
+
+    const config = (await server.app.inject('/api/v1/config')).json<ConfigView>();
+    const ui = config.sections.find((entry) => entry.id === 'ui');
+
+    expect(ui?.settings.map((setting) => setting.key)).toEqual(['ui.workspaceDepth']);
+    expect(ui?.settings[0]).toMatchObject({ value: '2', origin: 'default' });
   });
 
   it('reports a broken config with the paths needed to fix it', async () => {

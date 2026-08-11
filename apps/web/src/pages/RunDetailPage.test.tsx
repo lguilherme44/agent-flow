@@ -189,16 +189,18 @@ function renderPage(options: { live?: boolean } = {}): void {
   render(
     <QueryClientProvider client={createQueryClient()}>
       <TooltipPrimitive.Provider>
-        <ProjectProvider>
-          {/* One client for both, or invalidation from the stream would land
-              in a cache the page never reads. */}
-          {options.live === true ? <Harness /> : null}
-          <MemoryRouter initialEntries={['/runs/AF-2026-001']}>
+        {/* One client for both, or invalidation from the stream would land
+            in a cache the page never reads. */}
+        {options.live === true ? <Harness /> : null}
+        <MemoryRouter initialEntries={['/runs/AF-2026-001?project=demo']}>
+          {/* Inside the router as of UI-29: the project selection lives in the
+              URL, so a workspace switch is a thing a reload and a link agree on. */}
+          <ProjectProvider>
             <Routes>
               <Route path="/runs/:runId" element={<RunDetailPage />} />
             </Routes>
-          </MemoryRouter>
-        </ProjectProvider>
+          </ProjectProvider>
+        </MemoryRouter>
       </TooltipPrimitive.Provider>
     </QueryClientProvider>,
   );

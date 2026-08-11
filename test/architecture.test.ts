@@ -399,6 +399,51 @@ describe('the write API is an adapter, not a second workflow (UI-27, §60)', () 
   });
 });
 
+describe('a workspace has one registry (UI-29, §93)', () => {
+  // The registry *is* the filesystem security boundary: every endpoint names a
+  // project by id, and the only ids that exist are the ones one module produced
+  // by walking directories the operator pointed the server at. A second place
+  // that decided what counts as a project would be a second answer to "what may
+  // this server serve", and only one of them would be the one being audited.
+
+  it('discovers projects in one module', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path === 'src/server/project-registry.ts') continue;
+      // The marker of an initialised project. Anything else looking for it is
+      // deciding what a project is, somewhere else.
+      if (/\.agent-flow\/config\.yaml/.test(text) && /readDir|walk/.test(codeOnly(text))) {
+        offenders.push(path);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('builds every registry through the same constructor', () => {
+    // `registryOf` is the only way to make one, so an id can only exist if this
+    // module issued it.
+    const users = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /\bregistryOf\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(users.sort()).toEqual(['src/cli/ui.ts', 'src/server/project-registry.ts']);
+  });
+
+  it('resolves symlinks before deciding a directory is inside the workspace', () => {
+    // `stat` follows a link and reports an ordinary directory, so containment
+    // has to be judged on resolved paths. Without this the walk would publish a
+    // repository the operator never pointed it at.
+    const registry = codeOnly(read(join(ROOT, 'src/server/project-registry.ts')).text);
+
+    expect(registry).toContain('realPath');
+    expect(registry).toContain('within(');
+  });
+});
+
 describe('there is exactly one run execution lock (AF-L01)', () => {
   // The brief's requirement, made checkable: CLI and server must go through the same
   // service. Two locks would be no lock at all — each process would be excluding a

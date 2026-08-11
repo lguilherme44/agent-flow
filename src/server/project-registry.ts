@@ -33,6 +33,28 @@ export interface DiscoverOptions {
 }
 
 export const DEFAULT_WORKSPACE_DEPTH = 2;
+/** The deepest a workspace scan may be configured to go. */
+export const MAX_WORKSPACE_DEPTH = 6;
+
+/** A directory that looked like a project and was left out anyway. */
+export interface SkippedDirectory {
+  readonly path: string;
+  readonly reason: 'outside_workspace';
+  /** Where it really is, which is the part that made it a refusal. */
+  readonly resolved: string;
+}
+
+export interface DiscoveryResult {
+  readonly projects: readonly RegisteredProject[];
+  /**
+   * Reported rather than logged and forgotten.
+   *
+   * A workspace of symlinks into repositories elsewhere is a normal way to work,
+   * and somebody who arranged one will otherwise see their projects silently
+   * absent and conclude the tool is broken.
+   */
+  readonly skipped: readonly SkippedDirectory[];
+}
 
 /** Directories never worth descending into, and expensive to get wrong. */
 const SKIP = new Set([
@@ -56,21 +78,45 @@ const SKIP = new Set([
  * The marker is `.agent-flow/config.yaml`, the one versioned artifact of a
  * project. A directory holding only a `runs/` folder is a leftover, not a
  * project, and listing it would offer the user something with no configuration
- * to read.
+ * to read. A `package.json` is not a marker either: half a machine has one, and
+ * a workspace listing every Node directory it can reach is not a control plane.
+ *
+ * **Nothing outside a root is discovered, however it is reached.** The walk
+ * compares resolved paths, so a symlink inside the workspace pointing at a
+ * repository elsewhere is skipped and named rather than followed. `stat` cannot
+ * catch this — it follows the link and reports an ordinary directory — which is
+ * why `realPath` is on the port at all. The rule is deliberately blunt: the
+ * operator chose one directory when they started the server, and a link is not
+ * that choice being made again.
+ *
+ * The resolved path is also what makes the walk terminate: a link that points
+ * back up its own tree would otherwise be a new path string every time, and only
+ * the depth bound would stop it.
  */
-export async function discoverProjects(
-  options: DiscoverOptions,
-): Promise<RegisteredProject[]> {
-  const depth = options.depth ?? DEFAULT_WORKSPACE_DEPTH;
+export async function discoverProjects(options: DiscoverOptions): Promise<DiscoveryResult> {
+  const depth = Math.min(options.depth ?? DEFAULT_WORKSPACE_DEPTH, MAX_WORKSPACE_DEPTH);
   const found: string[] = [];
+  const skipped: SkippedDirectory[] = [];
   const seen = new Set<string>();
 
-  const walk = async (dir: string, remaining: number): Promise<void> => {
-    if (seen.has(dir)) return;
-    seen.add(dir);
+  const walk = async (dir: string, root: string, remaining: number): Promise<void> => {
+    const resolved = await options.fs.realPath(dir);
+    if (resolved === null) return;
+
+    if (!within(root, resolved)) {
+      skipped.push({ path: dir, reason: 'outside_workspace', resolved });
+      return;
+    }
+
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
 
     if (await options.fs.exists(`${dir}/.agent-flow/config.yaml`)) {
-      found.push(dir);
+      // The resolved path, not the one the walk arrived by. A project reached
+      // through a link inside the workspace is the same project, and registering
+      // it under the link would give it an id from the link's name — `current`
+      // rather than `api` — and a second identity for the same run history.
+      found.push(resolved);
       // Still descends: a monorepo can hold initialised sub-projects, and the
       // depth bound is what stops this rather than an early return.
     }
@@ -89,13 +135,30 @@ export async function discoverProjects(
       if (entry.startsWith('.') || SKIP.has(entry)) continue;
       const child = `${dir}/${entry}`;
       const stat = await options.fs.stat(child);
-      if (stat?.isDirectory === true) await walk(child, remaining - 1);
+      if (stat?.isDirectory === true) await walk(child, root, remaining - 1);
     }
   };
 
-  for (const root of options.roots) await walk(normalise(root), depth);
+  for (const root of options.roots) {
+    const start = normalise(root);
+    // The root is resolved too, so both sides of every comparison came out of
+    // the same function. Comparing a resolved child against a raw root would
+    // reject an entire workspace reached through a symlinked home directory.
+    const resolvedRoot = (await options.fs.realPath(start)) ?? start;
+    await walk(start, resolvedRoot, depth);
+  }
 
-  return assignIds(found.sort());
+  return { projects: assignIds(found.sort()), skipped };
+}
+
+/**
+ * Whether `path` is the root or sits under it.
+ *
+ * The separator matters: `/wk` must not contain `/wknight`, which a bare
+ * `startsWith` would say it does.
+ */
+function within(root: string, path: string): boolean {
+  return path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
 }
 
 /**

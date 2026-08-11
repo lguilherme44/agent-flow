@@ -30,7 +30,7 @@ describe('discoverProjects', () => {
 
     const found = await discoverProjects({ fs, roots: ['/wk/api'] });
 
-    expect(found.map((project) => project.path)).toEqual(['/wk/api']);
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
 
   it('finds several under one root', async () => {
@@ -38,7 +38,7 @@ describe('discoverProjects', () => {
 
     const found = await discoverProjects({ fs, roots: ['/wk'] });
 
-    expect(found.map((project) => project.id)).toEqual(['api', 'web']);
+    expect(found.projects.map((project) => project.id)).toEqual(['api', 'web']);
   });
 
   it('ignores a directory that was never initialised', async () => {
@@ -49,7 +49,7 @@ describe('discoverProjects', () => {
 
     const found = await discoverProjects({ fs, roots: ['/wk'] });
 
-    expect(found.map((project) => project.path)).toEqual(['/wk/api']);
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
 
   it('stops at the configured depth', async () => {
@@ -57,8 +57,8 @@ describe('discoverProjects', () => {
     // and reads places nobody asked it to.
     const fs = world(['/wk/a/b/c/deep']);
 
-    expect(await discoverProjects({ fs, roots: ['/wk'], depth: 2 })).toEqual([]);
-    expect(await discoverProjects({ fs, roots: ['/wk'], depth: 4 })).toHaveLength(1);
+    expect((await discoverProjects({ fs, roots: ['/wk'], depth: 2 })).projects).toEqual([]);
+    expect((await discoverProjects({ fs, roots: ['/wk'], depth: 4 })).projects).toHaveLength(1);
   });
 
   it('never descends into a dependency directory', async () => {
@@ -67,7 +67,7 @@ describe('discoverProjects', () => {
 
     const found = await discoverProjects({ fs, roots: ['/wk'], depth: 4 });
 
-    expect(found.map((project) => project.path)).toEqual(['/wk/api']);
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
 
   it('descends past a project, for a monorepo holding initialised packages', async () => {
@@ -75,7 +75,7 @@ describe('discoverProjects', () => {
 
     const found = await discoverProjects({ fs, roots: ['/wk'], depth: 4 });
 
-    expect(found.map((project) => project.path)).toEqual([
+    expect(found.projects.map((project) => project.path)).toEqual([
       '/wk/mono',
       '/wk/mono/packages/api',
     ]);
@@ -84,7 +84,84 @@ describe('discoverProjects', () => {
   it('returns nothing rather than failing on an unreadable root', async () => {
     const fs = new InMemoryFileSystem();
 
-    expect(await discoverProjects({ fs, roots: ['/nowhere'] })).toEqual([]);
+    expect((await discoverProjects({ fs, roots: ['/nowhere'] })).projects).toEqual([]);
+  });
+});
+
+describe('a workspace is the directory the operator named, and nothing else (UI-29, §93)', () => {
+  it('does not follow a link out of the workspace', async () => {
+    // The failure this exists to stop: a link in `~/wk` pointing at a repository
+    // in `~/private`, and a server the operator believes is serving `~/wk`
+    // publishing it on a local port. `stat` cannot see this — it follows the
+    // link and reports an ordinary directory.
+    const fs = world(['/wk/api', '/private/secrets']);
+    fs.link('/wk/elsewhere', '/private/secrets');
+
+    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
+    expect(found.skipped).toEqual([
+      { path: '/wk/elsewhere', reason: 'outside_workspace', resolved: '/private/secrets' },
+    ]);
+  });
+
+  it('follows a link that stays inside the workspace', async () => {
+    // Refusing every link would be a different rule, and a worse one: a
+    // workspace that arranges its own repositories with links is arranging what
+    // the operator already chose.
+    const fs = world(['/wk/repos/api']);
+    fs.link('/wk/current', '/wk/repos/api');
+
+    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+
+    expect(found.skipped).toEqual([]);
+    // One project, not two. The walk keys on the resolved path, so the same
+    // directory reached twice is the same project — reporting it twice would put
+    // one run history under two ids.
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/repos/api']);
+  });
+
+  it('terminates on a link that points back up its own tree', async () => {
+    const fs = world(['/wk/api']);
+    fs.link('/wk/api/self', '/wk');
+
+    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 6 });
+
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
+  });
+
+  it('resolves the root too, so a linked workspace is not entirely rejected', async () => {
+    // `agent-flow ui ~/wk` where `~` is itself a link — common on machines with
+    // a relocated home directory. Comparing a resolved child against a raw root
+    // would find nothing at all, and the operator would be told their workspace
+    // is empty.
+    const fs = world(['/real/wk/api']);
+    fs.link('/home/me/wk', '/real/wk');
+
+    const found = await discoverProjects({ fs, roots: ['/home/me/wk'], depth: 2 });
+
+    expect(found.projects.map((project) => project.id)).toEqual(['api']);
+    expect(found.skipped).toEqual([]);
+  });
+
+  it('never lets one root be a prefix of another by accident', async () => {
+    // `/wk` must not contain `/wknight`, which a bare `startsWith` says it does.
+    const fs = world(['/wknight/api']);
+    fs.link('/wk/near', '/wknight');
+    fs.seed('/wk/.agent-flow/config.yaml', CONFIG);
+
+    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk']);
+    expect(found.skipped.map((entry) => entry.resolved)).toEqual(['/wknight']);
+  });
+
+  it('caps a depth beyond the bound rather than honouring it', async () => {
+    const fs = world(['/wk/a/b/c/d/e/f/g/deep']);
+
+    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 99 });
+
+    expect(found.projects).toEqual([]);
   });
 });
 
