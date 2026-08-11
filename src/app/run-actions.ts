@@ -235,10 +235,18 @@ function busy(refusal: LockRefusal, wanted: LockOperation): ActionError {
   const holder = refusal.holder;
 
   if (holder === undefined) {
+    // Deliberately not "run `rm`" (AF-L01.1-C). A claim that cannot be read is the one
+    // case where Agent Flow knows nothing about who holds it, so the first instruction
+    // has to be the check, not the delete — and the file named has to be the one the
+    // algorithm actually uses. There is no `execution.lock`; there are numbered
+    // generations, and only the highest is the holder.
     return {
       code: 'run_busy',
-      message: `${refusal.runId} is locked by another process, and the lock could not be read.`,
-      action: `Wait for it to finish, or remove .agent-flow/runs/${refusal.runId}/execution.lock if you are sure nothing is running.`,
+      message: `${refusal.runId} is locked, and the claim on it could not be read.`,
+      action:
+        'Agent Flow refuses a claim it cannot read rather than guessing, because guessing ' +
+        'is how a run gets executed twice. Confirm no Agent Flow process is working on this ' +
+        'run — then remove the highest-numbered execution.lock.* file in the run directory.',
     };
   }
 
@@ -253,7 +261,9 @@ function busy(refusal: LockRefusal, wanted: LockOperation): ActionError {
       `${holder.owner} (${where}), since ${holder.createdAt}.`,
     action: refusal.sameHost
       ? 'Wait for the active execution to finish.'
-      : 'Agent Flow does not judge a lock from another machine. Remove the lock file there, or on this one if that host is gone.',
+      : 'Agent Flow does not judge a lock from another machine. Stop the execution on that ' +
+        'host, or — if that host is gone — remove the highest-numbered execution.lock.* file ' +
+        'in the run directory here.',
     detail: {
       wanted,
       holder: {

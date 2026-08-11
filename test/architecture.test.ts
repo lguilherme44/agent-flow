@@ -476,6 +476,23 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
     expect(port).toMatch(/\bcreateExclusive\s*\(/);
   });
 
+  it('never tells an operator to remove a file the lock does not use (AF-L01.1)', () => {
+    // Recovery copy has to name the real mechanism. There is no `execution.lock`; there
+    // are numbered generations, and only the highest one is the holder. An instruction
+    // to delete a path that does not exist teaches the operator that the message is
+    // wrong, which is worse than no message.
+    //
+    // Comments stripped and string literals kept — the opposite of `codeOnly`, because
+    // operator copy *is* the string literals.
+    const copy = read(join(ROOT, 'src/app/run-actions.ts'))
+      .text.replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+
+    for (const match of copy.matchAll(/execution\.lock[.\w*${}]*/g)) {
+      expect(match[0], 'lock copy names a generation').toMatch(/^execution\.lock\.\*$/);
+    }
+  });
+
   it('emits no heartbeat or polling event', () => {
     // There is no heartbeat, so there is nothing to poll and no event to emit for it.
     // Three lock events exist and all three describe a transition.
