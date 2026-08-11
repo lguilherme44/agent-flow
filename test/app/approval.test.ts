@@ -338,11 +338,58 @@ describe('a review does not survive the plan it reviewed', () => {
     expect(check.refusal?.kind).toBe('review_unverifiable');
   });
 
-  it('keeps every review refusal forceable, and nothing else', () => {
+  it('refuses a plan a person turned down, and says the override is available', async () => {
+    // The mirror of the rule `start` already enforces (AF-L01.2). Approving a
+    // rejected run executed nothing — `execute` refuses one outright — but it left
+    // the run recording that its plan was both turned down and approved, and a
+    // state file that contradicts itself is one nobody can reason from later.
+    const store = makeStore();
+    const run = await store.createRun('f');
+    await store.updateRun(run.runId, (state) => ({ ...state, status: 'plan_rejected' }));
+    const current = await store.loadRun(run.runId);
+
+    const check = checkApproval(current, plan(), review());
+
+    expect(check.allowed).toBe(false);
+    expect(check.refusal?.kind).toBe('plan_rejected');
+    expect(FORCIBLE_REFUSALS.has('plan_rejected')).toBe(true);
+  });
+
+  it('reports the failed review rather than the rejection it caused', async () => {
+    // A FAIL verdict *sets* `plan_rejected`, so the two arrive together. The
+    // review refusal wins because it carries the findings, and telling somebody
+    // "this was rejected" when the answer is "here is what the reviewer found"
+    // costs them the only actionable half.
+    const store = makeStore();
+    const run = await store.createRun('f');
+    await store.updateRun(run.runId, (state) => ({ ...state, status: 'plan_rejected' }));
+    const current = await store.loadRun(run.runId);
+
+    const check = checkApproval(
+      current,
+      plan(),
+      review({
+        verdict: 'FAIL',
+        findings: [
+          {
+            severity: 'high',
+            type: 'missing_test',
+            description: 'Nothing covers the boundary.',
+            suggestedAction: 'Add a test task.',
+          },
+        ],
+      }),
+    );
+
+    expect(check.refusal?.kind).toBe('review_failed');
+  });
+
+  it('keeps every waivable guarantee forceable, and nothing else', () => {
     // `--force` is for a guarantee deliberately given up, which is exactly what
     // each of these is. A missing run or a missing plan is not a guarantee
     // anybody can waive.
     expect([...FORCIBLE_REFUSALS].sort()).toEqual([
+      'plan_rejected',
       'review_failed',
       'review_missing',
       'review_stale',

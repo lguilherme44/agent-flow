@@ -1004,6 +1004,17 @@ function explainRefusal(
       };
     case 'already_approved':
       return { ...base, code: 'already_approved', message: 'This run is already approved.' };
+    case 'plan_rejected':
+      return {
+        ...base,
+        code: 'already_rejected',
+        message:
+          'This plan was rejected. Approving it now would leave the run recording both, ' +
+          'and nothing would execute either way.',
+        action:
+          'Revise the plan and approve the result — or approve over the rejection ' +
+          'deliberately, which is recorded on the run.',
+      };
     default:
       return {
         ...base,

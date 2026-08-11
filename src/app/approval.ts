@@ -22,14 +22,25 @@ export type ApprovalRefusal =
   /** A review exists and does not say which plan it judged. */
   | { kind: 'review_unverifiable'; review: ReviewResult }
   | { kind: 'review_failed'; review: ReviewResult }
-  | { kind: 'already_approved' };
+  | { kind: 'already_approved' }
+  /** The plan was turned down and nothing has replaced it since. */
+  | { kind: 'plan_rejected' };
 
-/** Refusals `--force` may override. Every one of them is about the review. */
+/**
+ * Refusals `--force` may override.
+ *
+ * All but one are about the review. `plan_rejected` is about a person: approving a
+ * run somebody turned down is not a thing to do by accident, and it is a thing to
+ * be able to do deliberately — a rejection followed by a change of mind is an
+ * ordinary Tuesday, and forcing it records `forced_approval` on the run so the two
+ * cannot be confused afterwards.
+ */
 export const FORCIBLE_REFUSALS: ReadonlySet<ApprovalRefusal['kind']> = new Set([
   'review_missing',
   'review_stale',
   'review_unverifiable',
   'review_failed',
+  'plan_rejected',
 ]);
 
 export interface ApprovalCheck {
@@ -97,6 +108,24 @@ export function checkApproval(
 
   if (review.verdict === 'FAIL') {
     return { allowed: false, refusal: { kind: 'review_failed', review }, warnings };
+  }
+
+  /**
+   * Last, and only when everything else says yes.
+   *
+   * `plan_rejected` carries two meanings the contract does not separate: the
+   * automated plan review returned FAIL, and a person said no. The first is
+   * already refused above by `review_failed`, which is the more useful message
+   * because it carries the findings — so reaching this line means the review
+   * passed and the rejection was somebody's decision.
+   *
+   * Without it, approving a run a person had rejected simply worked. Nothing
+   * executed — `start` refuses a rejected run outright (AF-L01.2) — but the run
+   * was left recording that its plan was both turned down and approved, and a
+   * state file that contradicts itself is one nobody can reason from later.
+   */
+  if (state.status === 'plan_rejected') {
+    return { allowed: false, refusal: { kind: 'plan_rejected' }, warnings };
   }
 
   return { allowed: true, warnings };
