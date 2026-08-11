@@ -198,6 +198,77 @@ describe('staleness', () => {
   });
 });
 
+describe('generations', () => {
+  it('gives up a claim that was superseded while it was being written', async () => {
+    // The straggler. This process reads an empty directory, decides on generation 1 and
+    // wins the create — but somebody who read the same empty directory got there first
+    // and is already at generation 2 by the time the write lands. Winning a create is
+    // not winning the lock; being the *highest* is, and that is what the confirmation
+    // after the create is for.
+    const fs = new InMemoryFileSystem();
+    const host = new FakeHost(4242, 'laptop', [4242, 7777]);
+    const { lock, path } = lockFor({ fs, host });
+
+    let published = false;
+    const create = fs.createExclusive.bind(fs);
+    fs.createExclusive = async (target: string, content: string) => {
+      const claimed = await create(target, content);
+      if (claimed && !published) {
+        published = true;
+        // The other process, publishing a higher generation in the gap. Its pid is
+        // alive, so it is a genuine holder rather than something to recover.
+        fs.seed(
+          path(2),
+          JSON.stringify({
+            version: LOCK_VERSION,
+            generation: 2,
+            runId: RUN,
+            pid: 7777,
+            hostname: 'laptop',
+            owner: 'server',
+            operation: 'run',
+            createdAt: '2026-08-10T20:00:00.000Z',
+          }),
+        );
+      }
+      return claimed;
+    };
+
+    const result = await lock.acquire({ runId: RUN, owner: 'cli', operation: 'run' });
+
+    // Refused rather than admitted: a second holder discovered *before* any work began
+    // is the entire reason the confirmation exists.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toMatchObject({ holderAlive: true, holder: { pid: 7777 } });
+
+    // And it took its own losing claim away with it. Left behind, it would be one more
+    // generation for the real holder's release to have to reason about.
+    expect(await fs.exists(path(1))).toBe(false);
+    expect(await fs.exists(path(2))).toBe(true);
+  });
+
+  it('does not accumulate generations in ordinary use', async () => {
+    // No TTL and no sweeper, so the only thing keeping this bounded is that release
+    // removes the claim and the next acquisition starts from an empty directory. A
+    // generation number that climbed with every run would eventually be the growth
+    // nobody was watching.
+    const { fs, lock } = lockFor();
+
+    for (let round = 0; round < 20; round += 1) {
+      const acquired = await lock.acquire({ runId: RUN, owner: 'cli', operation: 'run' });
+      expect(acquired.ok).toBe(true);
+      if (!acquired.ok) return;
+
+      expect(acquired.lease.lock.generation).toBe(1);
+      await acquired.lease.release();
+    }
+
+    const dir = await fs.readDir(`/repo/.agent-flow/runs/${RUN}`);
+    expect(dir.filter((entry) => entry.startsWith('execution.lock'))).toEqual([]);
+  });
+});
+
 describe('a lock from another machine', () => {
   const foreign = JSON.stringify({
     version: LOCK_VERSION,

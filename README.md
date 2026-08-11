@@ -184,7 +184,9 @@ result; a number written here would be neither for long.
 - [x] Write actions — approve, reject, revise, retry, start — as one set of use cases
       the CLI and the HTTP API are both adapters over
 - [x] Inter-process run lock: the CLI and the local server cannot schedule the same
-      run at once, proved with eight real processes racing one lock file
+      run at once, proved with eight real processes racing one lock file — and with an
+      opt-in stress run of 640 (`AF_LOCK_STRESS=1`), because a race is a test that has
+      to pass often rather than once
 - [x] Dashboard layout checked by screenshot at 1440, 1280, 1200 and 1024
 
 ### Incomplete
