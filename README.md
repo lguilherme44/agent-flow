@@ -4,51 +4,132 @@
 
 [![CI](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml)
 
-Turn a feature request into a reviewed design document, a task breakdown, a
-human approval gate — and only then code.
+**Local-first orchestration for AI coding agents.**
 
-Agent Flow orchestrates the coding CLIs you already have installed and logged
-into. It knows nothing about Claude Code or Codex in its core, and nothing about
-your framework. Roles are logical; configuration decides who runs them.
+Agent Flow turns a feature request into a reviewed design document, a task
+breakdown and a human approval gate — and only then into code. It drives the
+coding CLIs you already have installed and logged into; nothing here talks to a
+model API.
 
-Not on npm yet. Install it from a checkout — the package is built, packed and
-verified to work outside one, so this is the same artifact a publish would produce:
+```text
+feature request
+  → discovery
+  → architecture analysis
+  → SDD
+  → planning
+  → independent plan review
+  → human approval          ← bound to one exact plan hash
+  → implementation
+  → deterministic validation ← run by the orchestrator, never by an agent
+  → final review
+  → Definition of Done
+```
+
+The core knows nothing about Claude Code or Codex, and nothing about your
+framework. Roles are logical (`architect`, `sdd`, `planner`, `planReviewer`,
+three `executors`, `verification`, `finalReviewer`); configuration decides which
+runner and which effort level serves each one. Claude Code and Codex are the two
+adapters that exist today.
+
+Everything is local: run state, artifacts, the audit trail and the dashboard.
+There is no cloud control plane, no telemetry upload and no API key.
+
+**Status:** `v0.1.0` · Spec v3 complete · not published to npm.
+See [Status](#status) for the full picture.
+
+---
+
+## Requirements
+
+- Node 20+
+- git
+- At least one agent CLI, installed and logged in:
+  [Claude Code](https://claude.com/claude-code) · [Codex CLI](https://github.com/openai/codex)
+
+**No API keys.** Agent Flow invokes the CLIs you have already authenticated. It
+never reads, stores or transmits credentials. If a CLI works in your terminal,
+it works here.
+
+---
+
+## Install
+
+Not on npm. Install from a checkout — the package is built, packed and verified
+to work outside one, so this is the same artifact a publish would produce:
 
 ```bash
-git clone https://github.com/lguilherme44/agent-flow && cd agent-flow
+git clone https://github.com/lguilherme44/agent-flow
+cd agent-flow
+
 npm install
-npm run build && npm run build:web
+npm run build
+npm run build:web
+
 npm install -g "$(npm pack | tail -1)"
 ```
 
-Then, in any repository:
+## Quick start
 
 ```bash
-cd ~/your-project
-agent-flow init
-agent-flow doctor
+cd ~/my-project
 
-agent-flow feature "Allow bookings to repeat weekly"
-agent-flow status      # read the SDD and the plan
-agent-flow approve
+agent-flow init          # detect the stack, read your real scripts
+agent-flow doctor        # can this environment work?
+
+agent-flow feature "Add recurring bookings"
+agent-flow status        # read the SDD and the plan
+agent-flow approve       # the gate — bound to this plan, not the next one
 agent-flow run
 agent-flow review
 
-agent-flow ui          # or: agent-flow ui ~/wk   — the whole workspace
+agent-flow ui            # the local dashboard on 127.0.0.1:4782
+```
+
+One dashboard over several repositories:
+
+```bash
+agent-flow ui ~/wk
 ```
 
 ---
 
 ## Documentation
 
+**Product**
+
 | | |
 |---|---|
-| [`docs/web-ui.md`](docs/web-ui.md) | The dashboard: the two modes, the pages, the DAG, what it can change and what it cannot, the API |
-| [`docs/security.md`](docs/security.md) | The local server's boundary — no path, no command, no plan hash from the browser; symlinks; the run lock; the limits |
-| [`docs/testing.md`](docs/testing.md) | Three test layers and where each one stops |
-| [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do |
-| [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each CLI actually does, and the command that proves it |
-| [`FINDINGS.md`](FINDINGS.md) | What building this taught us, including what is still unsolved |
+| [`docs/web-ui.md`](docs/web-ui.md) | The dashboard: the two modes, the pages, the DAG, live events, what it can change and what it cannot, the HTTP API |
+| [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do about it |
+
+**Architecture & engineering**
+
+| | |
+|---|---|
+| [`docs/security.md`](docs/security.md) | The local server's boundary — no path, no command, no plan hash from the browser; symlink containment; the run lock; the limits |
+| [`docs/testing.md`](docs/testing.md) | The test layers, what each one proves, and where each one stops |
+| [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each CLI actually does, with the command that proves it and the version it was probed against |
+| [`docs/engineering/findings.md`](docs/engineering/findings.md) | Engineering log: what building this taught us, including what is still unsolved |
+
+**Specification** — what was designed and shipped, kept as written
+
+| | |
+|---|---|
+| [`docs/specs/implementation-spec-v3.md`](docs/specs/implementation-spec-v3.md) | Implementation Spec v3, complete. A historical document; the code is the current truth |
+
+**Technical reviews** — snapshots, not living documents
+
+| | |
+|---|---|
+| [`docs/reviews/validation-review.md`](docs/reviews/validation-review.md) | Structured validation review of the first complete implementation |
+| [`docs/reviews/reanalysis-post-fixes.md`](docs/reviews/reanalysis-post-fixes.md) | Re-analysis after those fixes landed |
+
+**Designs, not implementations** — written up, deliberately not built
+
+| | |
+|---|---|
+| [`docs/config-write-design.md`](docs/config-write-design.md) | `PATCH /config`: why scope has to be part of the address |
+| [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md) | `pause` / `resume` / `cancel`: the abort signal and the contract change they need |
 
 ---
 
@@ -77,19 +158,6 @@ one. The rule is enforced by the type system.
 **Done is decided by code.** Approved, all tasks complete, lint and tests and
 build passing, final review PASS. An agent saying "finished" is not one of the
 conditions — and in our first real run, that is exactly what caught a bad plan.
-
----
-
-## Requirements
-
-- Node 20+
-- git
-- At least one agent CLI, installed and logged in:
-  [Claude Code](https://claude.com/claude-code) · [Codex CLI](https://github.com/openai/codex)
-
-**No API keys.** Agent Flow invokes the CLIs you have already authenticated. It
-never reads, stores or transmits credentials. If a CLI works in your terminal,
-it works here.
 
 ---
 
@@ -160,7 +228,7 @@ cannot find is left empty rather than guessed.
 
 ## What lands where
 
-```
+```text
 <project>/.agent-flow/
 ├── config.yaml           # versioned — a team convention
 ├── current-run
@@ -174,17 +242,29 @@ cannot find is left empty rather than guessed.
 ```
 
 Everything with content lives inside a run, so two features in flight cannot
-overwrite each other.
+overwrite each other. Task results record the runner, model and effort that
+actually served the call, not the ones the configuration asked for.
 
 ---
 
 ## Status
 
-MVP 1 is complete and has been run end to end against Claude Code and Codex.
-The suite invokes no CLI: every runner is faked, so it costs nothing to run and
-proves nothing about the CLIs themselves. What it does prove is in `FINDINGS.md`
-— as is what it does not. The badge above is the current count and the current
-result; a number written here would be neither for long.
+```text
+version:   v0.1.0
+Spec v3:   complete
+npm:       not published
+MVP 2:     not started
+```
+
+Implementation Spec v3 is finished: the CLI workflow, the local Web Control
+Plane and their test gates are all in. There is no GitHub release and no npm
+package yet — the install instructions above are the only supported path.
+
+The Vitest suite invokes no CLI: every runner is faked, so it costs nothing to
+run and proves nothing about the CLIs themselves. What it does prove is in
+[`docs/engineering/findings.md`](docs/engineering/findings.md) — as is what it
+does not. The badge above is the current result; a number written here would not
+be current for long.
 
 ### Working
 
@@ -205,14 +285,17 @@ result; a number written here would be neither for long.
 - [x] `doctor --deep` — live probe per runner, folded back into the verdict
 - [x] Local telemetry, derived from the run's own state and event log
 - [x] `agent-flow ui` — local server and dashboard (spec §59–§102)
-- [x] Seven pages: run detail, runs, projects, agents & models, prompts, analytics, settings
+- [x] Seven pages over eight routes — run detail, runs, projects, agents & models,
+      prompts, analytics, settings; `/dashboard` renders the run-detail view for
+      whichever run wants you most
+- [x] Live updates over SSE, with polling as the documented fallback rather than the
+      default
 - [x] Write actions — approve, reject, revise, retry, start — as one set of use cases
       the CLI and the HTTP API are both adapters over
 - [x] Inter-process run lock: the CLI and the local server cannot schedule the same
       run at once, proved with eight real processes racing one lock file — and with an
       opt-in stress run of 640 (`AF_LOCK_STRESS=1`), because a race is a test that has
       to pass often rather than once
-- [x] Dashboard layout checked by screenshot at 1440, 1280, 1200 and 1024
 - [x] Dependency graph — the plan's edges, ranked and drawn by the server's answer,
       never rebuilt in the browser
 - [x] Workspace mode — `agent-flow ui ~/wk` serves several projects, bounded by
@@ -229,7 +312,7 @@ result; a number written here would be neither for long.
       throwaway prefix, and the packaged server driven with the checkout's own bundle
       renamed away — plus a black-box browser journey through the installed tarball
 
-### Incomplete
+### Designed, not built
 
 - [ ] `PATCH /config` — designed in
       [`docs/config-write-design.md`](docs/config-write-design.md), not built.
@@ -246,8 +329,8 @@ cross-provider review, approval, implementation, verification, final review,
 Definition of Done. The Python run reached `FEATURE COMPLETE` after a
 corrective round: the final review rejected it, `--fix` turned the findings
 into tasks, and the tests those tasks produced kill the corresponding mutations.
-`FINDINGS.md` §10–§13 records what that surfaced, including a defect where the
-prompt could set the runner's error code.
+[Findings §10–§13](docs/engineering/findings.md) records what that surfaced,
+including a defect where the prompt could set the runner's error code.
 
 ### Not yet validated
 
@@ -265,19 +348,26 @@ Not a roadmap — what is true today.
 - **No `pause`, `resume` or `cancel`.** The core has no semantics for any of them.
 - **No configuration writes.** `/settings` reads. Deciding which of three layers a
   value belongs in is the whole problem.
-- **Local only.** Loopback by default, no authentication, no cloud, no remote auth.
-  Anyone who can reach the port can approve a plan and start a run.
+- **Local only.** Loopback by default, no authentication, no cloud control plane, no
+  remote auth. Anyone who can reach the port can approve a plan and start a run.
+- **Not on npm.** No published package and no GitHub release; install from a checkout.
+- **No Windows CI job**, and on Windows the process timeout cannot signal a process
+  tree, so a CLI that spawns children can outlive its timeout.
 - **Visual baselines are per platform.** darwin and Linux sets are both committed and
   never compared against each other; font rasterisation differs.
 - **A lock claim can be unreadable under contention.** Mutual exclusion is unaffected,
   but the refusal then says the claim could not be read rather than naming who holds
-  it. Deferred deliberately — see [`FINDINGS.md`](FINDINGS.md).
+  it. Deferred deliberately — see
+  [`docs/engineering/findings.md`](docs/engineering/findings.md).
 
 ### Known defects — validation review
 
-A structured review after MVP 1 confirmed 17 findings. All twelve code-level
-defects are fixed; each reproduction was inverted and moved into the suite of
-the feature it belongs to.
+A structured review of the first complete implementation confirmed 17 findings.
+All twelve code-level defects are fixed; each reproduction was inverted and moved
+into the suite of the feature it belongs to. The review itself is kept as written,
+in [`docs/reviews/validation-review.md`](docs/reviews/validation-review.md), with
+the re-analysis in
+[`docs/reviews/reanalysis-post-fixes.md`](docs/reviews/reanalysis-post-fixes.md).
 
 - [x] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist → **fixed:** `validation` holds ids resolved against the project config
 - [x] **V-09 · high** — the process timeout never fires when the child has children → **fixed:** the child runs in its own process group
@@ -290,9 +380,11 @@ the feature it belongs to.
 - [x] **V-08 · medium** — validation commands run twice, once by the agent → **fixed:** the prompt says Agent Flow owns the run
 - [x] **V-10/11/12 · low** — `approvedAt` now recorded, dead prompt role metadata removed, CLI copy corrected
 
-See [FINDINGS §8](FINDINGS.md#8-a-structured-review-found-things-the-build-did-not).
+See [Findings §8](docs/engineering/findings.md#8-a-structured-review-found-things-the-build-did-not).
 
 ### Next
+
+Not started. Listed so the boundary of Spec v3 is visible, not as a commitment.
 
 - [ ] Git worktrees for task isolation
 - [ ] Parallel execution — the scheduler already runs with concurrency > 1
@@ -301,11 +393,11 @@ See [FINDINGS §8](FINDINGS.md#8-a-structured-review-found-things-the-build-did-
 
 ---
 
-## Findings
+## What building this taught us
 
-[`FINDINGS.md`](FINDINGS.md) documents what building this taught us about
-driving coding CLIs from a program — including the problems still unsolved.
-Short version:
+[`docs/engineering/findings.md`](docs/engineering/findings.md) documents what
+driving coding CLIs from a program actually involves — including the problems
+still unsolved. Short version:
 
 - Every CLI has its own dialect of JSON Schema, and they are mutually incompatible
 - Neither CLI validates its reasoning-level flag; a wrong mapping is invisible
@@ -334,8 +426,8 @@ npm run dev:web        # dashboard against a running `agent-flow ui`
 Once built, the CLI runs from the checkout as `node dist/bin/agent-flow.js`, or
 `npm link` it and use `agent-flow` as documented above.
 
-Three test layers, answering three different questions — and none of them is a
-cheaper version of another:
+Three further test layers, answering three different questions — and none of them
+is a cheaper version of another:
 
 ```bash
 npm run test:e2e                # Playwright, through the real local server
@@ -347,6 +439,12 @@ npm run test:packaging:browser  # the same, through gsd-browser
 [`docs/testing.md`](docs/testing.md) explains what each one can and cannot prove,
 including why the gsd-browser smoke does not replace Playwright and why it runs
 locally rather than in CI.
+
+No suite invokes a real CLI. Runners are exercised through a scripted
+`AgentRunner`; the adapters are tested by asserting the exact argv they build and
+by parsing recorded tool output — the two cases that could not be provoked on
+demand are labelled `SYNTHETIC-` in `test/fixtures/`. That is what keeps the suite
+fast, free and runnable in CI.
 
 Architectural rules are executable (`test/architecture.test.ts`):
 
@@ -361,10 +459,10 @@ Architectural rules are executable (`test/architecture.test.ts`):
 - no browser E2E intercepts `/api/**`
 
 The dashboard's layout is checked by screenshot against
-[`agent-flow-ui-reference.png`](agent-flow-ui-reference.png), at 1440, 1280, 1200
-and 1024 — the last two being the sides of the boundary where the inspector stops
-sharing the row with the table and becomes a drawer. Stubbed API, pinned clock,
-fixed locale and timezone.
+[`docs/assets/agent-flow-ui-reference.png`](docs/assets/agent-flow-ui-reference.png),
+at 1440, 1280, 1200 and 1024 — the last two being the sides of the boundary where
+the inspector stops sharing the row with the table and becomes a drawer. Stubbed
+API, pinned clock, fixed locale and timezone.
 
 Baselines are per platform, because font rasterisation is: `desktop-1440-darwin`
 comes from a maintainer's machine, `desktop-1440-linux` from the pinned Playwright
@@ -374,6 +472,10 @@ container CI compares in. Regenerate the Linux set only in that container:
 npm run test:visual:linux    # docker, pinned image
 npm run test:visual:update   # this platform
 ```
+
+CI runs `check` on Node 20 and 22, the browser E2E and the screenshot suite in the
+pinned container, and coverage as a report rather than a gate. The packaging smokes
+run locally.
 
 ---
 
@@ -395,4 +497,4 @@ what having no authentication does and does not mean.
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).

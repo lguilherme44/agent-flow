@@ -1,5 +1,5 @@
 /**
- * Design tokens (§67), calibrated against `agent-flow-ui-reference.png`.
+ * Design tokens (§67), calibrated against `docs/assets/agent-flow-ui-reference.png`.
  *
  * The only place in the dashboard where a colour is written down. Components
  * reference these through Tailwind's palette, which is generated from this file

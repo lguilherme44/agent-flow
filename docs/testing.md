@@ -153,7 +153,7 @@ Packaging and gsd-browser are local. See above for why.
   the tools actually do is recorded in
   [`runner-capabilities.md`](runner-capabilities.md), with the command that proves each
   claim and the version it was probed against, and end-to-end runs against live Claude
-  Code and Codex are logged in [`../FINDINGS.md`](../FINDINGS.md).
+  Code and Codex are logged in [`engineering/findings.md`](engineering/findings.md).
 - **Windows.** Path containment is now decided with `node:path` and its Windows rules
   are asserted on Linux with `path.win32`, but no CI job runs on Windows and the process
   timeout still cannot signal a process tree there.

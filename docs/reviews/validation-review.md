@@ -362,7 +362,7 @@ Isso é correto para implementação normal, mas incorreto para uma task explici
 ## Arquivos
 
 ```text
-FINDINGS.md
+docs/engineering/findings.md
 prompts/planning.md
 src/contracts/task.schema.ts
 src/app/task-executor.ts

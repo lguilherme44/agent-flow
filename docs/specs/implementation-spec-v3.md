@@ -2844,7 +2844,7 @@ A UI não deve:
 Arquivo de referência:
 
 ```text
-agent-flow-ui-reference.png
+docs/assets/agent-flow-ui-reference.png
 ```
 
 A implementação deve reproduzir a mesma linguagem visual:

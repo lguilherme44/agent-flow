@@ -5,7 +5,7 @@ including the things that are still broken.
 
 Everything here was observed by running the tools, not inferred from their
 documentation. Where a claim came from a probe, the command that produced it is
-in [`docs/runner-capabilities.md`](docs/runner-capabilities.md).
+in [`docs/runner-capabilities.md`](../runner-capabilities.md).
 
 Versions probed: Claude Code `2.1.226`, Codex CLI `0.147.0`, macOS, Node 22.
 
@@ -191,10 +191,10 @@ lint is broken is caught by the verification stage anyway.
 
 After MVP 1 was declared complete, the implementation went through a validation
 pass against a written checklist — hypotheses to disprove, not defects to
-confirm. All seventeen were real. Reproductions live in
-[`test/validation-review.repro.test.ts`](test/validation-review.repro.test.ts),
-where the assertions describe the **defect**; each will be inverted as its fix
-lands and then moved into the suite of the feature it belongs to.
+confirm. All seventeen were real. Reproductions were written first, in a single
+`test/validation-review.repro.test.ts`, where each assertion described the
+**defect**; each was inverted as its fix landed and then moved into the suite of
+the feature it belongs to, which is why that file no longer exists.
 
 Two are worth stating here because they are exactly the kind of thing a passing
 suite hides.
@@ -723,7 +723,7 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 | Codex strict-mode schemas | Would restore runtime-enforced structured output for Codex. Needs optional→nullable rewriting plus null-stripping on parse. |
 | `packages/*` split | §63 puts core, contracts, config and adapters in separate packages. The dependency *direction* it exists to guarantee is enforced today by an executable architecture test; the directory move is not done, because rewriting every import in a validated CLI buys nothing functional and risks the thing that works. |
 | ~~UI write actions~~ | Closed in UI-B. Approve, reject, revise, retry and start are use cases in `app/run-actions.ts`, and the CLI and the HTTP API are two adapters over them — not two implementations. An architecture test asserts that no handler writes state, decides an approval or accepts a plan hash. |
-| ~~`agent-flow-ui-reference.png`~~ | Closed. The file is in the repository and the dashboard was rebuilt against it — see §16. |
+| ~~`agent-flow-ui-reference.png`~~ | Closed. The file is in the repository — at [`docs/assets/agent-flow-ui-reference.png`](../assets/agent-flow-ui-reference.png) since the documentation was reorganised — and the dashboard was rebuilt against it. See §16. |
 | ~~Visual regression in CI~~ | Closed in UI-D. The blocker was stated as "this machine cannot generate Linux baselines", and the mistake was treating the platform as the pinned thing. Both sides now use one pinned Playwright container: `scripts/visual-linux.sh` generates in it, CI compares in it, and `test/visual-ci.test.ts` fails if the two ever name different versions. |
 | ~~E2E through the real server~~ | Closed in UI-D. Sixteen Playwright scenarios boot the real `agent-flow ui` against a real temp repository and stub nothing; the coding CLI is replaced at the executable boundary, so both real adapters still do the parsing and no quota is spent. An architecture test forbids `page.route`. |
 | Windows | Path containment is decided with `node:path` and its Windows rules are asserted on Linux with `path.win32`, so a workspace on Windows resolves correctly. Two things remain: no CI job runs there, and the process timeout cannot signal a process tree — `detached` opens a console rather than a process group, and killing the tree needs `taskkill /T /F`. |

@@ -144,7 +144,7 @@ passes the flags that disable them. But Agent Flow spawns a CLI as a child proce
 cannot intercept what that process runs. Anything stronger needs a container.
 
 **A read-only sandbox is not "writes nothing anywhere".** See
-[`../FINDINGS.md`](../FINDINGS.md) for what was measured.
+[`engineering/findings.md`](engineering/findings.md) for what was measured.
 
 **There is no authorisation model.** Anyone who can reach the port can approve a plan and
 start a run. On loopback that is the person at the keyboard; bound elsewhere, it is
@@ -158,4 +158,4 @@ child is reached, so a CLI that spawns children can outlive its timeout.
 and before its contents are written, and the refusal then says the claim could not be
 read rather than naming who holds it. Mutual exclusion is unaffected — the file exists,
 so acquisition fails — and the fix is deferred rather than forgotten. See
-[`../FINDINGS.md`](../FINDINGS.md).
+[`engineering/findings.md`](engineering/findings.md).
