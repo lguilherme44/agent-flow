@@ -95,6 +95,31 @@ export class InMemoryFileSystem implements FileSystem {
     for (const key of [...this.dirs]) if (key.startsWith(prefix)) this.dirs.delete(key);
   }
 
+  /**
+   * Atomic here because the whole fake is single-threaded.
+   *
+   * Which is exactly why it cannot prove the lock: an in-memory map has no TOCTOU
+   * window to lose, so a passing test here says nothing about two real processes.
+   * That is what `test/app/run-execution-lock.race.test.ts` is for. This fake is
+   * for the *policy* — stale recovery, cross-host caution, the refusal shape.
+   */
+  async createExclusive(path: string, content: string): Promise<boolean> {
+    if (this.files.has(path)) return false;
+    this.ensureParents(path);
+    this.files.set(path, content);
+    return true;
+  }
+
+  async rename(from: string, to: string): Promise<boolean> {
+    const content = this.files.get(from);
+    if (content === undefined) return false;
+
+    this.files.delete(from);
+    this.ensureParents(to);
+    this.files.set(to, content);
+    return true;
+  }
+
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
     if (this.dirs.has(path)) return { isDirectory: true, mtimeMs: 0, size: 0 };
     const content = this.files.get(path);

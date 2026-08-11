@@ -1,10 +1,18 @@
 /**
  * Filesystem access, behind a port so state handling can be tested in memory.
  *
- * The interesting member is `writeFileAtomic`: run state must never be left
- * half-written, so the implementation writes to a temp file and renames (AD-06).
- * Making that part of the contract keeps the guarantee from being an
- * implementation detail an adapter could quietly drop.
+ * Two members exist for their atomicity rather than for their convenience, and
+ * both are part of the contract so an adapter cannot quietly drop the guarantee.
+ *
+ * `writeFileAtomic` writes to a temp file and renames: run state must never be
+ * left half-written, since it is read back on resume and a truncated `state.json`
+ * would lose work that was actually completed (AD-06).
+ *
+ * `createExclusive` and `rename` are what makes an inter-process lock possible.
+ * `exists()` followed by `writeFileAtomic()` cannot be a lock — two processes both
+ * see "absent" and both write, which is the TOCTOU race the whole mechanism exists
+ * to avoid. The kernel has to be the one deciding who won, so acquisition is a
+ * single syscall that either creates the file or fails because someone else did.
  */
 export interface FileSystem {
   readFile(path: string): Promise<string>;
@@ -15,4 +23,22 @@ export interface FileSystem {
   readDir(path: string): Promise<string[]>;
   remove(path: string): Promise<void>;
   stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null>;
+
+  /**
+   * Creates a file only if it does not exist. One syscall, no window.
+   *
+   * Returns true when this caller created it and false when it was already there.
+   * Never overwrites, and never reports success for a file it did not create — the
+   * whole value of this member is that the answer is decided by the kernel.
+   */
+  createExclusive(path: string, content: string): Promise<boolean>;
+
+  /**
+   * Moves a path, atomically, failing if the source is gone.
+   *
+   * Returns false when the source did not exist. That is how a stale lock is
+   * claimed without a race: several processes may all decide a lock is stale, and
+   * exactly one of them can succeed in moving it aside.
+   */
+  rename(from: string, to: string): Promise<boolean>;
 }

@@ -61,6 +61,44 @@ export class NodeFileSystem implements FileSystem {
     await fs.rm(path, { recursive: true, force: true });
   }
 
+  /**
+   * `wx` — create for writing, fail if it exists. One syscall, no window.
+   *
+   * This is the entire basis of the run lock. `exists()` then `write()` would leave
+   * a gap in which two processes both decide the file is absent, and the kernel is
+   * the only party that can settle it.
+   */
+  async createExclusive(path: string, content: string): Promise<boolean> {
+    await this.mkdirp(dirname(path));
+
+    let handle;
+    try {
+      handle = await fs.open(path, 'wx');
+    } catch (error) {
+      if ((error as { code?: string }).code === 'EEXIST') return false;
+      throw error;
+    }
+
+    try {
+      await handle.writeFile(content, 'utf8');
+      return true;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async rename(from: string, to: string): Promise<boolean> {
+    try {
+      await fs.rename(from, to);
+      return true;
+    } catch (error) {
+      // The source was already claimed by somebody else. Not an error here: it is
+      // the answer, and it is how exactly one claimant wins.
+      if ((error as { code?: string }).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
     try {
       const stats = await fs.stat(path);

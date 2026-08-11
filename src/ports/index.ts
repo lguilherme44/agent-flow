@@ -12,3 +12,4 @@ export type { ProcessRunner, ProcessSpawnOptions, ProcessResult } from './proces
 export type { FileSystem } from './file-system.js';
 export type { Clock } from './clock.js';
 export type { Logger, LogLevel } from './logger.js';
+export type { Host } from './host.js';
