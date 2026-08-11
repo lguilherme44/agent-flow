@@ -66,3 +66,16 @@ export function ProjectProvider(props: { children: ReactNode }): JSX.Element {
 export function useProjectSelection(): ProjectSelection {
   return useContext(Context);
 }
+
+/**
+ * How a run is addressed: its id, and the project it belongs to.
+ *
+ * One function because there is one answer, and getting it wrong is invisible
+ * until a workspace holds two projects. Run ids restart at 001 per project per
+ * year, so two repositories initialised in the same year both hold AF-2026-001 —
+ * and a link without the project resolved against the *primary* one, opening a
+ * different project's run of the same name under a row that named the other.
+ */
+export function runHref(runId: string, projectId: string): string {
+  return `/runs/${runId}?${new URLSearchParams({ [PROJECT_PARAM]: projectId }).toString()}`;
+}

@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import type { RunSummaryView } from '@contracts/index.js';
-import { useProjectSelection } from '../app/project-context';
+import { runHref, useProjectSelection } from '../app/project-context';
 import { useProjects, useRuns } from '../lib/queries';
 import {
   Empty,
@@ -220,9 +220,18 @@ function RunRow(props: { run: RunSummaryView; showProject: boolean }): JSX.Eleme
         <span className="flex items-center gap-1.5">
           {/* The whole row is a link target in spirit, but only the id is one in
               fact: a row-level anchor would swallow the text selection people use
-              to copy a feature name out of a list. */}
+              to copy a feature name out of a list.
+
+              The project travels with the link, and in a workspace that is not a
+              nicety. Run ids restart at 001 per project per year, so two
+              repositories initialised in the same year both hold AF-2026-001 —
+              and a link with no project resolved against the *primary* one. The
+              row said `payments-api` and the page that opened was `booking-api`'s
+              run of the same name. Taken from the row's own answer rather than
+              from the current selection, because the row is what the reader
+              clicked. */}
           <Link
-            to={`/runs/${run.runId}`}
+            to={runHref(run.runId, run.projectId)}
             className="tabular whitespace-nowrap text-label font-medium text-text hover:text-primary-bright"
           >
             {run.runId}

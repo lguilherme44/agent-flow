@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Check, FolderGit2, Plus, TriangleAlert, X } from 'lucide-react';
 import type { ProjectView, RunnerHealthView } from '@contracts/index.js';
-import { PROJECT_PARAM, useProjectSelection } from '../app/project-context';
+import { runHref, useProjectSelection } from '../app/project-context';
 import { useProjects, useRunnerHealth } from '../lib/queries';
 import {
   Button,
@@ -332,15 +332,4 @@ function RunnerHealthStrip(props: { runners: RunnerHealthView[] | undefined }): 
       })}
     </ul>
   );
-}
-
-/**
- * A run, named together with the project it belongs to.
- *
- * Both facts in one href rather than a navigation plus a click handler racing it:
- * the link used to select the project and navigate separately, and the navigation
- * dropped the search parameter the selection had just written.
- */
-function runHref(runId: string, projectId: string): string {
-  return `/runs/${runId}?${new URLSearchParams({ [PROJECT_PARAM]: projectId }).toString()}`;
 }
