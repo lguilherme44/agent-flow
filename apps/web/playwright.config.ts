@@ -14,11 +14,29 @@ import { defineConfig, devices } from '@playwright/test';
  * `toLocaleTimeString` renders the same string on any machine. Animations are
  * disabled by Playwright's own screenshot handling.
  *
- * Baselines are per-platform by construction — font rasterisation differs
- * between macOS and Linux — so the committed ones are darwin/arm64 and CI does
- * not run this suite. Running it elsewhere means generating that platform's
- * baseline first with `npm run test:visual:update`.
+ * Baselines are per-platform by construction — font rasterisation differs between
+ * macOS and Linux — so `{platform}` is in the snapshot path and the two sets never
+ * meet. Both are committed: `desktop-1440-darwin` from a maintainer's machine and
+ * `desktop-1440-linux` from the pinned Playwright container CI runs in. Comparing
+ * one against the other would report a diff on every pixel of every glyph and
+ * teach everybody to ignore this suite.
  */
+
+/**
+ * Which browser draws the baselines.
+ *
+ * Chrome on macOS because the repository does not download browsers and the
+ * machine already has one. Bundled Chromium everywhere else, because that is
+ * pinned to the Playwright version in the lockfile — so the Linux baselines are
+ * reproducible from the container tag alone, without depending on whatever Chrome
+ * release a runner happens to have installed that week.
+ *
+ * The two never compare against each other, so using different builds costs
+ * nothing and buys reproducibility on the side that has to be automated.
+ */
+const BROWSER =
+  process.env['AF_VISUAL_BROWSER'] ?? (process.platform === 'darwin' ? 'chrome' : 'chromium');
+
 export default defineConfig({
   testDir: './visual',
   outputDir: './visual/.results',
@@ -28,7 +46,11 @@ export default defineConfig({
   snapshotPathTemplate: '{testDir}/__screenshots__/{projectName}-{platform}/{arg}{ext}',
   fullyParallel: true,
   forbidOnly: process.env['CI'] === 'true',
-  reporter: [['list']],
+  // The HTML report is how a failure in CI becomes something a person can look at:
+  // it embeds the expected, the actual and the diff for every mismatch. A list
+  // reporter alone says "screenshot comparison failed" and nothing about what moved.
+  reporter:
+    process.env['CI'] === 'true' ? [['list'], ['html', { open: 'never' }]] : [['list']],
 
   expect: {
     toHaveScreenshot: {
@@ -46,9 +68,7 @@ export default defineConfig({
     locale: 'en-US',
     timezoneId: 'UTC',
     colorScheme: 'dark',
-    // Chrome rather than bundled Chromium: this repository does not download
-    // browsers, and the machine already has one.
-    channel: 'chrome',
+    ...(BROWSER === 'chromium' ? {} : { channel: BROWSER }),
   },
 
   projects: [
@@ -78,12 +98,33 @@ export default defineConfig({
     // The built bundle, not the dev server: the dev server injects an overlay
     // and serves unminified CSS, so it is not what anybody will look at.
     //
+    // The build is *inside* the command rather than a separate step, so there is no
+    // way to run this suite — comparing or updating — against anything but the
+    // current source. `npm run` here resolves to this workspace's `build`, which is
+    // `tsc --noEmit && vite build`.
+    //
     // `--host 127.0.0.1` is required, not cosmetic: `vite preview` binds `::1`
     // only, so the IPv4 address Playwright polls never answers and the run dies
     // on a 120-second timeout with a healthy server sitting right there.
     command: 'npm run build && npx vite preview --port 4788 --strictPort --host 127.0.0.1',
     url: 'http://127.0.0.1:4788',
-    reuseExistingServer: process.env['CI'] !== 'true',
+
+    /**
+     * Never (D32-A).
+     *
+     * This was `process.env.CI !== 'true'`, and the consequence was the worst kind
+     * of green: a `vite preview` left running from an earlier session answers on
+     * 4788, Playwright adopts it, the build inside `command` never runs, and the
+     * screenshots compare an old bundle against the baselines. Source changes, the
+     * suite passes, and the pass is a statement about a bundle nobody has built
+     * since.
+     *
+     * With this false the server is always started, so the build always runs; and
+     * `--strictPort` turns an occupied port into a refusal that names itself
+     * instead of a silent adoption. The cost is one build per invocation, which is
+     * two seconds, and the alternative is a suite whose green means nothing.
+     */
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

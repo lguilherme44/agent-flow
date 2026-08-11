@@ -60,6 +60,85 @@ jobs:
 
       - run: npm run build:web
 
+  # A browser, driven against the real local server (UI-31).
+  #
+  # In the pinned Playwright container because that is the one place a Chromium and
+  # its dependencies are guaranteed present without a download step that can be a
+  # different version tomorrow. Nothing here spends quota: the coding CLI is replaced
+  # at the executable boundary by a deterministic script, which an architecture test
+  # enforces.
+  e2e:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The suite builds the CLI and the dashboard itself, in `globalSetup`, so a
+      # green run cannot be a statement about an artifact from an earlier step.
+      - run: npm run test:e2e
+        env:
+          AF_E2E_CHANNEL: chromium
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/e2e/.results/
+          retention-days: 7
+
+  # Screenshot regression, on Linux, against Linux baselines (D32-C).
+  #
+  # One job, not a matrix: the suite renders a page, and a page does not render
+  # differently under Node 20 than under Node 22. Duplicating it would double the
+  # slowest job in this file to learn nothing.
+  #
+  # The container is the whole point. Baselines are platform-specific because font
+  # rasterisation is, so "Linux" is not specific enough — the maintainer regenerates
+  # these with `scripts/visual-linux.sh`, which uses this exact image, and
+  # `test/visual-ci.test.ts` fails if the two ever name different versions.
+  visual:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The build happens inside the suite's own `webServer` command, so there is no
+      # arrangement of steps in which this compares an old bundle (D32-A, D32-B).
+      - run: npm run test:visual
+        env:
+          AF_VISUAL_BROWSER: chromium
+
+      # The expected, the actual and the diff for every mismatch. "Screenshot
+      # comparison failed" without the images is a failure nobody can act on.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-diff
+          path: |
+            apps/web/playwright-report/
+            apps/web/visual/.results/
+          retention-days: 7
+
   # Separated from `check` because coverage is a report, not a gate: a drop is
   # worth seeing without failing a pull request over a number.
   coverage:

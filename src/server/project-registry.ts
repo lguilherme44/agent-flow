@@ -1,3 +1,4 @@
+import nodePath from 'node:path';
 import { agentFlowPaths } from '../app/paths.js';
 import type { FileSystem } from '../ports/index.js';
 
@@ -111,7 +112,7 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
     if (seen.has(resolved)) return;
     seen.add(resolved);
 
-    if (await options.fs.exists(`${dir}/.agent-flow/config.yaml`)) {
+    if (await options.fs.exists(nodePath.join(dir, '.agent-flow', 'config.yaml'))) {
       // The resolved path, not the one the walk arrived by. A project reached
       // through a link inside the workspace is the same project, and registering
       // it under the link would give it an id from the link's name — `current`
@@ -133,7 +134,7 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
 
     for (const entry of entries) {
       if (entry.startsWith('.') || SKIP.has(entry)) continue;
-      const child = `${dir}/${entry}`;
+      const child = nodePath.join(dir, entry);
       const stat = await options.fs.stat(child);
       if (stat?.isDirectory === true) await walk(child, root, remaining - 1);
     }
@@ -152,14 +153,51 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
 }
 
 /**
- * Whether `path` is the root or sits under it.
+ * The path primitives containment is decided with.
  *
- * The separator matters: `/wk` must not contain `/wknight`, which a bare
- * `startsWith` would say it does.
+ * A parameter because the rules differ by platform in ways that cannot be tested on
+ * one: drive letters, UNC shares, two separators and case-insensitive roots are all
+ * Windows facts, and a test that could only assert them by running on Windows would
+ * never be run. Production passes `node:path`; the tests pass `path.posix` and
+ * `path.win32` explicitly.
  */
-function within(root: string, path: string): boolean {
-  return path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
+export interface PathFlavour {
+  relative(from: string, to: string): string;
+  isAbsolute(path: string): boolean;
+  readonly sep: string;
 }
+
+/**
+ * Whether `path` is the root or sits under it (D-F02).
+ *
+ * This was `startsWith(`${root}/`)`, which is right on POSIX and wrong everywhere
+ * else — `C:\wk` does not contain `C:\wk\api` by that rule, so a Windows workspace
+ * discovered nothing at all, and `\\server\share` compared as an ordinary prefix.
+ *
+ * `relative` answers the question the platform's own way. What comes back is a path
+ * *from* the root, so containment is a statement about that path rather than about
+ * string prefixes:
+ *
+ *   - empty means the two are the same directory,
+ *   - absolute means there is no route between them — a different drive letter, or
+ *     a different UNC share, which is the one case a prefix test cannot express,
+ *   - a leading `..` segment means it escapes upwards. `/wk` and `/wknight` produce
+ *     `../wknight`, which is exactly why the original needed the separator.
+ *
+ * Case is not handled here and must not be: `path.win32.relative` already compares
+ * Windows roots case-insensitively, and a `toLowerCase()` of our own would be a
+ * second, worse answer that also broke case-sensitive Linux filesystems.
+ */
+function within(root: string, path: string, flavour: PathFlavour = nodePath): boolean {
+  const relative = flavour.relative(root, path);
+  if (relative === '') return true;
+  if (flavour.isAbsolute(relative)) return false;
+
+  return relative !== '..' && !relative.startsWith(`..${flavour.sep}`);
+}
+
+/** Exported for the cross-platform tests; production always uses `node:path`. */
+export { within as isWithinWorkspace };
 
 /**
  * Builds a registry from an explicit list, for a single-project server.
@@ -189,11 +227,15 @@ export interface ProjectRegistry {
  * with the same basename. Giving them one id would show one run history for two
  * working trees — and, worse, route a write action to whichever won.
  */
-export function assignIds(paths: readonly string[]): RegisteredProject[] {
+export function assignIds(
+  paths: readonly string[],
+  /** The platform's, unless a test is asking about another one. */
+  flavour: Pick<typeof nodePath, 'basename'> = nodePath,
+): RegisteredProject[] {
   const used = new Map<string, number>();
 
   return paths.map((path) => {
-    const name = basename(path);
+    const name = basename(path, flavour);
     const base = slug(name);
     const seen = used.get(base) ?? 0;
     used.set(base, seen + 1);
@@ -220,11 +262,28 @@ export function runsDirOf(project: RegisteredProject): string {
   return agentFlowPaths(project.path).runsDir;
 }
 
-function basename(path: string): string {
-  const trimmed = path.replace(/\/+$/, '');
-  return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
+/**
+ * The last segment of a path, whatever separates segments here.
+ *
+ * `lastIndexOf('/')` named `C:\wk\api` in full, so a Windows project's id was the
+ * slug of its whole path. `node:path` already handles a trailing separator, and the
+ * fallback covers a root — `basename('/')` is empty, and a project with an empty id
+ * is one no route can ever match.
+ */
+function basename(path: string, flavour: Pick<typeof nodePath, 'basename'> = nodePath): string {
+  return flavour.basename(path) || path;
 }
 
-function normalise(path: string): string {
-  return path.replace(/\/+$/, '') || '/';
+/**
+ * An absolute path with no trailing separator, as the platform writes it.
+ *
+ * `resolve` rather than a regular expression, because the thing being removed is a
+ * separator and there are two of them on Windows. It is a no-op for a root: `/` and
+ * `C:\` stay as they are, which is what makes a workspace rooted at one work.
+ */
+function normalise(path: string, flavour: Pick<typeof nodePath, 'resolve'> = nodePath): string {
+  return flavour.resolve(path);
 }
+
+/** Exported for the cross-platform tests; production always uses `node:path`. */
+export { basename as workspaceBasename, normalise as normaliseWorkspaceRoot };

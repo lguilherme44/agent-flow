@@ -442,6 +442,23 @@ describe('a workspace has one registry (UI-29, §93)', () => {
     expect(registry).toContain('realPath');
     expect(registry).toContain('within(');
   });
+
+  it('decides containment with path primitives, not with string surgery (D-F02)', () => {
+    // The boundary was enforced with `startsWith(`${root}/`)` and
+    // `lastIndexOf('/')`. Both are correct on POSIX and meaningless on Windows:
+    // `C:\wk` does not contain `C:\wk\api` by that rule, so a Windows workspace
+    // discovered nothing — and a security boundary that silently matches nothing is
+    // indistinguishable from one that silently matches everything until you read it.
+    const { text } = read(join(ROOT, 'src/server/project-registry.ts'));
+    const registry = codeOnly(text);
+
+    expect(importSpecifiers(text)).toContain('node:path');
+    expect(registry).toMatch(/\.relative\(/);
+    // No separator arithmetic left. The slug's own `[^a-z0-9]` class is not path
+    // logic and lives in `slug`, which `codeOnly` blanks as a literal.
+    expect(registry).not.toMatch(/lastIndexOf\(/);
+    expect(registry).not.toMatch(/startsWith\(\s*root/);
+  });
 });
 
 describe('there is exactly one run execution lock (AF-L01)', () => {
