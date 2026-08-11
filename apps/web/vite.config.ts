@@ -41,9 +41,9 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
     css: false,
-    // Vitest and Playwright both claim `*.spec.ts`. The visual suite needs a
-    // real browser and its own runner; collected here it fails on an import of
-    // `@playwright/test` and takes the unit suite red with it.
-    exclude: ['node_modules/**', 'dist/**', 'visual/**'],
+    // Vitest and Playwright both claim `*.spec.ts`. The browser suites need a real
+    // browser and their own runner; collected here they fail on an import of
+    // `@playwright/test` and take the unit suite red with them.
+    exclude: ['node_modules/**', 'dist/**', 'visual/**', 'e2e/**'],
   },
 });

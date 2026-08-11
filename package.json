@@ -24,10 +24,14 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src test bin apps/web/src",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run test:web",
+    "check": "npm run typecheck && npm run typecheck:e2e && npm run lint && npm run test && npm run test:web",
     "build:web": "npm run build --workspace @agent-flow/web",
     "dev:web": "npm run dev --workspace @agent-flow/web",
-    "test:web": "npm run test --workspace @agent-flow/web"
+    "test:web": "npm run test --workspace @agent-flow/web",
+    "test:e2e": "npm run test:e2e --workspace @agent-flow/web",
+    "test:visual": "npm run test:visual --workspace @agent-flow/web",
+    "test:visual:update": "npm run test:visual:update --workspace @agent-flow/web",
+    "typecheck:e2e": "npm run typecheck:e2e --workspace @agent-flow/web"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

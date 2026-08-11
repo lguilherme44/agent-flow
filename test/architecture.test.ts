@@ -569,3 +569,66 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
     expect(emitted.filter((event) => /heartbeat|poll|ping/i.test(event ?? ''))).toEqual([]);
   });
 });
+
+describe('the E2E suite crosses the real server (UI-31)', () => {
+  // The failure mode this exists to prevent is not a broken test — it is a *green*
+  // one. An E2E that intercepts `/api/**` proves the React app can render a fixture,
+  // which the unit suite already proves more cheaply and in a hundredth of the time.
+  // What only an E2E can prove is that Fastify, the application services, the
+  // StateStore and the filesystem still agree with each other, and one `page.route`
+  // deletes exactly that.
+  const specs = sourceFiles('apps/web/e2e').filter((file) => file.endsWith('.spec.ts'));
+
+  it('exists at all', () => {
+    expect(specs.length).toBeGreaterThan(0);
+  });
+
+  it('intercepts no request', () => {
+    const offenders = specs
+      .map(read)
+      .filter(({ text }) => /\bpage\.route\s*\(|\bcontext\.route\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('starts the server through the CLI, in one place', () => {
+    // One harness, so "the server under test is the one a user gets" is a property
+    // of a single file rather than a habit spread across seven specs.
+    const spawners = sourceFiles('apps/web/e2e')
+      .map(read)
+      .filter(({ text }) => /\bspawn(Sync)?\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path)
+      .sort();
+
+    expect(spawners).toEqual([
+      'apps/web/e2e/global-setup.ts',
+      'apps/web/e2e/support/world.ts',
+    ]);
+
+    // And it boots the built CLI, not `buildServer` imported directly — a server
+    // assembled by the test is a server whose wiring the test is asserting about
+    // itself.
+    const world = read(join(ROOT, 'apps/web/e2e/support/world.ts')).text;
+    expect(world).toContain('dist/bin/agent-flow.js');
+    expect(importSpecifiers(world).filter((specifier) => specifier.includes('src/server'))).toEqual(
+      [],
+    );
+  });
+
+  it('spends no quota', () => {
+    // The runner is replaced at the executable boundary — `runners.<id>.command` —
+    // and nowhere else. A spec that named a real CLI would be a spec that only
+    // passes on a machine that is logged in, and costs money when it does.
+    const support = sourceFiles('apps/web/e2e/support').map(read);
+    const commands = support.filter(({ text }) => /command:/.test(text));
+
+    expect(commands.map(({ path }) => path)).toEqual(['apps/web/e2e/support/world.ts']);
+
+    for (const { path, text } of support) {
+      expect(codeOnly(text), `${path} names a real coding CLI`).not.toMatch(
+        /command:\s*'(claude|codex)'/,
+      );
+    }
+  });
+});

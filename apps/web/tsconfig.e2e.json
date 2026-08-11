@@ -1,0 +1,11 @@
+{
+  // The E2E suite drives Node — it spawns the CLI, writes temp repositories and
+  // opens sockets — while still writing browser code inside `page.evaluate`. Its
+  // own project because adding `node` to the app's global types would let a React
+  // component reach for `process` and typecheck.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["e2e", "playwright.e2e.config.ts", "src/hooks/use-live-events.ts"]
+}

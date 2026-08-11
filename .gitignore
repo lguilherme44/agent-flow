@@ -20,4 +20,9 @@ agent-flow-mvp1-plan.md
 # apps/web/visual/__screenshots__ are committed; this is the scratch space
 # where a failing run writes its actual and diff images.
 apps/web/visual/.results/
+apps/web/e2e/.results/
 apps/web/playwright-report/
+apps/web/test-results/
+
+# Packaging smoke output: a tarball and the throwaway prefix it is installed into.
+.packaging/
