@@ -444,15 +444,30 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
   });
 
   it('holds the lock across every action that moves a run', () => {
-    // `start`, `revise` and `retryTask` are the three that touch a run while a
-    // scheduler might be running. Each one goes through the helper rather than doing
-    // its own acquire/release, so none of them can forget the `finally`.
+    // `start`, `revise` and `retryTask` touch a run while a scheduler might be running;
+    // `approve` and `reject` move the gate that decides whether it may (AF-L01.2).
+    // Every one goes through the helper rather than doing its own acquire/release, so
+    // none of them can forget the `finally` — and there is one lease, not two mutexes
+    // that would each exclude a set of peers the other was not in.
     const actions = read(join(ROOT, 'src/app/run-actions.ts')).text;
     const locked = [...actions.matchAll(/withExecutionLock\(deps, store, runId, '(\w+)'/g)].map(
       (match) => match[1],
     );
 
-    expect(locked.sort()).toEqual(['retry', 'revise', 'run']);
+    expect(locked.sort()).toEqual(['approve', 'reject', 'retry', 'revise', 'run']);
+  });
+
+  it('leaves the read-only gate description unlocked (AF-L01.2)', () => {
+    // `describeApprovalGate` is a read. Refusing to *show* somebody the gate because a
+    // run is busy would help nobody, and a lock taken for a read is a lock two readers
+    // can queue behind.
+    const actions = read(join(ROOT, 'src/app/run-actions.ts')).text;
+    const describe = actions.slice(
+      actions.indexOf('export async function describeApprovalGate'),
+      actions.indexOf('export interface ApproveResult'),
+    );
+
+    expect(describe).not.toContain('withExecutionLock');
   });
 
   it('keeps the lock out of the workflow state (AF-L01)', () => {

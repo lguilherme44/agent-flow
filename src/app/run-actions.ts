@@ -287,6 +287,10 @@ function gerund(operation: LockOperation): string {
       return 're-planned';
     case 'retry':
       return 'modified by a retry';
+    case 'approve':
+      return 'approved';
+    case 'reject':
+      return 'rejected';
   }
 }
 
@@ -399,11 +403,38 @@ export interface ApproveResult {
  * specific plan, so the identity of that plan has to be established by whoever is
  * granting it — a caller that supplied its own hash could approve a plan nobody
  * read, which is precisely the failure the gate exists to prevent.
+ *
+ * **Locked, because it reads a plan another operation may be rewriting (AF-L01.2).**
+ * The question is not whether approving looks harmful; it is whether there is a moment
+ * during `run`, `revise` or `retry` at which approving is *useful*. There is not.
+ * `start` reads the gate once, before the first runner is spawned, so an approval that
+ * lands afterwards changes no execution — it only records that one was authorised when
+ * it was not. And under `revise` it is actively wrong: `replan` clears the approval and
+ * then rewrites `plan.json` through the pipeline, so an approval racing it hashes
+ * whichever version of the plan happened to be on disk. The plan hash catches the
+ * common case — a hash of the old plan no longer covers the new one — but only when
+ * nobody passes `--force`, and "safe as long as you do not force it" is safe by
+ * accident. So the answer is a refusal rather than a wait: a caller told `run_busy` can
+ * look at the plan again, which is the whole point of the gate.
+ *
+ * `describeApprovalGate` above takes no lock. It is a read, and refusing to *show*
+ * somebody the gate because a run is busy would help nobody.
  */
 export async function approve(
   deps: RunActionDeps,
   runId: string,
   options: { force?: boolean } = {},
+): Promise<ActionOutcome<ApproveResult>> {
+  const store = storeFor(deps);
+  return withExecutionLock(deps, store, runId, 'approve', () =>
+    grantApproval(deps, runId, options),
+  );
+}
+
+async function grantApproval(
+  deps: RunActionDeps,
+  runId: string,
+  options: { force?: boolean },
 ): Promise<ActionOutcome<ApproveResult>> {
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
@@ -443,7 +474,32 @@ export async function approve(
 // reject
 // ---------------------------------------------------------------------------
 
+/**
+ * Turns down the plan (§17) — and never behind an execution's back (AF-L01.2).
+ *
+ * A rejection while the scheduler is running is not a race that corrupts a file; it is
+ * a sentence that is not true. `reject` writes `plan_rejected` while agents keep
+ * spawning against that very plan, and the run then claims its plan was turned down
+ * while the work it describes is being done. The only honest orderings are "rejected,
+ * therefore not executed" and "executed, and rejected afterwards is too late".
+ *
+ * So it takes the same lease `start`, `revise` and `retry` take. Not a second mutex and
+ * not a `describe()` followed by an update — that is the `exists()`-then-`write()` shape
+ * the whole mechanism exists to avoid, and it would leave exactly the window this is
+ * closing. Refusing is the answer, rather than waiting: a rejection that queued behind
+ * a run would land on a run that had finished, which is the retrospective rejection
+ * this exists to prevent.
+ */
 export async function reject(
+  deps: RunActionDeps,
+  runId: string,
+  reason: string | undefined,
+): Promise<ActionOutcome<{ readonly runId: string }>> {
+  const store = storeFor(deps);
+  return withExecutionLock(deps, store, runId, 'reject', () => rejectPlan(deps, runId, reason));
+}
+
+async function rejectPlan(
   deps: RunActionDeps,
   runId: string,
   reason: string | undefined,
@@ -621,6 +677,22 @@ async function execute(
 
   const state = await loadRun(context.store, runId);
   if (state === null) return failed(noSuchRun(runId));
+
+  // A turned-down plan is not executable (AF-L01.2). Mutual exclusion gives the two
+  // operations an order; this is what makes the order *mean* something. Without it,
+  // "rejected, therefore not executed" held only by luck: `reject` writes `status` and
+  // nothing else, so a run approved before it was rejected still satisfied every gate
+  // below and ran the plan a person had explicitly refused. Checked here rather than
+  // left to the approval gate, because it must hold even where
+  // `approval.requiredBeforeImplementation` is off — that switch turns off the review
+  // ceremony, not a person's "no".
+  if (state.status === 'plan_rejected') {
+    return failed({
+      code: 'already_rejected',
+      message: `The plan for ${runId} was rejected, so it will not be executed.`,
+      action: 'Revise the plan and approve the result, or start a new run.',
+    });
+  }
 
   const current = await requireCurrent(context, runId);
   if (current !== undefined) return failed(current);

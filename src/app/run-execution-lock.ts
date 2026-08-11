@@ -66,8 +66,17 @@ export const LOCK_VERSION = 1;
 export const LOCK_OWNERS = ['cli', 'server'] as const;
 export type LockOwner = (typeof LOCK_OWNERS)[number];
 
-/** What is being done under the lock. Diagnostic, and shown to whoever is refused. */
-export const LOCK_OPERATIONS = ['run', 'revise', 'retry'] as const;
+/**
+ * What is being done under the lock. Diagnostic, and shown to whoever is refused.
+ *
+ * `approve` and `reject` are here rather than being folded into one of the others
+ * (AF-L01.2). They hold the lock for a different reason — they move the *gate* rather
+ * than execute the plan — and a refusal that named the wrong one would be a diagnostic
+ * message that lies. "This run is already being rejected by the server" is something a
+ * person can act on; "already being executed" would send them looking for a scheduler
+ * that does not exist.
+ */
+export const LOCK_OPERATIONS = ['run', 'revise', 'retry', 'approve', 'reject'] as const;
 export type LockOperation = (typeof LOCK_OPERATIONS)[number];
 
 /**
