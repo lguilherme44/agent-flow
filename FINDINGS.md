@@ -968,3 +968,71 @@ another host, and a local liveness check would answer a question about whichever
 process happens to share the number. Agent Flow is local-first, this is not a
 distributed lock, and it does not pretend to be one: a foreign lock is held until
 somebody removes it deliberately.
+
+---
+
+## AF-L01.1 — two ways to leak a lock that had nothing to do with the lock
+
+The generational algorithm survived review. The code holding it did not. Both bugs
+below leave a claim on disk that stale detection can never clear, which is worse than
+losing the race the algorithm was rewritten to win: a lost race is two executions, and
+these are a run that can never be executed again without a person deleting a file.
+
+**The audit trail could strand the lease.** `withExecutionLock` acquired, appended
+`stale_execution_lock_recovered` and `execution_lock_acquired`, and *then* opened its
+`try/finally`. Both appends write `events.jsonl`, and a full disk, a permission change
+or any I/O error there throws out of a function that has already claimed the run. The
+claim left behind names the process that is still executing, so liveness reports it
+alive and every later `start`, `revise` and `retry` is refused — for as long as the
+server lives, which for a long-running server is indefinitely. The fix is one line of
+placement: the `try` opens on the line after the lease exists, and the audit happens
+inside it. Nothing about the lock changed.
+
+The `finally` then needed an order and a policy, because it does two things that can
+fail. Release is physical and goes first; the event is a record and goes second, so a
+failed append can never leave a claim on disk. They are treated differently on purpose:
+`lease.release()` propagates, because it is the one failure that keeps the run refused
+and there is no other channel to say so, and the `execution_lock_released` event is
+best-effort, because by that line the claim is already gone and throwing from a
+`finally` would swap a real execution error for a logging one. The loss is visible
+anyway — an `execution_lock_acquired` with nothing closing it.
+
+**A claim can be created and not written.** `createExclusive` is `open(path, 'wx')`
+then `writeFile`, and the open is what wins the race — it wins it before a single byte
+exists. A failing write left an empty `execution.lock.N` behind, and an empty claim is
+the worst possible one: the reader treats an unreadable claim as held, which is right,
+and there is no pid in it for liveness to judge, so no recovery path can ever reach it.
+Fail-closed plus unjudgeable is a run locked forever. So a claim this call created and
+could not fill in is removed again — only that path, only on the write failure, never
+on `EEXIST`, and the original error is what propagates rather than whatever the cleanup
+made of it.
+
+Neither bug is reachable through the in-memory fake: it has no separate open and write,
+so it has no state in which the file exists and the content does not. The regression
+test for it stands in for the two members `createExclusive` uses and lets the open be
+real, so the file it asserts about is a real file on a real disk. The four for the lease
+go through `retryTask` rather than a hand-written `try/finally`, because the shape of
+production was the bug and only production can be asked whether it still has it.
+
+**Recovery copy named a file that does not exist.** The refusal for an unreadable claim
+told the operator to remove `.agent-flow/runs/<id>/execution.lock` — the single-file
+path from the design that was replaced. Wrong instructions are worse than none: they
+teach the reader that the message is guessing. It now names the mechanism that exists,
+and it leads with the check rather than the delete. An unreadable claim is the one case
+where Agent Flow knows nothing about who holds it, so `rm` is the last step and
+"confirm nothing is running" is the first.
+
+**And `FileSystem.rename` was deleted.** It existed for the reclaim-by-moving-aside
+design, that design is gone, and nothing had called it since. A port kept for a
+mechanism nothing uses is how the mechanism comes back: the next person who needs to
+move a file finds it declared, assumes it is load-bearing, and builds on the thing that
+failed. An architecture test now asserts its absence, and another asserts that no
+operator-facing string names a lock file without a generation.
+
+**Volume, not a green run.** A lock race is not a test that passes; it is a test that
+passes often enough. The design this one replaced failed two runs in five, which a
+single green race suite would have cleared. So the stress run is in the repository
+rather than in somebody's shell history — forty rounds of eight processes against a
+fresh run and forty more against an abandoned one, 640 processes, zero overlapping
+holds. It is opt-in behind `AF_LOCK_STRESS=1` because 640 spawns is not what every
+`npm test` should pay for; the eight-process race suite still runs every time.
