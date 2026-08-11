@@ -137,6 +137,30 @@ describe('RunHeader', () => {
     const graph = screen.getByRole('button', { name: 'View as DAG' });
     expect(graph).toBeEnabled();
     expect(graph).toHaveAttribute('aria-pressed', 'false');
+
+    // And not offered again once the gate is open.
+    expect(screen.queryByRole('button', { name: 'Review & approve' })).toBeNull();
+  });
+
+  it('offers nothing to approve on a run that is approved and has no work left', () => {
+    // Found on a live run: status stays `approved` until the final review moves
+    // it, so the run is not terminal, `canStart` is false at 100%, and the
+    // fallthrough offered a gate whose only outcome is `already_approved`.
+    render(
+      withTooltips(
+        <RunHeader
+          run={run({ status: 'approved', approved: true, progress: 100 })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
+
+    expect(screen.queryByRole('button', { name: 'Review & approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /run$/ })).toBeNull();
+    // Revising is still legitimate: a new plan reopens the gate.
+    expect(screen.getByRole('button', { name: 'Revise' })).toBeEnabled();
   });
 
   it('asks for approval before it offers to start', () => {

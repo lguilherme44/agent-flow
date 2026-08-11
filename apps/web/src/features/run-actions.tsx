@@ -91,7 +91,12 @@ export function RunActions(props: {
               <Play className="h-3.5 w-3.5" aria-hidden />
               {run.progress > 0 ? 'Resume run' : 'Start run'}
             </Button>
-          ) : terminal ? null : (
+          ) : terminal || run.approved ? null : (
+            // Not offered once the gate is open. A run that is approved and has
+            // no work left is not terminal — its status is `approved` until the
+            // final review moves it — and this button used to appear on it,
+            // whose only outcome is `already_approved`. Found on a real run, and
+            // the exact thing the comment above says this file avoids.
             <Button
               variant="primary"
               onClick={() => {

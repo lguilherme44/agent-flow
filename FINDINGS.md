@@ -1247,3 +1247,21 @@ Agents & Models resolves all of that and reports three distinct reasons a role c
 none. So the sidebar names what is unavailable and links to the page that can answer the
 rest, and says nothing about what will happen. The times a promise like that is wrong are
 exactly the times somebody was relying on it.
+
+### A gate offered on a run that was already through it
+
+Found by opening the dashboard against a real run rather than against a fixture.
+
+`RunActions` decides which controls exist from where the run is, and the fallthrough
+was `terminal ? null : <Review & approve>`. `terminal` means `completed` or
+`plan_rejected` — but a run that has been approved and has finished every task sits at
+status `approved` until the final review moves it. Not terminal, `canStart` false at
+100%, so the gate button appeared on a run whose gate was open. Clicking it would have
+returned `already_approved`.
+
+The file's own doc comment says a control whose only outcome is a refusal teaches people
+to ignore refusals. It had one.
+
+Nothing in the fixture suite could have caught it: every fixture run is either mid-flight
+or `completed`, and `approved` at 100% is a state that only exists for the minutes
+between the last task and the final review.

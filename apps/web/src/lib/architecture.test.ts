@@ -112,6 +112,27 @@ describe('the graph is drawn from the server’s answer, never derived (UI-28)',
     }
   });
 
+  it('keeps the selected task in one place', () => {
+    // The failure UI-28 could most easily have introduced: a graph that
+    // remembered which node was selected, beside a table that remembered which
+    // row was. Two answers to one question, and the inspector reading whichever
+    // it happened to be wired to. The graph takes the selection as a prop and
+    // reports changes upward; it stores nothing.
+    const graph = sources().find((entry) => entry.path === 'features/dag-view.tsx');
+    expect(graph).toBeDefined();
+    expect(codeOnly(graph?.text ?? ''), 'the graph keeps its own selection').not.toMatch(
+      /useState\s*[<(]/,
+    );
+
+    // And exactly one component owns it.
+    const owners = sources()
+      .filter(({ text }) => /useState<string \| undefined>\(undefined\)/.test(codeOnly(text)))
+      .filter(({ text }) => /selectedTask/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(owners).toEqual(['pages/RunDetailPage.tsx']);
+  });
+
   it('claims no critical path', () => {
     // §92 defers it, and the highlight this view has answers a different, much
     // cheaper question: what a task waits for and what waits on it. Calling that
