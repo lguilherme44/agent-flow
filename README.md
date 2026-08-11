@@ -80,7 +80,7 @@ it works here.
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
 | `review` | Run validation, inspect the code, judge it against the SDD. `--fix` turns findings into tasks and reviews the corrected plan. |
-| `ui` | Serve the local dashboard on `127.0.0.1:4782`. Approve, revise, retry and run go through the same use cases this CLI does. |
+| `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. Approve, revise, retry and run go through the same use cases this CLI does. |
 | `clean` | Remove old run state. Never the active run without `--force`. |
 
 `--dry-run` shows the routing without invoking anything. `--verbose`, `--json`,
@@ -188,6 +188,12 @@ result; a number written here would be neither for long.
       opt-in stress run of 640 (`AF_LOCK_STRESS=1`), because a race is a test that has
       to pass often rather than once
 - [x] Dashboard layout checked by screenshot at 1440, 1280, 1200 and 1024
+- [x] Dependency graph — the plan's edges, ranked and drawn by the server's answer,
+      never rebuilt in the browser
+- [x] Workspace mode — `agent-flow ui ~/wk` serves several projects, bounded by
+      `ui.workspaceDepth`, and discovers nothing that resolves outside the root
+- [x] Empty, error and degraded states — what happened, where, whether the run
+      stopped, and what to do about it
 
 ### Incomplete
 
@@ -198,7 +204,6 @@ result; a number written here would be neither for long.
       [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md),
       not built. Pause needs an abort signal the scheduler checks between tasks;
       cancel needs a new terminal run status and is a contract change
-- [ ] DAG view, workspace multi-project mode, full empty/degraded state sweep
 
 ### Validated end to end, against live CLIs
 

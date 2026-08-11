@@ -385,6 +385,70 @@ export function Tooltip(props: { content: ReactNode; children: ReactNode }): JSX
   );
 }
 
+/**
+ * Something went wrong, or something is missing, said the way §95 asks.
+ *
+ * Four things, in this order: what happened, where, whether the workflow stopped,
+ * and what to do about it. They are separate props rather than one sentence
+ * because a reader uses them differently — the first two explain, the third
+ * decides whether to panic, and the last is the only one they can act on.
+ *
+ * The third is the one that keeps getting dropped, and it is the one that
+ * matters most: "the plan review used the same provider" and "the run stopped"
+ * are both worth showing and mean entirely different things about whether
+ * anybody needs to do something right now.
+ *
+ * A notice belongs beside the content it is about. A toast for everything is how
+ * a dashboard ends up with an error nobody can locate.
+ */
+export function Notice(props: {
+  tone: 'warning' | 'danger' | 'info';
+  /** What happened. One line, in words a person reads. */
+  title: ReactNode;
+  /** Where — a command, a task, a file. Rendered as evidence, not prose. */
+  detail?: ReactNode;
+  /** Whether the workflow stopped, when that is not obvious from the title. */
+  consequence?: ReactNode;
+  /** What to do next. Buttons, or a sentence naming a command. */
+  action?: ReactNode;
+  className?: string;
+}): JSX.Element {
+  const Icon = props.tone === 'info' ? Circle : AlertTriangle;
+
+  return (
+    <div
+      role={props.tone === 'danger' ? 'alert' : 'status'}
+      className={cx(
+        'flex flex-col gap-1.5 rounded-md border px-3 py-2',
+        props.tone === 'danger' && 'border-danger/25 bg-danger-soft',
+        props.tone === 'warning' && 'border-warning/25 bg-warning-soft',
+        props.tone === 'info' && 'border-info/25 bg-info-soft',
+        props.className,
+      )}
+    >
+      <span className="flex items-start gap-2 text-label text-text">
+        <Icon
+          className={cx('mt-px h-3.5 w-3.5 shrink-0', TONE_TEXT[props.tone])}
+          aria-hidden
+        />
+        <span className="min-w-0">{props.title}</span>
+      </span>
+
+      {props.detail === undefined ? null : (
+        <div className="overflow-x-auto pl-5 font-mono text-micro text-muted">{props.detail}</div>
+      )}
+      {props.consequence === undefined ? null : (
+        <span className="pl-5 text-micro text-muted">{props.consequence}</span>
+      )}
+      {props.action === undefined ? null : (
+        <div className="flex flex-wrap items-center gap-2 pl-5 pt-0.5 text-micro text-muted">
+          {props.action}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Empty(props: {
   title: string;
   hint?: ReactNode;

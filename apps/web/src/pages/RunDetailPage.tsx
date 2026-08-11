@@ -22,7 +22,8 @@ import {
   ExecutionSummaryCard,
   ModelUsageCard,
 } from '../features/bottom-cards';
-import { Empty } from '../components/ui';
+import { Empty, Notice } from '../components/ui';
+import { ApiError } from '../lib/api';
 import { INSPECTOR_PANE, useMediaQuery } from '../hooks/use-media-query';
 import type { TaskDetailView } from '@contracts/index.js';
 
@@ -96,11 +97,32 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   );
 
   if (run.isError) {
+    // 404 and "the server is unreachable" are different situations with different
+    // next steps, and a single "could not be read" hides which one this is (§95).
+    const missing = run.error instanceof ApiError && run.error.status === 404;
+
     return (
-      <Empty
-        title="That run could not be read."
-        hint={run.error instanceof Error ? run.error.message : undefined}
-      />
+      <div className="p-4">
+        <Notice
+          tone="danger"
+          title={
+            missing
+              ? `${runId ?? 'That run'} is not in this project.`
+              : `${runId ?? 'That run'} could not be read.`
+          }
+          detail={run.error instanceof Error ? run.error.message : undefined}
+          consequence={
+            missing
+              ? 'Nothing has stopped: run ids are unique inside a project, and a workspace can hold the same id in more than one.'
+              : 'The run itself is unaffected — this is the dashboard failing to read it, not the workflow failing.'
+          }
+          action={
+            missing
+              ? 'Pick the project it belongs to in the sidebar, or open it from Runs.'
+              : 'Check that the server is still running, then reload.'
+          }
+        />
+      </div>
     );
   }
 
@@ -200,7 +222,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
       {asGraph ? null : (
         <div className="grid h-bottom shrink-0 grid-cols-4 gap-3">
           <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
-          <ApprovalCard run={run.data} />
+          <ApprovalCard run={run.data} projectId={projectId} />
           <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
           <ModelUsageCard telemetry={telemetry.data} />
         </div>
@@ -333,7 +355,24 @@ function ArtifactDialog(props: {
           </header>
 
           <div className="min-h-0 flex-1 overflow-auto bg-sunken p-3">
-            {artifact.data === undefined ? (
+            {artifact.isError ? (
+              // An artifact the run never produced and one the server could not
+              // read are different facts, and only one of them is a problem.
+              <Notice
+                tone={
+                  artifact.error instanceof ApiError && artifact.error.status === 404
+                    ? 'info'
+                    : 'danger'
+                }
+                title={
+                  artifact.error instanceof ApiError && artifact.error.status === 404
+                    ? 'This run has not produced that artifact.'
+                    : 'That artifact could not be read.'
+                }
+                detail={artifact.error instanceof Error ? artifact.error.message : undefined}
+                consequence="The run is unaffected either way — artifacts are written as stages finish."
+              />
+            ) : artifact.data === undefined ? (
               <Empty title={artifact.isLoading ? 'Loading…' : 'Not available.'} />
             ) : (
               <pre className="whitespace-pre-wrap break-words font-mono text-micro leading-relaxed text-muted">

@@ -2,7 +2,17 @@ import { useMemo, useState, type ReactNode } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { ArrowDownToLine, Copy, Pause, RotateCcw, X } from 'lucide-react';
 import type { TaskDetailView } from '@contracts/index.js';
-import { ActionRefusal, Badge, Button, Dialog, Empty, MetaCell, Panel, cx } from '../components/ui';
+import {
+  ActionRefusal,
+  Badge,
+  Button,
+  Dialog,
+  Empty,
+  MetaCell,
+  Notice,
+  Panel,
+  cx,
+} from '../components/ui';
 import { useRetry } from '../lib/mutations';
 import { formatDuration, formatTime } from '../lib/format';
 import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
@@ -116,6 +126,8 @@ export function TaskInspector(props: {
               {task.correctiveFor.stage.replace(/-/g, ' ')}.
             </p>
           )}
+
+          <TaskOutcome task={task} onOpenTests={() => { setTab('tests'); }} />
         </div>
       }
     >
@@ -258,6 +270,102 @@ function LogsTab(props: { task: TaskDetailView }): JSX.Element {
       </div>
     </div>
   );
+}
+
+/**
+ * How a task ended, when how it ended is worth stating (§95).
+ *
+ * Four things: what happened, where, whether the workflow stopped, and what to do
+ * about it. The status chip above says `FAILED`; it does not say that the run
+ * halted, which command exited non-zero, or that Retry is the next move — and
+ * those are the three a person actually needs.
+ *
+ * Nothing here decides anything. The state, the error code and the commands all
+ * come from the run's own record; a component that inferred "the workflow
+ * stopped" from a red chip would be guessing at the scheduler's policy.
+ */
+function TaskOutcome(props: { task: TaskDetailView; onOpenTests: () => void }): JSX.Element | null {
+  const { task } = props;
+
+  const failedCommand = task.commands.find((command) => command.exitCode !== 0);
+  const evidence =
+    failedCommand === undefined ? undefined : (
+      <span>
+        {failedCommand.command}
+        <span className="text-danger"> · exit {failedCommand.exitCode}</span>
+      </span>
+    );
+
+  if (task.state === 'failed') {
+    return (
+      <Notice
+        tone="danger"
+        title={
+          failedCommand === undefined
+            ? `${task.id} failed${task.errorCode === undefined ? '' : `: ${task.errorCode}`}.`
+            : `${task.id} failed validation.`
+        }
+        detail={evidence}
+        // The scheduler stops on the first task that fails rather than pressing
+        // on with independent branches (§22), so this is a fact about the run and
+        // not a guess about it.
+        //
+        // Terse on purpose: this sits above the log, and every line it takes is a
+        // line of the log that a person now has to scroll for.
+        consequence="The run stopped here — nothing downstream of it will start."
+        action={
+          failedCommand === undefined ? (
+            'Read the log, then retry above.'
+          ) : (
+            <>
+              <Button size="sm" onClick={props.onOpenTests}>
+                Command output
+              </Button>
+              <span>then retry above.</span>
+            </>
+          )
+        }
+      />
+    );
+  }
+
+  if (task.state === 'blocked') {
+    return (
+      <Notice
+        tone="warning"
+        title={`${task.id} is blocked.`}
+        consequence="Either something it depends on failed, or the SDD did not answer a question this task needs answered. It will not be retried on its own (§23)."
+        action="Resolve the cause, then retry deliberately — the button above forces it."
+      />
+    );
+  }
+
+  if (task.state === 'review_required') {
+    return (
+      <Notice
+        tone="warning"
+        title={`${task.id} finished, and its validation did not settle the question.`}
+        detail={evidence}
+        consequence="The run is waiting on a person rather than on a runner."
+        action="Read the output, then retry or accept it."
+      />
+    );
+  }
+
+  if (task.state === 'interrupted') {
+    return (
+      <Notice
+        tone="warning"
+        title={`${task.id} was interrupted.`}
+        consequence="The process running it stopped before it reported anything, so what it did — if anything — was not recorded."
+        action="Running the workflow again queues it afresh; the attempt already counted."
+      />
+    );
+  }
+
+  // A completed task whose validation was expected to fail is not a problem, and
+  // saying nothing about it is the right amount to say.
+  return null;
 }
 
 /**

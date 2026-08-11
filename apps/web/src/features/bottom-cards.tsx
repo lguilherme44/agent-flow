@@ -5,6 +5,7 @@ import type { TelemetryResponse } from '../lib/api';
 import { Card, Empty, Progress, cx } from '../components/ui';
 import { formatDuration, formatWhen } from '../lib/format';
 import { countTasks } from './run-overview';
+import { ReviewGateButton } from './run-actions';
 
 /**
  * The bottom row (§78).
@@ -74,7 +75,10 @@ export function ArtifactsCard(props: {
  * is granted to one specific plan, so a card saying only "approved at 19:12"
  * would describe a property the run may no longer have.
  */
-export function ApprovalCard(props: { run: RunDetailView }): JSX.Element {
+export function ApprovalCard(props: {
+  run: RunDetailView;
+  projectId: string | undefined;
+}): JSX.Element {
   const { run } = props;
   const forced = run.degradationDetail.some(
     (degradation) => degradation.kind === 'forced_approval',
@@ -94,10 +98,9 @@ export function ApprovalCard(props: { run: RunDetailView }): JSX.Element {
       footer={
         run.approved ? (
           <span>Bound to this exact plan — a revision reopens the gate</span>
+        ) : run.status === 'waiting_for_approval' ? (
+          <span>The SDD and the plan are in Artifacts, beside this card</span>
         ) : (
-          // Where the buttons are, not which command to type. Approve, revise and
-          // reject stopped being CLI-only with UI-27, and a card still pointing at
-          // the terminal would send somebody to do by hand what is on screen.
           <span>Review &amp; approve is in the run header</span>
         )
       }
@@ -151,11 +154,21 @@ export function ApprovalCard(props: { run: RunDetailView }): JSX.Element {
                 {run.approvedPlanHash ?? '—'}
               </dd>
             </dl>
+          ) : run.status === 'waiting_for_approval' ? (
+            // Operational, as §94 asks: the card that says a plan is ready for
+            // review is the card that opens the review. It used to name the
+            // button in the header instead, which is a direction, not a control.
+            <div className="flex items-center gap-2">
+              <ReviewGateButton
+                projectId={props.projectId}
+                run={run}
+                label="Review the plan"
+              />
+              <span className="truncate text-micro text-muted">verdict, findings and hash</span>
+            </div>
           ) : (
             <span className="truncate text-micro text-muted">
-              {run.status === 'waiting_for_approval'
-                ? 'The gate shows the review verdict and the plan hash before you decide.'
-                : 'Request a revision to produce a plan the review can pass.'}
+              Request a revision to produce a plan the review can pass.
             </span>
           )}
 

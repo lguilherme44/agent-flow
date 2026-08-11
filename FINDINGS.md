@@ -1116,3 +1116,134 @@ message: by the time a person reads it and looks, the claim is legible again.
 The fix is to space the retries rather than burn them — which is a change to the
 acquisition loop and needs somewhere to wait, so it is left for a round that is allowed
 to touch the algorithm.
+
+## UI-C — three views the tool had described and never drawn
+
+DAG view, workspace mode and the empty/error/degraded sweep. Together they moved the
+dashboard from "one project, working" to "several projects, one of which is on fire".
+
+### The task table had been saying `QUEUED` about two different things
+
+Building the graph needed `ready` and `blocked`, and §22 is explicit that neither is
+stored: readiness is a claim about *other* tasks' states and goes stale the moment one
+of them fails, so `core/dag` computes both on every pass and the StateStore persists
+`queued`.
+
+Which meant the read model had been flattening two facts into one word. A task whose
+dependencies had all finished read `QUEUED` — indistinguishable from one waiting behind
+four unfinished tasks. So did a task downstream of a failure, which is not waiting for
+anything: it is never going to start.
+
+The fix was not to teach the graph about readiness. It was to notice there was no place
+that derived it, add one — `effectiveTaskStates` in the application layer, running on
+the same `core/dag` functions the scheduler runs on — and have the task list and the
+graph both go through it. One derivation, two views, and a test that the two describe
+every task the same way.
+
+This is the third time in this project that building a *reader* found something the
+writer had been quietly losing.
+
+### Structure and state are two answers on two clocks
+
+The obvious `/dag` endpoint returns nodes with their titles, statuses and durations.
+It would also have been wrong.
+
+The plan's graph changes when the plan changes — a re-plan, a corrective round — which
+is rare. Task state changes every few seconds. Served together, every status tick
+invalidates the structure, and a five-hundred-node layout re-runs because one duration
+moved. Served apart, the layout is memoised on a query that genuinely does not change,
+`task.*` events do not invalidate it, and `stage.*` and `job.*` do — because those are
+the two ways a plan gets replaced.
+
+The same split decided the layout: columns come from a rank the server computes once
+from `core/dag`, so the browser never traverses to find out what depends on what. It
+only reads edges it was given.
+
+### `fitViewOptions.minZoom` is ignored on the first fit
+
+React Flow's initial viewport is computed in `getInitialState`, before the pan-zoom
+instance exists, and that path reads the component's `minZoom` — only `padding` comes
+from `fitViewOptions`. The imperative `fitView()` honours all of them.
+
+This mattered because the two floors are different numbers. The opening view wants a
+*legibility* floor: nine tasks seven columns deep fit at about a third scale, where a
+task id is four pixels tall and the picture answers "what shape is this plan" and
+nothing else. The reader afterwards wants no floor at all — refusing to zoom out takes
+away the one thing zooming out is for. Setting the floor as a component prop gave both
+to the opening view and to the reader; fitting once from `onInit` gives each what it
+needs.
+
+Dropping the `fitView` prop was a second gain: it re-fits on every node array change,
+so the view jumped under the reader's hands whenever a task ticked over.
+
+### A symlink is a directory `stat` will lie about
+
+Workspace discovery walks directories under a root the operator named. A symlink inside
+one of them can point anywhere on the machine, and `stat` follows it and reports a
+perfectly ordinary directory — so a link in `~/wk` pointing at `~/private` would have
+published that repository on a local HTTP port with nothing to see it happening.
+
+`realPath` had to go on the FileSystem port for this, and both sides of the comparison
+have to go through it: a resolved child against a raw root rejects an entire workspace
+reached through a symlinked home directory, which is common enough that the check would
+have been turned off within a week.
+
+Resolving also bought two things that were not the point. The walk terminates on a link
+pointing back up its own tree, which was otherwise bounded only by depth. And a project
+reached twice — once directly, once through a link — is one project rather than two ids
+over one run history, because the resolved path is what gets registered.
+
+Skipped directories are reported, not dropped. A workspace of links into repositories
+elsewhere is a normal way to work, and somebody who arranged one would otherwise see
+their projects absent and conclude the scan is broken.
+
+### The invalidation was scoped to runs, and run ids are not unique
+
+Every SSE filter matched on `runId` alone, deliberately: a single-project dashboard
+fetches without naming a project while every event names one, and keying the
+invalidation on the project missed exactly that case — the screen went quiet and looked
+like an idle run.
+
+With one project that was correct. With a workspace it is a bug in the other direction:
+two repositories will both have an `AF-2026-001`, so a task finishing in one refetched
+the other's run. Nothing looked wrong, which is the property that makes it worth writing
+down.
+
+The fix keeps both: invalidate by run, and match a cached key when its project is the
+event's *or* absent. Over-invalidating costs a refetch. Under-invalidating costs the
+truth.
+
+### `--port 80.5` was port 80
+
+`parseInt` reads a prefix and discards the rest. The command ran, on a port nobody
+typed, with nothing on screen to say a character had been ignored. `--depth 2.7` was
+depth 2 the same way. Found by a test written for the new depth precedence, which had
+nothing to do with either.
+
+### `--update-snapshots` does not update a snapshot it thinks matches
+
+Two baselines in this round showed the *old* UI and passed. Playwright rewrites a
+screenshot only when the comparison fails, and the comparison had been made against a
+stale bundle: `reuseExistingServer` skips the whole `build && preview` command when
+something already answers on the port, and a leftover preview from a previous run was
+still there.
+
+The failure mode is the dangerous one — a committed image that documents behaviour the
+code no longer has, and a green suite defending it. The only reliable regeneration is to
+kill the port, delete the baselines, and let them be written from scratch.
+
+### §94's own example text was a promise the UI cannot keep
+
+The specification's runner-offline state reads:
+
+```text
+Codex unavailable.
+Workflow can continue using Claude fallback.
+```
+
+The second sentence is not something a health indicator knows. A fallback is configured
+per *role*, it has to satisfy that role's requirements, and it can be disabled outright —
+Agents & Models resolves all of that and reports three distinct reasons a role can have
+none. So the sidebar names what is unavailable and links to the page that can answer the
+rest, and says nothing about what will happen. The times a promise like that is wrong are
+exactly the times somebody was relying on it.

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useMatch, useParams } from 'react-router-dom';
 import {
   Activity,
+  AlertTriangle,
   BookOpen,
   BarChart3,
   ChevronRight,
@@ -19,7 +20,7 @@ import { ProjectProvider, useProjectSelection } from './project-context';
 import { useLiveEvents, type ConnectionState } from '../hooks/use-live-events';
 import { useProjects, useRunnerHealth, useRuns } from '../lib/queries';
 import { pickRun } from '../pages/DashboardPage';
-import { cx } from '../components/ui';
+import { Button, Notice, cx } from '../components/ui';
 import { runLabel, runTone, TONE_DOT } from '../lib/status';
 
 /**
@@ -41,12 +42,51 @@ export function Shell(): JSX.Element {
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar />
-          <main className="min-h-0 flex-1 overflow-hidden p-page">
-            <Outlet />
+          <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-page">
+            <UnknownProject />
+            <div className="min-h-0 flex-1">
+              <Outlet />
+            </div>
           </main>
         </div>
       </div>
     </ProjectProvider>
+  );
+}
+
+/**
+ * A project id in the URL that this server did not issue (§95).
+ *
+ * Every page under it would independently render "could not be read", once per
+ * query, which describes a server problem rather than the actual one: the id is
+ * fine, it just does not belong to this workspace. Said once, here, where the
+ * selection lives — and only after the registry has arrived, so a slow first load
+ * does not accuse a perfectly good link.
+ */
+function UnknownProject(): JSX.Element | null {
+  const { projectId, select } = useProjectSelection();
+  const projects = useProjects();
+
+  if (projectId === undefined || projects.data === undefined) return null;
+  if (projects.data.some((project) => project.id === projectId)) return null;
+
+  return (
+    <Notice
+      className="shrink-0"
+      tone="warning"
+      title={`This server has no project called ${projectId}.`}
+      consequence="Nothing is wrong with the workflow — the id in the address is not one this workspace knows."
+      action={
+        <Button
+          size="sm"
+          onClick={() => {
+            select(undefined);
+          }}
+        >
+          Show the whole workspace
+        </Button>
+      }
+    />
   );
 }
 
@@ -224,43 +264,72 @@ function SidebarFooter(): JSX.Element {
     (runner) => !runner.installed || !runner.executable || runner.auth === 'not_configured',
   );
 
+  /**
+   * What is wrong, in words, and never what it would do about it.
+   *
+   * §94's example reads "Codex unavailable. Workflow can continue using Claude
+   * fallback." — and that second sentence is a claim this indicator cannot make.
+   * Whether a fallback exists depends on the *role*: it is configured per role,
+   * it must satisfy that role's requirements, and it may be disabled outright.
+   * Agents & Models resolves all of that and reports three distinct reasons a
+   * role can have no fallback. Saying "Claude will take over" from here would be
+   * a guess, and the times it was wrong would be exactly the times somebody was
+   * relying on it.
+   */
+  const summary =
+    runners.length === 0
+      ? 'Runner health unknown'
+      : down.length === 0
+        ? 'All runners ready'
+        : `${String(down.length)} runner${down.length === 1 ? '' : 's'} unavailable`;
+
   return (
     <div className="shrink-0 p-2">
-      <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-2">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-micro text-muted">Agent Flow v0.1.0</span>
-          <span className="flex items-center gap-1.5 text-micro text-faint">
-            Local mode
-            <span
-              className={cx(
-                'h-1.5 w-1.5 rounded-full',
-                runners.length === 0
-                  ? 'bg-faint'
-                  : down.length === 0
-                    ? 'bg-success'
-                    : 'bg-warning',
-              )}
-              aria-hidden
-            />
-            <span className="sr-only">
-              {runners.length === 0
-                ? 'runner health unknown'
-                : down.length === 0
-                  ? 'all runners ready'
-                  : `${String(down.length)} runner(s) unavailable`}
+      <div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate text-micro text-muted">Agent Flow v0.1.0</span>
+            <span className="flex items-center gap-1.5 text-micro text-faint">
+              Local mode
+              <span
+                className={cx(
+                  'h-1.5 w-1.5 rounded-full',
+                  runners.length === 0
+                    ? 'bg-faint'
+                    : down.length === 0
+                      ? 'bg-success'
+                      : 'bg-warning',
+                )}
+                aria-hidden
+              />
             </span>
+          </div>
+          <span
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-border text-faint"
+            title={
+              runners.length === 0
+                ? summary
+                : runners.map((runner) => `${runner.id}: ${runner.auth}`).join('\n')
+            }
+          >
+            <Terminal className="h-3 w-3" aria-hidden />
           </span>
         </div>
-        <span
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-border text-faint"
-          title={
-            runners.length === 0
-              ? 'Runner health unknown'
-              : runners.map((runner) => `${runner.id}: ${runner.auth}`).join('\n')
-          }
-        >
-          <Terminal className="h-3 w-3" aria-hidden />
-        </span>
+
+        {/* Visible, not only in a tooltip. A coloured dot is not a status (§97),
+            and a person who has to hover to learn that a runner is down will
+            learn it from a failed run instead. */}
+        {down.length === 0 ? (
+          <span className="sr-only">{summary}</span>
+        ) : (
+          <NavLink
+            to="/agents"
+            className="flex items-center gap-1.5 rounded-sm text-micro text-warning hover:underline"
+          >
+            <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="truncate">{summary}</span>
+          </NavLink>
+        )}
       </div>
     </div>
   );

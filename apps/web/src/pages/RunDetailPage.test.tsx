@@ -301,6 +301,65 @@ describe('the run detail composition', () => {
   });
 });
 
+describe('UI-30 — what the page says when something is missing', () => {
+  it('separates a run this project does not have from a server it cannot reach', async () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <TooltipPrimitive.Provider>
+          <MemoryRouter initialEntries={['/runs/AF-2026-999?project=demo']}>
+            <ProjectProvider>
+              <Routes>
+                <Route path="/runs/:runId" element={<RunDetailPage />} />
+              </Routes>
+            </ProjectProvider>
+          </MemoryRouter>
+        </TooltipPrimitive.Provider>
+      </QueryClientProvider>,
+    );
+
+    // A 404 is not a broken dashboard: run ids repeat across a workspace, and
+    // the useful next step is picking the project it belongs to (§95).
+    //
+    // The wait is long because the query client retries once before giving up,
+    // which is the right behaviour for a transport blip and costs a second here.
+    expect(
+      await screen.findByText('AF-2026-999 is not in this project.', {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Nothing has stopped/)).toBeInTheDocument();
+    expect(screen.getByText(/Pick the project it belongs to/)).toBeInTheDocument();
+  });
+
+  it('opens the gate from the approval card, not just from the header', async () => {
+    // §94's waiting state is meant to be operational. The card used to name the
+    // button in the header instead, which is a direction rather than a control.
+    ROUTES['/api/v1/runs/AF-2026-001'] = { ...RUN, status: 'waiting_for_approval', approved: false };
+    ROUTES['/api/v1/runs/AF-2026-001/approval'] = {
+      runId: 'AF-2026-001',
+      approved: false,
+      canApprove: true,
+      warnings: [],
+      planHash: 'a1b2c3d4e5f60718',
+      taskCount: 2,
+      degradations: [],
+    };
+
+    try {
+      renderPage();
+      await screen.findByText('Add weekly recurrence');
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Review the plan' }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog).toHaveTextContent('Approve the plan for AF-2026-001');
+      // The hash the server just computed, which is what approval binds to.
+      expect(dialog).toHaveTextContent('a1b2c3d4e5f60718');
+    } finally {
+      ROUTES['/api/v1/runs/AF-2026-001'] = RUN;
+      delete ROUTES['/api/v1/runs/AF-2026-001/approval'];
+    }
+  });
+});
+
 describe('UI-28 — the dependency graph', () => {
   it('does not read the graph until somebody asks for it', async () => {
     renderPage();

@@ -170,6 +170,46 @@ describe('the workspace sidebar', () => {
     });
   });
 
+  it('says a runner is unavailable in words, and claims no fallback (§94)', async () => {
+    // §94's example reads "Codex unavailable. Workflow can continue using Claude
+    // fallback." — and the second sentence is a claim this indicator cannot make.
+    // Whether a fallback exists is per role, configurable, and may be off; Agents
+    // & Models resolves it. A coloured dot is not a status either (§97).
+    ROUTES['/api/v1/runners/health'] = [
+      { id: 'codex', installed: false, executable: false, auth: 'not_configured' },
+      { id: 'claude', installed: true, executable: true, auth: 'available' },
+    ];
+
+    try {
+      renderShell();
+
+      const warning = await screen.findByRole('link', { name: /1 runner unavailable/ });
+      expect(warning).toHaveAttribute('href', '/agents');
+      expect(screen.queryByText(/fallback/i)).toBeNull();
+    } finally {
+      ROUTES['/api/v1/runners/health'] = [
+        { id: 'codex', installed: true, executable: true, auth: 'available' },
+      ];
+    }
+  });
+
+  it('says once that a project id is unknown, rather than once per query', async () => {
+    // Every page under an unknown id would otherwise render "could not be read"
+    // for each of its queries — which describes a server problem rather than the
+    // real one: the id is fine, it is not one this workspace knows (§95).
+    renderShell('/dashboard?project=gone');
+
+    expect(
+      await screen.findByText('This server has no project called gone.'),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show the whole workspace' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('This server has no project called gone.')).toBeNull();
+    });
+  });
+
   it('says so when the workspace turned up nothing', async () => {
     ROUTES['/api/v1/projects'] = [];
     try {

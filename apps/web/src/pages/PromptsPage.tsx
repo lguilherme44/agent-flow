@@ -6,11 +6,13 @@ import {
   Badge,
   Empty,
   MetaCell,
+  Notice,
   Panel,
   SearchInput,
   SectionHeader,
   cx,
 } from '../components/ui';
+import { ApiError } from '../lib/api';
 import { formatWhenCompact, humanise } from '../lib/format';
 
 /**
@@ -148,6 +150,7 @@ export function PromptsPage(): JSX.Element {
         prompt={detail.data}
         summary={all.find((entry) => entry.name === selected)}
         isLoading={detail.isLoading}
+        error={detail.isError ? detail.error : undefined}
       />
     </div>
   );
@@ -157,6 +160,7 @@ function PromptDetail(props: {
   prompt: PromptContentView | undefined;
   summary: PromptView | undefined;
   isLoading: boolean;
+  error: unknown;
 }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const meta = props.prompt ?? props.summary;
@@ -264,7 +268,25 @@ function PromptDetail(props: {
           in the app is below the page ground, so this reads as source text rather
           than as prose the UI wrote. */}
       <div className="min-h-0 flex-1 overflow-auto bg-sunken p-3.5">
-        {content === undefined ? (
+        {props.error !== undefined ? (
+          // A prompt the installation does not ship and a prompt the server could
+          // not read are different problems with different fixes (§95).
+          <Notice
+            tone="danger"
+            title={
+              props.error instanceof ApiError && props.error.status === 404
+                ? `This installation ships no prompt called ${meta.name}.`
+                : `${meta.name} could not be read.`
+            }
+            detail={props.error instanceof Error ? props.error.message : undefined}
+            consequence={
+              props.error instanceof ApiError && props.error.status === 404
+                ? 'Any role that runs it would fail at the stage that needs it — Agents & Models says which roles those are.'
+                : 'Prompts are read from the installation directory, so this is about the install rather than about any run.'
+            }
+            action="Reinstall agent-flow, or check the prompts directory it was started from."
+          />
+        ) : content === undefined ? (
           <Empty title={props.isLoading ? 'Loading…' : 'Not available.'} />
         ) : (
           <pre className="whitespace-pre-wrap break-words font-mono text-micro leading-relaxed text-muted">

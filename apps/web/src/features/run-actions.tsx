@@ -154,6 +154,63 @@ export function RunActions(props: {
  * `state.json`, so it would never reach the stream and the screen would sit there
  * looking like nothing had happened.
  */
+/**
+ * The gate, reachable from wherever a person notices it is open (§94).
+ *
+ * The Plan approval card used to say "Review & approve is in the run header",
+ * which is a direction rather than a control: §94's waiting state is meant to be
+ * operational, and pointing across the screen is not that.
+ *
+ * Self-contained, and holding nothing. The two booleans are which dialog is open
+ * — local UI state §88 allows — and the gate itself is read from the server every
+ * time one opens. So a second trigger elsewhere on the page is a second *button*,
+ * never a second answer: both ask the same endpoint, and the plan hash the person
+ * sees is the one the server just computed from disk.
+ */
+export function ReviewGateButton(props: {
+  projectId: string | undefined;
+  run: RunDetailView;
+  label?: string;
+  variant?: 'primary' | 'surface';
+}): JSX.Element {
+  const [dialog, setDialog] = useState<'approve' | 'revise' | undefined>(undefined);
+
+  return (
+    <>
+      <Button
+        variant={props.variant ?? 'primary'}
+        size="sm"
+        onClick={() => {
+          setDialog('approve');
+        }}
+      >
+        {props.label ?? 'Review & approve'}
+      </Button>
+
+      <ApprovalDialog
+        open={dialog === 'approve'}
+        projectId={props.projectId}
+        run={props.run}
+        onClose={() => {
+          setDialog(undefined);
+        }}
+        onRevise={() => {
+          setDialog('revise');
+        }}
+      />
+      <RevisionDialog
+        open={dialog === 'revise'}
+        projectId={props.projectId}
+        runId={props.run.runId}
+        approved={props.run.approved}
+        onClose={() => {
+          setDialog(undefined);
+        }}
+      />
+    </>
+  );
+}
+
 function JobIndicator(props: { job: ActionJobView }): JSX.Element {
   const { job } = props;
 
