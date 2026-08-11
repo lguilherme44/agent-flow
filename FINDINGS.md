@@ -1036,3 +1036,83 @@ rather than in somebody's shell history — forty rounds of eight processes agai
 fresh run and forty more against an abandoned one, 640 processes, zero overlapping
 holds. It is opt-in behind `AF_LOCK_STRESS=1` because 640 spawns is not what every
 `npm test` should pay for; the eight-process race suite still runs every time.
+
+---
+
+## AF-L01.2 — the lock ordered execution, and left the gate outside it
+
+AF-L01 made `start`, `revise` and `retry` mutually exclusive. `approve` and `reject`
+stayed outside, and the hole that leaves is not a corrupted file. It is a run that says
+something untrue about itself:
+
+```text
+start acquires the lease
+→ scheduler spawning agents against the plan
+
+reject
+→ status = plan_rejected
+
+scheduler keeps going
+```
+
+The run now records that its plan was turned down while the work that plan describes is
+being done. The only honest orderings are "rejected, therefore not executed" and
+"executed, and rejecting afterwards is too late" — so `reject` takes the same lease the
+other three take, and is refused rather than queued. A rejection that waited would land
+on a run that had already finished, which is the retrospective rejection this exists to
+prevent. Not a second mutex, and not `describe()` followed by an update: that is the
+`exists()`-then-`write()` shape the whole mechanism exists to avoid.
+
+**Ordering was necessary and not sufficient.** With the lease alone, "rejected therefore
+not executed" still held only by luck. `reject` writes `status` and nothing else, so a
+run approved *before* it was rejected satisfied every gate in `execute` — the approval
+flag, the plan hash, the SDD — and executed a plan a person had explicitly refused.
+`execute` now refuses a `plan_rejected` run outright, checked before the approval gate
+rather than through it, because it has to hold even where
+`approval.requiredBeforeImplementation` is off. That switch turns off the review
+ceremony, not a person's "no".
+
+**Approve was the harder question, and the answer is the same.** The test is not whether
+approving during an execution looks harmful; it is whether there is a moment at which it
+is *useful*. There is not. `start` reads the gate once, before the first runner is
+spawned, so an approval landing afterwards changes no execution — it only records that
+one was authorised when it was not. Under `revise` it is worse than useless: `replan`
+clears the approval and then rewrites `plan.json` through the pipeline, so an approval
+racing it hashes whichever version of the plan happened to be on disk — the old one, or
+a new one nobody has read. The plan hash catches most of that, and stops catching it the
+moment anybody passes `--force`. Safe-as-long-as-you-do-not-force-it is safe by
+accident. So `approve` takes the lease too, and `describeApprovalGate` does not: it is a
+read, and refusing to *show* somebody the gate because a run is busy helps nobody.
+
+`LOCK_OPERATIONS` grew `approve` and `reject` rather than reusing `run`. A refusal that
+said "already being executed" about a rejection would send the reader looking for a
+scheduler that does not exist; diagnostic metadata that lies is worse than none.
+
+**Holding the lease for real, in a test.** The in-flight cases pause a genuine `revise`
+inside its planning pipeline — a `ProcessRunner` that stops in the first agent
+invocation and waits — so what the racing `reject` meets is the production
+`withExecutionLock` body, held open. Six of the seven new tests fail without the change.
+
+### Open — a claim caught mid-write reads as unreadable
+
+Found by the race suite failing once in roughly thirteen full-suite runs, under the CPU
+contention of the rest of the tests running alongside it. Not a safety failure: no two
+holders overlapped, and none can. What broke was the *refusal message*.
+
+`open(path, 'wx')` is what wins the race, and it wins it before any content exists. A
+reader that arrives in that window sees a file it cannot parse and — correctly, by
+design — treats it as held-but-unreadable. Acquisition then retries, but `MAX_ATTEMPTS`
+rounds run back to back with nothing between them, so under load all four can land
+inside another process's open-to-write window. The claimant ends up refused with no
+holder to name, which is the branch whose message tells an operator to confirm nothing
+is running and then remove the highest generation — about a holder that is alive and
+merely finishing its write.
+
+Reproduced deterministically by seeding an empty `execution.lock.1`: acquisition returns
+`{ sameHost: false }` with no holder. In 480 processes without contention it never
+happened, so this is rare rather than routine, and the practical cost is a confusing
+message: by the time a person reads it and looks, the claim is legible again.
+
+The fix is to space the retries rather than burn them — which is a change to the
+acquisition loop and needs somewhere to wait, so it is left for a round that is allowed
+to touch the algorithm.
