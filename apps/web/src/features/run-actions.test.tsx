@@ -383,6 +383,30 @@ describe('start', () => {
   });
 });
 
+describe('a run another process is executing (AF-L01)', () => {
+  it('shows the conflict through the existing error UX', async () => {
+    failWith = {
+      status: 409,
+      body: {
+        error: 'run_busy',
+        message: 'AF-2026-001 is already being executed by the cli (pid 31337), since 2026-08-10T19:00:00.000Z.',
+        action: 'Wait for the active execution to finish.',
+        detail: { holder: { owner: 'cli', operation: 'run', pid: 31_337 }, sameHost: true },
+      },
+    };
+    renderActions({ ...RUN, approved: true, status: 'approved' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    // §95 again, and nothing new was built for it: a lock conflict is a refusal like
+    // any other, so it arrives with a message, an action, and a code to branch on.
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText(/already being executed by the cli \(pid 31337\)/)).toBeInTheDocument();
+    expect(screen.getByText('Wait for the active execution to finish.')).toBeInTheDocument();
+    expect(screen.getByText('run_busy')).toBeInTheDocument();
+  });
+});
+
 describe('what the browser never sends', () => {
   it('posts no path, command or hash on any action', async () => {
     renderActions({ ...RUN, approved: true, status: 'approved' });

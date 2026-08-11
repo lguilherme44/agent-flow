@@ -398,3 +398,84 @@ describe('the write API is an adapter, not a second workflow (UI-27, §60)', () 
     ).toBe(true);
   });
 });
+
+describe('there is exactly one run execution lock (AF-L01)', () => {
+  // The brief's requirement, made checkable: CLI and server must go through the same
+  // service. Two locks would be no lock at all — each process would be excluding a
+  // set of peers that did not include the other one.
+
+  it('is implemented in one module', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path === 'src/app/run-execution-lock.ts') continue;
+
+      // The atomic primitive a lock is built from. `src/ports` declares it and
+      // `src/adapters` implements it; anywhere else it would be a second locking
+      // mechanism, and two locks are no lock at all.
+      if (path.startsWith('src/adapters/') || path.startsWith('src/ports/')) continue;
+      if (/createExclusive\s*\(/.test(codeOnly(text))) offenders.push(path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('is reached by both adapters through the same use cases', () => {
+    // Neither entry point may acquire on its own: acquisition belongs to
+    // `withExecutionLock` inside `run-actions.ts`, so the CLI and the HTTP API cannot
+    // hold different locks or forget to hold one.
+    const lockUsers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) =>
+        importSpecifiers(text).some((specifier) => specifier.includes('run-execution-lock')),
+      )
+      .map(({ path }) => path);
+
+    expect(lockUsers.sort()).toEqual([
+      'src/app/run-actions.ts',
+      // The server reads the lock for a pre-flight conflict answer; it never takes it.
+      'src/server/server.ts',
+    ]);
+
+    const server = codeOnly(read(join(ROOT, 'src/server/server.ts')).text);
+    expect(server).toContain('.describe(');
+    expect(server, 'the server acquires the lock itself').not.toContain('.acquire(');
+  });
+
+  it('holds the lock across every action that moves a run', () => {
+    // `start`, `revise` and `retryTask` are the three that touch a run while a
+    // scheduler might be running. Each one goes through the helper rather than doing
+    // its own acquire/release, so none of them can forget the `finally`.
+    const actions = read(join(ROOT, 'src/app/run-actions.ts')).text;
+    const locked = [...actions.matchAll(/withExecutionLock\(deps, store, runId, '(\w+)'/g)].map(
+      (match) => match[1],
+    );
+
+    expect(locked.sort()).toEqual(['retry', 'revise', 'run']);
+  });
+
+  it('keeps the lock out of the workflow state (AF-L01)', () => {
+    // The lock is coordination infrastructure. A `locked` field on `RunState` would
+    // make it workflow state, and the StateStore would then have two jobs.
+    const state = read(join(ROOT, 'src/contracts/state.schema.ts')).text;
+
+    expect(codeOnly(state)).not.toMatch(/\block(ed)?\s*:/i);
+  });
+
+  it('emits no heartbeat or polling event', () => {
+    // There is no heartbeat, so there is nothing to poll and no event to emit for it.
+    // Three lock events exist and all three describe a transition.
+    // Read raw: `codeOnly` blanks string literals, which is exactly what an event
+    // name is.
+    const actions = read(join(ROOT, 'src/app/run-actions.ts')).text;
+    const emitted = [...actions.matchAll(/appendEvent\(runId, '([\w_]+)'/g)].map(
+      (match) => match[1],
+    );
+
+    expect(emitted).toContain('execution_lock_acquired');
+    expect(emitted).toContain('execution_lock_released');
+    expect(emitted).toContain('stale_execution_lock_recovered');
+    expect(emitted.filter((event) => /heartbeat|poll|ping/i.test(event ?? ''))).toEqual([]);
+  });
+});

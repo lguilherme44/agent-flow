@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
+import { FakeHost } from '../fakes/fake-host.js';
 import { buildServer, type RunningServer } from '../../src/server/server.js';
 import { registryOf } from '../../src/server/project-registry.js';
 import { StateStore } from '../../src/app/state-store.js';
@@ -93,6 +94,7 @@ async function serve(
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const processRunner = new FakeProcessRunner().always({ exitCode: 0, stdout: '1.0.0' });
+  const host = new FakeHost();
 
   fs.seed('/repo/.agent-flow/config.yaml', PROJECT_CONFIG);
   fs.seed('/other/.agent-flow/config.yaml', PROJECT_CONFIG);
@@ -153,10 +155,11 @@ async function serve(
     host: '127.0.0.1',
     port: 4782,
     promptsDir: '/install/prompts',
+    processHost: host,
     pollIntervalMs: 20,
   });
 
-  return { fs, clock, store, run, server: running };
+  return { fs, clock, host, store, run, server: running };
 }
 
 describe('UI-02 — the server answers', () => {
@@ -546,6 +549,7 @@ describe('UI-23 — the role routing table', () => {
       host: '127.0.0.1',
       port: 4783,
       promptsDir: '/install/prompts',
+      processHost: new FakeHost(),
       pollIntervalMs: 20,
     });
 
@@ -1384,3 +1388,207 @@ async function settleJob(
   }
   throw new Error(`job ${jobId} never finished`);
 }
+
+describe('AF-L01 — a run another process is executing', () => {
+  /** A lock on disk, as a real holder would have left one. */
+  async function holdLock(
+    fs: InMemoryFileSystem,
+    runId: string,
+    holder: { pid: number; hostname: string; owner: string; operation: string },
+  ): Promise<void> {
+    fs.seed(
+      `/repo/.agent-flow/runs/${runId}/execution.lock.1`,
+      JSON.stringify({
+        version: 1,
+        generation: 1,
+        runId,
+        createdAt: '2026-08-10T19:00:00.000Z',
+        ...holder,
+      }),
+    );
+  }
+
+  it('refuses start with a conflict rather than a 202 that fails later', async () => {
+    const { fs, host, server, run } = await serve();
+
+    // A CLI in a terminal, holding the run. The server's in-process guard knows
+    // nothing about it — this is the risk the lock exists to close.
+    host.spawn(31_337);
+    await holdLock(fs, run.runId, {
+      pid: 31_337,
+      hostname: 'test-host',
+      owner: 'cli',
+      operation: 'run',
+    });
+
+    const response = await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/start`,
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json<ActionErrorView>()).toMatchObject({
+      error: 'run_busy',
+      action: 'Wait for the active execution to finish.',
+    });
+    // Enough to diagnose: which entry point has it, doing what, as which process.
+    expect(response.json<ActionErrorView>().detail).toMatchObject({
+      holder: { owner: 'cli', operation: 'run', pid: 31_337 },
+      sameHost: true,
+    });
+  });
+
+  it('refuses revise and retry the same way', async () => {
+    const { fs, host, server, run } = await serve();
+
+    host.spawn(31_337);
+    await holdLock(fs, run.runId, {
+      pid: 31_337,
+      hostname: 'test-host',
+      owner: 'cli',
+      operation: 'run',
+    });
+
+    const revise = await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/revise`,
+      payload: { instruction: 'split TASK-001' },
+    });
+    const retry = await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+      payload: {},
+    });
+
+    expect(revise.statusCode).toBe(409);
+    expect(revise.json<ActionErrorView>().error).toBe('run_busy');
+
+    // Retry goes through the use case rather than the pre-flight, and lands on the
+    // same code — requeuing a task while the scheduler is executing it would have the
+    // two fighting over one entry in `state.json`.
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json<ActionErrorView>().error).toBe('run_busy');
+  });
+
+  it('never answers a conflict with a 500', async () => {
+    const { fs, host, server, run } = await serve();
+
+    host.spawn(31_337);
+    await holdLock(fs, run.runId, {
+      pid: 31_337,
+      hostname: 'test-host',
+      owner: 'cli',
+      operation: 'run',
+    });
+
+    for (const request of [
+      { url: `/api/v1/runs/${run.runId}/start`, payload: {} },
+      { url: `/api/v1/runs/${run.runId}/revise`, payload: { instruction: 'change it' } },
+      { url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`, payload: {} },
+    ]) {
+      const response = await server.app.inject({ method: 'POST', ...request });
+      expect(response.statusCode).toBe(409);
+      expect(response.body).not.toMatch(/at \w+ \(|node_modules/);
+    }
+  });
+
+  it('will not judge a lock written by another machine', async () => {
+    const { fs, server, run } = await serve();
+
+    // The pid is not alive here, and that means nothing: it names a process on another
+    // host. Overriding it is how a run gets executed twice, so it is treated as held.
+    await holdLock(fs, run.runId, {
+      pid: 999,
+      hostname: 'somebody-elses-machine',
+      owner: 'server',
+      operation: 'run',
+    });
+
+    const response = await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/start`,
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json<ActionErrorView>().detail).toMatchObject({ sameHost: false });
+  });
+
+  it('proceeds once the holder is gone, and records the recovery', async () => {
+    const { fs, server, store, run } = await serve();
+
+    // A holder that died without releasing. No heartbeat has expired — the pid is the
+    // liveness signal, and `FakeHost` reports this one as absent.
+    await holdLock(fs, run.runId, {
+      pid: 999,
+      hostname: 'test-host',
+      owner: 'cli',
+      operation: 'run',
+    });
+
+    const response = await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+      payload: {},
+    });
+
+    // Refused for a different reason — FIX-001 has not run — which is the point: the
+    // stale lock did not stand in the way.
+    expect(response.json<ActionErrorView>().error).not.toBe('run_busy');
+
+    const events = await store.readEvents(run.runId);
+    expect(events.map((event) => event.type)).toContain('stale_execution_lock_recovered');
+    expect(events.find((event) => event.type === 'stale_execution_lock_recovered')?.detail).
+      toMatchObject({ pid: 999, owner: 'cli' });
+  });
+
+  it('records who held the lock and when they let go', async () => {
+    const { server, store, run } = await serve();
+
+    await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+      payload: {},
+    });
+
+    const types = (await store.readEvents(run.runId)).map((event) => event.type);
+
+    // The audit trail: who executed this run, from where. There is no heartbeat, so
+    // there is no polling event either — two lines per acquisition and no more.
+    expect(types).toContain('execution_lock_acquired');
+    expect(types).toContain('execution_lock_released');
+    expect(types.filter((type) => type.startsWith('execution_lock')).length).toBe(2);
+  });
+
+  it('releases the lock even when the action is refused', async () => {
+    const { fs, server, run } = await serve();
+
+    // FIX-001 has not run, so retry refuses — and the lock must not be left behind by
+    // a refusal. `withExecutionLock` releases in a `finally`.
+    await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+      payload: {},
+    });
+
+    const entries = await fs.readDir(`/repo/.agent-flow/runs/${run.runId}`);
+    expect(entries.filter((entry) => entry.startsWith('execution.lock'))).toEqual([]);
+  });
+
+  it('writes no lock state into state.json', async () => {
+    const { server, store, run } = await serve();
+
+    await server.app.inject({
+      method: 'POST',
+      url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+      payload: {},
+    });
+
+    // The lock is coordination, not workflow state. `state.json` remains the source of
+    // truth for what a run *is*, and deleting every lock file on a machine loses no
+    // information about any run.
+    const raw = JSON.stringify(await store.loadRun(run.runId));
+    expect(raw).not.toMatch(/lock|pid|hostname/i);
+  });
+});
