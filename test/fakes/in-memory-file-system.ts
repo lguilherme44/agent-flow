@@ -14,6 +14,15 @@ export class InMemoryFileSystem implements FileSystem {
   /** Set by a test to simulate a crash mid-write. */
   failNextAtomicWriteAfterTemp = false;
 
+  /**
+   * Set by a test to fail one specific write, by path and content.
+   *
+   * Coarser hooks were not enough for AF-L01.1: the failures worth testing are "the
+   * append of *this* audit event throws" and "the write of `state.json` throws", and a
+   * counter would break the moment an unrelated write was added ahead of it.
+   */
+  failWrite?: (operation: 'append' | 'atomic', path: string, content: string) => Error | undefined;
+
   /** Every path handed to writeFileAtomic, in order. Includes temp files. */
   readonly writes: string[] = [];
 
@@ -42,6 +51,9 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async writeFileAtomic(path: string, content: string): Promise<void> {
+    const injected = this.failWrite?.('atomic', path, content);
+    if (injected !== undefined) throw injected;
+
     const temp = `${path}.tmp`;
     this.writes.push(temp);
     this.files.set(temp, content);
@@ -58,6 +70,9 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async appendFile(path: string, content: string): Promise<void> {
+    const injected = this.failWrite?.('append', path, content);
+    if (injected !== undefined) throw injected;
+
     this.ensureParents(path);
     this.files.set(path, (this.files.get(path) ?? '') + content);
   }

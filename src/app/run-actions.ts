@@ -147,6 +147,26 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
  *
  * The events are the audit trail: who executed this run, from where, and when. There
  * is no heartbeat, so there is nothing to poll and no polling event to emit.
+ *
+ * **Every exit from the point the lease exists goes through release (AF-L01.1).** The
+ * audit events used to be appended before the `try`, which is a leak with no recovery
+ * behind it: a full disk or a permission error on `events.jsonl` would throw out of a
+ * function that had already claimed the lock, and the claim left behind names *this*
+ * process — which is still alive, so stale detection can never clear it. The run would
+ * be refused until the process exited. So the `try` opens on the line after
+ * acquisition, and the audit happens inside it.
+ *
+ * **Order in the `finally` is safety before audit.** The claim is removed first and the
+ * event is written second, because a failed append must not be able to leave a lock on
+ * disk. The two failures are then treated differently on purpose:
+ *
+ *   `lease.release()` propagates. It is the one failure that keeps the run refused for
+ *   as long as this process lives, and there is no other channel to report it — so it
+ *   is allowed to replace whatever `work` was reporting.
+ *   The `execution_lock_released` event is best-effort. By that line the claim is
+ *   already gone, so a failure costs a line in the audit trail and nothing else, while
+ *   throwing from a `finally` would swap a real execution error for a logging one. The
+ *   loss is still visible anyway: an `execution_lock_acquired` with nothing closing it.
  */
 async function withExecutionLock<T>(
   deps: RunActionDeps,
@@ -167,33 +187,39 @@ async function withExecutionLock<T>(
 
   const { lease } = acquired;
 
-  if (lease.recoveredStale !== undefined) {
-    // Recorded explicitly. A lock taken over from a dead process is a recovery, and
-    // the alternative — reclaiming it silently — leaves no trace that a previous
-    // execution of this run ended without releasing anything.
-    await store.appendEvent(runId, 'stale_execution_lock_recovered', {
-      pid: lease.recoveredStale.pid,
-      owner: lease.recoveredStale.owner,
-      operation: lease.recoveredStale.operation,
-      createdAt: lease.recoveredStale.createdAt,
-    });
-  }
-
-  await store.appendEvent(runId, 'execution_lock_acquired', {
-    pid: lease.lock.pid,
-    owner: lease.lock.owner,
-    operation: lease.lock.operation,
-  });
-
   try {
-    return await work();
-  } finally {
-    await lease.release();
-    await store.appendEvent(runId, 'execution_lock_released', {
+    if (lease.recoveredStale !== undefined) {
+      // Recorded explicitly. A lock taken over from a dead process is a recovery, and
+      // the alternative — reclaiming it silently — leaves no trace that a previous
+      // execution of this run ended without releasing anything.
+      await store.appendEvent(runId, 'stale_execution_lock_recovered', {
+        pid: lease.recoveredStale.pid,
+        owner: lease.recoveredStale.owner,
+        operation: lease.recoveredStale.operation,
+        createdAt: lease.recoveredStale.createdAt,
+      });
+    }
+
+    await store.appendEvent(runId, 'execution_lock_acquired', {
       pid: lease.lock.pid,
       owner: lease.lock.owner,
       operation: lease.lock.operation,
     });
+
+    return await work();
+  } finally {
+    await lease.release();
+
+    try {
+      await store.appendEvent(runId, 'execution_lock_released', {
+        pid: lease.lock.pid,
+        owner: lease.lock.owner,
+        operation: lease.lock.operation,
+      });
+    } catch {
+      // Swallowed deliberately, and only here: the claim is already off disk, so the
+      // filesystem is in the state it needs to be in. See the note above the function.
+    }
   }
 }
 
