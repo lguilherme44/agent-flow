@@ -1,5 +1,4 @@
-import { loadPlan } from '../app/execution-context.js';
-import { StateStore } from '../app/state-store.js';
+import { buildExecutionContext, loadPlan } from '../app/execution-context.js';
 import { retryTask, start } from '../app/run-actions.js';
 import { explainRouting, routeTask } from '../core/router.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
@@ -135,19 +134,30 @@ export async function runRetryCommand(
 }
 
 /**
- * `--dry-run`: the routing, without invoking anything.
+ * `--dry-run`: the routing and the limits, without invoking anything.
  *
  * Stays in the CLI because it is a CLI feature. The write API has no equivalent,
  * and a use case taking a "print it instead of doing it" flag would be two use
  * cases wearing one name.
+ *
+ * Assembles the real execution context now, where it used to build a bare
+ * StateStore. That is deliberate and it does change one thing: a project whose
+ * configuration will not load, or whose roles resolve to nothing, is refused here
+ * rather than printing a plan it could never execute. Both refusals are named
+ * config errors with exit code 2, not crashes — and a dry run of an execution
+ * that cannot be configured is not a dry run of anything.
+ *
+ * Nothing is spawned. The registry is built from configuration and its roles are
+ * checked against declared capabilities; no runner is invoked, which is the
+ * promise the last line makes.
  */
 async function printExecutionPlan(
   deps: ReturnType<typeof actionDeps>,
   runId: string,
 ): Promise<ExitCodeValue> {
-  const store = new StateStore({ fs: deps.fs, clock: deps.clock, projectDir: deps.projectDir });
-  const state = await store.loadRun(runId);
-  const plan = await loadPlan(store, runId);
+  const context = await buildExecutionContext(deps);
+  const state = await context.store.loadRun(runId);
+  const plan = await loadPlan(context.store, runId);
 
   if (plan === null) {
     process.stderr.write('This run has no plan yet.\n');
@@ -164,6 +174,15 @@ async function printExecutionPlan(
       `  ${task.id}  ${role.padEnd(18)} ${explainRouting(task).padEnd(28)}${already}\n`,
     );
   }
+
+  // Printed before any quota is spent, which is the point of a dry run. The two
+  // numbers are separate lines rather than one, because "4" and "1" are different
+  // facts and a reader who saw only the configured one would plan around it.
+  const { requested, effective, clamped, reason } = context.concurrency;
+  process.stdout.write(`\nParallelism requested: ${String(requested)}\n`);
+  process.stdout.write(`Parallelism effective: ${String(effective)}\n`);
+  if (clamped && reason !== undefined) process.stdout.write(`  ${reason}\n`);
+
   process.stdout.write('\nNo runner was invoked.\n');
   return ExitCode.OK;
 }

@@ -14,6 +14,7 @@ import { TaskExecutor } from './task-executor.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
+import { resolveTaskConcurrency, type ConcurrencyDecision } from '../core/concurrency.js';
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
@@ -42,6 +43,15 @@ export interface ExecutionContext {
   readonly stageRunner: StageRunner;
   readonly executor: TaskExecutor;
   readonly scheduler: Scheduler;
+  /**
+   * What the configured task limit became, and why (M2-00.3).
+   *
+   * Published rather than kept inside the scheduler because two callers need the
+   * same answer: `start` records the reduction on the run, and `run --dry-run`
+   * prints it. Two computations of one number would eventually disagree, and the
+   * one on screen would be the wrong one.
+   */
+  readonly concurrency: ConcurrencyDecision;
   readonly processRunner: ProcessRunner;
   /** The adapter type behind a runner id — what independence is judged on. */
   readonly providerOf: (runnerId: string) => string | undefined;
@@ -107,10 +117,15 @@ export async function buildExecutionContext(
     projectDir: options.projectDir,
   });
 
+  // The configured number is an intention; the scheduler needs an instruction.
+  // Handing `maxTasks` straight through is what made `maxTasks: 4` run four
+  // agents against one working tree — see core/concurrency.ts.
+  const concurrency = resolveTaskConcurrency(config.global.parallelism.maxTasks);
+
   const scheduler = new Scheduler({
     store,
     executor,
-    maxConcurrency: config.global.parallelism.maxTasks,
+    maxConcurrency: concurrency.effective,
     maxAttempts: config.global.retry.maxAttempts,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),
     ...(options.onTaskFinish === undefined ? {} : { onTaskFinish: options.onTaskFinish }),
@@ -126,6 +141,7 @@ export async function buildExecutionContext(
     stageRunner,
     executor,
     scheduler,
+    concurrency,
     processRunner,
     providerOf: (id) => registry.providerOf(id),
     projectDir: options.projectDir,

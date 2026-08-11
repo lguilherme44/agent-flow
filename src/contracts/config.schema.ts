@@ -69,13 +69,28 @@ export const GlobalConfigSchema = z.object({
   parallelism: z
     .object({
       /**
-       * One in MVP 1 (AD-05). The scheduler is already written for N; raising
-       * this is what MVP 2 costs, plus worktrees to stop tasks colliding.
+       * How many tasks a run *asks* to execute at once. One in MVP 1 (AD-05).
+       *
+       * Still a positive integer rather than a literal 1, because this records an
+       * intention and the intention is part of the MVP 2 contract. What it is not
+       * is an instruction: `core/concurrency.ts` resolves it against what the
+       * product can isolate, and until tasks have workspaces of their own that
+       * resolves to one however this is written. Narrowing the schema instead
+       * would make the eventual change a migration of everybody's config file.
        */
       maxTasks: z.number().int().positive().default(1),
     })
     .prefault({}),
   retry: z.object({ maxAttempts: z.number().int().min(1).default(2) }).prefault({}),
+  /**
+   * Reserved for task isolation (MVP 2), and inert.
+   *
+   * Kept because it is part of a design that is coming and removing it would
+   * churn config files twice. Read by nothing that executes anything: no
+   * execution path creates a worktree, so switching it on isolates nothing and
+   * — deliberately — raises no limit. An architecture test pins the list of
+   * modules allowed to name it.
+   */
   git: z.object({ useWorktrees: z.boolean().default(false) }).prefault({}),
   approval: z.object({ requiredBeforeImplementation: z.boolean().default(true) }).prefault({}),
   /**

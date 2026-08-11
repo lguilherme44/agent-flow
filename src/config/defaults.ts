@@ -77,14 +77,19 @@ fallback:
     - runner_unavailable
 
 parallelism:
-  # MVP 1 runs one task at a time. The scheduler is already written for N;
-  # raising this needs worktrees so parallel tasks cannot collide.
+  # Accepted above 1, and capped at 1 at runtime. Tasks share one working tree,
+  # so running two at once would give them one diff, one AGENTS.md and one set of
+  # validation commands between them. A run that asked for more says so in its
+  # degradations, and \`agent-flow run --dry-run\` prints both numbers.
   maxTasks: 1
 
 retry:
   maxAttempts: 2
 
 git:
+  # Reserved for task isolation, and not implemented: nothing in the execution
+  # path creates a worktree, so turning this on changes nothing — including the
+  # cap above.
   useWorktrees: false
 
 approval:

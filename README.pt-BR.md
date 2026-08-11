@@ -398,7 +398,9 @@ Não iniciados. Listados para deixar visível onde a Spec v3 termina, não como
 compromisso.
 
 - [ ] Git worktrees para isolamento de tasks
-- [ ] Execução paralela — o scheduler já roda com concorrência > 1
+- [ ] Execução paralela — o loop do scheduler aceita N; nada pode entregar mais
+      de 1 enquanto as tasks não forem isoladas, então `parallelism.maxTasks` é
+      aceito acima de 1 e limitado a 1 em runtime
 - [ ] Escalonamento de modelo após falhas repetidas
 - [ ] Workspaces de monorepo
 

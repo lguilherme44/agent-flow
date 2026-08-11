@@ -768,6 +768,24 @@ async function execute(
     }
   }
 
+  // A run that was asked for parallelism it did not get has to be able to say so
+  // afterwards (M2-00.3). Recorded here rather than where the number is resolved,
+  // because `buildExecutionContext` is also assembled by every read — the approval
+  // gate, `review`, `status` — and a degradation written by a read would appear on
+  // runs that never executed anything.
+  //
+  // `recordDegradation` deduplicates by kind and reason, so resuming a run does not
+  // stack up copies of the same sentence.
+  if (context.concurrency.clamped) {
+    await context.store.recordDegradation(runId, {
+      kind: 'parallelism_clamped',
+      reason: context.concurrency.reason ?? 'the configured task limit could not be honoured',
+      impact:
+        `implementation ran ${String(context.concurrency.effective)} task at a time ` +
+        `rather than ${String(context.concurrency.requested)}`,
+    });
+  }
+
   const outcome = await context.scheduler.run(plan, runId, sdd, previous, {
     ...(target === undefined ? {} : { only: new Set([target.id]) }),
   });

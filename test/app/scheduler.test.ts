@@ -120,9 +120,11 @@ describe('concurrency (AD-05)', () => {
   });
 
   it('runs independent tasks in parallel when the limit is raised — no code change', async () => {
-    // The MVP 2 proof: the scheduler is already written for N. Raising the
-    // number is the whole change, plus worktrees so parallel tasks do not write
-    // to the same tree.
+    // The MVP 2 proof: the scheduler is already written for N, and this is about
+    // the scheduler alone. Nothing in production hands it a number above one —
+    // `core/concurrency.ts` decides that, and until task workspaces are isolated
+    // it answers one however the configuration is written. See
+    // test/app/effective-concurrency.test.ts, which is where that is proved.
     const { store, run } = await harness();
     const { executor, peak } = fakeExecutor();
 
@@ -283,6 +285,157 @@ describe('persistence', () => {
 
     const state = await store.loadRun(run.runId);
     expect(state.tasks[0]?.attempts).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// M2-00.2. `attempts` used to be derived from `state === 'running'` at the moment
+// `persist` happened, which made it a count of *persistences that caught a task
+// in flight* rather than a count of dispatches. The two agree only because a
+// batch is a barrier: every task in it has left `running` by the next write. The
+// counter now moves where the decision is made, so it stays a count of attempts
+// whatever the dispatch shape becomes.
+describe('an attempt is counted when the task is dispatched', () => {
+  const attemptsOf = async (
+    store: StateStore,
+    runId: string,
+    id: string,
+  ): Promise<number | undefined> =>
+    (await store.loadRun(runId)).tasks.find((task) => task.id === id)?.attempts;
+
+  it('moves from 0 to 1 on the first dispatch', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD');
+
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(1);
+  });
+
+  it('does not move when the run is persisted while the task is still running', async () => {
+    // The property the old derivation could not give. A write that happens for
+    // some other reason — another task finishing, a degradation being recorded —
+    // must not spend one of the task's attempts.
+    const { store, run } = await harness();
+
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+    }));
+
+    let persistedMidFlight = 0;
+
+    const executor = {
+      execute: async (t: Task) => {
+        // Anything at all writing to the run while this task is in flight.
+        await store.updateRun(run.runId, (state) => ({ ...state, stage: 'implementation' }));
+        persistedMidFlight += 1;
+        return result(t.id, 'completed');
+      },
+    } as unknown as TaskExecutor;
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
+      'TASK-001': 'queued',
+    });
+
+    expect(persistedMidFlight).toBe(1);
+    // One dispatch happened in this invocation, on top of the attempt already
+    // recorded. Two, not three.
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(2);
+  });
+
+  it('does not spend a second attempt when a persisted state still says running', async () => {
+    // The seam the old derivation got wrong, driven directly.
+    //
+    // `persist` recomputed `attempts` for every task whose state it was about to
+    // write, incrementing wherever it saw `running`. Under the batch barrier no
+    // production path reaches that — every task in a batch has left `running` by
+    // the time the batch is written — so the fault was latent rather than live.
+    // It stops being latent the moment dispatch overlaps a write, which is the
+    // shape any rolling dispatch has.
+    //
+    // This is one dispatch. Whatever else is persisted about the task, it must
+    // stay one attempt.
+    const { store, run } = await harness();
+
+    const executor = {
+      execute: async (t: Task) => result(t.id, 'running'),
+    } as unknown as TaskExecutor;
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD');
+
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(1);
+  });
+
+  it('leaves the count alone once the task has finished', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001'), task('TASK-002')] });
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD');
+
+    // TASK-001 finished in the first wave and TASK-002 in the second, so the
+    // run was persisted several times after TASK-001 was already done.
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(1);
+    expect(await attemptsOf(store, run.runId, 'TASK-002')).toBe(1);
+  });
+
+  it('spends a second attempt on a task recovered from a dead process', async () => {
+    // The attempt the crashed process spent still counts — that is what bounds
+    // recovery — and the redispatch spends the next one.
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+    }));
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({ store, executor, maxAttempts: 3 }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'running' },
+    );
+
+    expect(outcome.recovered).toEqual(['TASK-001']);
+    expect(executed).toEqual(['TASK-001']);
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(2);
+  });
+
+  it('counts exactly one attempt per task in a batch', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001'), task('TASK-002')] });
+    await new Scheduler({ store, executor, maxConcurrency: 2 }).run(plan, run.runId, 'SDD');
+
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(1);
+    expect(await attemptsOf(store, run.runId, 'TASK-002')).toBe(1);
+  });
+
+  it('does not spend an attempt on a task that was never dispatched', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      {},
+      { only: new Set(['TASK-001']) },
+    );
+
+    expect(await attemptsOf(store, run.runId, 'TASK-001')).toBe(1);
+    expect(await attemptsOf(store, run.runId, 'TASK-002')).toBe(0);
   });
 });
 

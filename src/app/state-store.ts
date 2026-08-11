@@ -10,6 +10,7 @@ import {
 } from '../contracts/index.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import { agentFlowPaths, artifactPath, runPaths, type ArtifactName } from './paths.js';
+import { serializeStateWrite } from './state-write-queue.js';
 import { transition } from '../core/task-state.js';
 
 export class StateError extends Error {
@@ -113,20 +114,35 @@ export class StateStore {
    * and no production path called it — so the policy held only for as long as
    * every writer happened to agree with it. Checking here needs no cooperation
    * from callers and cannot be forgotten by a new one.
+   *
+   * **Serialised per state file, for exactly the same reason (M2-00.1).** The
+   * load and the write are two steps, and two callers interleaving them lose an
+   * update: both read one snapshot, both write their own conclusion, and the
+   * second erases the first. The §22 guard cannot see it — `running → completed`
+   * observed twice is two legal transitions and one task that never finished.
+   * Only the batch size of the scheduler keeps that from happening today, which
+   * makes it a fact about a caller rather than a property of this class. The
+   * queue closes it here, where a new caller inherits it without knowing.
+   *
+   * The mutator therefore runs *inside* the queue, and it must not call back into
+   * `updateRun` for the same run — see `state-write-queue.ts` on reentrancy.
    */
   async updateRun(
     runId: string,
     mutate: (state: RunState) => RunState,
   ): Promise<RunState> {
-    const current = await this.loadRun(runId);
-    const next = RunStateSchema.parse({ ...mutate(current), updatedAt: this.clock.now() });
+    return serializeStateWrite(runPaths(this.projectDir, runId).state, async () => {
+      const current = await this.loadRun(runId);
+      const next = RunStateSchema.parse({ ...mutate(current), updatedAt: this.clock.now() });
 
-    // Raises before the write, so a refused transition leaves the run exactly
-    // as it was rather than half-applied.
-    assertLegalTransitions(current, next);
+      // Raises before the write, so a refused transition leaves the run exactly
+      // as it was rather than half-applied. Raising in here also releases the
+      // queue: a refusal blocks the next writer for no longer than a success.
+      assertLegalTransitions(current, next);
 
-    await this.write(next);
-    return next;
+      await this.write(next);
+      return next;
+    });
   }
 
   async currentRunId(): Promise<string | null> {
@@ -155,6 +171,21 @@ export class StateStore {
     return entries.filter((entry) => /^AF-\d{4}-\d{3}$/.test(entry)).sort().reverse();
   }
 
+  /**
+   * Appends one line to the audit trail.
+   *
+   * **Deliberately not serialised, unlike `updateRun` (M2-00.1).** The two look
+   * alike and are not: this reads nothing, so there is no snapshot to go stale and
+   * no update to lose. What is left is whether two appends can interleave *within*
+   * a line, and they cannot — the port's contract is one append of one small line,
+   * which `O_APPEND` places at the end of the file in a single write.
+   *
+   * Serialising it anyway would buy a tidier event order and nothing else, and the
+   * order it would buy is arguably the wrong one: once tasks really do run at the
+   * same time, the order two of their events were written in *is* information. A
+   * queue that reordered them into something neater would be the audit trail
+   * describing a sequence that did not happen.
+   */
   async appendEvent(
     runId: string,
     type: string,

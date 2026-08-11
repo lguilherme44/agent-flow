@@ -276,6 +276,128 @@ describe('graph logic lives in exactly one module (C-3)', () => {
   });
 });
 
+describe('a configured task limit is resolved, never used raw (M2-00.3)', () => {
+  // The defect this pins: `parallelism.maxTasks` went from the configuration file
+  // straight into `Scheduler.maxConcurrency`, so `maxTasks: 4` really did run four
+  // implementation agents against one working tree — no worktrees, one `git
+  // status`, one set of validation commands. `git.useWorktrees` looks like the
+  // safety catch and is read by nothing that executes anything.
+  //
+  // The behaviour is proved in test/app/effective-concurrency.test.ts. This is the
+  // rule underneath it: the number reaching a scheduler must have gone through the
+  // resolver, so re-wiring it back is a failing test rather than a silent
+  // regression. Deliberately no `IsolationCapability` interface behind it — there
+  // is no isolation to describe yet, and inventing a type for one would be a
+  // seam that lies about what exists.
+  const HOME = 'src/core/concurrency.ts';
+
+  it('reads parallelism.maxTasks in one place outside the config layer', () => {
+    const allowed = new Set([
+      HOME,
+      // Resolves it into what the scheduler is given.
+      'src/app/execution-context.ts',
+      // Reports the configured value, and says it is not the effective one.
+      'src/server/config-reader.ts',
+    ]);
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !allowed.has(path) && !path.startsWith('src/config/'))
+      .filter(({ text }) => /parallelism\s*\.\s*maxTasks/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('hands the scheduler a resolved number rather than the configured one', () => {
+    const { text } = read(join(ROOT, 'src/app/execution-context.ts'));
+    const code = codeOnly(text);
+
+    expect(code).toMatch(/resolveTaskConcurrency\s*\(/);
+    expect(code).toMatch(/maxConcurrency:\s*concurrency\.effective/);
+    // The shape of the bug, spelled out so it cannot come back by copy-paste.
+    expect(code).not.toMatch(/maxConcurrency:\s*config\.global\.parallelism\.maxTasks/);
+  });
+
+  it('keeps the ceiling in the resolver, so raising it is one edit', () => {
+    // Guards the rule above from passing vacuously if the resolver were emptied.
+    const { text } = read(join(ROOT, HOME));
+    expect(text).toMatch(/MAX_SUPPORTED_TASK_CONCURRENCY\s*=\s*1/);
+  });
+
+  it('reads git.useWorktrees nowhere that could grant isolation it does not have', () => {
+    // The flag is part of the MVP 2 design and deliberately stays in the schema.
+    // Deciding concurrency from it would be worse than deciding it from
+    // `maxTasks` alone, because it would *look* deliberate — nothing in the
+    // execution path creates a worktree, so switching it on isolates nothing.
+    //
+    // So the flag may be declared and it may be displayed, and that is all. The
+    // day it becomes real, this list is where the change announces itself.
+    const allowed = new Set([
+      // Declares it.
+      'src/contracts/config.schema.ts',
+      // Shows what is configured, on a page about configuration.
+      'src/server/config-reader.ts',
+    ]);
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /useWorktrees/.test(codeOnly(text)))
+      .filter(({ path }) => !allowed.has(path))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('creates no git worktree anywhere in production code', () => {
+    // M2-00 is the hardening that comes *before* isolation. A worktree appearing
+    // here would mean the milestone quietly became the next one.
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /worktree\s+(add|remove|prune|list)/.test(text))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('state writes are serialised where they happen (M2-00.1)', () => {
+  // `updateRun` is a read-modify-write, and two of them interleaving lose an
+  // update that the §22 machine cannot catch — each transition, seen alone, is
+  // legal. Concurrency is one today, so the store's correctness rests on a fact
+  // about one caller. These rules keep the fix where callers inherit it.
+
+  it('serialises inside the StateStore rather than at its callers', () => {
+    const { text } = read(join(ROOT, 'src/app/state-store.ts'));
+    expect(codeOnly(text)).toMatch(/serializeStateWrite\s*\(/);
+  });
+
+  it('keeps the §22 machine in the store, next to the serialisation', () => {
+    // The two are complementary. Moving the transition guard back out to callers
+    // to make room for the queue would trade one unenforceable policy for another.
+    const { text } = read(join(ROOT, 'src/app/state-store.ts'));
+    expect(codeOnly(text)).toMatch(/assertLegalTransitions\s*\(/);
+  });
+
+  it('keys the queue on the state file, not on the run id', () => {
+    // Run ids are per project and reset each year, so `AF-2026-001` exists in as
+    // many repositories as you like — and one server process serves all of them.
+    // A queue keyed on the id would make two unrelated projects wait on each
+    // other, which is a global lock wearing a local name.
+    const { text } = read(join(ROOT, 'src/app/state-store.ts'));
+    expect(codeOnly(text)).toMatch(/serializeStateWrite\(\s*runPaths\([^)]*\)\.state/);
+  });
+
+  it('adds no filesystem lock to do it', () => {
+    // Every writer is already under one execution lease. A file lock to order two
+    // callbacks in one event loop would be a syscall standing in for a promise —
+    // and a second locking mechanism to keep in step with AF-L01.
+    const { text } = read(join(ROOT, 'src/app/state-write-queue.ts'));
+    const code = codeOnly(text);
+    expect(code).not.toMatch(/createExclusive|\.lock/);
+  });
+});
+
 describe('the write API is an adapter, not a second workflow (UI-27, §60)', () => {
   // The rules the final architectural review of UI-B checks for by hand, written
   // down so they hold in six months instead of on the day somebody looked. Every

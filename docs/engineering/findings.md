@@ -767,10 +767,27 @@ a working login; forcing a real 429 means burning a quota limit. They are
 prefixed so nobody mistakes them for recordings, and — per §6 — normalisation
 does not depend on their exact wording.
 
-**No worktrees, so tasks share one working tree.** Concurrency is pinned at 1
+**No worktrees, so tasks share one working tree.** Concurrency is capped at 1
 and the scheduler stops on the first failure, which bounds the damage. With
 parallel execution this becomes unsafe, which is why worktrees are the first
 item of the next milestone.
+
+This paragraph used to say concurrency was *pinned* at 1, and it was not: it was
+`parallelism.maxTasks`, which went from the configuration file straight into the
+scheduler. Writing `maxTasks: 4` really did run four implementation agents at
+once — against one working tree, one `git status`, one `AGENTS.md` — and
+`git.useWorktrees`, the flag that reads like the safety catch, was consulted by
+nothing that executes anything. The cap is now resolved in `core/concurrency.ts`
+and a run that asked for more records a `parallelism_clamped` degradation, so
+the reduction is on the run rather than in a sentence here. `maxTasks` stays a
+positive integer, because it records an intention that MVP 2 will honour.
+
+The same round serialised `StateStore.updateRun` per state file. It is a
+read-modify-write, and two of them interleaving lose an update the §22 machine
+cannot catch — `running → completed` observed twice is two legal transitions and
+one task that never finished. Nothing had lost an update, because concurrency was
+one; that made the store's correctness a fact about one caller rather than a
+property of the store.
 
 **Agent Flow cannot contain the agent.** It spawns a CLI as a child process and
 cannot intercept what that process decides to run. Containment is the runner's

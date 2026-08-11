@@ -1,6 +1,7 @@
 import type { ConfigSectionView, ConfigSettingView, ConfigView } from '../contracts/index.js';
 import { readSettingOrigins, type SettingOrigins } from '../app/config-origins.js';
 import { ConfigError, loadConfig } from '../config/loader.js';
+import { resolveTaskConcurrency } from '../core/concurrency.js';
 import type { EffectiveConfig } from '../contracts/index.js';
 import type { FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
@@ -171,9 +172,12 @@ function sectionsOf(
           'parallelism.maxTasks',
           'Parallel tasks',
           String(global.parallelism.maxTasks),
-          global.parallelism.maxTasks > 1
-            ? 'more than one task at a time needs worktrees to stop them colliding'
-            : undefined,
+          // The note has to say what the *runtime* does, not what the setting
+          // would like to. It used to read as though switching worktrees on were
+          // the missing step, and worktrees do not exist in the execution path —
+          // so a reader who followed it would have configured four parallel tasks
+          // and got one, with nothing on this page admitting it.
+          concurrencyNote(global.parallelism.maxTasks),
         ),
         setting('retry.maxAttempts', 'Attempts per task', String(global.retry.maxAttempts)),
         setting('git.useWorktrees', 'Git worktrees', global.git.useWorktrees ? 'on' : 'off'),
@@ -225,4 +229,23 @@ function list(values: readonly string[] | undefined): string {
 function count(values: readonly string[] | undefined): string {
   const total = values?.length ?? 0;
   return total === 0 ? 'none' : `${String(total)} declared`;
+}
+
+/**
+ * What a configured task limit actually does, when the two differ.
+ *
+ * The number on this page is the configured one, which is right — this is a page
+ * about configuration, and every row here carries the layer it came from. What it
+ * must not do is let the reader infer the runtime from it. Resolved through the
+ * same function the scheduler is wired from, so the sentence cannot fall behind
+ * the behaviour it describes.
+ */
+function concurrencyNote(maxTasks: number): string | undefined {
+  const decision = resolveTaskConcurrency(maxTasks);
+  if (!decision.clamped) return undefined;
+
+  return (
+    `configured, not effective: runs execute ${String(decision.effective)} task at a time ` +
+    'until tasks get isolated workspaces'
+  );
 }

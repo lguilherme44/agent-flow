@@ -7,11 +7,18 @@ export interface SchedulerOptions {
   readonly store: StateStore;
   readonly executor: TaskExecutor;
   /**
-   * One in MVP 1 (AD-05).
+   * How many tasks this scheduler may have in flight. One in MVP 1 (AD-05).
    *
-   * The loop below is already written for N. Raising this is what MVP 2 costs —
-   * plus worktrees, because at N > 1 tasks would otherwise write to the same
-   * working tree at the same time.
+   * The loop below is already written for N, and deliberately still is. What it
+   * is *not* is the place the limit is decided: nothing in production reads
+   * `parallelism.maxTasks` and hands it here, because a configured number is an
+   * intention and this is an instruction. `core/concurrency.ts` resolves one into
+   * the other, and until tasks have isolated workspaces it resolves to one
+   * however the configuration is written — see `app/execution-context.ts`.
+   *
+   * Left as an option rather than removed because the scheduler's own contract is
+   * worth testing at N, and because the resolver is the only thing that should
+   * ever have to change.
    */
   readonly maxConcurrency?: number;
   /** Bounds recovery of interrupted tasks. Comes from `retry.maxAttempts`. */
@@ -116,7 +123,9 @@ export class Scheduler {
       // attempt counter has to move when an attempt begins, and a process
       // killed mid-task must leave evidence that the task was in flight rather
       // than looking as though it never started.
-      await this.persist(runId, states);
+      //
+      // The batch is named, because this is the write that spends the attempts.
+      await this.persist(runId, states, batch);
 
       const executed = await Promise.all(
         batch.map(async (id) => {
@@ -223,17 +232,32 @@ export class Scheduler {
    * Written after every batch, not at the end. A run killed mid-flight must
    * resume from what actually happened, and the whole point of persisting task
    * state is that the terminal closing is a normal event.
+   *
+   * **`dispatched` is what spends an attempt, and only that (M2-00.2).** The
+   * counter used to be derived here from `taskState === 'running'`, which made it
+   * a count of writes that happened to catch a task in flight rather than a count
+   * of times the task was sent to a runner. The two agree only because a batch is
+   * a barrier: everything in it has left `running` before the next write. So the
+   * old rule was not wrong, it was true by coincidence — and `retry.maxAttempts`,
+   * the recovery bound and everything a person reads off `attempts` rested on that
+   * coincidence. Naming the dispatch makes the counter mean what it says whatever
+   * the dispatch shape becomes.
    */
-  private async persist(runId: string, states: Record<string, TaskState>): Promise<void> {
+  private async persist(
+    runId: string,
+    states: Record<string, TaskState>,
+    dispatched: readonly string[] = [],
+  ): Promise<void> {
+    const starting = new Set(dispatched);
+
     await this.options.store.updateRun(runId, (state) => ({
       ...state,
       tasks: Object.entries(states).map(([id, taskState]) => {
-        const previous = state.tasks.find((entry) => entry.id === id);
+        const attempts = state.tasks.find((entry) => entry.id === id)?.attempts ?? 0;
         return {
           id,
           state: taskState,
-          attempts:
-            taskState === 'running' ? (previous?.attempts ?? 0) + 1 : (previous?.attempts ?? 0),
+          attempts: starting.has(id) ? attempts + 1 : attempts,
         };
       }),
     }));

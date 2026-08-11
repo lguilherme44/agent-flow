@@ -81,6 +81,12 @@ export const DEGRADATION_KINDS = [
   // normally provides, deliberately given up, which is exactly what this
   // channel exists to carry.
   'forced_approval',
+  // The run asked for more parallelism than the product can isolate, and got
+  // less. Here rather than in a log line for the reason the channel exists: the
+  // question "why did this run one task at a time when I configured four" is
+  // asked long after the terminal has scrolled, and the honest answer belongs on
+  // the run. Recorded only when the two numbers actually differ.
+  'parallelism_clamped',
 ] as const;
 
 export const DegradationSchema = z.object({

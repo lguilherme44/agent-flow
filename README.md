@@ -387,7 +387,9 @@ See [Findings §8](docs/engineering/findings.md#8-a-structured-review-found-thin
 Not started. Listed so the boundary of Spec v3 is visible, not as a commitment.
 
 - [ ] Git worktrees for task isolation
-- [ ] Parallel execution — the scheduler already runs with concurrency > 1
+- [ ] Parallel execution — the scheduler loop takes N; nothing may hand it more
+      than 1 until tasks are isolated, so `parallelism.maxTasks` is accepted
+      above 1 and capped at 1 at runtime
 - [ ] Model escalation after repeated failure
 - [ ] Monorepo workspaces
 
