@@ -13,7 +13,6 @@
   "files": [
     "dist",
     "prompts",
-    "templates",
     "apps/web/dist"
   ],
   "scripts": {
@@ -31,7 +30,10 @@
     "test:e2e": "npm run test:e2e --workspace @agent-flow/web",
     "test:visual": "npm run test:visual --workspace @agent-flow/web",
     "test:visual:update": "npm run test:visual:update --workspace @agent-flow/web",
-    "typecheck:e2e": "npm run typecheck:e2e --workspace @agent-flow/web"
+    "typecheck:e2e": "npm run typecheck:e2e --workspace @agent-flow/web",
+    "test:packaging": "node scripts/packaging-smoke.mjs",
+    "test:packaging:browser": "node scripts/gsd-smoke.mjs",
+    "test:visual:linux": "./scripts/visual-linux.sh"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
