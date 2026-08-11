@@ -722,9 +722,12 @@ accepted-and-ignored when wrong, so there is no signal to check against.
 | ~~`review --fix`~~ | Closed. Findings at or above `medium` become FIX tasks in the plan, which reopens the approval gate — the plan is no longer the one that was approved. The old generator claimed here to be "written and tested" had no tests at all, and produced tasks with `validation: []`: a fix for a review finding that ran no validation. |
 | Codex strict-mode schemas | Would restore runtime-enforced structured output for Codex. Needs optional→nullable rewriting plus null-stripping on parse. |
 | `packages/*` split | §63 puts core, contracts, config and adapters in separate packages. The dependency *direction* it exists to guarantee is enforced today by an executable architecture test; the directory move is not done, because rewriting every import in a validated CLI buys nothing functional and risks the thing that works. |
-| UI write actions | The dashboard reads. Approve, run, retry and revise stay with the CLI until the write API is designed — every one of them is a state transition the StateStore owns. |
+| ~~UI write actions~~ | Closed in UI-B. Approve, reject, revise, retry and start are use cases in `app/run-actions.ts`, and the CLI and the HTTP API are two adapters over them — not two implementations. An architecture test asserts that no handler writes state, decides an approval or accepts a plan hash. |
 | ~~`agent-flow-ui-reference.png`~~ | Closed. The file is in the repository and the dashboard was rebuilt against it — see §16. |
-| Visual regression in CI | The baselines are per-platform: font rasterisation differs between macOS and Linux, so the committed darwin images would fail on an Ubuntu runner. Running it there means generating Linux baselines on Linux, which this machine cannot do. `npm run test:visual` is local-only until then. |
+| ~~Visual regression in CI~~ | Closed in UI-D. The blocker was stated as "this machine cannot generate Linux baselines", and the mistake was treating the platform as the pinned thing. Both sides now use one pinned Playwright container: `scripts/visual-linux.sh` generates in it, CI compares in it, and `test/visual-ci.test.ts` fails if the two ever name different versions. |
+| ~~E2E through the real server~~ | Closed in UI-D. Sixteen Playwright scenarios boot the real `agent-flow ui` against a real temp repository and stub nothing; the coding CLI is replaced at the executable boundary, so both real adapters still do the parsing and no quota is spent. An architecture test forbids `page.route`. |
+| Windows | Path containment is decided with `node:path` and its Windows rules are asserted on Linux with `path.win32`, so a workspace on Windows resolves correctly. Two things remain: no CI job runs there, and the process timeout cannot signal a process tree — `detached` opens a console rather than a process group, and killing the tree needs `taskkill /T /F`. |
+| A distinct "rejected by a human" run status | `plan_rejected` means both "the automated plan review returned FAIL" and "a person said no". Approving over the second is now a deliberate, recorded act (see UI-D), but separating the two properly is a contract change of the same shape `cancel` needs. |
 | ~~Inspector as a drawer below 1200px~~ | Closed. Below 1200 the inspector opens as an overlay and the table takes the full width; the choice is made in JavaScript so only one inspector is ever in the document. Validated at 1440, 1280, 1200 and 1024. |
 | Long titles truncate on one line | A feature description of 80+ characters and a task title over ~28 characters do not fit beside a run id, a progress bar and three buttons — or in a seven-column table with the inspector open. Both truncate with the full text on hover. Widening either would take the space from the other. |
 | End-to-end tests against real CLIs | The suite runs entirely on fakes. The real-CLI cycles were run by hand, and their findings are in §7 and §8; nothing reruns them. Automating it means spending quota on every push, which is why it has not been done rather than why it should not be. |
@@ -1265,3 +1268,148 @@ to ignore refusals. It had one.
 Nothing in the fixture suite could have caught it: every fixture run is either mid-flight
 or `completed`, and `approved` at 100% is a state that only exists for the minutes
 between the last task and the final review.
+
+---
+
+## UI-D — the phase where the tests stopped agreeing with each other
+
+E2E, visual CI, packaging and documentation. Four of the five findings below were found
+by building a test that crossed a boundary the existing tests did not, and the fifth was
+found by breaking the package on purpose.
+
+### A green screenshot suite was describing a bundle nobody had built
+
+`reuseExistingServer` was `process.env.CI !== 'true'`, which reads as a convenience: do
+not restart a server that is already up. What it actually did was adopt whatever was
+listening on 4788 — usually a `vite preview` left running from an earlier session — and
+*skip the build*, because the build is the first half of the `webServer` command.
+
+So the failure mode was not a red suite. It was a green one. Source changed, screenshots
+passed, and the pass was a statement about an artifact from an hour earlier. Nothing on
+screen distinguishes that from a real pass, which is what makes it worse than a flake.
+
+The fix is one word — `false` — and the interesting part is what makes it safe rather
+than annoying. The build lives *inside* `command`, so it runs on every invocation and
+both `test:visual` and `test:visual:update` are current by construction. `--strictPort`
+turns an occupied port into a named refusal rather than a silent move to another one.
+Playwright's own error then suggests setting `reuseExistingServer: true`, which is
+exactly the wrong advice, so the troubleshooting doc says so explicitly.
+
+Cost: two seconds per invocation. The alternative was a suite whose green meant nothing.
+
+### "Generate the baselines on Linux" is not specific enough
+
+Screenshot baselines are platform-specific because font rasterisation is — and
+rasterisation depends on the fonts and the freetype build available to the browser, not
+on the operating system's name. A GitHub runner and an `ubuntu:24.04` container are both
+Linux and do not agree.
+
+Which makes the reproducibility problem circular: CI cannot compare against baselines a
+maintainer cannot generate, and a maintainer on a Mac cannot generate Linux ones. The
+answer is to make the environment the pinned thing rather than the platform. Both sides
+now run `mcr.microsoft.com/playwright:v1.62.1-noble`: `scripts/visual-linux.sh` generates
+in it, the CI job compares in it, and the image is verified to reproduce byte-identical
+images across two runs.
+
+That leaves three facts that must agree — the locked Playwright version, the image the
+generator names, the image the workflow names — in three files written at three
+different times. Drift between any two shows up as a diff on every glyph of every image,
+which reads as "somebody changed the design" and costs an afternoon before anybody
+suspects the runner. So `test/visual-ci.test.ts` asserts the agreement, and also that
+both platforms carry the same *set* of images: a shot added on one platform and not the
+other is a comparison that silently stops happening, because Playwright writes the
+missing baseline and passes.
+
+### Two projects, one run id, and a link that dropped the difference
+
+Found by writing the workspace E2E, and it is the kind of bug that only exists at two.
+
+Run ids are `AF-YYYY-NNN`, per project, restarting at 001 each year. So any two
+repositories initialised in the same year both hold `AF-2026-001`. The Runs list linked
+to `/runs/:runId` with no project, and a run route with no project resolves against the
+*primary* project — the directory the server was started in.
+
+The row said `payments-api`. The page that opened was `booking-api`'s run of the same
+name, with its feature description, its tasks, and its approval gate. Nothing looked
+broken.
+
+The Projects page had already solved this and kept the solution private, as a local
+`runHref`. Two pages, one of them right, and no way to tell which without reading both.
+`runHref` now lives beside the URL contract it belongs to, and there is one answer to
+"how is a run addressed".
+
+The unit suite could not have found this: it has one project. The visual suite could not
+either — its fixture workspace has four projects and four distinct run ids, because
+someone writing a fixture naturally makes things distinguishable. Only a test that
+creates two real repositories gets the collision for free.
+
+### Approving a plan a person had rejected simply worked
+
+`start` refuses a rejected run outright — that was AF-L01.2, and it is what makes
+"rejected, therefore not executed" true rather than lucky. `approve` had no equivalent
+guard, and `checkApproval` never looked at the run's status. So `POST /approve` on a
+rejected run returned 200 and set `approved: true`.
+
+Nothing executed. The harm is subtler and slower: the run was left recording that its
+plan had been both turned down and approved, and a state file that contradicts itself is
+one nobody can reason from later — including us, six months on, trying to work out what
+happened.
+
+The fix took a minute; deciding *where* took longer. `plan_rejected` carries two
+meanings the contract does not separate: the automated plan review returning FAIL sets
+it, and a person saying no sets it. Refusing on the status alone would have broken
+`approve --force` after a failed review, which is a documented path. But that path is
+*already* refused by `review_failed`, which is the better message because it carries the
+findings — so putting the new check last, after the whole review chain, separates the two
+without a contract change. Reaching it means the review passed and the rejection was
+somebody's decision.
+
+Forcible, and recorded as `forced_approval`. A rejection followed by a change of mind is
+an ordinary Tuesday; doing it by accident from a browser is not.
+
+The honest limit: `RUN_STATUSES` still has no distinct "rejected by a human", and adding
+one is a contract change of the same shape `cancel` needs. Deferred, not forgotten.
+
+### The package worked because the source tree happened to be next door
+
+`resolveWebDir` walks a candidate list, and one candidate is `../../apps/web/dist` from
+`dist/bin/`. Inside the installed package that resolves to `<pkg>/apps/web/dist`, which
+is correct. Inside the repository it resolves to the checkout's own build output, which
+is *also* correct — and indistinguishable. Every test that ran `agent-flow ui` from the
+repository would pass whether or not the bundle was ever packaged.
+
+So the packaging smoke renames `apps/web/dist` away for its duration. A dashboard that
+still loads can only be the packaged one. Verified by removing `apps/web/dist` from
+`files` and watching the smoke refuse — which it did, on the tarball contents, before it
+ever got as far as a browser.
+
+Two smaller things fell out of the same pass. `files` declared a `templates/` directory
+that has never existed and nothing reads; npm skips a missing entry in silence, so the
+only cost was the next person going looking for whatever deleted it. And a runtime
+import of a devDependency is invisible to the type checker — in here they are all just
+installed — so `test/packaging.test.ts` scans `src/` and `bin/` for bare specifiers that
+are not in `dependencies`.
+
+### gsd-browser, and being clear about what a second browser buys
+
+The packaged product needed a check by something that does not know the codebase, and
+the temptation was to reimplement a slice of the Playwright suite in it.
+
+That would have been the wrong trade in both directions. Playwright's value is that it
+*does* know this application: it selects by the roles the components render, waits on
+the queries they issue, and asserts against the contracts the server declares. Hundreds
+of precise assertions belong there. What it cannot do is forget all of that, which is
+the only way to answer "can a browser use this as installed".
+
+So gsd-browser runs two journeys — navigate the packaged dashboard, then approve and
+start a run — with explicit `--checks` JSON, a per-run named session, and no baselines.
+Visual comparison stays with Playwright: a second baseline mechanism is two things to
+keep in step for no gain.
+
+It runs locally, as a mandatory step before publishing, rather than in CI. It is a
+native binary distributed per platform with no published checksum, and CI already has a
+deterministic browser gate that needs no such dependency; pinning it in a workflow would
+add a supply-chain surface to buy a second opinion CI does not need. The version is
+pinned at 0.2.2 and the smoke refuses anything else, printing the install command rather
+than reaching for `latest` — a black-box check that changes underneath you is worse than
+none.

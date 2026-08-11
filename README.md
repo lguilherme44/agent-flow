@@ -11,9 +11,19 @@ Agent Flow orchestrates the coding CLIs you already have installed and logged
 into. It knows nothing about Claude Code or Codex in its core, and nothing about
 your framework. Roles are logical; configuration decides who runs them.
 
-```bash
-npm install -g agent-flow
+Not on npm yet. Install it from a checkout — the package is built, packed and
+verified to work outside one, so this is the same artifact a publish would produce:
 
+```bash
+git clone https://github.com/lguilherme44/agent-flow && cd agent-flow
+npm install
+npm run build && npm run build:web
+npm install -g "$(npm pack | tail -1)"
+```
+
+Then, in any repository:
+
+```bash
 cd ~/your-project
 agent-flow init
 agent-flow doctor
@@ -23,7 +33,22 @@ agent-flow status      # read the SDD and the plan
 agent-flow approve
 agent-flow run
 agent-flow review
+
+agent-flow ui          # or: agent-flow ui ~/wk   — the whole workspace
 ```
+
+---
+
+## Documentation
+
+| | |
+|---|---|
+| [`docs/web-ui.md`](docs/web-ui.md) | The dashboard: the two modes, the pages, the DAG, what it can change and what it cannot, the API |
+| [`docs/security.md`](docs/security.md) | The local server's boundary — no path, no command, no plan hash from the browser; symlinks; the run lock; the limits |
+| [`docs/testing.md`](docs/testing.md) | Three test layers and where each one stops |
+| [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do |
+| [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each CLI actually does, and the command that proves it |
+| [`FINDINGS.md`](FINDINGS.md) | What building this taught us, including what is still unsolved |
 
 ---
 
@@ -80,7 +105,7 @@ it works here.
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
 | `review` | Run validation, inspect the code, judge it against the SDD. `--fix` turns findings into tasks and reviews the corrected plan. |
-| `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. Approve, revise, retry and run go through the same use cases this CLI does. |
+| `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. Approve, revise, retry and run go through the same use cases this CLI does — see [`docs/web-ui.md`](docs/web-ui.md). |
 | `clean` | Remove old run state. Never the active run without `--force`. |
 
 `--dry-run` shows the routing without invoking anything. `--verbose`, `--json`,
@@ -194,6 +219,15 @@ result; a number written here would be neither for long.
       `ui.workspaceDepth`, and discovers nothing that resolves outside the root
 - [x] Empty, error and degraded states — what happened, where, whether the run
       stopped, and what to do about it
+- [x] Deterministic browser E2E — sixteen scenarios across the real local server,
+      stubbing nothing; the coding CLI is replaced at the executable boundary, so no
+      quota is spent and both real adapters still parse the output
+- [x] Screenshot regression in CI, on Linux baselines, in a pinned container — and
+      a suite that cannot adopt a stale preview
+- [x] Cross-platform workspace containment, with the Windows rules asserted on Linux
+- [x] Packaging proved outside the checkout: `npm pack`, a clean install into a
+      throwaway prefix, and the packaged server driven with the checkout's own bundle
+      renamed away — plus a black-box browser journey through the installed tarball
 
 ### Incomplete
 
@@ -220,6 +254,24 @@ prompt could set the runner's error code.
 - [ ] Flutter, Go or Rust repositories (stack detection is unit-tested only)
 - [ ] Fallback and reasoning clamping against a live CLI
 - [ ] Cost across models and repository sizes
+- [ ] Windows. Path containment now uses `node:path` and its Windows rules are
+      asserted with `path.win32`, but no CI job runs there and the process timeout
+      still cannot signal a process tree on that platform
+
+### Known limitations
+
+Not a roadmap — what is true today.
+
+- **No `pause`, `resume` or `cancel`.** The core has no semantics for any of them.
+- **No configuration writes.** `/settings` reads. Deciding which of three layers a
+  value belongs in is the whole problem.
+- **Local only.** Loopback by default, no authentication, no cloud, no remote auth.
+  Anyone who can reach the port can approve a plan and start a run.
+- **Visual baselines are per platform.** darwin and Linux sets are both committed and
+  never compared against each other; font rasterisation differs.
+- **A lock claim can be unreadable under contention.** Mutual exclusion is unaffected,
+  but the refusal then says the claim could not be read rather than naming who holds
+  it. Deferred deliberately — see [`FINDINGS.md`](FINDINGS.md).
 
 ### Known defects — validation review
 
@@ -272,18 +324,29 @@ was probed against.
 
 ```bash
 npm install
-npm run check         # typecheck + lint + CLI tests + dashboard tests
-npm run build         # the CLI bundle
-npm run build:web     # the dashboard bundle
+npm run build          # the CLI bundle
+npm run build:web      # the dashboard bundle
+npm run check          # typecheck + lint + Vitest + dashboard unit tests
 
-npm run dev:web       # dashboard against a running `agent-flow ui`
-npm run test:visual   # screenshot regression, local only — see below
+npm run dev:web        # dashboard against a running `agent-flow ui`
 ```
 
-The suite never invokes a real CLI. Runners are exercised through a scripted
-`AgentRunner`; adapters are tested by asserting the exact argv they build plus
-parsing output recorded from the real tools. That keeps it fast, free and
-runnable in CI.
+Once built, the CLI runs from the checkout as `node dist/bin/agent-flow.js`, or
+`npm link` it and use `agent-flow` as documented above.
+
+Three test layers, answering three different questions — and none of them is a
+cheaper version of another:
+
+```bash
+npm run test:e2e                # Playwright, through the real local server
+npm run test:visual             # Playwright, screenshots (this platform's baselines)
+npm run test:packaging          # pack, install elsewhere, drive the installed product
+npm run test:packaging:browser  # the same, through gsd-browser
+```
+
+[`docs/testing.md`](docs/testing.md) explains what each one can and cannot prove,
+including why the gsd-browser smoke does not replace Playwright and why it runs
+locally rather than in CI.
 
 Architectural rules are executable (`test/architecture.test.ts`):
 
@@ -293,15 +356,24 @@ Architectural rules are executable (`test/architecture.test.ts`):
 - topological ordering exists in exactly one module
 - the core side never imports the server; the server never imports the CLI
 - no server module names an auth file or reads the environment
+- no request contract accepts a filesystem path, a command or a plan hash
+- there is one project registry and one run execution lock
+- no browser E2E intercepts `/api/**`
 
 The dashboard's layout is checked by screenshot against
-[`agent-flow-ui-reference.png`](agent-flow-ui-reference.png), at 1440, 1280,
-1200 and 1024 — the last two being the sides of the boundary where the inspector
-stops sharing the row with the table and becomes a drawer. Stubbed API, pinned
-clock, fixed locale and timezone. Those baselines are darwin
-images — font rasterisation differs by platform — so `test:visual` is not in CI
-and running it elsewhere means regenerating baselines there first with
-`npm run test:visual:update`.
+[`agent-flow-ui-reference.png`](agent-flow-ui-reference.png), at 1440, 1280, 1200
+and 1024 — the last two being the sides of the boundary where the inspector stops
+sharing the row with the table and becomes a drawer. Stubbed API, pinned clock,
+fixed locale and timezone.
+
+Baselines are per platform, because font rasterisation is: `desktop-1440-darwin`
+comes from a maintainer's machine, `desktop-1440-linux` from the pinned Playwright
+container CI compares in. Regenerate the Linux set only in that container:
+
+```bash
+npm run test:visual:linux    # docker, pinned image
+npm run test:visual:update   # this platform
+```
 
 ---
 
@@ -314,6 +386,10 @@ that disable them.
 Being precise about the limit: Agent Flow spawns a CLI as a child process and
 cannot intercept what that process runs. The containment is the runner's, not
 ours. Anything stronger needs a container.
+
+[`docs/security.md`](docs/security.md) covers the local server: why the browser
+never sends a path, a command or a plan hash, how symlink containment works, and
+what having no authentication does and does not mean.
 
 ---
 

@@ -12,9 +12,20 @@ autenticadas. O core não sabe que Claude Code ou Codex existem, e não sabe qua
 framework você usa. Os papéis são lógicos; quem os executa é decidido por
 configuração.
 
-```bash
-npm install -g agent-flow
+Ainda não está no npm. Instale a partir de um checkout — o pacote é construído,
+empacotado e verificado fora dele, então este é o mesmo artefato que um publish
+produziria:
 
+```bash
+git clone https://github.com/lguilherme44/agent-flow && cd agent-flow
+npm install
+npm run build && npm run build:web
+npm install -g "$(npm pack | tail -1)"
+```
+
+Depois, em qualquer repositório:
+
+```bash
 cd ~/seu-projeto
 agent-flow init
 agent-flow doctor
@@ -24,7 +35,24 @@ agent-flow status      # leia o SDD e o plano
 agent-flow approve
 agent-flow run
 agent-flow review
+
+agent-flow ui          # ou: agent-flow ui ~/wk   — o workspace inteiro
 ```
+
+---
+
+## Documentação
+
+Os documentos abaixo estão em inglês.
+
+| | |
+|---|---|
+| [`docs/web-ui.md`](docs/web-ui.md) | O dashboard: os dois modos, as páginas, o DAG, o que ele muda e o que não muda, a API |
+| [`docs/security.md`](docs/security.md) | A fronteira do servidor local — o browser não envia path, comando nem plan hash; symlinks; o lock de run; os limites |
+| [`docs/testing.md`](docs/testing.md) | As três camadas de teste e onde cada uma para |
+| [`docs/troubleshooting.md`](docs/troubleshooting.md) | O que cada mensagem significa e o que fazer |
+| [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | O que cada CLI faz de fato, e o comando que comprova |
+| [`FINDINGS.md`](FINDINGS.md) | O que construir isto ensinou, incluindo o que segue sem solução |
 
 ---
 
@@ -178,11 +206,44 @@ número escrito aqui não seria nenhum dos dois por muito tempo.
 - [x] Comandos de verificação executados pelo orquestrador, não por um agente
 - [x] Final review e Definition of Done avaliados como código
 - [x] `review --fix` — findings viram tasks no plano e reentram no pipeline
+- [x] Rodadas corretivas revisadas por si mesmas, então o loop não precisa de `--force`
+- [x] `doctor --deep` — probe real por runner, dobrado de volta no veredito
+- [x] Telemetria local, derivada do próprio state e event log do run
+- [x] `agent-flow ui` — servidor local e dashboard (spec §59–§102)
+- [x] Sete páginas: run detail, runs, projects, agents & models, prompts, analytics, settings
+- [x] Ações de escrita — approve, reject, revise, retry, start — como um único conjunto
+      de use cases sobre o qual a CLI e a API HTTP são apenas adapters
+- [x] Lock de run inter-processo: a CLI e o servidor local não conseguem escalonar o
+      mesmo run ao mesmo tempo, provado com oito processos reais disputando um lock —
+      e com um stress opt-in de 640 (`AF_LOCK_STRESS=1`), porque uma race é um teste
+      que tem de passar com frequência, não uma vez
+- [x] Grafo de dependências — as arestas do plano, ranqueadas e desenhadas a partir da
+      resposta do servidor, nunca reconstruídas no browser
+- [x] Workspace mode — `agent-flow ui ~/wk` serve vários projetos, limitado por
+      `ui.workspaceDepth`, e não descobre nada que resolva fora da raiz
+- [x] Estados vazio, de erro e degradado — o que aconteceu, onde, se o run parou, e o
+      que fazer a respeito
+- [x] E2E determinístico de browser — dezesseis cenários atravessando o servidor local
+      real, sem stub nenhum; a CLI de código é substituída na fronteira do executável,
+      então nenhuma quota é gasta e os dois adapters reais continuam fazendo o parsing
+- [x] Regressão visual em CI, com baselines Linux, em container fixado — e uma suíte
+      que não consegue adotar um preview velho
+- [x] Containment de workspace cross-platform, com as regras de Windows verificadas no Linux
+- [x] Empacotamento provado fora do checkout: `npm pack`, install limpo em um prefix
+      descartável, e o servidor empacotado dirigido com o bundle do checkout escondido
+      — mais uma jornada black-box de browser contra o tarball instalado
 
 ### Incompleto
 
-- [ ] `doctor --deep` — probe real de autenticação (hoje apenas avisa que não está implementado)
-- [ ] Telemetria local — o schema existe, nada escreve nele
+- [ ] `PATCH /config` — desenhado em
+      [`docs/config-write-design.md`](docs/config-write-design.md), não construído.
+      O escopo precisa fazer parte do endereço, ou um save edita a camada errada
+      em silêncio
+- [ ] `pause`, `resume`, `cancel` — desenhados em
+      [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md),
+      não construídos. Pause precisa de um sinal de abort que o scheduler consulte
+      entre tasks; cancel precisa de um novo status terminal de run, o que é mudança
+      de contrato
 
 ### Validado de ponta a ponta, contra CLIs reais
 
@@ -199,6 +260,24 @@ o prompt podia definir o código de erro do runner.
 - [ ] Repositórios Flutter, Go ou Rust (detecção de stack só tem teste unitário)
 - [ ] Fallback e clamp de reasoning contra uma CLI real
 - [ ] Custo entre modelos e tamanhos de repositório
+- [ ] Windows. O containment de path já usa `node:path` e as regras de Windows são
+      verificadas com `path.win32`, mas nenhum job de CI roda lá e o timeout de
+      processo ainda não consegue sinalizar uma árvore de processos nessa plataforma
+
+### Limitações conhecidas
+
+Não é roadmap — é o que é verdade hoje.
+
+- **Sem `pause`, `resume` ou `cancel`.** O core não tem semântica para nenhum deles.
+- **Sem escrita de configuração.** `/settings` só lê. Decidir em qual das três camadas
+  um valor mora é o problema inteiro.
+- **Só local.** Loopback por padrão, sem autenticação, sem cloud, sem auth remota.
+  Quem alcança a porta pode aprovar um plano e iniciar um run.
+- **Baselines visuais são por plataforma.** Os conjuntos darwin e Linux são ambos
+  versionados e nunca comparados entre si; a rasterização de fontes difere.
+- **Um claim de lock pode ficar ilegível sob contenção.** A exclusão mútua não é
+  afetada, mas a recusa passa a dizer que o claim não pôde ser lido em vez de nomear
+  quem o detém. Adiado deliberadamente — veja [`FINDINGS.md`](FINDINGS.md).
 
 ### Defeitos conhecidos — revisão de validação
 
@@ -249,9 +328,26 @@ que foi testada.
 
 ```bash
 npm install
-npm run check    # typecheck + lint + test
-npm run build
+npm run build          # o bundle da CLI
+npm run build:web      # o bundle do dashboard
+npm run check          # typecheck + lint + Vitest + testes unitários do dashboard
+
+npm run dev:web        # dashboard contra um `agent-flow ui` rodando
 ```
+
+Três camadas de teste, respondendo três perguntas diferentes — e nenhuma delas é
+uma versão mais barata de outra:
+
+```bash
+npm run test:e2e                # Playwright, atravessando o servidor local real
+npm run test:visual             # Playwright, screenshots (baselines desta plataforma)
+npm run test:packaging          # pack, install em outro lugar, dirige o produto instalado
+npm run test:packaging:browser  # o mesmo, via gsd-browser
+```
+
+O [`docs/testing.md`](docs/testing.md) explica o que cada uma prova e o que não
+prova — inclusive por que o smoke do gsd-browser não substitui o Playwright e por
+que ele roda local em vez de no CI.
 
 A suíte nunca invoca uma CLI real. Os runners são exercitados por um
 `AgentRunner` roteirizado; os adapters são testados verificando o argv exato que
@@ -264,6 +360,19 @@ As regras de arquitetura são executáveis (`test/architecture.test.ts`):
 - `src/core/` não menciona provider, modelo ou nome de CLI
 - nenhum nome de framework aparece em `src/` fora da detecção de stack
 - ordenação topológica existe em exatamente um módulo
+- nenhum contrato de request aceita path de filesystem, comando ou plan hash
+- existe um único project registry e um único lock de execução
+- nenhum E2E de browser intercepta `/api/**`
+
+As baselines visuais são por plataforma, porque a rasterização de fontes é:
+`desktop-1440-darwin` vem da máquina de um mantenedor, `desktop-1440-linux` do
+container Playwright fixado em que o CI compara. Regenere o conjunto Linux só
+nesse container:
+
+```bash
+npm run test:visual:linux    # docker, imagem fixada
+npm run test:visual:update   # esta plataforma
+```
 
 ---
 
@@ -276,6 +385,10 @@ desativam isso.
 Sendo preciso sobre o limite: o Agent Flow spawna a CLI como processo filho e
 não consegue interceptar o que aquele processo executa. A contenção é do runner,
 não nossa. Qualquer coisa mais forte que isso exige um container.
+
+O [`docs/security.md`](docs/security.md) cobre o servidor local: por que o browser
+nunca envia path, comando ou plan hash, como funciona o containment de symlink, e o
+que não ter autenticação significa e não significa.
 
 ---
 
