@@ -888,3 +888,83 @@ the same stream as everything else. It has to be published explicitly rather tha
 inferred from the run, because a job the workflow *refused* never touched
 `state.json`, so the watcher would never see it happen and a page waiting for the
 run to change would wait forever.
+
+---
+
+## AF-L01 — the lock, and the bug the race test found in it
+
+Two processes could schedule the same run. `agent-flow run` in a terminal and
+`POST /runs/:id/start` in the local server would both move the same task to
+`running`, spawn the same agent, pay for it twice and write over each other's result
+files. The server's in-process guard covered a double-clicked button and nothing
+else. This was the largest operational risk in the tool.
+
+**The obvious implementation is wrong, and it took real processes to show it.**
+
+The first version was one file, `execution.lock`, created with `open(path, 'wx')` —
+atomic, no TOCTOU, and correct for acquisition. Recovery of a lock whose process had
+died was the problem: read it, find the pid gone, `rename` it aside, then create your
+own. Renaming rather than deleting was already the careful choice, because
+`remove` then `create` lets a second process delete the *winner's* fresh lock.
+
+Eight real child processes racing one abandoned lock failed two runs in five. The
+data named it exactly:
+
+```text
+ACQUIRED 59013 … stale=null      ← created in the empty window
+ACQUIRED 59014 … stale=59012     ← won the rename, then created
+```
+
+A process that judged the lock stale at T renamed whatever was at that path at T+δ.
+By then it could be a *live* lock somebody else had published — in the gap the rename
+itself had created. Two holders, both convinced.
+
+Every repair for that is a conditional delete: "remove this file only if it is still
+the one I judged". POSIX has no such call, and every layered fix — a reclaim mutex,
+verify-then-restore, an inode check — moves the same race one level down. So the lock
+stopped needing one.
+
+**Generations.** A claim is `execution.lock.1`, `.2`, `.3`; the holder is whoever owns
+the highest number present; claiming is a single exclusive create, and creating the
+file *is* publishing. A stale holder is superseded rather than removed, so contention
+never destroys anything a live process might be relying on. Two details finish it: a
+claimant confirms its generation is still the highest before returning a lease, so a
+process that wins a low generation late discovers it lost *before* doing any work; and
+the files below a confirmed-highest generation are tidied on the way in, which is safe
+precisely because their owners are by definition not the holder.
+
+Forty rounds of eight processes — 320 attempts, both fresh and stale — produce exactly
+one holder per round and zero overlapping holds.
+
+**Two things the test suite taught us about testing a lock.**
+
+An in-memory filesystem cannot prove mutual exclusion. It is single-threaded and has
+no window to lose, so the policy tests are green on a design that fails in two runs
+out of five with real processes. The race suite bundles the lock with esbuild and
+spawns real children; the fake covers stale recovery, cross-host caution and the
+refusal shape, which is all it can honestly cover.
+
+And counting acquisitions is the wrong assertion. A refused process retries, and a
+retry that lands after the holder released is a perfectly correct second acquisition —
+the first version of the test failed on behaviour that was right. The invariant is that
+no two holds *overlap*, which needs the interval stamped after acquisition and before
+release, so the measured window sits inside the real one. Stamping after the release
+syscall made a slow unlink look like a stolen lock.
+
+**No heartbeat.** A pid is a liveness signal that needs no maintenance: nothing has to
+be refreshed, so nothing can fail to be refreshed. A timer-based lease adds a second
+way to be wrong, and the way it is wrong is the exact failure the lock exists to
+prevent — a slow run whose heartbeat missed its window would have its lock taken while
+it was still executing. Process death by any means, including Ctrl-C and SIGKILL, is
+covered by liveness rather than by cleanup, which is also why no signal handler was
+added: it would be global shutdown machinery for a case stale detection already
+handles.
+
+The residual risk is pid reuse, and it errs toward refusing a legitimate run rather
+than toward running two. That is the direction to err in.
+
+**A lock from another machine is never judged.** The pid in it names a process on
+another host, and a local liveness check would answer a question about whichever local
+process happens to share the number. Agent Flow is local-first, this is not a
+distributed lock, and it does not pretend to be one: a foreign lock is held until
+somebody removes it deliberately.

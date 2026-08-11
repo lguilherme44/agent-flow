@@ -183,20 +183,19 @@ result; a number written here would be neither for long.
 - [x] Seven pages: run detail, runs, projects, agents & models, prompts, analytics, settings
 - [x] Write actions — approve, reject, revise, retry, start — as one set of use cases
       the CLI and the HTTP API are both adapters over
+- [x] Inter-process run lock: the CLI and the local server cannot schedule the same
+      run at once, proved with eight real processes racing one lock file
 - [x] Dashboard layout checked by screenshot at 1440, 1280, 1200 and 1024
 
 ### Incomplete
 
-- [ ] `pause`, `resume`, `cancel` — listed in the spec's endpoint table and absent
-      here on purpose: `RUN_STATUSES` has no paused or cancelled and the scheduler
-      cannot be interrupted between tasks, so an endpoint would only be able to set
-      a status field and lie about what it did
-- [ ] `PATCH /config` — writing a merged value back means deciding which of three
-      layers it belongs in, and guessing would move a project's override into the
-      global file and change every other project on the machine
-- [ ] A lock two processes can see. One job per run is enforced inside the server,
-      so the dashboard cannot start the same run twice; a CLI `agent-flow run`
-      alongside it still can
+- [ ] `PATCH /config` — designed in
+      [`docs/config-write-design.md`](docs/config-write-design.md), not built.
+      Scope has to be part of the address, or a save silently edits the wrong layer
+- [ ] `pause`, `resume`, `cancel` — designed in
+      [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md),
+      not built. Pause needs an abort signal the scheduler checks between tasks;
+      cancel needs a new terminal run status and is a contract change
 - [ ] DAG view, workspace multi-project mode, full empty/degraded state sweep
 
 ### Validated end to end, against live CLIs
