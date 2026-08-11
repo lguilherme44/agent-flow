@@ -3,7 +3,7 @@ import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-c
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
 import { revise } from '../app/run-actions.js';
-import { actionDeps, currentRunId, render } from './approve.js';
+import { actionDeps, currentRunId, exitCodeFor, render } from './approve.js';
 import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
@@ -128,7 +128,7 @@ export async function runReviseCommand(
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
-      return ExitCode.GATE_NOT_SATISFIED;
+      return exitCodeFor(outcome.error);
     }
 
     if (outcome.value.approvalCleared) {

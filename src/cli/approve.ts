@@ -42,7 +42,7 @@ export async function runApproveCommand(
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
-      return ExitCode.GATE_NOT_SATISFIED;
+      return exitCodeFor(outcome.error);
     }
 
     if (outcome.value.forced) {
@@ -85,7 +85,7 @@ export async function runRejectCommand(
     const outcome = await reject(deps, runId, reason);
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
-      return ExitCode.GATE_NOT_SATISFIED;
+      return exitCodeFor(outcome.error);
     }
 
     process.stdout.write(`Rejected ${outcome.value.runId}.\n`);
@@ -130,6 +130,17 @@ export function render(error: ActionError): string {
   return lines.join('\n');
 }
 
+/**
+ * The exit code a refusal deserves.
+ *
+ * Only `run_busy` is separated out, and for a practical reason: it is the one refusal
+ * where retrying unchanged is the right thing to do, so a script needs to be able to
+ * tell it apart without parsing the message.
+ */
+export function exitCodeFor(error: ActionError): ExitCodeValue {
+  return error.code === 'run_busy' ? ExitCode.RUN_BUSY : ExitCode.GATE_NOT_SATISFIED;
+}
+
 export function printWarnings(outcome: ActionOutcome<unknown>): void {
   if (outcome.warnings.length === 0) return;
   for (const warning of outcome.warnings) process.stdout.write(`⚠ ${warning}\n`);
@@ -142,6 +153,9 @@ export function actionDeps(globals: GlobalOptions): RunActionDeps {
     ...nodeAdapters(),
     projectDir: globals.cwd,
     globalConfigPath: globals.globalConfigPath,
+    // Which entry point is asking. Written into the execution lock, so a person
+    // refused by one can see whether the other is what has it.
+    owner: 'cli',
   };
 }
 

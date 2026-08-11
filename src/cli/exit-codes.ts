@@ -13,6 +13,14 @@ export const ExitCode = {
   CONFIG_ERROR: 2,
   GATE_NOT_SATISFIED: 3,
   DEGRADED_STRICT: 4,
+  /**
+   * Another process is executing this run (AF-L01).
+   *
+   * Separate from GATE_NOT_SATISFIED because the correct response differs: a gate
+   * wants something fixed, and this wants waiting. A script can loop on 5 and cannot
+   * usefully loop on 3.
+   */
+  RUN_BUSY: 5,
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];

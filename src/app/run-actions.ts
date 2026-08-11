@@ -21,8 +21,15 @@ import {
   type BuildContextOptions,
   type ExecutionContext,
 } from './execution-context.js';
+import {
+  RunExecutionLock,
+  type LockOperation,
+  type LockOwner,
+  type LockRefusal,
+} from './run-execution-lock.js';
 import type { SchedulerOutcome } from './scheduler.js';
-import type { StateStore } from './state-store.js';
+import { StateStore } from './state-store.js';
+import type { Host } from '../ports/index.js';
 
 /**
  * Every state transition a person can ask for, as use cases (UI-27).
@@ -69,6 +76,7 @@ export type ActionErrorCode =
   | 'task_blocked'
   | 'attempts_exhausted'
   | 'unmet_dependencies'
+  | 'run_busy'
   | 'invalid_input';
 
 export interface ActionError {
@@ -109,7 +117,142 @@ function done<T>(value: T, warnings: readonly string[] = []): ActionOutcome<T> {
 }
 
 /** Everything a use case needs, as ports. Nothing concrete, nothing global. */
-export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFinish'>;
+export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFinish'> & {
+  /**
+   * This process, for the execution lock (AF-L01).
+   *
+   * A port rather than `process.pid`, because the lock is decided on facts about the
+   * operating system and a use case that read them directly could be driven by one
+   * caller and tested by none.
+   */
+  readonly host: Host;
+  /**
+   * Which entry point is asking. Recorded in the lock and shown to whoever is
+   * refused, so "this run is busy" can say *what* is busy with it.
+   */
+  readonly owner: LockOwner;
+};
+
+// ---------------------------------------------------------------------------
+// the execution lock
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs `work` while holding the run's execution lock (AF-L01).
+ *
+ * The single place acquisition, the audit events and release live, so all three
+ * locked use cases get identical behaviour and none of them can forget the `finally`.
+ * Release happens on success, on a refusal and on a thrown exception — and *not* on
+ * SIGKILL or power loss, which is precisely what stale detection is for.
+ *
+ * The events are the audit trail: who executed this run, from where, and when. There
+ * is no heartbeat, so there is nothing to poll and no polling event to emit.
+ */
+async function withExecutionLock<T>(
+  deps: RunActionDeps,
+  store: StateStore,
+  runId: string,
+  operation: LockOperation,
+  work: () => Promise<ActionOutcome<T>>,
+): Promise<ActionOutcome<T>> {
+  const lock = new RunExecutionLock({
+    fs: deps.fs,
+    clock: deps.clock,
+    host: deps.host,
+    projectDir: deps.projectDir,
+  });
+
+  const acquired = await lock.acquire({ runId, owner: deps.owner, operation });
+  if (!acquired.ok) return failed(busy(acquired.refusal, operation));
+
+  const { lease } = acquired;
+
+  if (lease.recoveredStale !== undefined) {
+    // Recorded explicitly. A lock taken over from a dead process is a recovery, and
+    // the alternative — reclaiming it silently — leaves no trace that a previous
+    // execution of this run ended without releasing anything.
+    await store.appendEvent(runId, 'stale_execution_lock_recovered', {
+      pid: lease.recoveredStale.pid,
+      owner: lease.recoveredStale.owner,
+      operation: lease.recoveredStale.operation,
+      createdAt: lease.recoveredStale.createdAt,
+    });
+  }
+
+  await store.appendEvent(runId, 'execution_lock_acquired', {
+    pid: lease.lock.pid,
+    owner: lease.lock.owner,
+    operation: lease.lock.operation,
+  });
+
+  try {
+    return await work();
+  } finally {
+    await lease.release();
+    await store.appendEvent(runId, 'execution_lock_released', {
+      pid: lease.lock.pid,
+      owner: lease.lock.owner,
+      operation: lease.lock.operation,
+    });
+  }
+}
+
+/**
+ * A refusal a person can act on (§95).
+ *
+ * Names the operation that is in progress and where it is running, because "this run
+ * is busy" without those leaves somebody guessing whether they are competing with
+ * their own terminal or with something they should not interrupt. The pid is included
+ * only when it is a pid on this machine, where it means something.
+ */
+function busy(refusal: LockRefusal, wanted: LockOperation): ActionError {
+  const holder = refusal.holder;
+
+  if (holder === undefined) {
+    return {
+      code: 'run_busy',
+      message: `${refusal.runId} is locked by another process, and the lock could not be read.`,
+      action: `Wait for it to finish, or remove .agent-flow/runs/${refusal.runId}/execution.lock if you are sure nothing is running.`,
+    };
+  }
+
+  const where = refusal.sameHost
+    ? `pid ${String(holder.pid)}`
+    : `host ${holder.hostname}, which is not this machine`;
+
+  return {
+    code: 'run_busy',
+    message:
+      `${refusal.runId} is already being ${gerund(holder.operation)} by the ` +
+      `${holder.owner} (${where}), since ${holder.createdAt}.`,
+    action: refusal.sameHost
+      ? 'Wait for the active execution to finish.'
+      : 'Agent Flow does not judge a lock from another machine. Remove the lock file there, or on this one if that host is gone.',
+    detail: {
+      wanted,
+      holder: {
+        owner: holder.owner,
+        operation: holder.operation,
+        pid: holder.pid,
+        hostname: holder.hostname,
+        createdAt: holder.createdAt,
+      },
+      sameHost: refusal.sameHost,
+      ...(refusal.holderAlive === undefined ? {} : { holderAlive: refusal.holderAlive }),
+    },
+  };
+}
+
+function gerund(operation: LockOperation): string {
+  switch (operation) {
+    case 'run':
+      return 'executed';
+    case 'revise':
+      return 're-planned';
+    case 'retry':
+      return 'modified by a retry';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // approve
@@ -324,6 +467,21 @@ export async function retryTask(
   taskId: string,
   options: { force?: boolean } = {},
 ): Promise<ActionOutcome<RetryResult>> {
+  // Locked too, and briefly. Requeuing a task while the scheduler is executing it
+  // would have the two fighting over the same entry in `state.json` — the retry
+  // setting it back to `queued` under an executor that is mid-flight.
+  const store = storeFor(deps);
+  return withExecutionLock(deps, store, runId, 'retry', () =>
+    requeue(deps, runId, taskId, options),
+  );
+}
+
+async function requeue(
+  deps: RunActionDeps,
+  runId: string,
+  taskId: string,
+  options: { force?: boolean },
+): Promise<ActionOutcome<RetryResult>> {
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
   if (state === null) return failed(noSuchRun(runId));
@@ -409,6 +567,15 @@ export async function start(
   deps: RunActionDeps,
   runId: string,
   options: StartOptions = {},
+): Promise<ActionOutcome<StartResult>> {
+  const store = storeFor(deps);
+  return withExecutionLock(deps, store, runId, 'run', () => execute(deps, runId, options));
+}
+
+async function execute(
+  deps: RunActionDeps,
+  runId: string,
+  options: StartOptions,
 ): Promise<ActionOutcome<StartResult>> {
   const context = await buildExecutionContext({
     ...deps,
@@ -545,6 +712,15 @@ export async function revise(
     });
   }
 
+  const store = storeFor(deps);
+  return withExecutionLock(deps, store, runId, 'revise', () => replan(deps, runId, trimmed));
+}
+
+async function replan(
+  deps: RunActionDeps,
+  runId: string,
+  trimmed: string,
+): Promise<ActionOutcome<ReviseResult>> {
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
   if (state === null) return failed(noSuchRun(runId));
@@ -619,6 +795,17 @@ async function requireCurrent(
     action: 'Only the active run can be started or re-planned.',
     ...(current === null ? {} : { detail: { currentRunId: current } }),
   };
+}
+
+/**
+ * A StateStore from the ports alone.
+ *
+ * The lock helper needs one before `buildExecutionContext` runs, because it appends
+ * its audit events around work that may never get as far as assembling a context —
+ * a refused acquisition does not, and neither does a config that will not load.
+ */
+function storeFor(deps: RunActionDeps): StateStore {
+  return new StateStore({ fs: deps.fs, clock: deps.clock, projectDir: deps.projectDir });
 }
 
 async function loadRun(store: StateStore, runId: string): Promise<RunState | null> {

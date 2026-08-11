@@ -31,6 +31,7 @@ import {
 import { StateStore } from '../app/state-store.js';
 import { PromptLoader } from '../app/prompt-loader.js';
 import { describeRoleRoutes } from '../app/role-routes.js';
+import { RunExecutionLock, type LockRefusal } from '../app/run-execution-lock.js';
 import {
   approve,
   describeApprovalGate,
@@ -47,7 +48,7 @@ import { buildRegistry } from '../adapters/runners/registry.js';
 import { referencedRunners } from '../core/health.js';
 import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
-import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
+import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import { RunReader } from './run-reader.js';
 import { PromptReader } from './prompt-reader.js';
 import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
@@ -86,6 +87,14 @@ export interface ServerOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
   readonly processRunner: ProcessRunner;
+  /**
+   * This process, for the run execution lock (AF-L01).
+   *
+   * Named apart from `host` below, which is a network interface. One is who we are,
+   * the other is where we listen, and calling both `host` would have them read as
+   * the same thing.
+   */
+  readonly processHost: Host;
   readonly registry: ProjectRegistry;
   readonly globalConfigPath: string;
   readonly version: string;
@@ -480,10 +489,23 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     fs: options.fs,
     clock: options.clock,
     processRunner: options.processRunner,
+    host: options.processHost,
     projectDir: project.path,
     globalConfigPath: options.globalConfigPath,
     promptsDir: options.promptsDir,
+    // Written into the execution lock, so a CLI refused by this server can see that
+    // the server is what has the run.
+    owner: 'server',
   });
+
+  /** The lock, for the pre-flight read. Acquisition belongs to the use cases. */
+  const lockFor = (project: RegisteredProject): RunExecutionLock =>
+    new RunExecutionLock({
+      fs: options.fs,
+      clock: options.clock,
+      host: options.processHost,
+      projectDir: project.path,
+    });
 
   app.get('/api/v1/runs/:runId/approval', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
@@ -567,13 +589,24 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * job id and the work proceeds; progress arrives through the stream the run
    * watcher already feeds, because `state.json` changing is what progress *is*.
    */
-  const startJob = (
+  const startJob = async (
     reply: FastifyReply,
     project: RegisteredProject,
     kind: 'start' | 'revise',
     runId: string,
     work: () => Promise<JobResult>,
-  ): ActionJobView | ActionErrorView => {
+  ): Promise<ActionJobView | ActionErrorView> => {
+    // Asked before the job starts, so a run another process is executing is refused
+    // with a conflict rather than accepted and then failed. Not a second
+    // implementation of the guard — it reads the same lock the use case will take,
+    // and the authoritative acquisition still happens in there. Racing this check
+    // only costs a job that reports `run_busy`, which is the honest outcome anyway.
+    const held = await lockFor(project).describe(runId);
+    if (held !== undefined) {
+      reply.code(409);
+      return runBusy(held);
+    }
+
     const outcome = jobs.start({ kind, projectId: project.id, runId, work });
 
     if ('busy' in outcome) {
@@ -608,7 +641,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     // well would mean two implementations of the same gate, one of which could
     // fall behind — so the 202 says "asked", not "will succeed", and the job says
     // which.
-    return startJob(reply, scope.project, 'start', runId, async () => {
+    return await startJob(reply, scope.project, 'start', runId, async () => {
       const outcome = await start(deps, runId, taskId === undefined ? {} : { taskId });
       if (!outcome.ok) return { error: outcome.error };
 
@@ -636,7 +669,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const runId = scope.runId;
     const instruction = body.data.instruction;
 
-    return startJob(reply, scope.project, 'revise', runId, async () => {
+    return await startJob(reply, scope.project, 'revise', runId, async () => {
       const outcome = await revise(deps, runId, instruction);
       if (!outcome.ok) return { error: outcome.error };
 
@@ -794,6 +827,44 @@ function jobView(job: ActionJob): ActionJobView {
     ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
     ...(job.summary === undefined ? {} : { summary: job.summary }),
     ...(job.error === undefined ? {} : { error: errorView(job.error) }),
+  };
+}
+
+/**
+ * A run another process is executing, as the browser sees it.
+ *
+ * The same words the use case would have produced, from the same refusal shape — so
+ * the pre-flight 409 and the job's own refusal cannot describe the situation
+ * differently.
+ */
+function runBusy(held: LockRefusal): ActionErrorView {
+  const holder = held.holder;
+
+  return {
+    error: 'run_busy',
+    message:
+      holder === undefined
+        ? `${held.runId} is locked by another process.`
+        : `${held.runId} is already being ${
+            holder.operation === 'run' ? 'executed' : holder.operation === 'revise' ? 're-planned' : 'modified by a retry'
+          } by the ${holder.owner}${held.sameHost ? ` (pid ${String(holder.pid)})` : ` on ${holder.hostname}`}.`,
+    action: held.sameHost
+      ? 'Wait for the active execution to finish.'
+      : 'The lock was written by another machine, which this server will not judge.',
+    ...(holder === undefined
+      ? {}
+      : {
+          detail: {
+            holder: {
+              owner: holder.owner,
+              operation: holder.operation,
+              pid: holder.pid,
+              hostname: holder.hostname,
+              createdAt: holder.createdAt,
+            },
+            sameHost: held.sameHost,
+          },
+        }),
   };
 }
 

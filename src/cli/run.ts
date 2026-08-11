@@ -4,7 +4,7 @@ import { retryTask, start } from '../app/run-actions.js';
 import { explainRouting, routeTask } from '../core/router.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
-import { actionDeps, currentRunId, printWarnings, render } from './approve.js';
+import { actionDeps, currentRunId, exitCodeFor, printWarnings, render } from './approve.js';
 import type { GlobalOptions } from './index.js';
 
 /**
@@ -50,7 +50,7 @@ export async function runRunCommand(
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
-      return ExitCode.GATE_NOT_SATISFIED;
+      return exitCodeFor(outcome.error);
     }
 
     const scheduled = outcome.value.outcome;
@@ -122,7 +122,7 @@ export async function runRetryCommand(
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
-      return ExitCode.GATE_NOT_SATISFIED;
+      return exitCodeFor(outcome.error);
     }
 
     process.stdout.write(`${taskId} is queued again.\n\nRun it with: agent-flow run\n`);
