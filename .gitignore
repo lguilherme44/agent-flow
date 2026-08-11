@@ -26,3 +26,9 @@ apps/web/test-results/
 
 # Packaging smoke output: a tarball and the throwaway prefix it is installed into.
 .packaging/
+*.tgz
+
+# The packaging smoke renames the checkout's dashboard bundle aside to prove the
+# packaged server is not reading it, and restores it afterwards. A run killed at the
+# wrong moment leaves this behind; it is a build artifact, not a loss.
+apps/web/dist.hidden-by-packaging-smoke/

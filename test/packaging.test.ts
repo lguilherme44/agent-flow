@@ -73,13 +73,51 @@ function bareImports(dir: string): Map<string, string[]> {
   return out;
 }
 
+/**
+ * Where the build configs say their output goes, repository-relative.
+ *
+ * Read from the configs rather than listed here, so a bundler retargeted to
+ * `build/` makes this test fail rather than quietly keep asserting about `dist`.
+ */
+function buildOutputs(): string[] {
+  const outputs: string[] = [];
+
+  const tsup = readFileSync(join(ROOT, 'tsup.config.ts'), 'utf8');
+  const cliOut = /outDir:\s*'([^']+)'/.exec(tsup)?.[1];
+  if (cliOut !== undefined) outputs.push(cliOut);
+
+  const vite = readFileSync(join(ROOT, 'apps/web/vite.config.ts'), 'utf8');
+  const webOut = /outDir:\s*'([^']+)'/.exec(vite)?.[1];
+  if (webOut !== undefined) outputs.push(`apps/web/${webOut}`);
+
+  expect(outputs, 'no build config declares an output directory').toHaveLength(2);
+  return outputs;
+}
+
 describe('the published package', () => {
-  it('declares nothing it does not have', () => {
+  it('declares nothing that is neither present nor built', () => {
     // `files` carried an entry for a `templates/` directory that never existed and
     // nothing read. npm skips it silently, which is exactly the problem: the next
     // person finds a declared runtime directory and goes looking for what deleted it.
+    //
+    // "Exists on disk" is the wrong test on its own, and the first version of this was
+    // exactly that — green locally, red in CI, because `npm run test` runs before
+    // `npm run build` there and `dist/` does not exist yet. So an entry is legitimate
+    // when it is present *or* when a build config says it is produced. That still
+    // catches `templates`, which is neither.
+    const built = buildOutputs();
+
     for (const entry of manifest.files) {
-      expect(existsSync(join(ROOT, entry)), `files declares ${entry}`).toBe(true);
+      const present = existsSync(join(ROOT, entry));
+      const produced = built.some(
+        (output) => output === entry || output.startsWith(`${entry}/`) || entry.startsWith(`${output}/`),
+      );
+
+      expect(
+        present || produced,
+        `files declares ${entry}, which is neither on disk nor produced by a build ` +
+          `(build outputs: ${built.join(', ')})`,
+      ).toBe(true);
     }
   });
 
