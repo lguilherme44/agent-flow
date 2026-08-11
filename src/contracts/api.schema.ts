@@ -101,10 +101,15 @@ export const ProjectQuerySchema = z.object({ projectId: ProjectIdSchema.optional
  */
 export const ApproveRequestSchema = z.object({
   /**
-   * Overrides a *review* refusal, and only those.
+   * Overrides a refusal the server said was forcible, and only those.
+   *
+   * Which ones those are is the server's answer, not this schema's: the gate reports
+   * `refusal.forcible`, and a client that kept its own list would eventually be wrong
+   * about it. Today they are the four review refusals and a plan a person rejected.
    *
    * Recorded on the run as a degradation, which is the point: a gate opened over a
-   * failed review has to look different afterwards from one that passed.
+   * failed review — or over somebody's "no" — has to look different afterwards from
+   * one that passed.
    */
   force: z.boolean().default(false),
 });
