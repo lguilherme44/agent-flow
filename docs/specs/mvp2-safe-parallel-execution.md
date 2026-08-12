@@ -145,10 +145,10 @@ is written (§4.4, §29).
 **I-12 — Every attempt is a fresh worktree and a fresh branch.** A retry never
 reuses a previous attempt's workspace, and never overwrites its evidence (§16).
 
-**I-13 — A run's isolation mode is decided once and frozen.** It is written to run
-state before the first wave, and every later entry MUST resolve the same mode. A
-configuration change that would move a run between modes is a refusal
-(`isolation_mode_changed`), never a switch (§6.5).
+**I-13 — A run's isolation mode is captured when the run is created, and is
+immutable.** `git.useWorktrees` is read once, by `createRun`, before anything observes
+the repository. No later configuration change moves a run between modes, no execution
+chooses a mode, and a precondition refusal does not change one (§6.1, §6.4).
 
 ---
 
@@ -176,7 +176,7 @@ New modules introduced by MVP 2:
 | `src/core/concurrency.ts` *(extended)* | core, pure | Resolves a configured limit against a declared isolation mode. |
 | `src/adapters/git/git-command.ts` | adapter | The single hook-isolated `git` spawner. |
 | `src/adapters/git/git-workspaces.ts` | adapter | Worktree add/lock/remove/prune, `write-tree`, `commit-tree`, `update-ref`, `merge`, ancestry, `cat-file`. |
-| `src/app/run-git-identity.ts` | app | Captures `gitRunKey` and `planningBase`; evaluates admissibility. |
+| `src/app/run-git-identity.ts` | app | Captures `gitRunKey`, `planningBase` and `isolationMode` at run creation — the only reader of `git.useWorktrees`; evaluates execution preconditions. |
 | `src/app/task-workspaces.ts` | app | Attempt workspace lifecycle: create → assert clean → setup → assert clean. |
 | `src/app/attempt-receipt.ts` | app | Nonce, validated tree, attempt artifact, marker construction. |
 | `src/app/integrator.ts` | app | Serial deterministic integration and the only writer of `completed` in worktree mode. |
@@ -218,7 +218,12 @@ validation `cwd`, and where `AGENTS.md` is read from. All three become
 
 **Configuration resolution is deliberately *not* moved into the worktree.**
 `.agent-flow/config.yaml` continues to be read from the project directory, once, when
-the execution context is assembled. Reading the project overlay from the worktree
+the execution context is assembled — with one field exempt from that sentence.
+**`git.useWorktrees` is not resolved per execution at all**: it is read by `createRun`
+and captured on the run (§6.1, I-13), and every later reader takes
+`state.isolationMode` instead. It is the one setting whose value must describe the run
+rather than the machine, because changing it mid-run does not change a preference, it
+changes which tree the work is built in. Reading the project overlay from the worktree
 while the global layer necessarily comes from `~/.agent-flow/config.yaml` would give
 one effective config assembled from two different points in time, and the merge
 result would depend on which half moved. The SDD, the plan and the run's artifacts
@@ -275,9 +280,10 @@ timidity: each concurrent task is one agent process, one full repository checkou
 one install of the project's dependencies. Eight is a number with a stated basis
 (§24) and a single edit to change.
 
-**The probe — "is this run admissible for worktree mode?" — lives in `src/app/`
-(§6.3), never in core.** Core answers a policy question about a declared mode; the
-application answers a factual question about a repository.
+**The declared mode is `state.isolationMode`, read from the run — never
+`config.global.git.useWorktrees`, and never a probe's answer** (§6.1, I-13). Core answers a
+policy question about a mode it is handed; the application answers a factual question
+about a repository (§6.3), and neither of them decides which mode the run is in.
 
 ---
 
@@ -359,7 +365,7 @@ adopts a dead `AF-2026-001`'s branches.
 
 | Layer | Responsibility |
 |---|---|
-| application (`run-git-identity.ts`) | Generates the key. Passes it to `StateStore.createRun`. |
+| application (`run-git-identity.ts`) | Generates the key, captures `planningBase`, and reads `git.useWorktrees` **exactly once** to produce `isolationMode`. Passes all three to `StateStore.createRun`, which writes them together (§6.1). |
 | `StateStore` | Persists an opaque, schema-validated string. **Executes no Git. Knows nothing about refs.** (I-1) |
 | `GitWorkspaces` | Derives the namespace, checks for a real collision, refuses on collision, **never regenerates silently.** |
 
@@ -385,58 +391,154 @@ agent-flow/<gitRunKey>/integration                   the integration branch
 agent-flow/<gitRunKey>/<taskId>/attempt-<n>          one attempt's branch
 ```
 
-**Collision check — and it is asked only on first entry.**
+**Collision check — four states on disk, three of which look alike.**
 
-The check distinguishes two situations that look identical on disk and mean opposite
-things. A namespace that already exists is a *collision* the first time a run enters
-worktree mode, and *the run's own namespace* on every resume after that. Getting this
-wrong would make every resumed run refuse itself.
+An existing namespace means opposite things depending on how it got there: someone
+else's wreckage, this run's own namespace on a resume, or this run's own namespace
+created moments before a crash. Getting the distinction wrong in one direction makes
+every resumed run refuse itself; in the other, it makes a run build on refs it does
+not own.
 
-The discriminator is `state.isolationMode` — the frozen mode of §6.5, which is
-written to `StateStore` at the same moment the namespace is created. It is **not**
-`events.jsonl`: a decision input read from the audit trail would make the audit trail
-a second source of truth, which I-1 forbids. The `integration_branch_created` event
-(Appendix B) is written in the same step and remains the human-readable record of
-when it happened, never the thing that is consulted.
+The discriminator is `state.integrationHead` (§6.1). It is **not** `events.jsonl`: a
+decision input read from the audit trail would make the audit trail a second source of
+truth, which I-1 forbids. `integration_branch_created` (Appendix B) remains the
+human-readable record of when the namespace appeared, never the thing that is
+consulted.
 
-```text
-first entry     — state.isolationMode is absent
-    git for-each-ref --format='%(refname)' 'refs/heads/agent-flow/<gitRunKey>/*'
-    non-empty, OR the worktree directory <repoKey>/<gitRunKey>/ exists
-        → refusal `git_run_key_collision`
+It is deliberately *not* `state.isolationMode` either — that is captured at run
+creation and is present from the run's first moment, long before any ref exists. And
+it is deliberately **not a dedicated "namespace created" field**, for a reason worth
+stating because the obvious design has it backwards:
 
-resume          — state.isolationMode === 'worktree'
-    the integration branch MUST be present
-        absent → refusal `namespace_missing`, run halted for review
-    an existing namespace is expected and is not a collision
-```
+> **Creating the branch and writing the state are two operations, and a crash fits
+> between them.** A field that means "I created the namespace" is absent in exactly
+> the case where the namespace exists — so a resume after that crash would read
+> *first entry*, find the run's own integration branch, and refuse it as a collision
+> with itself. The initialisation algorithm below is written so that this window is a
+> **recoverable state**, not a refusal.
+
+**Initialisation, evaluated under the run execution lock (§18.2):**
+
+| | State | Repository | Action |
+|---|---|---|---|
+| **A** | `integrationHead` absent | the namespace is empty | Create the branch at `planningBase`; create the integration worktree; persist `integrationHead = planningBase`. |
+| **B** | `integrationHead` absent | the namespace contains **only** `…/integration`, it resolves **exactly** to `planningBase`, there are no attempt refs, no attempt artifact and no integrated task | A crash during initialisation. **Adopt it** — recreate the integration worktree if it is gone (§14.1) — and persist `integrationHead = planningBase`. **Not a collision.** |
+| **C** | `integrationHead` absent | anything else in the namespace: an attempt ref, an integration branch at a commit other than `planningBase`, or a worktree directory whose contents do not match B | Refusal `git_run_key_collision`. |
+| **D** | `integrationHead` present | — | Resume. The branch MUST exist, and `integrationHead` MUST be an ancestor of it. |
+
+**Why B is safe to adopt rather than a collision.** The branch is at `planningBase`
+and nothing else in the namespace exists — which is to say it contains no work. Every
+distinguishing fact matches what step A would have produced and nothing matches what a
+*different* run would have left, because a different run that got anywhere would have
+moved the branch or created an attempt ref. Adopting it is therefore identical to
+creating it, and re-creating it would be identical too; the reason to adopt rather
+than delete-and-recreate is that deleting a ref to reach a state you already have is
+a destructive operation performed for no gain.
+
+**Under D, the two failures are different and neither is repairable.**
+
+- The branch is **absent** → `namespace_missing`. Work that was recorded as integrated
+  is gone from the repository, and re-creating the branch from `planningBase` would
+  silently discard it.
+- The branch exists but `integrationHead` is **not an ancestor** of it →
+  `integration_head_diverged`. The branch was rewound, reset or replaced under a
+  running run. The state's claim and the repository's shape cannot both be true, and
+  choosing one of them by guessing is how a run finishes green over a tree that lost
+  half its work.
+
+`integrationHead` being *behind* the branch head is **not** a failure: that is
+§17.3 window 7 — the merge landed and the process died before the state write —
+and recovery reconciles it forward.
 
 Agent Flow **MUST NOT** generate a new key to get past a collision: a 64-bit
 collision is not a random event, it is evidence that something is wrong with the
 state on disk, and papering over it would hide exactly the case the key exists to
 detect.
 
-`namespace_missing` is equally not repairable. A missing integration branch means
-work that was recorded as integrated is gone from the repository, and re-creating the
-branch from `planningBase` would silently discard it.
-
 ---
 
 ## 6. `planningBase` and repository gates
 
-### 6.1 The field
+### 6.1 The fields, and the one moment they are captured
 
 ```ts
-// RunStateSchema, additive and optional
+// RunStateSchema, additive and optional. The first three are written by
+// createRun, together, and never written again.
 planningBase:  z.string().regex(/^[0-9a-f]{40}$/).optional(),
 gitRunKey:     GitRunKeySchema.optional(),
-/** Written once, at first execution entry. Absent until then. See §6.5. */
 isolationMode: z.enum(['none', 'worktree']).optional(),
+
+// Mutable, and the only Git fact this run persists. Written when the namespace
+// is initialised (= planningBase, §5.3) and advanced by each merge, in the same
+// write that completes the task (§14.3). §19.2 pins verification and review to it.
+integrationHead: z.string().regex(/^[0-9a-f]{40}$/).optional(),
 ```
 
-`planningBase` is the commit the repository was on **when the run was created**,
-captured by the application layer *before* discovery, architecture analysis or
-planning observes the repository.
+**`createRun` captures the first three, before discovery, architecture analysis or
+planning observes the repository:**
+
+```text
+isolationMode := config.global.git.useWorktrees ? 'worktree' : 'none'
+planningBase  := HEAD, whenever HEAD resolves
+gitRunKey     := runId + 64 random bits                (§5.2)
+```
+
+`EffectiveConfig` is `{ global, project? }`, and `global` is already the merged
+result — defaults, then the global file, then the project overlay for every
+overridable key (`src/config/loader.ts`). So `config.global.git.useWorktrees` **is**
+the effective value including the project's override; there is no second `config.git`
+shape and this document must not invent one.
+
+**The branch name is derived, never stored:**
+
+```text
+agent-flow/<gitRunKey>/integration
+```
+
+`gitRunKey` is on the run, the ref name is a pure function of it (§5.3), and
+persisting the name as well would create a second copy of the same fact that a bug
+could make disagree with the first.
+
+**These are immutable properties of the run.** Nothing later writes them: not an
+execution, not a retry, not a resume, and above all not a configuration change. `run
+--dry-run`, `status` and the read model all *report* the mode; none of them derives
+it.
+
+> **`git.useWorktrees` is read in exactly one place, at exactly one moment.** That is
+> the whole mechanism, and §26.1 pins it with an architecture test whose allowlist is
+> a single module. Everything else in this document reads `state.isolationMode`. A
+> config flag consulted at each execution is a property of *the machine at that
+> moment*; a field captured at creation is a property of *the run*, and a run is the
+> thing this specification makes promises about.
+
+**`config.global.git.useWorktrees` is the fully resolved value** — the global layer with the
+project overlay applied, exactly as every other setting is resolved (§4.2) — read at
+`createRun`. Reading only the global layer was considered and would silently ignore a
+per-project `useWorktrees: true`, which no other setting in this tool does; the
+property that matters is *when* the value is read, not *which layer* supplies it.
+
+`planningBase` is the commit the repository was on **when the run was created**. It is
+captured for every run, in either mode: in worktree mode it is the base the
+integration branch is cut from, and in sequential mode it is what
+`planning_base_observation` (§6.2) compares against.
+
+"Whenever HEAD resolves" is the only qualification, and it decides one case:
+**a run being born `worktree` in a repository that cannot supply a base is refused at
+creation, not at execution.** The structural preconditions — not a Git repository,
+bare, unborn HEAD, submodules, Git below the floor, unresolvable root, projected path
+too long — are facts no user action during the run will change, so evaluating them at
+`createRun` costs the user nothing and saves them a discovery pass, a planning pass
+and a plan review before the refusal arrives. §6.3 keeps them too, because a run can
+be resumed on a different machine.
+
+> **This preflight runs only when `isolationMode` resolves to `'worktree'`, and that
+> restriction is a compatibility guarantee, not an optimisation.** A run being born
+> sequential is asked nothing about Git: not whether the directory is a repository,
+> not what version is installed, not whether HEAD exists. Agent Flow has always run
+> in directories that are not repositories, and §25 promises that mode is unchanged.
+> A preflight that refused there would break every such project on upgrade, in a
+> milestone whose whole subject is a feature those projects did not turn on.
+> `planningBase` is simply absent for them, which is the honest value.
 
 **There is exactly one base field.** `implementationBase` was considered and is
 **rejected** (§30.1): two base fields make "which commit was this plan written
@@ -444,13 +546,14 @@ against" a question with two answers, and the whole value of the field is that i
 one. The integration branch is created from `planningBase`, so the tree the plan was
 written against is the tree the work is built on.
 
-Both fields are **optional in the schema** so that runs created before MVP 2 still
-parse (§25).
+All four fields are **optional in the schema** so that runs created before MVP 2 still
+parse. A run with `isolationMode` and `planningBase` both absent is a **legacy run**,
+and that shape is load-bearing rather than incidental (§25.2).
 
 ### 6.2 The invariants
 
-For a run in worktree mode, at each of these moments the repository MUST satisfy
-`clean && HEAD == planningBase`:
+For a run whose `state.isolationMode` is `'worktree'`, at each of these moments the
+repository MUST satisfy `clean && HEAD == planningBase`:
 
 | Moment | Why here |
 |---|---|
@@ -464,141 +567,148 @@ forcible. There is no `--force` for either, and adding one would be adding a fla
 whose only function is to produce an unexplainable tree.
 
 > **Deviation from the brief, stated rather than absorbed.** These gates are
-> **enforced when the run is in worktree mode** and **evaluated but non-blocking when
-> `git.useWorktrees` is `false`**. Enforcing them unconditionally would mean that
-> after this milestone lands, every existing user who plans a feature on a dirty
-> working tree — which sequential mode has always allowed and which is the normal
-> way people work — is refused. That is a breaking behaviour change to the mode §25
-> promises to keep compatible. In sequential mode the checks still run and their
-> result is written to `events.jsonl` as `planning_base_observation`, so the
-> information exists without the refusal.
+> **enforced when `state.isolationMode === 'worktree'`** and **evaluated but
+> non-blocking otherwise**. Enforcing them unconditionally would mean that after this
+> milestone lands, every existing user who plans a feature on a dirty working tree —
+> which sequential mode has always allowed and which is the normal way people work —
+> is refused. That is a breaking behaviour change to the mode §25 promises to keep
+> compatible. For a run in sequential mode the checks still run and their result is
+> written to `events.jsonl` as `planning_base_observation`, so the information exists
+> without the refusal.
 
-### 6.3 Admissibility
+**The condition is `state.isolationMode`, never `config.global.git.useWorktrees`, and the
+difference is the whole reason §6.1 exists.** A gate keyed on the live config is a
+gate that can be off while planning observes the repository and on by the time
+implementation starts:
 
-`app/run-git-identity.ts` answers one question: **may this run enter worktree mode?**
-The answer is computed on every execution and reconciled against the run's frozen
-mode (§6.5), which is evaluated **before** check 1 and short-circuits the rest.
+```text
+useWorktrees: false        run is created
+dirty working tree         gates are observational — planning proceeds
+                           discovery, the SDD and the plan describe the DIRTY tree
+git stash                  the tree is now clean; HEAD never moved
+useWorktrees: true         the user flips the flag
+agent-flow start           clean, and HEAD === planningBase — every check passes
+                           the integration branch is cut from planningBase
+                           → the work is implemented against a tree the plan
+                             was never written against, and nothing reports it
+```
+
+Every individual check in that sequence answers correctly. The defect is that the
+question *"is this run isolated?"* was asked twice, at two moments, of a source that
+could change in between. Captured once at creation, the first line of the sequence
+decides all of them: the run is `none`, it stays `none`, and flipping the flag does
+nothing to it.
+
+### 6.3 Execution preconditions
+
+`app/run-git-identity.ts` no longer chooses anything. §6.1 chose. It answers a
+narrower question: **can this run execute, right now, in the mode it was born in?**
 
 ```ts
-export type WorktreeAdmissibility =
-  | { readonly admissible: true }
-  | { readonly admissible: false; readonly code: RefusalCode; readonly detail: string };
+export type WorktreePreconditions =
+  | { readonly satisfied: true }
+  | { readonly satisfied: false; readonly code: RefusalCode; readonly detail: string };
 ```
+
+It is evaluated only when `state.isolationMode === 'worktree'`. A run in sequential
+mode has no preconditions to satisfy — it executes the way this tool has always
+executed — and a legacy run (§25.2) is sequential by shape.
 
 Checked, in this order, cheapest and most conclusive first:
 
-1. `git.useWorktrees === false` → not admissible (`worktrees_disabled`). Not a
-   failure; the run proceeds sequentially.
-2. Not a Git repository → `not_a_git_repository`.
-3. Bare repository → `repository_is_bare`.
-4. No commits (unborn HEAD) → `repository_has_no_commits`.
-5. Submodules present → `repository_has_submodules` (§23).
-6. Git older than the supported floor → `git_version_unsupported`.
-7. Projected worst-case worktree path exceeds the platform limit → `worktree_path_too_long` (§23).
-8. `state.planningBase` absent → `planning_base_missing` (a pre-MVP-2 run, §25). Not
-   a failure either; the run proceeds sequentially (§6.4).
-9. `state.gitRunKey` absent or not prefixed by `runId` → `git_identity_missing`.
-10. Agent Flow's own run state is not ignored by the repository →
-    `agent_flow_state_not_ignored`.
-11. Working tree dirty → `working_tree_dirty`.
-12. `HEAD !== planningBase` → `planning_base_moved`.
-13. Namespace state disagrees with the run's frozen mode (§5.3) →
-    `git_run_key_collision` on first entry, `namespace_missing` on resume.
+1. Not a Git repository → `not_a_git_repository`.
+2. Bare repository → `repository_is_bare`.
+3. No commits (unborn HEAD) → `repository_has_no_commits`.
+4. Submodules present → `repository_has_submodules` (§23).
+5. Git older than the supported floor → `git_version_unsupported`.
+6. Projected worst-case worktree path exceeds the platform limit → `worktree_path_too_long` (§23).
+7. `state.gitRunKey` absent or not prefixed by `runId` → `git_identity_missing`.
+8. Agent Flow's own run state is not ignored by the repository →
+   `agent_flow_state_not_ignored`.
+9. Working tree dirty → `working_tree_dirty`.
+10. `HEAD !== planningBase` → `planning_base_moved`.
+11. The namespace does not match `state.integrationHead` under the initialisation
+    algorithm (§5.3) → `git_run_key_collision` (case C), `namespace_missing` or
+    `integration_head_diverged` (case D). Cases A and B are not refusals.
 
-**Check 10 exists because without it the run refuses itself.** `init` appends
+**Checks 1–6 are structural** — no action taken during the run makes them true or
+false — which is why §6.1 also evaluates them at `createRun`, where the refusal is
+free. They are repeated here because a run can be resumed on another machine, with
+another Git, at another path length.
+
+**Checks 7–11 are per-entry** and are the reason this function still exists.
+
+**Check 8 exists because without it the run refuses itself.** `init` appends
 `.agent-flow/runs/`, `.agent-flow/cache/` and `.agent-flow/current-run` to
 `.gitignore`. If any of them is not ignored — an old project, a hand-edited
 `.gitignore`, a `.gitignore` the user reverted — then the run's own state files make
-the working tree dirty, and check 11 refuses the run while naming files Agent Flow
+the working tree dirty, and check 9 refuses the run while naming files Agent Flow
 itself just wrote. That is a message that teaches the user the tool is broken.
 Detected with `git check-ignore -q` on each of the three paths, and refused with a
 code whose fix is one line in `.gitignore`.
 
-Checks 11 and 12 apply on **every** entry, including a resume. A user who moved HEAD
+Checks 9 and 10 apply on **every** entry, including a resume. A user who moved HEAD
 or dirtied the tree between two `start` invocations changed the ground the integration
 branch was cut from, and the run must stop rather than build on it.
 
-### 6.4 Refusal or sequential — one bucket per code, no third outcome
+### 6.4 A refusal is temporary; the run's mode is not
 
-A code from §6.3 has exactly one of two consequences, and which one is a property of
-the code, not of the caller.
-
-| Bucket | Codes | Outcome |
-|---|---|---|
-| **sequential by design** | `worktrees_disabled` (1), `planning_base_missing` (8) | The run **executes**, in sequential mode. No `ActionError`. Recorded as `isolation_mode_frozen { mode: 'none', code }` — and, when `parallelism.maxTasks > 1`, as the existing `parallelism_clamped` degradation naming the code. |
-| **refusal** | every other code (2–7, 9–13) | The run **does not execute**. `ActionError` with the code and an action line, plus a `worktree_mode_refused` event. Nothing is frozen and no degradation is recorded. The operator decides. |
-
-The degradation is conditional on purpose. A run configured `maxTasks: 1` with
-`useWorktrees: false` lost nothing and is not degraded; writing a degradation for it
-would put a complaint on every sequential run this tool has ever executed.
-`worktree_mode_refused` is likewise reserved for the codes that actually refuse — an
-event named "refused" on a run the user deliberately configured to be sequential
-teaches them to distrust a working tool.
-
-Two codes are in the first bucket and both for the same reason: **there is a person's
-decision or a historical fact behind them that no amount of stopping the run will
-change.**
-
-- `worktrees_disabled` is a configured intent to run sequentially.
-- `planning_base_missing` is a run created before this milestone existed (§25.2).
-  Refusing it would strand every pre-MVP-2 run permanently the moment its owner turns
-  the flag on, and there is nothing the owner could do about it — the field cannot be
-  back-filled honestly (I-5). Such a run resumes exactly as it always did.
-
-Everything in the second bucket is a **refusal to run, not a silent downgrade**. A run
-configured for worktrees that cannot have them MUST NOT quietly execute four tasks
-against one tree, and MUST NOT quietly execute one either without saying why.
-
-**No new degradation kind is introduced by any of this** (§25.1). The first bucket
-reuses `parallelism_clamped`; the second produces no degradation at all, because a run
-that did not execute has nothing to record having degraded.
-
-### 6.5 The isolation mode is frozen
-
-**The mode is written to `state.isolationMode` before the first wave and never
-changes for the life of the run (I-13).**
+**Nothing in §6.3 writes to run state.** A precondition refusal reports that the
+repository is not ready. It does not record a decision, does not downgrade the run,
+and does not consume anything.
 
 ```text
-first execution entry     state.isolationMode absent
-                          → resolve it from §6.3 + §6.4
-                          → persist it, with the namespace, in one StateStore write
-                          → event isolation_mode_frozen { mode, code? }
-
-every later entry         resolve the mode again
-                          equal to state.isolationMode  → proceed
-                          different                     → refusal isolation_mode_changed
+run.isolationMode = 'worktree'
+    dirty tree      → working_tree_dirty, ActionError, run untouched
+    user cleans it
+    start again     → still 'worktree', executes
 ```
 
-**A refusal is not a freeze.** The mode is persisted only when execution actually
-begins, so a first `start` refused by the second bucket of §6.4 — a dirty tree, a
-moved HEAD — leaves `isolationMode` absent. The user fixes the repository and starts
-again, and *that* entry is the first one. Freezing on a refusal would turn a
-recoverable mistake into a permanent one.
+That asymmetry is the point: **the repository's readiness is a moment; the run's
+intent is a fact.** A design in which a refusal settled the mode would make "I forgot
+to commit before starting" permanently reclassify the run, and the user's only
+recourse would be to throw the plan away.
 
-**A sequential run is frozen too**, and that is the same rule rather than an
-afterthought: a run that executed its first wave in the user's working tree cannot
-later adopt an integration branch cut from `planningBase`, because that branch would
-not contain the work already sitting in the tree.
+The three things a refusal is **not**:
 
-The refusal is not symmetric caution; each direction destroys something different.
+| Not | Because |
+|---|---|
+| a downgrade to sequential | The run was created isolated. Executing it in the user's working tree is not a smaller version of what was asked for; it is a different thing (§6.2). |
+| a degradation | Nothing executed. A degradation describes how a run ran, and this one did not. |
+| permanent | Every per-entry code (7–11) names a repository state the user changes with one command. |
 
-- **`worktree` → `none`** is the dangerous one, and it is the direction a plain
-  reading of §6.4 would wave through: `worktrees_disabled` is a configured intent that
-  executes the run sequentially. Without the freeze, a run that already integrated
-  three tasks onto its integration branch would resume in the user's working tree — a
-  tree that does not contain any of that work, and that I-10 has been promising was
-  not written to. The remaining tasks would be implemented against the wrong base, no
-  `TaskResult.integration` would be written for them (I-3 quietly stops holding), and
-  final verification would run over a tree that is missing half the feature.
-- **`none` → `worktree`** cuts an integration branch from `planningBase` that does not
-  contain the work the sequential tasks already did in the working tree. Checks 11
-  and 12 catch most of this by accident — the tree is dirty, or HEAD moved — but
-  "caught by accident, with a message about the wrong thing" is not a guarantee.
+**Where `parallelism_clamped` is recorded, and where it is not.** The degradation
+belongs to a run that *executes* with less concurrency than it asked for — knowable at
+creation, from the same two values:
 
-`isolation_mode_changed` is **not forcible**. The fix is the user's, and it is one of
-two: put the configuration back, or start a new run. Both are one command, and both
-are honest about the fact that the two halves of the work would otherwise live in two
-places that no commit connects.
+```text
+isolationMode === 'none'      AND maxTasks > 1                            → clamped
+isolationMode === 'worktree'  AND maxTasks > MAX_ISOLATED_TASK_CONCURRENCY → clamped
+otherwise                                                                 → no degradation
+```
+
+A run created `maxTasks: 1` with worktrees off lost nothing and is not degraded;
+recording one would put a complaint on every sequential run this tool has ever
+executed. **No new degradation kind is added** (§25.1).
+
+**A configuration change never reaches an existing run.** Both directions, stated so
+that neither is left to inference:
+
+| Change after `createRun` | Effect on the run | What the user does |
+|---|---|---|
+| `none`, config now `true` | none — the run stays sequential | start a new run to get worktrees |
+| `worktree`, config now `false` | none — the run stays isolated | let it finish, or abandon it and start a new one |
+
+The second row is the one that surprises people, so `status` and `run --dry-run` MUST
+say it in words: *this run was created in worktree mode; the current configuration
+does not apply to it* (§21.4). A surprise the tool names is a fact; the same surprise
+unexplained is a bug report.
+
+**There is no `isolation_mode_changed` refusal, and nothing for one to detect.** A
+refusal code exists to report a conflict; capturing the mode at creation removes the
+conflict rather than reporting it. Choosing the mode at the first successful execution
+— the design this section replaces — is rejected in §30.1, and the sequence it admits
+is written out in §6.2.
 
 ---
 
@@ -1185,7 +1295,7 @@ The integration branch is checked out in its own worktree for the life of the ru
 ~/.agent-flow/worktrees/<repoKey>/<gitRunKey>/integration/
 ```
 
-created at implementation start:
+created at implementation start, by case A or B of §5.3:
 
 ```bash
 git branch agent-flow/<gitRunKey>/integration <planningBase>
@@ -1200,6 +1310,12 @@ on resume — pruned, removed by hand, on a machine whose home directory was cle
 it is re-created from the existing branch, with no loss. If the *branch* is missing,
 that is `namespace_missing` (§5.3) and the run halts: a worktree is a checkout, a
 branch is the work.
+
+That asymmetry is why the initialisation sequence above is safe to interrupt anywhere.
+Neither of its two commands is the thing that must not be repeated: `git branch` on an
+existing branch at the same commit is refused harmlessly and case B adopts it, and the
+worktree is recreatable by definition. The state write that follows is what makes the
+run stop asking.
 
 ### 14.2 Order
 
@@ -1244,8 +1360,11 @@ Serially, holding the in-process integration mutex (§18.2):
    skip to 7.
 6. **Merge** (§14.5).
 7. **On success:** write `TaskResult` with the `integration` block (§10.3), transition
-   the task to `completed`, release its dependents, and mark the attempt worktree
-   reclaimable.
+   the task to `completed` **and advance `state.integrationHead` to the new merge
+   commit — in one `StateStore` write**, release its dependents, and mark the attempt
+   worktree reclaimable. Splitting that write would create a second version of
+   §17.3 window 7 for every merge, and the single-writer queue (M2-00.1) makes one
+   write the cheaper option anyway.
 8. **On conflict:** §15.
 
 **No validation command runs anywhere in this sequence.**
@@ -1419,15 +1538,19 @@ through `interrupted`; MVP 2 adds the Git half.
 
 For each task not in a terminal state, in topological order:
 
+Window 0 is not per task — it is the run's own initialisation, and it is checked once
+before the loop below.
+
 | # | Window | Detection | Resolution |
 |---|---|---|---|
+| 0 | **Crashed during namespace initialisation** | `state.integrationHead` absent; the integration branch exists at `planningBase` with nothing else in the namespace | Case B of §5.3. Adopt the branch, recreate the integration worktree if needed, persist `integrationHead = planningBase`. **Never a collision** — the run must not refuse its own branch. |
 | 1 | **Crashed during the agent** | task `running`; no `attempt-<n>.json` | The attempt's work was never observed. Task → `interrupted` → requeued as attempt *n+1* within `maxAttempts`. Old worktree retained. |
 | 2 | **Crashed after validation, before the receipt was written** | task `running`; no `attempt-<n>.json` | Indistinguishable from (1), and correctly so: with no artifact there is no evidence, and the milestone does not infer evidence from a worktree's contents. Same resolution as (1). |
 | 3 | **Crashed after the receipt, before the marker** | `attempt-<n>.json` with a receipt; branch absent | The tree object still exists (checked). Re-run `commit-tree` → the *same* SHA (§12.2) → `update-ref`. Continue to integration. |
 | 4 | **Crashed after `commit-tree`, before `update-ref`** | as (3): the commit object exists, the ref does not | Identical handling. `commit-tree` is idempotent by SHA, so this window does not need to be distinguished from (3) at all. |
 | 5 | **Crashed after the marker, before the merge** | receipt + valid marker; marker not an ancestor of integration | Verify tree binding and nonce (§17.1), then merge (§14.3 step 6). |
 | 6 | **Crashed during the merge** | the integration worktree has an in-progress merge (`MERGE_HEAD` present, or `git status` reports merging) | `git merge --abort`, then re-attempt from a clean integration worktree. If the abort fails, refuse with `integration_worktree_unavailable` and halt — never force. |
-| 7 | **Crashed after the merge, before `StateStore` recorded completion** | `git merge-base --is-ancestor <marker> <integration>` is true; task is not `completed` | The merge happened. Do **not** merge again. Write `TaskResult` with the integration block (reconstructed from the artifact and the merge commit found by walking integration for a merge whose second parent is the marker), transition to `completed`. |
+| 7 | **Crashed after the merge, before `StateStore` recorded completion** | `git merge-base --is-ancestor <marker> <integration>` is true; task is not `completed`; `integrationHead` is behind the branch | The merge happened. Do **not** merge again. Write `TaskResult` with the integration block (reconstructed from the artifact and the merge commit found by walking integration for a merge whose second parent is the marker), transition to `completed`, and advance `integrationHead` — the same single write as §14.3 step 7. |
 | 8 | **Crashed after completion, before cleanup** | task `completed`; its attempt worktree still registered | Cleanup only. Reclaimable, not required — a leftover worktree costs disk, never correctness. |
 | 9 | **Sibling workers still alive** | another process holds the run execution lock | Not a recovery case. The second process is refused with `run_busy` (§18.2). Recovery only ever runs in a process that holds the lease. |
 | 10 | **Receipt tree pruned before the marker existed** | `git cat-file -e <validatedTree>^{tree}` fails | The validated tree is gone (a `git gc` between the crash and the resume; the tree was never referenced). The attempt cannot be reconstructed. Requeue as a new attempt, event `attempt_tree_missing`. **Never fabricate a tree.** |
@@ -1546,7 +1669,11 @@ integration branch (final)
 
 **There MUST NOT be a "validated tree A, reviewed tree B" situation.** The
 verification result, the reviewer's diff and the DoD evaluation all describe one
-commit, and that commit MUST be recorded on the run.
+commit, and **that commit is `state.integrationHead`** (§6.1) — read once, at the
+start of review, and used for all three. It is the same field the Integrator advances
+on every merge (§14.3) and the same field §5.3 uses to tell initialisation from
+resume; one durable Git fact serves all three purposes, and a run cannot be reviewed
+against a commit its own state does not name.
 
 The reviewer's changed-file list is computed as
 `integration branch vs planningBase` — which for the first time gives the reviewer the
@@ -1750,7 +1877,7 @@ the server; React renders answers.
 | Fact | Shape | Source |
 |---|---|---|
 | parallelism | `{ requested: number, effective: number, clamped: boolean, reason?: string }` | `ConcurrencyDecision` |
-| isolation mode | `'none' \| 'worktree'` | `state.isolationMode`, the frozen mode (§6.5) — before the first entry, the admissibility projection (§6.3) |
+| isolation mode | `'none' \| 'worktree' \| 'legacy'` | `state.isolationMode`, captured at creation (§6.1). `legacy` is the absent case (§25.2), projected — never a stored value |
 | per-task attempt | `number` | `TaskProgress.attempts` |
 | workspace active | `boolean` | task is `running` in worktree mode |
 | awaiting integration | `boolean` | attempt satisfied, not yet integrated |
@@ -1775,9 +1902,21 @@ existing test that no *request* schema accepts a path (§26.1).
 of tasks integrated, the current wave, per-task attempt numbers, and — for a halted
 run — the conflicting paths.
 
-`agent-flow run --dry-run` prints the resolved concurrency, the isolation mode, and,
-when worktree mode is not admissible, **the refusal code and what to do about it**.
-This is the command that answers "why is this still running one task at a time".
+`agent-flow run --dry-run` prints the resolved concurrency, the run's isolation mode,
+and, when a precondition is unmet, **the refusal code and what to do about it**. This
+is the command that answers "why is this still running one task at a time".
+
+Both commands MUST also answer the question §6.4 creates: **when the run's mode and
+the current `git.useWorktrees` disagree, say so, and say which one applies.**
+
+```text
+isolation  worktree   (captured when this run was created)
+           your configuration now says useWorktrees: false — it does not
+           apply to this run. Start a new run to execute sequentially.
+```
+
+Without that line the tool looks broken to the one user who did exactly what the
+documentation told them to do and then wondered why it had no effect.
 
 ---
 
@@ -1799,7 +1938,7 @@ Trust boundaries in this milestone, in order of how much damage crossing one doe
 | S-10 | an agent forging an attempt artifact | worktree → orchestrator state | artifacts live outside every worktree and are gitignored; atomic single write, no overwrite; schema `.refine`. **Residual risk stated in §11.3 — this is not fully closed and MUST NOT be claimed as closed.** | integration: an overwrite attempt is refused |
 | S-11 | setup contaminating the validated tree | project config → marker | post-setup cleanliness assertion; agent not invoked on failure (§8.3) | integration: an install that touches a tracked file refuses, and no marker is created |
 | S-12 | Git hooks executing inside an internal operation | repository config → Agent Flow | one wrapper injects an owned empty `core.hooksPath`; `git commit` forbidden (§12.3) | integration: hooks that write a sentinel file never fire for `worktree add`, `update-ref`, `merge`; the sentinel *does* appear for a user-issued merge |
-| S-13 | a stale namespace being adopted by a new run | disk → Git | 64-bit `gitRunKey`; real collision check; refusal, never regeneration (§5.2) | unit + integration |
+| S-13 | a stale namespace being adopted by a new run | disk → Git | 64-bit `gitRunKey`; the §5.3 initialisation algorithm; refusal, never regeneration (§5.2). **Case B adopts a namespace, and is not a hole in this row**: it requires the integration branch at exactly `planningBase` with no attempt ref, no attempt artifact and no integrated task — a state carrying no work, which a stale namespace that got anywhere cannot be in | unit + integration |
 | S-14 | a nested repository inside the worktree | filesystem | documented and DEFERRED (§23); not detected in MVP 2 | — |
 
 Existing guarantees that MUST survive unchanged: validation ids resolved through the
@@ -1822,7 +1961,7 @@ loopback-only server with no authentication and the same stated limits.
 | nested repository inside the working tree | **DEFER** | Not detected. Documented as a known limitation: a nested repo is untracked content that a fresh checkout will not contain. |
 | case-insensitive filesystem | **SUPPORTED** | `realpath` resolves both spellings to the stored name; the canonical root is hashed verbatim (§5.1). |
 | `realpath` fails on the repository root | **REFUSE EARLY** | `repository_root_unresolvable`. Guessing produces a `repoKey` that is not stable. |
-| Git older than the supported floor | **REFUSE EARLY** | `git_version_unsupported`, probed by `doctor` and re-checked at admissibility. |
+| Git older than the supported floor | **REFUSE EARLY** | `git_version_unsupported`, probed by `doctor`, evaluated at `createRun` and re-checked before every execution (§6.1, §6.3). |
 | Windows path length | **REFUSE EARLY** | `worktree_path_too_long` when the projected worst case (root + `repoKey` + `gitRunKey` + `taskId` + `attempt-<n>` + the repository's own deepest tracked path) exceeds the platform limit and long paths are not enabled. A dedicated worktree-root setting is **DEFERRED**; the documented workaround is a shorter home path or enabling long paths. |
 | `core.autocrlf` / `.gitattributes` making a fresh checkout dirty | **HANDLED** | Caught by the pre-setup cleanliness assertion, reported with `phase: "checkout"` (§8.3) — which is why that assertion exists separately from the post-setup one. |
 | Windows generally | **UNVALIDATED** | No CI job runs there and the process timeout still cannot signal a process tree. `doctor` MUST say worktree mode is unvalidated on Windows. |
@@ -1871,38 +2010,47 @@ git:
   useWorktrees: false      # default, unchanged
 ```
 
+**The flag is a default for runs not yet created**, never a switch over runs that
+exist (§6.1, I-13). Changing it changes what the next `createRun` captures and nothing
+else.
+
 Runs execute sequentially, in the user's working tree, exactly as at `e24dd48`.
 `parallelism.maxTasks` above 1 continues to be accepted, clamped to 1 at runtime, and
 recorded as the `parallelism_clamped` degradation.
 
-**No new degradation kind is added, and only one bucket of codes produces a
-degradation at all.** A run that *executes sequentially by design* —
-`worktrees_disabled` or `planning_base_missing`, the first bucket of §6.4 — gets the
-existing `parallelism_clamped` degradation with a reason naming the code, which keeps
-the contract change to `DEGRADATION_KINDS` at zero. A run that is *refused* records no
-degradation, because it does not run: the outcome is an `ActionError` and an event,
-and there is no execution to describe as degraded. Writing a degradation for a run
-that never started would put a claim about how it executed on a run that did not.
+**No new degradation kind is added**, which keeps the contract change to
+`DEGRADATION_KINDS` at zero. The existing `parallelism_clamped` covers the whole
+surface, and it is derived at creation from `(isolationMode, maxTasks)` alone (§6.4) —
+a run created sequential with `maxTasks: 4` gets it, with a reason naming the mode.
+
+A run that is *refused* records no degradation, because it does not run: the outcome
+is an `ActionError` and an event, and there is no execution to describe as degraded.
+Writing a degradation for a run that never started would put a claim about how it
+executed on a run that did not.
 
 ### 25.2 Runs created before MVP 2
 
-They have no `gitRunKey` and no `planningBase`, because both fields are optional
-additions to `RunStateSchema`. Therefore:
+They have no `gitRunKey`, no `planningBase` and no `isolationMode`, because all of
+them are optional additions to `RunStateSchema`. **That shape — the fields absent — is
+what a legacy run *is*.** It is not a run in sequential mode; it is a run that
+predates the question, and the two are told apart by `isolationMode` being absent
+rather than `'none'`. Therefore:
 
 - They **MUST** continue to parse, load, display and resume — including with
-  `useWorktrees: true` in the configuration. This is why `planning_base_missing` is in
-  the *sequential by design* bucket of §6.4 and not the refusal bucket: a run created
-  before the field existed can never satisfy the check, so refusing it would not be a
-  gate, it would be a permanent lockout of work already in progress, with no action
-  the owner could take.
-- They **MUST NOT** enter worktree mode. Admissibility answers
-  `planning_base_missing`, the run's `isolationMode` freezes as `'none'` (§6.5), and
-  it stays there for the rest of its life even if a later `start` would otherwise be
-  admissible.
-- Agent Flow **MUST NOT** back-fill either field. There is no honest value for
+  `useWorktrees: true` in the configuration, which describes runs created from now on
+  and says nothing about them (§25.1).
+- They execute exactly as they always did: **legacy sequential**, in the user's
+  working tree, with no preconditions evaluated (§6.3) and no gates enforced (§6.2).
+- They **MUST NOT** be promoted. No execution, no resume and no configuration change
+  ever gives a legacy run an `isolationMode`. There is no path from absent to
+  `'worktree'`, and the absence of that path is the guarantee — not a check that
+  happens to refuse.
+- Agent Flow **MUST NOT** back-fill any of the fields. There is no honest value for
   `planningBase` on a run whose planning already happened — the current HEAD is not
   it, and writing it anyway would be inventing the evidence the field exists to
-  provide (I-5).
+  provide (I-5). The same argument retires `planning_base_missing` as a runtime
+  refusal: there is nothing to refuse at execution time, because there was never a
+  moment at which this run could have been isolated.
 
 `agent-flow status` on such a run says, in words: this run predates workspace
 isolation; start a new run to use it.
@@ -1927,7 +2075,7 @@ Rules to change:
 | Current rule | Change |
 |---|---|
 | *"creates no git worktree anywhere in production code"* | becomes: **only `src/adapters/git/**` may name `worktree add\|remove\|prune\|list`** |
-| *"reads `git.useWorktrees` nowhere that could grant isolation"* | allowlist grows by the admissibility module and `src/app/execution-context.ts`; the rule stays — it is now the list of everywhere the flag is load-bearing |
+| *"reads `git.useWorktrees` nowhere that could grant isolation"* | becomes **stronger, not weaker**: the allowlist is exactly one module, `src/app/run-git-identity.ts`, and one call path, `createRun`. Every other consumer reads `state.isolationMode`. This is the architecture test that makes I-13 structural instead of remembered |
 | *"keeps the ceiling in the resolver"* | asserts both `MAX_SUPPORTED_TASK_CONCURRENCY = 1` and `MAX_ISOLATED_TASK_CONCURRENCY` |
 | *"hands the scheduler a resolved number"* | additionally asserts the isolation argument is passed, not defaulted |
 
@@ -1964,6 +2112,10 @@ Rules to add:
     over the application service like every other write action, which is what puts it
     under the lease (§18.2). The test is an import rule, because "did you remember to
     take the lock" is not observable and "who may call this" is.
+13. **Only `createRun` writes `isolationMode`, `planningBase` or `gitRunKey`** (I-13).
+    No other write path names them, and `StateStore.updateRun` MUST reject a patch
+    that carries one. The same shape of test as rule 6, for the same reason: an
+    invariant that only one module can break is an invariant.
 
 ### 26.2 Unit tests (pure, no filesystem)
 
@@ -1971,12 +2123,20 @@ Rules to add:
 - `gitRunKey`: generation shape, validation, `runId` prefix invariant, rejection of
   injection payloads
 - branch naming and workspace-relative paths, for every legal and illegal `taskId`
-- admissibility: each code, its evaluation order, and **which bucket it lands in**
-  (§6.4) — the two sequential-by-design codes never produce an `ActionError`, every
-  other code always does
-- the isolation freeze (§6.5): `(recorded, resolved)` for every pair — `none`/`none`
-  and `worktree`/`worktree` proceed, both mixed pairs refuse with
-  `isolation_mode_changed`, and an absent `recorded` freezes rather than refusing
+- preconditions: each code and its evaluation order; a run with
+  `isolationMode: 'none'` is never evaluated at all; a legacy run is never evaluated
+  and never promoted; **neither of them asks Git anything**, including in a directory
+  that is not a repository
+- the §5.3 initialisation algorithm, as a pure decision over
+  `(integrationHead, namespace shape, planningBase)`: A, B, C and both failures of D,
+  with B asserted **not** to produce `git_run_key_collision`
+- **mode immutability (I-13), as four named cases** rather than a generic assertion:
+  a `none` run under `useWorktrees: true` stays `none`; a `worktree` run under
+  `useWorktrees: false` stays `worktree`; a `working_tree_dirty` refusal leaves the
+  mode and every other field byte-identical, and the next start executes; a legacy run
+  gains neither `isolationMode` nor `planningBase` from any of it
+- `parallelism_clamped` is derived from `(isolationMode, maxTasks)` and from nothing
+  else — recorded for `none × maxTasks > 1`, not recorded for `none × maxTasks === 1`
 - `resolveTaskConcurrency` across `{1,2,4,16} × {none, worktree}`
 - receipt matching: nonce match/mismatch, tree match/mismatch, and every combination
   of the two
@@ -2102,18 +2262,24 @@ no filesystem and no Git.
 
 **Production files.** `src/core/worktree-policy.ts` (new);
 `src/core/concurrency.ts` (extended with `IsolationMode`);
-`src/contracts/state.schema.ts` (`gitRunKey`, `planningBase`, `isolationMode`, all
-optional); `src/contracts/attempt.schema.ts` (new).
+`src/contracts/state.schema.ts` (`gitRunKey`, `planningBase`, `isolationMode`,
+`integrationHead`, all optional); `src/contracts/attempt.schema.ts` (new).
 
-**Tests.** §26.2, in full — including the freeze reconciliation, which is a pure
-function of `(recorded, resolved)` and belongs here rather than in M2-03 with its
-caller. Architecture: `src/core` still imports no Node built-in and names no provider.
+**Tests.** §26.2, in full. Architecture: `src/core` still imports no Node built-in and
+names no provider.
 
 **Acceptance.** `repoKey` and `gitRunKey` derivation, ref naming, workspace-relative
-paths, task-id validation, the concurrency resolver and the mode-freeze
-reconciliation are all decided in `core`, all pure, all tested against injection and
-traversal payloads. `resolveTaskConcurrency(4, 'none').effective === 1` still holds.
-`DEGRADATION_KINDS` is unchanged (§25.1).
+paths, task-id validation and the concurrency resolver are all decided in `core`, all
+pure, all tested against injection and traversal payloads.
+`resolveTaskConcurrency(4, 'none').effective === 1` still holds. `DEGRADATION_KINDS`
+is unchanged (§25.1). The four new state fields parse as optional, and a state file
+written before MVP 2 — none of them present — still loads (§25.2).
+
+> **There is no mode-resolution function in `core`, and that absence is the item.**
+> An earlier draft put a `(recorded, resolved) → decision` reconciler here, which
+> presupposed a design where two answers exist and have to be compared. §6.1 leaves
+> one answer, captured at creation, so there is nothing to reconcile and no pure
+> function to write. If one appears in a pull request, §30.1 is the answer.
 
 **Failure semantics.** Pure functions refuse by returning a typed refusal, never by
 throwing for expected input.
@@ -2121,9 +2287,11 @@ throwing for expected input.
 **Security.** S-1, S-2 are closed here for the *policy* half; the adapters re-validate
 (§22).
 
-**Risk.** Low. The only trap is putting an I/O probe into `core` to answer
-admissibility — the existing comment in `concurrency.ts` explains why that must not
-happen, and an architecture test enforces it.
+**Risk.** Low, with two traps of the same shape. The first is putting an I/O probe
+into `core` to answer a precondition — the existing comment in `concurrency.ts`
+explains why that must not happen, and an architecture test enforces it. The second is
+letting `isolationMode` become a value `core` computes rather than one it is handed;
+see the note above.
 
 ---
 
@@ -2159,43 +2327,66 @@ they are mandatory here and not deferred to M2-12.
 
 ---
 
-### M2-03 — Run Git identity and `planningBase` gates
+### M2-03 — Run identity capture and `planningBase` gates
 
-**Goal.** A run is born with a Git identity and a base, and admissibility for
-worktree mode is a computed, recorded answer.
+**Goal.** A run is **born** with its Git identity, its base and its isolation mode,
+all three immutable; and the preconditions for executing in that mode are a check that
+changes nothing.
 
 **Dependencies.** M2-01, M2-02.
 
-**Production files.** `src/app/run-git-identity.ts` (new);
-`src/app/state-store.ts` (`createRun` accepts opaque identity fields — **still no Git**);
-`src/app/run-actions.ts` (gates at approve and start);
-`src/app/planning-pipeline.ts` (gate between stages).
+**Production files.** `src/app/run-git-identity.ts` (new — **the only reader of
+`git.useWorktrees`**, at `createRun` only);
+`src/app/state-store.ts` (`createRun` accepts opaque identity fields — **still no
+Git** — and `updateRun` rejects a patch touching any of them);
+`src/app/run-actions.ts` (preconditions at approve and start, keyed on
+`state.isolationMode`);
+`src/app/planning-pipeline.ts` (gate between stages, same key);
+`src/cli/status.ts`, `src/cli/run.ts` (the mode-vs-config line, §21.4).
 
-**Tests.** Unit: every code, its ordering and its bucket (§6.4). Integration: real
-repository, HEAD moved between planning and approve → `planning_base_moved`; dirty
-tree → `working_tree_dirty`; namespace present → `git_run_key_collision`; a run that
-executed a wave in worktree mode and is restarted with `useWorktrees: false` →
-`isolation_mode_changed`, **and its integration branch is still intact afterwards**;
-a pre-MVP-2 run resumes sequentially with `useWorktrees: true` and is not refused.
-Architecture: `StateStore` names no Git.
+**Tests.** Unit: §26.2, every code and its ordering, plus the four immutability cases.
+Integration, against a real repository:
 
-**Acceptance.** New runs carry `gitRunKey` and `planningBase`. Admissibility returns
-one of the codes in §6.3, sorted into one of the two buckets of §6.4 — the two
-sequential-by-design codes execute the run and record `parallelism_clamped`, every
-other code stops it with an `ActionError` and records no degradation. The mode is
-frozen at first execution entry and reconciled before every later one (§6.5). No
-refusal is forcible. In sequential mode the planning gates are observational and never
-refuse (§6.2, the stated deviation).
+- HEAD moved between planning and approve → `planning_base_moved`; dirty tree →
+  `working_tree_dirty`; a foreign attempt ref in the namespace → §5.3 case C,
+  `git_run_key_collision`
+- **the §6.2 sequence, as a regression test**: create with `useWorktrees: false` on a
+  dirty tree, plan, stash, flip the flag to `true`, start — the run executes
+  sequentially and **no integration branch is created**
+- a `worktree` run restarted with `useWorktrees: false` still executes in worktree
+  mode, and its integration branch is intact
+- a `working_tree_dirty` refusal, then a clean tree, then a successful start — same
+  mode, same `planningBase`, same `gitRunKey`
+- a legacy run resumes with `useWorktrees: true`, is never evaluated for preconditions
+  and gains no fields
+- creating a run with `useWorktrees: true` in a repository with no commits is refused
+  **at creation**, before discovery spends anything — and creating one with
+  `useWorktrees: false` **in a directory that is not a Git repository succeeds**, as
+  it always has (§25)
+- **the initialisation crash window, against real Git**: create the integration
+  branch, kill the process before the state write, resume — the run adopts its own
+  branch (§5.3 case B, §17.3 window 0) and does not refuse itself
 
-**Failure semantics.** `ActionError` with the admissibility code, an action line the
-user can act on, and an event — for the refusal bucket only. The sequential-by-design
-bucket produces no `ActionError`: the run executes, degraded and recorded.
+Architecture: `StateStore` names no Git; §26.1 rules 13 and the tightened
+`useWorktrees` allowlist.
+
+**Acceptance.** New runs carry `gitRunKey`, `planningBase` and `isolationMode`,
+written together and never rewritten. Preconditions are evaluated only for a
+`worktree` run, return one of the codes in §6.3, and **write nothing**. No refusal is
+forcible. `parallelism_clamped` is a function of `(isolationMode, maxTasks)` alone. A
+sequential or legacy run reaches no Git code path at all. In sequential mode the
+planning gates are observational and never refuse (§6.2, the stated deviation).
+
+**Failure semantics.** `ActionError` with the precondition code, an action line the
+user can act on, and a `worktree_mode_refused` event. The run is unchanged and the
+next attempt is free.
 
 **Security.** S-2, S-13.
 
 **Risk.** Medium — this is where the deviation in §6.2 lives, and getting the scope
-of the gates wrong breaks existing users' sequential runs. The test that matters most
-is the one asserting a dirty tree does **not** refuse when `useWorktrees` is false.
+of the gates wrong breaks existing users' sequential runs. Two tests matter most: the
+one asserting a dirty tree does **not** refuse a `none` run, and the §6.2 sequence
+above, which is the defect this item exists to make impossible rather than to detect.
 
 ---
 
@@ -2273,6 +2464,8 @@ verification and final review both observe.
 **Production files.** `src/app/integrator.ts` (new);
 `src/app/scheduler.ts` (integration phase after the wave barrier);
 `src/contracts/result.schema.ts` (`integration` block);
+`src/contracts/state.schema.ts` (`integrationHead` advanced in the same write as
+`completed`, §14.3 step 7);
 `src/app/run-actions.ts` (**a `review` use case under `withExecutionLock`** — §18.2);
 `src/cli/review.ts` (**§19**: becomes an adapter over that use case; `runVerification`
 and the `GitClient` both move to the integration worktree; the reviewer's changed-file
@@ -2281,9 +2474,12 @@ list becomes `planningBase..integration` rather than `git status`);
 
 **Tests.** §26.4 in full. Integration: a forged marker is refused; a merge conflict
 halts with recorded paths; the merge commit's parent count is the discriminator; the
-verification result, the reviewer's file list and the DoD all name the same commit;
-**a `review` issued while the run holds its lease gets `run_busy` rather than reading
-a half-merged integration worktree**. Architecture: rules 6, 11 and 12 of §26.1.
+verification result, the reviewer's file list and the DoD all name the same commit,
+and that commit is `state.integrationHead`; **a `review` issued while the run holds
+its lease gets `run_busy` rather than reading a half-merged integration worktree**;
+`integrationHead` and `completed` land in one write, proved by killing the process
+between the merge and the write and asserting §17.3 window 7 reconciles both.
+Architecture: rules 6, 11 and 12 of §26.1.
 
 **Acceptance.** Integration order is topological. No validation command runs during
 integration. `TaskResult.integration` is present on every completed task. Ancestry is
@@ -2424,22 +2620,22 @@ one edit plus its wiring.**
 **Dependencies.** M2-01 … M2-08, and M2-10 for the observability that makes a
 parallel run debuggable.
 
-**Production files.** `src/app/execution-context.ts` (passes the resolved
-`IsolationMode` into `resolveTaskConcurrency`); `src/app/run-actions.ts` (records the
-decision).
+**Production files.** `src/app/execution-context.ts` (passes `state.isolationMode`
+into `resolveTaskConcurrency` — **read from the run, never re-derived from config**);
+`src/app/run-actions.ts` (records the decision).
 
-**Tests.** §26.4 in full, at N=2 and N=4, against real Git. A run whose admissibility
-is refused still resolves to 1. `parallelism_clamped` is recorded when and only when
-the numbers differ.
+**Tests.** §26.4 in full, at N=2 and N=4, against real Git. A `none` run resolves to 1
+whatever the current configuration says. `parallelism_clamped` is recorded when and
+only when the numbers differ.
 
-**Acceptance.** With `useWorktrees: true`, an admissible run, and
-`maxTasks: 4`, four independent tasks execute concurrently in four worktrees, are
-integrated in topological order, and the user's working tree is unchanged. Without
-isolation the effective value is 1, however the configuration is written (I-11).
+**Acceptance.** A run **created** with `useWorktrees: true`, whose preconditions hold,
+with `maxTasks: 4`, executes four independent tasks concurrently in four worktrees,
+integrates them in topological order, and leaves the user's working tree unchanged.
+A run created sequential resolves to 1 however the configuration reads at the moment
+it executes (I-11, I-13).
 
-**Failure semantics.** Not admissible → sequential is not silently substituted; the
-run is refused with the admissibility code, except for the two sequential-by-design
-codes of §6.4, which execute the run at concurrency 1 and say so on it.
+**Failure semantics.** An unmet precondition → sequential is not silently substituted;
+the run is refused with the code and executes nothing (§6.4).
 
 **Security.** —
 
@@ -2528,10 +2724,10 @@ are part of what makes concurrency safe, not a follow-up to it.
 Not before, and the preconditions are exact:
 
 ```text
-git.useWorktrees === true
-  AND admissibility === admissible                    (§6.3)
+state.isolationMode === 'worktree'                    captured at createRun (§6.1)
+  AND every precondition of §6.3 holds
   AND M2-02  the hook-isolated Git adapter exists
-  AND M2-03  the run has gitRunKey and planningBase, and the gates hold
+  AND M2-03  the run was born with its identity, base and mode, and the gates hold
   AND M2-04  every dispatched task gets a prepared, verified-clean worktree
   AND M2-05  a satisfied attempt produces a receipt and a bound marker
   AND M2-06  integration is serial, ordered, and the only writer of `completed`
@@ -2567,8 +2763,11 @@ one of these reappears in a pull request, this section is the answer.
 | rolling dispatch instead of waves | Lets a later task start against a head an unintegrated sibling is about to move (§4.3). Deferred, not forbidden. |
 | regenerating `gitRunKey` on collision | A 64-bit collision is evidence of broken state, not a random event (§5.2). |
 | back-filling `planningBase` on old runs | Inventing the evidence the field exists to provide (§25.2). |
-| letting `useWorktrees: false` downgrade a run that already integrated work | The remaining tasks would be built in a tree that does not contain the integrated half. The mode is frozen; the change is a refusal (§6.5, I-13). |
-| refusing a pre-MVP-2 run because it has no `planningBase` | A permanent lockout with no action its owner could take. It runs sequentially, as it always did (§6.4, §25.2). |
+| a `gitNamespace` field recording that the namespace was created | The branch name is derivable from `gitRunKey`, so it would be a second copy of one fact; and because the branch and the state write are not atomic, the field is absent exactly when the branch exists — a resume would refuse the run's own branch as a collision. `integrationHead` is the durable evidence instead (§5.3). |
+| choosing the isolation mode at the first successful execution | Planning runs under one answer and implementation under another. The exact sequence — plan on a dirty tree with worktrees off, stash, turn them on, start — passes every individual check and builds against a tree the plan was never written against (§6.2). Captured at `createRun` instead (§6.1, I-13). |
+| letting a `useWorktrees` change reach an existing run, in either direction | Off would leave the integrated half on a branch nobody merges; on would cut an integration branch from a base the sequential half is missing. The flag is a default for the next run, not a switch (§6.4, §25.1). |
+| an `isolation_mode_changed` refusal | A code to report a conflict that capturing at creation does not create. Reporting it would mean the design still allowed it (§6.4). |
+| refusing a pre-MVP-2 run because it has no `planningBase` | A permanent lockout with no action its owner could take. Legacy runs execute as they always did, and are never promoted (§25.2). |
 | cleaning attempt refs and the integration branch by the same rule | One is diagnostic, the other is the product §19.3 told the user to merge (§20.4). |
 
 ### 30.2 Not in this milestone
@@ -2608,7 +2807,7 @@ recovery matrix (M2-07). **Deferred.**
 | R-8 | Conflicts are frequent enough to make parallelism unpleasant | medium | Halt-and-report is the correct response; the plan reviewer's independence analysis is the upstream fix; §27 measures how often it happens |
 | R-9 | M2-11 lands early "to see it work" | critical | §29 states the preconditions; the architecture test on the ceiling fails if the resolver is bypassed |
 | R-10 | Agents' own commits confuse users reading the integration branch | low | §12.5 states the model; the marker message says so in prose |
-| R-11 | A configuration edit between two starts moves a run between modes and splits its work across a branch and a working tree | **critical, and silent** — nothing fails, the run just finishes wrong | The mode is frozen in run state and reconciled before every entry; `isolation_mode_changed` is not forcible (I-13, §6.5) |
+| R-11 | A `useWorktrees` edit lands between two phases of one run — planning under one answer, implementation under another — and the work is built against a tree nobody planned against | **critical, and silent**: every individual check passes and the run finishes wrong | The mode is captured at `createRun` and immutable; `git.useWorktrees` is read in one module at one moment, pinned by an architecture test (I-13, §6.1, §26.1) |
 | R-12 | `agent-flow clean` deletes the integration branch of an old run — the product the CLI told the user to merge | high, and it happens weeks later with nobody watching | Attempt refs and the integration branch are cleaned by different rules; an unmerged branch is kept and reported; `--branches` is the explicit opt-in (§20.4) |
 
 ---
@@ -2628,7 +2827,8 @@ MVP 2 is **PASS** only when all of the following are demonstrated:
 [ ] the user's working tree is byte-identical before and after a parallel run
 [ ] no browser-controlled Git path, ref, branch or command — requests and responses
 [ ] no Git hook executes inside any internal Agent Flow operation
-[ ] a run's isolation mode cannot change between two starts — either direction
+[ ] a run's isolation mode is captured at creation and no later config edit,
+    execution or refusal changes it — proved in both directions and for legacy runs
 [ ] cleanup leaves no worktree and no attempt ref behind, touches nothing foreign,
     and never deletes an integration branch that is merged nowhere
 [ ] final review cannot observe the integration worktree while a merge is in it
@@ -2644,27 +2844,30 @@ is something a user would otherwise discover by having it go wrong.
 
 ## Appendix A — Refusal codes
 
-Two of these do **not** stop the run: they select sequential mode and are recorded as
-a `parallelism_clamped` degradation (§6.4). Every other code stops it.
+**Every code here stops a run; none of them changes what the run is** (§6.4). Two
+former entries are gone rather than renamed: `worktrees_disabled` is now the value
+`isolationMode: 'none'` captured at creation, and `planning_base_missing` is the
+legacy shape of §25.2 — neither is a runtime decision, so neither is a refusal.
+
+Codes marked **creation** are also evaluated by `createRun` for a run being born
+`worktree` (§6.1), where refusing costs nothing.
 
 | Code | Raised by | Forcible |
 |---|---|---|
-| `worktrees_disabled` | admissibility | n/a — configured intent, runs sequentially |
-| `not_a_git_repository` | admissibility | no |
-| `repository_is_bare` | admissibility | no |
-| `repository_has_no_commits` | admissibility | no |
-| `repository_has_submodules` | admissibility | no |
-| `repository_root_unresolvable` | admissibility | no |
-| `git_version_unsupported` | admissibility, `doctor` | no |
-| `worktree_path_too_long` | admissibility | no |
-| `planning_base_missing` | admissibility | n/a — pre-MVP-2 run, runs sequentially (§25.2) |
-| `git_identity_missing` | admissibility | no |
-| `isolation_mode_changed` | admissibility, before every entry | **no** |
-| `agent_flow_state_not_ignored` | admissibility | no |
-| `working_tree_dirty` | admissibility, planning gates | **no** |
-| `planning_base_moved` | admissibility, planning gates | **no** |
-| `git_run_key_collision` | `GitWorkspaces`, first entry only | no |
-| `namespace_missing` | `GitWorkspaces`, resume only | no |
+| `not_a_git_repository` | preconditions, **creation** | no |
+| `repository_is_bare` | preconditions, **creation** | no |
+| `repository_has_no_commits` | preconditions, **creation** | no |
+| `repository_has_submodules` | preconditions, **creation** | no |
+| `repository_root_unresolvable` | preconditions, **creation** | no |
+| `git_version_unsupported` | preconditions, **creation**, `doctor` | no |
+| `worktree_path_too_long` | preconditions, **creation** | no |
+| `git_identity_missing` | preconditions | no |
+| `agent_flow_state_not_ignored` | preconditions | no |
+| `working_tree_dirty` | preconditions, planning gates | **no** |
+| `planning_base_moved` | preconditions, planning gates | **no** |
+| `git_run_key_collision` | `GitWorkspaces`, §5.3 case C only | no |
+| `namespace_missing` | `GitWorkspaces`, §5.3 case D | no |
+| `integration_head_diverged` | `GitWorkspaces`, §5.3 case D | no |
 | `task_workspace_preparation_failed` | `TaskWorkspaces` | no |
 | `attempt_marker_mismatch` | Integrator, recovery | no |
 | `attempt_tree_missing` | recovery | no — requeues |
@@ -2676,11 +2879,10 @@ a `parallelism_clamped` degradation (§6.4). Every other code stops it.
 None of these carries an absolute filesystem path (§7.2, §21.3).
 
 ```text
-run_git_identity_assigned      { gitRunKey, planningBase }
+run_git_identity_assigned      { gitRunKey, planningBase, isolationMode }  at createRun
 planning_base_observation      { clean, head, planningBase, matches }   sequential mode
-worktree_mode_refused          { code, detail }
-isolation_mode_frozen          { mode, code? }                          §6.5, once per run
-integration_branch_created     { branch, base }
+worktree_mode_refused          { code, detail }                         a precondition
+integration_branch_created     { branch, base, adopted }               §5.3 case A or B
 task_workspace_created         { task, attempt, branch, base }
 task_workspace_preparation_failed { task, attempt, phase, changes }
 task_attempt_validated         { task, attempt, judgement, validationIds }
