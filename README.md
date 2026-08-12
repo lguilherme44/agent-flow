@@ -116,6 +116,7 @@ agent-flow ui ~/wk
 | | |
 |---|---|
 | [`docs/specs/implementation-spec-v3.md`](docs/specs/implementation-spec-v3.md) | Implementation Spec v3, complete. A historical document; the code is the current truth |
+| [`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md) | MVP 2 — Safe Parallel Execution. The current design, not yet implemented; supersedes §19 and §47–§48 of Spec v3 |
 
 **Technical reviews** — snapshots, not living documents
 
@@ -385,6 +386,10 @@ See [Findings §8](docs/engineering/findings.md#8-a-structured-review-found-thin
 ### Next
 
 Not started. Listed so the boundary of Spec v3 is visible, not as a commitment.
+
+The first two are specified in full in
+[`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md)
+— written, reviewed, and deliberately not implemented yet.
 
 - [ ] Git worktrees for task isolation
 - [ ] Parallel execution — the scheduler loop takes N; nothing may hand it more

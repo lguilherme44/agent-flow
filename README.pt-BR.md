@@ -120,6 +120,7 @@ Os documentos abaixo estão em inglês.
 | | |
 |---|---|
 | [`docs/specs/implementation-spec-v3.md`](docs/specs/implementation-spec-v3.md) | Implementation Spec v3, completa. Documento histórico; o código é a verdade atual |
+| [`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md) | MVP 2 — Safe Parallel Execution. O desenho atual, ainda não implementado; substitui §19 e §47–§48 da Spec v3 |
 
 **Revisões técnicas** — snapshots, não documentos vivos
 
@@ -396,6 +397,10 @@ Veja [Findings §8](docs/engineering/findings.md#8-a-structured-review-found-thi
 
 Não iniciados. Listados para deixar visível onde a Spec v3 termina, não como
 compromisso.
+
+Os dois primeiros estão especificados por completo em
+[`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md)
+— escrito, revisado e deliberadamente ainda não implementado.
 
 - [ ] Git worktrees para isolamento de tasks
 - [ ] Execução paralela — o loop do scheduler aceita N; nada pode entregar mais
