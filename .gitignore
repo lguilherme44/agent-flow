@@ -32,3 +32,15 @@ apps/web/test-results/
 # packaged server is not reading it, and restores it afterwards. A run killed at the
 # wrong moment leaves this behind; it is a build artifact, not a loss.
 apps/web/dist.hidden-by-packaging-smoke/
+
+# The design system itself is committed: PRODUCT.md, DESIGN.md, .impeccable/design.json
+# and the detector's shared ignores are meant to be read and argued with in a review.
+# These three are not part of it — they are per-machine state: dedup cache and pending
+# queue for the per-edit hook, and one developer's consent and overrides. A shared
+# exception that lands in config.local.json is a shared exception nobody else gets.
+#
+# The installer also writes these to `.git/info/exclude`, which does not travel to a
+# clone; here they are, where a second contributor inherits them.
+**/.impeccable/hook.cache.json
+**/.impeccable/hook.pending.json
+**/.impeccable/config.local.json

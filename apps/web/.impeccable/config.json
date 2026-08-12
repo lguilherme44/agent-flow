@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font-size",
+        "value": "10px",
+        "files": [
+          "src/styles/index.css"
+        ],
+        "createdAt": "2026-08-12T17:30:44.154Z",
+        "reason": "React Flow's attribution link is third-party credit chrome shrunk so it stops competing, not app typography. The DAG node's own 10px stays visible on purpose."
+      }
+    ]
+  }
+}

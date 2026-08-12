@@ -1,0 +1,380 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-12T15:18:52Z",
+  "title": "Design System: Agent Flow Dashboard",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Ink Plane",
+        "canonical": "#070b14",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Plane One",
+        "canonical": "#0b111c",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "surface-2": {
+        "role": "neutral",
+        "displayName": "Plane Two",
+        "canonical": "#0f1622",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "surface-3": {
+        "role": "neutral",
+        "displayName": "Plane Three",
+        "canonical": "#151d2b",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "sunken": {
+        "role": "neutral",
+        "displayName": "Log Well",
+        "canonical": "#04070d",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "rgba(148, 163, 184, 0.1)"
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "rgba(148, 163, 184, 0.2)"
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "canonical": "#f1f5f9",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "canonical": "#a3b0c2",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "faint": {
+        "role": "neutral",
+        "displayName": "Faint",
+        "canonical": "#6b7a90",
+        "tonalRamp": ["#04070d", "#070b14", "#0b111c", "#0f1622", "#151d2b", "#6b7a90", "#a3b0c2", "#f1f5f9"]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "Orchestration Violet",
+        "canonical": "#7c3aed",
+        "tonalRamp": ["#1a0b33", "#2a1152", "#3d1a75", "#5423a8", "#6b2fd1", "#7c3aed", "#9366f5", "#c4b0fa"]
+      },
+      "primary-bright": {
+        "role": "primary",
+        "displayName": "Violet Bright",
+        "canonical": "#9366f5",
+        "tonalRamp": ["#1a0b33", "#2a1152", "#3d1a75", "#5423a8", "#6b2fd1", "#7c3aed", "#9366f5", "#c4b0fa"]
+      },
+      "primary-soft": {
+        "role": "primary",
+        "displayName": "Violet Soft",
+        "canonical": "rgba(124, 58, 237, 0.16)"
+      },
+      "primary-border": {
+        "role": "primary",
+        "displayName": "Violet Border",
+        "canonical": "rgba(147, 102, 245, 0.45)"
+      },
+      "success": {
+        "role": "secondary",
+        "displayName": "Signal Green",
+        "canonical": "#34d399",
+        "tonalRamp": ["#052e22", "#07553d", "#0a7a58", "#0f9e72", "#1cba88", "#34d399", "#6ee7b7", "#b6f3da"]
+      },
+      "success-soft": {
+        "role": "secondary",
+        "displayName": "Green Wash",
+        "canonical": "rgba(52, 211, 153, 0.12)"
+      },
+      "info": {
+        "role": "secondary",
+        "displayName": "Signal Blue",
+        "canonical": "#3b82f6",
+        "tonalRamp": ["#0a1e3d", "#0f2f5e", "#14417f", "#1a55a5", "#2569cd", "#3b82f6", "#7aa9f9", "#bdd4fc"]
+      },
+      "info-soft": {
+        "role": "secondary",
+        "displayName": "Blue Wash",
+        "canonical": "rgba(59, 130, 246, 0.12)"
+      },
+      "warning": {
+        "role": "secondary",
+        "displayName": "Signal Amber",
+        "canonical": "#fbbf24",
+        "tonalRamp": ["#3d2c05", "#5e4308", "#7f5a0a", "#a5760d", "#cd9412", "#fbbf24", "#fcd370", "#fde9b8"]
+      },
+      "warning-soft": {
+        "role": "secondary",
+        "displayName": "Amber Wash",
+        "canonical": "rgba(251, 191, 36, 0.12)"
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Signal Red",
+        "canonical": "#f87171",
+        "tonalRamp": ["#3d0f0f", "#5e1717", "#7f1f1f", "#a52a2a", "#cd4141", "#f87171", "#fba5a5", "#fdd2d2"]
+      },
+      "danger-soft": {
+        "role": "secondary",
+        "displayName": "Red Wash",
+        "canonical": "rgba(248, 113, 113, 0.12)"
+      }
+    },
+    "typographyMeta": {
+      "hero": { "displayName": "Hero", "purpose": "The run id, and the largest type on any screen. Bold and large so it holds the header alone." },
+      "title": { "displayName": "Title", "purpose": "The feature name, beside the run id. Regular weight on purpose, full text colour." },
+      "section": { "displayName": "Section", "purpose": "Panel and dialog headings." },
+      "metric": { "displayName": "Metric", "purpose": "Numbers in a count strip. Always tabular." },
+      "body-lg": { "displayName": "Body Large", "purpose": "Card headings and the product wordmark." },
+      "body": { "displayName": "Body", "purpose": "The document base and table content." },
+      "label": { "displayName": "Label", "purpose": "The working size: buttons, table cells, nav items, chips, metadata values, form controls." },
+      "micro": { "displayName": "Micro", "purpose": "Field labels, captions, badges, sub-lines, code fragments, uppercase column headers." },
+      "mono": { "displayName": "Mono", "purpose": "Machine output only: paths, hashes, error codes, config keys, commands, log bodies. Used at 11px and 12px." }
+    },
+    "shadows": [
+      {
+        "name": "floating-panel",
+        "value": "0 25px 50px -12px rgb(0 0 0 / 0.25)",
+        "purpose": "Dialogs and the inspector drawer — the only elements that overlay the page. Paired with a border-strong hairline and an rgb(0 0 0 / 0.7) backdrop."
+      },
+      {
+        "name": "transient-overlay",
+        "value": "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)",
+        "purpose": "Tooltips. Nothing that is part of the page carries a shadow at all."
+      }
+    ],
+    "motion": [
+      {
+        "name": "colour-transition",
+        "value": "transition-property: color, background-color, border-color; transition-duration: 150ms",
+        "purpose": "Interactive elements responding to hover, focus and press. The default and almost only transition in the app."
+      },
+      {
+        "name": "opacity-transition",
+        "value": "transition-property: opacity; transition-duration: 150ms",
+        "purpose": "DAG nodes dimming to 30% when filtered out or unrelated to the selection."
+      },
+      {
+        "name": "progress-transition",
+        "value": "transition-property: all; transition-duration: 150ms",
+        "purpose": "The progress bar's width, so a completing run does not snap."
+      },
+      {
+        "name": "run-spinner",
+        "value": "animation: spin 1s linear infinite",
+        "purpose": "The only continuous animation: the marker on a stage or task that is genuinely running. Always accompanied by a word that does not move, which is what makes it safe to stop."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }",
+        "purpose": "One base rule neutralising every animation and transition in the app and in any library inside it. Blunt on purpose: a rule naming today's four would miss the fifth. 0.01ms rather than none so Radix still fires the animationend it reads before unmounting."
+      }
+    ],
+    "breakpoints": [
+      { "name": "pane", "value": "1200px" },
+      { "name": "wide", "value": "1440px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The affirmative action in a dialog or an action row. The only place a violet fill appears outside navigation and the running pipeline step.",
+      "html": "<button class=\"ds-btn-primary\">Approve plan</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border: none; border-radius: var(--af-radius-sm); background: var(--af-primary); color: #fff; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 12px; line-height: 16px; font-weight: 500; cursor: pointer; transition: background-color 150ms, border-color 150ms, color 150ms; } .ds-btn-primary:hover { background: var(--af-primary-bright); } .ds-btn-primary:focus-visible { outline: 2px solid var(--af-primary); outline-offset: 2px; border-radius: 4px; } .ds-btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }"
+    },
+    {
+      "name": "Surface Button",
+      "kind": "button",
+      "refersTo": "button-surface",
+      "description": "The ordinary button of the interface. Hover strengthens the hairline and lifts one plane; it never changes hue.",
+      "html": "<button class=\"ds-btn-surface\">View as DAG</button>",
+      "css": ".ds-btn-surface { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--af-border); border-radius: var(--af-radius-sm); background: var(--af-surface-2); color: var(--af-text); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 12px; line-height: 16px; font-weight: 500; cursor: pointer; transition: background-color 150ms, border-color 150ms, color 150ms; } .ds-btn-surface:hover { background: var(--af-surface-3); border-color: var(--af-border-strong); } .ds-btn-surface:focus-visible { outline: 2px solid var(--af-primary); outline-offset: 2px; border-radius: 4px; } .ds-btn-surface:disabled { opacity: 0.45; cursor: not-allowed; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "A hairline box on Plane Two with a faint leading icon. Focus strengthens the container border via focus-within; the field itself shows no inner ring.",
+      "html": "<label class=\"ds-input-search\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input type=\"text\" placeholder=\"Search tasks\" /></label>",
+      "css": ".ds-input-search { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 224px; padding: 4px 8px; border: 1px solid var(--af-border); border-radius: var(--af-radius-sm); background: var(--af-surface-2); } .ds-input-search:focus-within { border-color: var(--af-border-strong); } .ds-input-search svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--af-text-faint); } .ds-input-search input { width: 100%; border: none; background: transparent; color: var(--af-text); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 12px; line-height: 16px; } .ds-input-search input::placeholder { color: var(--af-text-faint); } .ds-input-search input:focus { outline: none; }"
+    },
+    {
+      "name": "Nav Item (Active)",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "The active destination takes a full violet fill with white text and medium weight — a perceptible surface, not a marginally different grey. Inactive siblings are muted text that lift to Plane Two on hover.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item-active\" href=\"#\" aria-current=\"page\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><rect width=\"7\" height=\"9\" x=\"3\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"5\" x=\"14\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"9\" x=\"14\" y=\"12\" rx=\"1\"/><rect width=\"7\" height=\"5\" x=\"3\" y=\"16\" rx=\"1\"/></svg>Dashboard</a><a class=\"ds-nav-item\" href=\"#\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M22 12h-4l-3 9L9 3l-3 9H2\"/></svg>Runs</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 1px; width: 200px; padding: 8px; background: var(--af-surface); border-radius: var(--af-radius-md); } .ds-nav-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--af-radius-sm); color: var(--af-text-muted); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 12px; line-height: 16px; text-decoration: none; transition: background-color 150ms, color 150ms; } .ds-nav-item svg { width: 16px; height: 16px; flex-shrink: 0; } .ds-nav-item:hover { background: var(--af-surface-2); color: var(--af-text); } .ds-nav-item-active, .ds-nav-item-active:hover { background: var(--af-primary); color: #fff; font-weight: 500; } .ds-nav-item:focus-visible { outline: 2px solid var(--af-primary); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "A tonal wash with tonal text at micro size. Uppercase and wide-tracked only when it carries a status word; badges also carry data, so caps are opt-in.",
+      "html": "<span class=\"ds-badge ds-badge-success ds-badge-caps\">COMPLETED</span> <span class=\"ds-badge ds-badge-warning ds-badge-caps\">WAITING APPROVAL</span> <span class=\"ds-badge ds-badge-muted\">3 attempts</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: var(--af-radius-sm); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 11px; line-height: 14px; font-weight: 500; white-space: nowrap; } .ds-badge-caps { text-transform: uppercase; letter-spacing: 0.025em; } .ds-badge-success { background: var(--af-success-soft); color: var(--af-success); } .ds-badge-warning { background: var(--af-warning-soft); color: var(--af-warning); } .ds-badge-muted { background: var(--af-surface-3); color: var(--af-text-muted); }"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "A place where work happens. Plane One, 10px radius, hairline border, and a header flush inside the panel rather than a bar on top of it — separated by one hairline where the body needs it.",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-panel-header\"><h2>Tasks</h2><span class=\"ds-panel-meta\">12 / 18</span></div><div class=\"ds-panel-body\">Panel body content sits here.</div></section>",
+      "css": ".ds-panel { display: flex; flex-direction: column; overflow: hidden; width: 100%; max-width: 420px; border: 1px solid var(--af-border); border-radius: var(--af-radius-lg); background: var(--af-surface); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; } .ds-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--af-border); } .ds-panel-header h2 { margin: 0; font-size: 15px; line-height: 22px; font-weight: 600; color: var(--af-text); } .ds-panel-meta { font-size: 11px; line-height: 14px; color: var(--af-text-faint); font-variant-numeric: tabular-nums; } .ds-panel-body { padding: 12px 16px; font-size: 13px; line-height: 18px; color: var(--af-text-muted); }"
+    },
+    {
+      "name": "Stage Pipeline Step",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Signature. The running step is wider and takes the violet wash; pending steps are transparent with muted text. The hairline connector between chips is what makes the row a flow rather than a set of widgets.",
+      "html": "<ol class=\"ds-pipeline\"><li class=\"ds-stage\"><div class=\"ds-stage-chip ds-stage-done\"><span class=\"ds-stage-dot ds-stage-dot-done\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"/></svg></span><span class=\"ds-stage-text\"><span class=\"ds-stage-name\">Planning</span><span class=\"ds-stage-sub\">1m 12s</span></span></div><span class=\"ds-stage-link\" aria-hidden=\"true\"></span></li><li class=\"ds-stage ds-stage-wide\"><div class=\"ds-stage-chip ds-stage-running\"><span class=\"ds-stage-dot ds-stage-dot-running\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg></span><span class=\"ds-stage-text\"><span class=\"ds-stage-name ds-stage-name-running\">Implementation</span><span class=\"ds-stage-sub ds-stage-sub-running\">4m 03s</span></span></div><span class=\"ds-stage-link\" aria-hidden=\"true\"></span></li><li class=\"ds-stage\"><div class=\"ds-stage-chip ds-stage-pending\"><span class=\"ds-stage-dot ds-stage-dot-pending\"></span><span class=\"ds-stage-text\"><span class=\"ds-stage-name ds-stage-name-pending\">Verification</span><span class=\"ds-stage-sub\">pending</span></span></div></li></ol>",
+      "css": ".ds-pipeline { display: flex; align-items: stretch; list-style: none; margin: 0; padding: 12px 16px; background: var(--af-surface); border: 1px solid var(--af-border); border-radius: var(--af-radius-lg); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; } .ds-stage { display: flex; align-items: stretch; flex: 1; min-width: 132px; } .ds-stage-wide { flex: 1.4; } .ds-stage-chip { display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--af-border); border-radius: var(--af-radius-md); } .ds-stage-done { background: var(--af-success-soft); } .ds-stage-running { background: var(--af-primary-soft); border-color: var(--af-primary-border); } .ds-stage-pending { background: transparent; } .ds-stage-dot { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border-radius: 9999px; } .ds-stage-dot svg { width: 10px; height: 10px; } .ds-stage-dot-done { background: var(--af-success); color: var(--af-bg); } .ds-stage-dot-running { border: 1px solid var(--af-primary-border); color: var(--af-primary); animation: ds-spin 1s linear infinite; } .ds-stage-dot-pending { border: 1px solid var(--af-border-strong); } .ds-stage-text { display: flex; min-width: 0; flex-direction: column; } .ds-stage-name { font-size: 12px; line-height: 1.15; color: var(--af-text); } .ds-stage-name-running { font-weight: 500; } .ds-stage-name-pending { color: var(--af-text-muted); } .ds-stage-sub { font-size: 11px; line-height: 1.15; color: var(--af-text-faint); font-variant-numeric: tabular-nums; } .ds-stage-sub-running { color: var(--af-primary); } .ds-stage-link { display: flex; width: 8px; flex-shrink: 0; align-items: center; } .ds-stage-link::before { content: ''; display: block; width: 100%; height: 1px; background: var(--af-border-strong); } @keyframes ds-spin { to { transform: rotate(360deg); } }"
+    },
+    {
+      "name": "DAG Task Node",
+      "kind": "custom",
+      "refersTo": "dag-node",
+      "description": "Signature. A fixed 200x64 box declared rather than measured. Border carries three states — selected, dependency-related, or the task's own status tone — and dimming is opacity, never a new colour.",
+      "html": "<div class=\"ds-dag-canvas\"><div class=\"ds-dag-node ds-dag-node-selected\"><div class=\"ds-dag-top\"><span class=\"ds-dag-dot\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg></span><span class=\"ds-dag-id\">TASK-004</span><span class=\"ds-dag-chip\">RUNNING</span></div><span class=\"ds-dag-title\">Wire the approval gate to the plan hash</span><span class=\"ds-dag-meta\">Complex · claude-opus-5 · 2m 41s</span></div><div class=\"ds-dag-node ds-dag-node-dim\"><div class=\"ds-dag-top\"><span class=\"ds-dag-dot ds-dag-dot-queued\"></span><span class=\"ds-dag-id\">TASK-005</span><span class=\"ds-dag-chip ds-dag-chip-queued\">QUEUED</span></div><span class=\"ds-dag-title\">Record the degradation on the run</span><span class=\"ds-dag-meta\">Moderate · no model yet</span></div></div>",
+      "css": ".ds-dag-canvas { display: flex; gap: 20px; padding: 16px; background: var(--af-bg); border-radius: var(--af-radius-lg); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; } .ds-dag-node { display: flex; width: 200px; height: 64px; flex-direction: column; justify-content: center; gap: 4px; padding: 6px 8px; border: 1px solid var(--af-border-strong); border-radius: var(--af-radius-md); background: var(--af-surface); cursor: pointer; transition: opacity 150ms; } .ds-dag-node-selected { border-color: var(--af-primary-bright); box-shadow: 0 0 0 1px var(--af-primary-bright); } .ds-dag-node-dim { opacity: 0.3; } .ds-dag-top { display: flex; min-width: 0; align-items: center; gap: 6px; } .ds-dag-dot { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border: 1px solid var(--af-info); border-radius: 9999px; color: var(--af-info); animation: ds-spin 1s linear infinite; } .ds-dag-dot svg { width: 10px; height: 10px; } .ds-dag-dot-queued { border-color: var(--af-border-strong); animation: none; } .ds-dag-id { flex-shrink: 0; font-size: 11px; line-height: 14px; font-weight: 500; color: var(--af-text); font-variant-numeric: tabular-nums; } .ds-dag-chip { margin-left: auto; flex-shrink: 0; padding: 1px 4px; border-radius: var(--af-radius-sm); background: var(--af-info-soft); color: var(--af-info); font-size: 10px; line-height: 1.15; font-weight: 500; } .ds-dag-chip-queued { background: var(--af-surface-3); color: var(--af-text-muted); } .ds-dag-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.15; color: var(--af-text); } .ds-dag-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 1.15; color: var(--af-text-faint); } @keyframes ds-spin { to { transform: rotate(360deg); } }"
+    },
+    {
+      "name": "Live Indicator",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Signature. Three states, each with a sentence rather than only a dot: live, degraded to polling, or connecting. A stream that silently died looks exactly like a run that is simply idle, and only one is worth telling somebody about.",
+      "html": "<div class=\"ds-live-row\"><span class=\"ds-live ds-live-up\"><span class=\"ds-live-dot\"></span>Agent Flow is running</span><span class=\"ds-live ds-live-degraded\"><span class=\"ds-live-dot\"></span>Reconnecting — polling</span><span class=\"ds-live ds-live-idle\"><span class=\"ds-live-dot\"></span>Connecting…</span></div>",
+      "css": ".ds-live-row { display: flex; flex-wrap: wrap; gap: 8px; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; } .ds-live { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--af-border); border-radius: var(--af-radius-sm); font-size: 12px; line-height: 16px; } .ds-live-dot { width: 6px; height: 6px; border-radius: 9999px; background: currentColor; } .ds-live-up { border-color: rgba(52, 211, 153, 0.3); background: var(--af-success-soft); color: var(--af-success); } .ds-live-degraded { border-color: rgba(251, 191, 36, 0.3); background: var(--af-warning-soft); color: var(--af-warning); } .ds-live-idle { background: var(--af-surface-2); color: var(--af-text-faint); }"
+    },
+    {
+      "name": "Refusal Notice",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Signature. Never a toast — it sits beside the thing it is about and carries four fields in order: what happened, where (as mono evidence), whether the workflow stopped, and what to do next.",
+      "html": "<div class=\"ds-notice\" role=\"alert\"><span class=\"ds-notice-head\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z\"/><path d=\"M12 9v4\"/><path d=\"M12 17h.01\"/></svg><span><strong>Approval refused.</strong> The plan review returned findings that block the gate.</span></span><span class=\"ds-notice-detail\">PLAN_REVIEW_BLOCKING</span><span class=\"ds-notice-line\">The run has not started. Nothing has been written.</span><span class=\"ds-notice-line\">Read the findings, then revise the plan with an instruction.</span></div>",
+      "css": ".ds-notice { display: flex; flex-direction: column; gap: 6px; max-width: 460px; padding: 8px 12px; border: 1px solid rgba(248, 113, 113, 0.25); border-radius: var(--af-radius-md); background: var(--af-danger-soft); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; } .ds-notice-head { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 16px; color: var(--af-text); } .ds-notice-head svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; color: var(--af-danger); } .ds-notice-head strong { font-weight: 500; } .ds-notice-detail { padding-left: 22px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 14px; color: var(--af-text-muted); } .ds-notice-line { padding-left: 22px; font-size: 11px; line-height: 14px; color: var(--af-text-muted); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "One Dark Plane",
+    "overview": "There is one plane, and information rests on it. That is the whole thesis, and every other decision in this system is downstream of it. The page ground is a blue-cast near-black; the three surfaces above it are separated by three or four points of lightness — close enough that no bordered element also reads as a lighter rectangle. Regions are told apart by a hairline and by what they mean, never by brightness. An earlier pass put six points between the ground and the first surface, and with a border on everything, the result was a tiled grid of same-weight boxes. That grid is the anti-reference this system was built against.\n\nThe plane is dark by necessity, not by taste. This surface sits open beside a terminal for hours while agent processes write to the repository, and it must not be the brightest rectangle on the desk. Density follows from the same scene: the base body size is 13px, buttons are 24 and 28px tall, and the type scale runs from 11px to 24px in eight steps. Every measurement in the token file carries a written reason — the inspector is 448px because the table needs the rest, the pipeline chip floors at 132px because that is what \"Implementation\" needs beside its marker at 12px. Nothing here is a default that survived by accident.\n\nRestraint is the mechanism, and one accent is the exception that proves it. Orchestration Violet appears on exactly two things: the pipeline step that is running, and the navigation destination you are on. A running task is blue specifically so that violet keeps meaning \"where is this run right now\". Rejected outright: light or high-contrast grounds, marketing-dashboard chrome (gradients, glass, illustrated empty states, floating shadowed cards), colour as the only carrier of status, and any return to the equal-weight box grid.",
+    "keyCharacteristics": [
+      "One dark plane; four surfaces within three points of lightness of each other",
+      "Hairline borders at 10% alpha carry all structure — 20% only on hover or emphasis",
+      "Flat at rest: nothing on the page casts a shadow",
+      "Exactly one surface goes below the plane, and only the terminal uses it",
+      "One violet, spent on two things",
+      "Status always arrives as ring + glyph + word, never hue alone",
+      "Eight-step type scale, 11px to 24px, tabular numerals wherever a number ticks",
+      "Every dimension is a token, and every token has a written justification"
+    ],
+    "rules": [
+      {
+        "name": "The One Violet Rule",
+        "body": "Full-strength violet marks the running pipeline step and the active nav destination. A running task is blue. If violet ever marks a third kind of thing, it stops answering \"where is this run right now\" and the system loses its only loud voice.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Loose Colour Rule",
+        "body": "A colour is written down once, in tokens.css. Tailwind's palette is generated from it, so bg-surface cannot resolve to a shade the token file does not define, and retuning the whole surface is one file. A component never receives a colour — it receives a tone, and one module turns a status into a tone.",
+        "section": "colors"
+      },
+      {
+        "name": "The Three-Channel Status Rule",
+        "body": "Status is ring, glyph, and word. A greyscale screenshot, a colour-blind reader, and a glance from three feet away all have to get the same answer, so hue is never load-bearing on its own.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Any number that changes in place carries font-variant-numeric: tabular-nums — durations, percentages, counts, run ids. A ticking duration that reflows its row is a layout bug wearing a number.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono-Is-Evidence Rule",
+        "body": "Mono is reserved for what a machine produced: paths, hashes, error codes, config keys, commands, cycle chains, log bodies. Prose never uses it, and a mono string is never asked to wrap prettily — it scrolls.",
+        "section": "typography"
+      },
+      {
+        "name": "The Single Headline Rule",
+        "body": "One line may carry only one heavy string. Where two pieces of information share a row, the second drops to regular weight and keeps full colour.",
+        "section": "typography"
+      },
+      {
+        "name": "The System-Face Rule",
+        "body": "No webfont ships with this dashboard. Every pixel floor in tokens.css was measured in the platform's own UI face — 132px is what \"Implementation\" needs there — and both committed visual baseline sets are pictures of it. Introducing a webfont is therefore not a typography change but a re-calibration: it invalidates every baseline and every measured width at once. If one is ever wanted, it is a milestone with re-measurement in it, not an edit to the font stack.",
+        "section": "typography"
+      },
+      {
+        "name": "The Table Wins Rule",
+        "body": "When width runs out, the inspector narrows first and the padding tightens second. The table is the surface people read, and eight columns in 530px is not a table.",
+        "section": "layout"
+      },
+      {
+        "name": "The Scroll-Don't-Shave Rule",
+        "body": "A row of labelled steps scrolls sideways before it compresses. A stepper you can push is still a stepper; a stepper reading \"Architectu…\" beside \"Implemen…\" is not readable at all.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat-Plane Rule",
+        "body": "If it is part of the page, it has no shadow. A shadow is a claim that something is above the plane, and only overlays get to make it.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One-Way-Down Rule",
+        "body": "Exactly one surface is darker than the page — the Log Well — and only terminal output and prompt bodies use it. Its rarity is what makes it read as a different kind of thing rather than another panel.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Redundant-Motion Rule",
+        "body": "Motion may reinforce a signal; it may never be the signal. Every spinner in this app sits beside a word that does not move — \"RUNNING\" in the table and the graph, \"Running…\" in the job pill, the stage's own status under the pipeline chip — which is what makes stopping all of it under prefers-reduced-motion: reduce safe rather than lossy. One base rule neutralises every animation and transition in the app and in any library inside it, blunt on purpose: a rule naming today's four would miss the fifth, and the fifth is the one nobody remembers adding. If a new element needs motion to be understood, the element is wrong, not the rule.",
+        "section": "components"
+      },
+      {
+        "name": "The Border-Not-Fill Rule",
+        "body": "Structure comes from a hairline, not from a brightness step. Before adding a surface value to separate two regions, add a border — and if a border does not solve it, the regions are probably one region.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do add every colour to tokens.css and let Tailwind generate from it. One file retunes the whole surface.",
+      "Do pass components a tone (success · info · warning · danger · primary · muted) and let the single status module decide which one a status maps to.",
+      "Do state status three ways — ring, glyph, word. Use the decorative marker variant when the word is already visible next to it.",
+      "Do separate regions with a 1px hairline at 10% alpha, and reserve the 20% hairline for hover, emphasis, and floating surfaces.",
+      "Do choose Panel for a region where work happens and Card for a region where a number lives. If the answer is \"neither\", it probably belongs inside an existing panel.",
+      "Do put counts in a hairline-divided strip inside a panel header.",
+      "Do mark every number that changes in place as tabular.",
+      "Do reserve mono for machine output, and let long mono strings scroll.",
+      "Do give the page-level dimensions names in tokens.css and write the reason for the value next to it, as every existing token does.",
+      "Do derive control availability from real state, and give a disabled control a title that says why.",
+      "Do keep exactly one of a duplicated pane in the document; use the media query hook, not hidden classes, when both copies would be announced."
+    ],
+    "donts": [
+      "Don't write a colour, a radius, or a layout dimension inline in a component. Tailwind is mapped onto the tokens precisely so a component cannot invent a shade.",
+      "Don't spend full-strength violet on a third kind of thing. The running pipeline step and the active nav destination are the whole budget; a running task is blue.",
+      "Don't separate two surfaces by brightness when a hairline would do — six points of lightness between the ground and a surface is what produced the box grid this system was rebuilt to escape.",
+      "Don't add a shadow to anything that is part of the page. Shadows belong to dialogs, drawers and tooltips only.",
+      "Don't send anything other than terminal output or a prompt body to the Log Well. Its rarity is what makes it legible.",
+      "Don't ship a light or high-contrast ground. This build is dark-only, the theme control is present-but-disabled and says so, and the palette exists because the tool sits beside a terminal.",
+      "Don't bring marketing-dashboard chrome anywhere near this surface: gradients as decoration, glass, illustrated empty states, large decorative icons, floating shadowed cards.",
+      "Don't convey state with colour alone — not in a badge, not in a dot, not in a toggle, not in a DAG node.",
+      "Don't make motion carry meaning on its own, and don't exempt a new animation from the reduced-motion rule. If it has to move to be understood, redesign it.",
+      "Don't add a font size outside the eight-step scale. The DAG node's 10px metadata line is the single existing exception and it is justified by a 200px node holding three facts.",
+      "Don't name a font the project does not load, and don't add a webfont as a standalone edit. The stack must describe what actually renders, and changing what renders re-opens every measured width and both baseline sets.",
+      "Don't compress a row of labelled steps to make it fit. Scroll it, and fade the edge that hides content.",
+      "Don't render an error as a toast. A notice belongs beside the thing it is about, and it names the consequence and the next step.",
+      "Don't replace a native control with a custom widget for visual consistency alone. The <select> stays native because keyboard driving and screen-reader announcement come free and cannot regress.",
+      "Don't hide an empty state behind a blank pane. Say what is missing and name the command that would produce it."
+    ]
+  }
+}
