@@ -17,7 +17,8 @@ import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveTaskConcurrency, type ConcurrencyDecision } from '../core/concurrency.js';
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
-import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
+import { createGitCommand, type GitCommand } from '../adapters/git/git-command.js';
+import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 
 /**
  * The wiring every execution command needs.
@@ -53,6 +54,15 @@ export interface ExecutionContext {
    */
   readonly concurrency: ConcurrencyDecision;
   readonly processRunner: ProcessRunner;
+  /**
+   * The one hook-isolated `git` spawner (M2-02, §12.3).
+   *
+   * Assembled here for the same reason every other collaborator is: `review`
+   * needs one for its `GitClient` and planning needs one for the discovery
+   * fingerprint, and two constructions of it would be two chances to point
+   * `core.hooksPath` somewhere else.
+   */
+  readonly git: GitCommand;
   /** The adapter type behind a runner id — what independence is judged on. */
   readonly providerOf: (runnerId: string) => string | undefined;
   readonly projectDir: string;
@@ -62,6 +72,12 @@ export interface BuildContextOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
   readonly processRunner: ProcessRunner;
+  /**
+   * Needed for its home directory, which is where `~/.agent-flow/no-hooks` and
+   * `~/.agent-flow/worktrees` live (§7.1). Passed rather than resolved so a test
+   * can point both at a temporary directory instead of at a real home.
+   */
+  readonly host: Host;
   readonly projectDir: string;
   readonly globalConfigPath: string;
   /** Where the shipped prompts live. Resolved by whoever knows the install. */
@@ -74,6 +90,8 @@ export async function buildExecutionContext(
   options: BuildContextOptions,
 ): Promise<ExecutionContext> {
   const { fs, clock, processRunner } = options;
+
+  const git = await createGitCommand({ processRunner, fs, homeDir: options.host.homeDir });
 
   const config = await loadConfig({
     fs,
@@ -143,6 +161,7 @@ export async function buildExecutionContext(
     scheduler,
     concurrency,
     processRunner,
+    git,
     providerOf: (id) => registry.providerOf(id),
     projectDir: options.projectDir,
   };
@@ -163,6 +182,7 @@ export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeli
     store: context.store,
     stageRunner: context.stageRunner,
     processRunner: context.processRunner,
+    git: context.git,
     config: context.config,
     capabilities: context.capabilities,
     providerOf: context.providerOf,

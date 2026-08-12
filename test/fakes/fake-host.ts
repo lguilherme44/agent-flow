@@ -19,6 +19,14 @@ export class FakeHost implements Host {
     readonly pid = 1000,
     readonly hostname = 'test-host',
     alive: readonly number[] = [1000],
+    /**
+     * Where this fake machine keeps `~/.agent-flow`. The default is deliberately
+     * a path no test should ever create anything under: a test that needs the
+     * worktree root or the no-hooks directory to exist passes a temporary
+     * directory, and one that forgets fails visibly rather than writing into the
+     * developer's home.
+     */
+    readonly homeDir = '/fake-home',
   ) {
     this.alive = new Set(alive);
   }

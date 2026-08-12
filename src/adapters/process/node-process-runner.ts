@@ -57,6 +57,25 @@ class BoundedBuffer {
 }
 
 /**
+ * The parent environment, minus `unsetEnv`, plus `env`.
+ *
+ * `delete` rather than assigning an empty string, because for the variables this
+ * exists for the two are not the same: Git reads `GIT_DIR=''` as a repository
+ * path that happens to be empty and fails, rather than as an absent variable.
+ * `undefined` values would also survive into `spawn` on some Node versions as
+ * the literal string, so the key is removed outright.
+ */
+function environmentFor(options: ProcessSpawnOptions): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  for (const name of options.unsetEnv ?? []) {
+    delete env[name];
+  }
+
+  return { ...env, ...options.env };
+}
+
+/**
  * The real ProcessRunner.
  *
  * It never throws for a failing child: a non-zero exit, a timeout and a missing
@@ -83,7 +102,12 @@ export class NodeProcessRunner implements ProcessRunner {
         // Inherit the parent environment: the runners depend on each CLI's own
         // local authentication (§54), which lives in the environment and the
         // user's home directory. Wiping it would break the whole premise.
-        env: { ...process.env, ...options.env },
+        //
+        // `unsetEnv` is the one subtraction, applied before the overrides so a
+        // caller can remove a variable and set it again in the same call. Only
+        // the Git boundary uses it, and only for the variables that would let an
+        // inherited value decide which repository a command acts on.
+        env: environmentFor(options),
         stdio: ['pipe', 'pipe', 'pipe'],
         // Puts the child in its own process group so the whole tree can be
         // signalled at once. Without this the timeout does not work at all:

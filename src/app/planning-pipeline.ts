@@ -3,6 +3,7 @@ import { stringify as toYaml } from 'yaml';
 import type { EffectiveConfig, Plan, ReviewResult, RunStage } from '../contracts/index.js';
 import { PlanSchema } from '../contracts/index.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
+import type { GitCommand } from '../adapters/git/git-command.js';
 import type { StageRunner } from './stage-runner.js';
 import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -39,6 +40,8 @@ export interface PlanningPipelineOptions {
   readonly clock: Clock;
   /** Used to fingerprint the repository for cache invalidation. */
   readonly processRunner: ProcessRunner;
+  /** The hook-isolated `git` wrapper the discovery fingerprint reads through. */
+  readonly git: GitCommand;
   readonly store: StateStore;
   readonly stageRunner: StageRunner;
   readonly config: EffectiveConfig;
@@ -217,7 +220,7 @@ export class PlanningPipeline {
     // against a map of what it used to be.
     const fingerprint = await computeFingerprint({
       fs,
-      processRunner: this.options.processRunner,
+      git: this.options.git,
       projectDir,
       projectConfig: context.projectConfig,
     });

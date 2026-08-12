@@ -265,6 +265,7 @@ describe('the reduction is on the record', () => {
       fs: world.fs,
       clock: world.clock,
       processRunner: world.processRunner,
+      host: new FakeHost(),
       projectDir: PROJECT,
       globalConfigPath: '/install/config.yaml',
       promptsDir: '/install/prompts',

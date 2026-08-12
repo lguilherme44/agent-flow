@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { FileSystem } from '../ports/file-system.js';
-import type { ProcessRunner } from '../ports/process-runner.js';
+import { GIT_TIMEOUT_SECONDS, type GitCommand } from '../adapters/git/git-command.js';
 import { agentFlowPaths } from './paths.js';
 
 /**
@@ -41,7 +41,17 @@ function digest(value: string): string {
 
 export interface FingerprintInputs {
   readonly fs: FileSystem;
-  readonly processRunner: ProcessRunner;
+  /**
+   * The hook-isolated Git wrapper (M2-02).
+   *
+   * This used to be a `ProcessRunner` and a local helper that built
+   * `{ command: 'git' }` — a second internal Git spawner, and the known offender
+   * §26.1 rule 1 was written against. Nothing about the fingerprint changed with
+   * it: `HEAD` and the dirty-file list are read the same way, and a directory
+   * that is not a repository still produces a usable fingerprint rather than an
+   * error, which is what keeps sequential mode working where it always has.
+   */
+  readonly git: GitCommand;
   readonly projectDir: string;
   /** Serialised project configuration, as the pipeline renders it for prompts. */
   readonly projectConfig: string;
@@ -50,23 +60,28 @@ export interface FingerprintInputs {
 export async function computeFingerprint(
   inputs: FingerprintInputs,
 ): Promise<CacheFingerprint> {
-  const { fs, processRunner, projectDir } = inputs;
+  const { fs, projectDir } = inputs;
 
-  const git = async (args: string[]): Promise<string> => {
-    const result = await processRunner.run({
-      command: 'git',
+  const git = async (
+    subcommand: 'rev-parse' | 'status',
+    args: string[],
+  ): Promise<string> => {
+    const result = await inputs.git.run({
+      subcommand,
       args,
       cwd: projectDir,
-      timeoutSeconds: 30,
+      timeoutSeconds: GIT_TIMEOUT_SECONDS.quick,
       maxOutputBytes: 256 * 1024,
     });
-    return result.exitCode === 0 ? result.stdout.trim() : '';
+    // A failure to run git at all reads as "no git answer", exactly as a
+    // non-zero exit did before. Git is not a requirement for planning.
+    return result.ok && result.value.exitCode === 0 ? result.value.stdout.trim() : '';
   };
 
   // A repository without git still gets a usable fingerprint: head and dirty
   // fall back to empty, and the other two inputs carry the signal.
-  const head = (await git(['rev-parse', 'HEAD'])) || EMPTY;
-  const status = await git(['status', '--porcelain=v1', '--untracked-files=no']);
+  const head = (await git('rev-parse', ['HEAD'])) || EMPTY;
+  const status = await git('status', ['--porcelain=v1', '--untracked-files=no']);
 
   const agentsMdPath = `${projectDir}/AGENTS.md`;
   const agentsMd = (await fs.exists(agentsMdPath))

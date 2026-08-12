@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { testGitCommand } from '../fakes/test-git-command.js';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import {
@@ -14,11 +15,16 @@ const FINGERPRINT_PATH = `${PROJECT}/.agent-flow/cache/architecture.fingerprint.
 
 const git = (head: string, status = '') =>
   new FakeProcessRunner().always((spawn) =>
-    spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: head } : { exitCode: 0, stdout: status },
+    spawn.args.includes('rev-parse') ? { exitCode: 0, stdout: head } : { exitCode: 0, stdout: status },
   );
 
 const compute = (fs: InMemoryFileSystem, processRunner: FakeProcessRunner, projectConfig = 'cfg') =>
-  computeFingerprint({ fs, processRunner, projectDir: PROJECT, projectConfig });
+  computeFingerprint({
+    fs,
+    git: testGitCommand(processRunner),
+    projectDir: PROJECT,
+    projectConfig,
+  });
 
 describe('reading a stored fingerprint', () => {
   it('round-trips what was written', async () => {

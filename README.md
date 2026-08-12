@@ -42,7 +42,10 @@ See [Status](#status) for the full picture.
 ## Requirements
 
 - Node 20+
-- git
+- git — any version for the current sequential mode; **2.33.0 or newer** for the
+  worktree isolation mode being built in MVP 2, which needs
+  `git worktree add --lock --reason` (added in 2.33.0). `agent-flow doctor`
+  reports your version and whether it clears that floor.
 - At least one agent CLI, installed and logged in:
   [Claude Code](https://claude.com/claude-code) · [Codex CLI](https://github.com/openai/codex)
 

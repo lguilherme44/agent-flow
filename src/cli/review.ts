@@ -52,7 +52,7 @@ export async function runReviewCommand(
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const git = new GitClient(context.processRunner, globals.cwd);
+    const git = new GitClient(context.git, globals.cwd);
     const changes = await git.changedFiles();
     const changedFiles = renderChanges(changes);
 

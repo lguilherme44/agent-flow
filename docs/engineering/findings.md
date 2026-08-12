@@ -1430,3 +1430,213 @@ add a supply-chain surface to buy a second opinion CI does not need. The version
 pinned at 0.2.2 and the smoke refuses anything else, printing the install command rather
 than reaching for `latest` — a black-box check that changes underneath you is worse than
 none.
+
+---
+
+## M2-02 — what real Git said, and where the design was wrong before it did
+
+The milestone that builds the boundary between Agent Flow and Git. Every claim below
+was probed on **Git 2.52.0** rather than recalled, which is the rule this document
+exists to enforce; the version floor was then established from official documentation
+rather than from that one installation.
+
+### The last `-c core.hooksPath` wins, so prefixing a safe one is not a defence
+
+The obvious wrapper is "put `-c core.hooksPath=<empty dir>` at the front, then append
+whatever the caller asked for". Probed:
+
+```bash
+git -c core.hooksPath=$SAFE -c core.hooksPath=$EVIL worktree add …
+# → the hook in $EVIL fires
+```
+
+So a caller who could place `-c core.hooksPath=…` anywhere in the argument list could
+turn hook isolation off, and the wrapper would still look correct in review. The
+protection has to be structural: Git accepts configuration **only before the
+subcommand**, so `GitCommand` takes a subcommand from a closed list and every
+caller-supplied argument lands after it, where it cannot be configuration. The
+`assertOperationArgs` denylist that also rejects `-c`, `--config-env`, `-C` and friends
+is belt and braces — it exists so that a future refactor loosening the shape fails
+loudly rather than silently reopening the hole.
+
+The related good news, also probed: a command-line `-c` beats `GIT_CONFIG_COUNT` /
+`GIT_CONFIG_KEY_n` in the inherited environment. The environment cannot defeat the
+isolation, so nothing has to be scrubbed for it to hold.
+
+### `--no-verify` would not have covered this, and here is which hooks
+
+The spec says it and the probe confirms it. A `reference-transaction` hook fires for a
+plain `git update-ref` and does not fire under `-c core.hooksPath=<empty>`; the flag
+does not exist for `update-ref` at all. The same is true of `post-checkout`, which
+`git worktree add` runs. `--no-verify` is not a weaker version of the same mechanism —
+it is a different and smaller set.
+
+Every isolation test is written with a **positive control** for this reason. "The
+sentinel file was not written" is green when isolation works, when the hook is broken,
+when it was never installed, and when the operation did not run — so each test first
+proves the same hook fires for a user-issued command in the same repository.
+
+### `for-each-ref 'refs/heads/agent-flow/<key>/*'` silently omits the attempt refs
+
+The bug this caught was already written. `*` in a `for-each-ref` pattern matches a
+single path component:
+
+```text
+pattern  refs/heads/agent-flow/K/*   → refs/heads/agent-flow/K/integration
+pattern  refs/heads/agent-flow/K     → refs/heads/agent-flow/K/integration
+                                       refs/heads/agent-flow/K/TASK-001/attempt-1
+```
+
+A namespace-collision check built on the glob would have reported an empty namespace
+while attempt refs sat in it — which is §5.3 case C answering "no collision" over
+somebody else's work. A bare prefix matches everything beneath, recursively, so
+`refsUnder` takes a prefix and refuses a glob outright. Refusing rather than
+translating also means there is no free-form ref query anywhere in the adapter (S-6).
+
+### `cat-file -e <oid>^{commit}` cannot tell "absent" from "broken"
+
+```text
+git cat-file -e <missing>            → exit 1
+git cat-file -e <missing>^{commit}   → exit 128
+```
+
+The peel is evaluated during revision parsing, before `cat-file` runs, so it fails the
+whole command rather than answering the existence question. §17.1 writes the recovery
+check as `cat-file -e <validatedTree>^{tree}`, and taken literally that would make a
+pruned tree indistinguishable from a corrupt repository — exactly the confusion §32
+forbids. Existence and type are therefore two methods: `objectExists` asks without a
+suffix and maps 0/1 cleanly, and `objectType` asks separately.
+
+The same shape recurs and each case was probed rather than assumed: `merge` exits **1**
+on a conflict and 128 on a real error; `merge-base --is-ancestor` exits 1 for "no" and
+**128** for a bogus id, so folding non-zero into `false` would report "not yet merged"
+about a repository that cannot answer; `merge --abort` exits 128 when there is no merge
+to abort, which is the distinction recovery window 6 is detected by.
+
+### The version floor is 2.33.0, and `-z` is what it cost
+
+`git worktree add --lock --reason` is the newest thing MVP 2 needs. Release notes
+2.33.0: *"`git worktree add --lock` learned to record why the worktree is locked with a
+custom message."* Cross-checked against the versioned manual pages — the `add` synopsis
+carries `[--lock [--reason <string>]]` from 2.33.0 and does not in 2.31.0's, and
+git-scm serves the 2.32.0 URL as the 2.31.0 document, meaning it did not change between
+them.
+
+`worktree list --porcelain -z` arrived in **2.36.0**, and was deliberately not adopted:
+it would move the floor three minor versions to close one edge case — a *foreign*
+worktree whose path contains a newline is not representable without it. The exposure is
+bounded because every path Agent Flow acts on is re-checked for containment under its
+own canonical root, so a mis-split record cannot become a directory it removes. M2-09
+owns cleanup and may reopen this; it is recorded here so the decision is visible rather
+than inherited.
+
+`status --porcelain=v1` **is** issued with `-z`, which predates the floor by far. Not
+optional: probed, a rename is `RM h.txt\0f.txt\0`, and in the newline format that is
+the same bytes as a file literally called `h.txt -> f.txt`.
+
+### `core.quotePath=false` belongs in the safety configuration
+
+With Git's default, `status --porcelain` and `ls-files` C-quote non-ASCII paths. Every
+consumer would need a de-quoting step, and the one that forgot would act on a path that
+does not exist. It is set alongside `core.hooksPath`, in the same unreachable position,
+so a path in stdout is the path on disk.
+
+### `GIT_DIR=''` does not read as "unset" — a documented limitation, not a handled one
+
+`ProcessRunner` merges an override map over the inherited environment, so it can set a
+variable and not remove one. `GIT_CONFIG_COUNT=0` neutralises an inherited config pair,
+but there is no value that neutralises `GIT_DIR`: probed, the empty string fails with
+`not a git repository: ''`. Running Agent Flow from inside a Git hook, or from a script
+that exports `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`, therefore redirects its
+Git operations. It is written down here rather than half-handled — the environment
+belongs to the user, not to a model or a browser, and a fix belongs with whichever
+milestone needs it.
+
+### `Host` grew a fourth member, against its own comment
+
+The port said "deliberately three members; anything more would be an invitation to
+reach for the environment". §7.1 requires `~` to be resolved through this port and
+never from `process.env.HOME`, so `homeDir` was added and the comment rewritten to say
+why. The practical payoff is the test suite: with home injectable, the real-Git tests
+create and destroy worktrees under a temporary home instead of the developer's, which
+is the difference between a failing test costing a rerun and costing a `git worktree
+list` cleanup in this repository.
+
+### The hardening pass: three things the first implementation got wrong
+
+Found by reviewing the M2-02 diff adversarially before committing it, and each one
+was reproduced against real Git before it was fixed.
+
+**An inherited `GIT_DIR` beats a correct `cwd`.** `NodeProcessRunner` built the child
+environment as `{ ...process.env, ...options.env }`, which can only *set* a variable.
+So an Agent Flow `update-ref`, `merge` or `worktree remove` issued from exactly the
+right directory would act on whatever repository the environment named — and a shell
+with `GIT_DIR` exported is ordinary rather than exotic: every Git hook runs with
+`GIT_DIR` and `GIT_INDEX_FILE` set, and so does anything under `git rebase --exec`.
+Blanking is not available (`GIT_DIR=` fails with `not a git repository: ''`), so
+`ProcessSpawnOptions` grew `unsetEnv` and the Git boundary is its only caller. An
+architecture test pins that: a module removing variables from a *coding agent's*
+environment would break the CLI authentication §54 depends on.
+
+Ten variables are removed. The one worth staring at is `GIT_INDEX_FILE`: `write-tree`
+records whatever index it is pointed at, so an inherited value would have made the
+"validated tree" of §11.2 a tree nobody validated — a receipt about content that was
+never checked. `GIT_ALTERNATE_OBJECT_DIRECTORIES` is next: `cat-file -e` is what
+recovery asks before trusting a tree, and an alternates list lets it answer "exists"
+about an object the repository does not have. `GIT_CONFIG_GLOBAL` and `GIT_SSH_COMMAND`
+are deliberately kept — §12.3 isolates hooks and nothing else.
+
+**`worktree list --porcelain` can be made to emit a record Git never wrote.** A
+worktree registered at a path whose name contains `"\nworktree /tmp/injected"` prints:
+
+```text
+worktree /tmp/inj            ← the real path, truncated at the newline
+worktree /tmp/injected       ← a record Git never emitted
+HEAD 0000000000000000000000000000000000000000
+HEAD 12500d21…               ← the real one
+branch refs/heads/hostile2
+```
+
+The parser started a new record on the second `worktree` line, which handed its caller
+a registered worktree that does not exist at a path an attacker chose — and downstream
+that path goes to `git worktree remove`. It is detectable, because Git ends every
+record with a blank line and never emits two `worktree` lines in one, so a second one
+**is** the signature of a forgery. The listing now fails whole rather than in part.
+
+What remains undetectable is the plain case: a newline with nothing attribute-shaped
+after it simply arrives truncated. That is closed a layer up by `realPath`, below.
+Together they are why the floor stayed at 2.33.0 instead of moving to 2.36.0 for `-z`.
+
+**`git worktree add` resolves symlinks, but ownership still cannot be lexical.** The
+first probe was reassuring: adding a worktree through a symlink records the *resolved*
+path, so a link cannot smuggle one in at registration time. The threat is later — a
+parent directory swapped for a symlink after the fact, which a user or a script does.
+The recorded path is then textually inside `~/.agent-flow/worktrees` and physically
+outside it, and `isWithinRoot` alone would have called it Agent Flow-owned and offered
+it to `git worktree remove`. `ownWorktrees` now canonicalises the root, resolves each
+entry with `realPath`, and **drops what does not resolve** — fail-closed in the
+direction that matters, since wrongly excluding a worktree costs disk and wrongly
+including one costs a directory nobody agreed to lose.
+
+One incidental trap, recorded because it will catch the next person: two temporary
+repositories created back to back with the same content, message and author produce
+the **same commit id**. Git timestamps have one-second resolution, so "we operated on A
+and not B" was unprovable until repository B was given a divergent commit.
+
+**A safety check that would have broken the next milestone.** `assertOperationArgs`
+rejected the whole C0 control range, which reads as prudent and is wrong: §12.4
+specifies a marker message with a subject, a body and trailers, so a **newline inside
+one argument** is exactly what M2-05 has to be able to pass, and `commit-tree -m` would
+have been refused by Agent Flow's own wrapper. The check is now on the NUL byte alone
+— the one that truncates an argument at `execve`, making this layer and `git` disagree
+about what was passed — and newlines in *structured* values are refused by the ref,
+revision and path allowlists in `git-workspaces.ts`, which is where a decision about a
+structured value belongs. Identity values keep the strict rule, because a commit
+object's author line is format-sensitive in a way a message body is not.
+
+Two related trip hazards, both self-inflicted and both worth naming: writing a literal
+control character into a TypeScript source instead of its escape produces a file `rg`
+reports as binary and `eslint` flags as `no-control-regex`; and `validRevision` had
+drifted from `validRef`, so a revision ending in `.lock` or `/` was refused by Git
+rather than by the layer that owns operand shape — turning a rejection into a
+`git_command_failed` from the far side of a spawn.

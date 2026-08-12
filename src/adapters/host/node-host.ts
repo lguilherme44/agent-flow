@@ -1,4 +1,4 @@
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import type { Host } from '../../ports/host.js';
 
 /**
@@ -17,6 +17,14 @@ import type { Host } from '../../ports/host.js';
 export class NodeHost implements Host {
   readonly pid = process.pid;
   readonly hostname = hostname();
+  /**
+   * `os.homedir()` rather than `process.env.HOME`, which MVP 2 §7.1 forbids
+   * reading directly. The difference is not stylistic: `HOME` is an ordinary
+   * environment variable that a wrapper script, a CI runner or a sudo invocation
+   * can set to anything, and Agent Flow's worktree root is a place it later
+   * *removes* directories from.
+   */
+  readonly homeDir = homedir();
 
   isAlive(pid: number): boolean {
     if (!Number.isInteger(pid) || pid <= 0) return false;

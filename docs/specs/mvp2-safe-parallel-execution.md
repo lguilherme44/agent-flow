@@ -1966,14 +1966,44 @@ loopback-only server with no authentication and the same stated limits.
 | `core.autocrlf` / `.gitattributes` making a fresh checkout dirty | **HANDLED** | Caught by the pre-setup cleanliness assertion, reported with `phase: "checkout"` (§8.3) — which is why that assertion exists separately from the post-setup one. |
 | Windows generally | **UNVALIDATED** | No CI job runs there and the process timeout still cannot signal a process tree. `doctor` MUST say worktree mode is unvalidated on Windows. |
 
-**On the Git version floor:** the operations this milestone needs are
-`worktree add --lock --reason`, `worktree remove`, `worktree prune`,
-`rev-parse --path-format=absolute`, `commit-tree`, `update-ref`,
+**On the Git version floor — determined in M2-02, and this is the answer.**
+
+```text
+MINIMUM_SUPPORTED_GIT_VERSION = 2.33.0
+```
+
+Pinned in `src/adapters/git/git-workspaces.ts`, reported by `doctor`, and stated in
+the README. The operations this milestone needs are `worktree add --lock --reason`,
+`worktree remove`, `worktree unlock`, `worktree prune`, `worktree list --porcelain`,
+`rev-parse --path-format=absolute`, `write-tree`, `commit-tree`, `update-ref`,
 `merge --no-ff --no-edit`, `merge --abort`, `merge-base --is-ancestor`, `cat-file -e`,
-`for-each-ref` and `status --porcelain=v1 --untracked-files=all`. **The exact minimum
-version MUST be determined empirically in M2-02 and pinned in `doctor` and in the
-README.** A version asserted here from memory would be a claim nobody probed, and
-this project's own Findings document exists because of exactly that kind of claim.
+`for-each-ref` and `status --porcelain=v1 --untracked-files=all`. Exactly one of them
+sets the floor:
+
+| Flag | Introduced | Evidence |
+|---|---|---|
+| `worktree add --lock --reason <string>` | **2.33.0** | Release notes 2.33.0: *"`git worktree add --lock` learned to record why the worktree is locked with a custom message."* The `add` synopsis carries `[--lock [--reason <string>]]` from the 2.33.0 manual page and does not in 2.31.0's; the 2.32.0 page is the 2.31.0 document unchanged. |
+| `worktree add --lock` | ≤ 2.30.0 | In the 2.30.0 synopsis, absent from 2.9.5's. |
+| `rev-parse --path-format=absolute` | 2.31.0 | Below the floor, so it does not move it. |
+| `--end-of-options` (used to harden `rev-parse`) | 2.24.0 | Release notes 2.24.0: *"The command line parser learned `--end-of-options` notation."* Below the floor. |
+| everything else | ≤ 2.11.0 | — |
+
+**`worktree list --porcelain -z` was deliberately not adopted.** It arrived in 2.36.0
+(absent from the 2.35.0 synopsis, present in 2.36.0's) and would move the floor three
+minor versions to close one edge case — a *foreign* worktree whose path contains a
+newline is not representable in the non-`-z` porcelain format. The exposure is
+bounded, because every path Agent Flow acts on is re-checked for containment under its
+own canonical root, so a mis-split record cannot become a directory it removes. M2-09
+owns cleanup and may reopen the trade-off; the reasoning is recorded in
+[`findings.md`](../engineering/findings.md).
+
+`status --porcelain=v1` **is** issued with `-z`, which long predates the floor and
+costs nothing. It is not optional there: without it a rename and a file literally
+called `old -> new` are the same bytes.
+
+Probed on Git 2.52.0. A version asserted here from memory would have been a claim
+nobody checked, and this project's own Findings document exists because of exactly
+that kind of claim.
 
 ---
 
@@ -2295,7 +2325,7 @@ see the note above.
 
 ---
 
-### M2-02 — `GitCommand` and `GitWorkspaces`
+### M2-02 — `GitCommand` and `GitWorkspaces` · STATUS: IMPLEMENTED
 
 **Goal.** One hook-isolated Git spawner, and every Git operation this milestone needs
 behind it. Real Git from the first commit — no mocks in the adapter's own tests.
@@ -2324,6 +2354,21 @@ never silently swallowed, and never retried automatically.
 **Risk.** Medium. Platform differences in `worktree` behaviour and in how hooks are
 resolved are exactly the class of thing that only real-Git tests catch — which is why
 they are mandatory here and not deferred to M2-12.
+
+**What landed, and the three things probing changed.** `GitCommand` takes a subcommand
+from a closed list and puts every caller argument *after* it, because Git reads
+configuration only before the subcommand and the last `-c core.hooksPath` on a command
+line wins — so prefixing a safe value while accepting arbitrary argv would have been no
+defence at all. `refsUnder` takes a namespace **prefix** rather than a `…/*` glob,
+because `*` matches one path component: the obvious spelling returned `…/integration`
+and silently omitted every attempt ref, which would have made the §5.3 case C collision
+check report an empty namespace that was not empty. And `objectExists` asks
+`cat-file -e <oid>` with no peel suffix, because `<oid>^{commit}` exits 128 for a
+missing object where the bare form exits 1 — with the suffix, "absent" and "this
+repository is broken" are the same answer, which §32 forbids. The Git floor is
+**2.33.0** (§23). `Host` gained `homeDir` so `~/.agent-flow` is resolved through a port
+rather than from `process.env.HOME` (§7.1), which is also what lets the real-Git tests
+run against a temporary home.
 
 ---
 

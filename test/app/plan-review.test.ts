@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { testGitCommand } from '../fakes/test-git-command.js';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
@@ -100,6 +101,7 @@ async function harness(reviewerRunner: string) {
     store,
     stageRunner,
     processRunner,
+    git: testGitCommand(processRunner),
     config: { global },
     capabilities: { claude: CAPS, codex: CAPS },
     providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
@@ -115,7 +117,7 @@ async function harness(reviewerRunner: string) {
     PROJECT,
     await computeFingerprint({
       fs,
-      processRunner,
+      git: testGitCommand(processRunner),
       projectDir: PROJECT,
       projectConfig: 'No project configuration found. Infer conventions from the repository itself.',
     }),

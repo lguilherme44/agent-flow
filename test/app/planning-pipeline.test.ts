@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { testGitCommand } from '../fakes/test-git-command.js';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
@@ -155,6 +156,7 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     store,
     stageRunner,
     processRunner,
+    git: testGitCommand(processRunner),
     config: { global: globalConfig, project: PROJECT_CONFIG },
     capabilities: CAPABILITIES,
     providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
@@ -187,7 +189,7 @@ async function seedValidCache(
     PROJECT,
     await computeFingerprint({
       fs,
-      processRunner,
+      git: testGitCommand(processRunner),
       projectDir: PROJECT,
       // Must match what the pipeline renders, or the fingerprints differ and
       // the cache is correctly treated as stale.
@@ -431,7 +433,7 @@ describe('the discovery cache is invalidated when the repository changes (V-07 r
   /** Drives `git rev-parse` / `git status` for the fingerprint. */
   const gitReturning = (head: string, status = '') =>
     new FakeProcessRunner().always((spawn) =>
-      spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: head } : { exitCode: 0, stdout: status },
+      spawn.args.includes('rev-parse') ? { exitCode: 0, stdout: head } : { exitCode: 0, stdout: status },
     );
 
   it('reuses the cache when nothing relevant changed', async () => {
@@ -458,7 +460,7 @@ describe('the discovery cache is invalidated when the repository changes (V-07 r
 
     // A commit landed.
     proc.always((spawn) =>
-      spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: 'def456' } : { exitCode: 0, stdout: '' },
+      spawn.args.includes('rev-parse') ? { exitCode: 0, stdout: 'def456' } : { exitCode: 0, stdout: '' },
     );
 
     scriptHappyPath(runner);
@@ -474,7 +476,7 @@ describe('the discovery cache is invalidated when the repository changes (V-07 r
     await pipeline.run(run.runId, 'first feature');
 
     proc.always((spawn) =>
-      spawn.args[0] === 'rev-parse'
+      spawn.args.includes('rev-parse')
         ? { exitCode: 0, stdout: 'abc123' }
         : { exitCode: 0, stdout: ' M src/notes.js' },
     );
@@ -503,7 +505,7 @@ describe('the discovery cache is invalidated when the repository changes (V-07 r
     await pipeline.run(run.runId, 'first feature');
 
     proc.always((spawn) =>
-      spawn.args[0] === 'rev-parse' ? { exitCode: 0, stdout: 'zzz' } : { exitCode: 0, stdout: '' },
+      spawn.args.includes('rev-parse') ? { exitCode: 0, stdout: 'zzz' } : { exitCode: 0, stdout: '' },
     );
 
     scriptHappyPath(runner);

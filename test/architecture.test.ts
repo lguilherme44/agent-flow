@@ -49,6 +49,17 @@ function importSpecifiers(text: string): string[] {
   return out;
 }
 
+/**
+ * Strips comments and keeps string literals — the opposite of {@link codeOnly}.
+ *
+ * Some rules are *about* the literals: an error code, a command-line flag, an
+ * event name. `codeOnly` blanks exactly those, so a rule written against it
+ * would pass by looking at nothing.
+ */
+function withoutComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+}
+
 /** Strips comments and string literals so identifier scans do not hit prose. */
 function codeOnly(text: string): string {
   return text
@@ -352,15 +363,157 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     expect(offenders).toEqual([]);
   });
 
-  it('creates no git worktree anywhere in production code', () => {
-    // M2-00 is the hardening that comes *before* isolation. A worktree appearing
-    // here would mean the milestone quietly became the next one.
+  it('names a git worktree operation only inside the Git adapter (M2-02)', () => {
+    // Until M2-02 this read "creates no git worktree anywhere in production
+    // code", which was the right rule while no module was allowed to know what a
+    // worktree was. M2-02 builds the one module that is, so the rule becomes a
+    // *location* rule rather than a prohibition — which is stronger, not weaker:
+    // a prohibition is deleted the day the feature lands, and a location rule is
+    // the thing that keeps it in one place afterwards.
+    //
+    // Read from the raw text rather than `codeOnly`, so that prose describing a
+    // worktree operation is caught too. A comment in the scheduler explaining how
+    // it would run `worktree add` is exactly the draft of the code that must not
+    // be there.
     const offenders = sourceFiles('src')
       .map(read)
-      .filter(({ text }) => /worktree\s+(add|remove|prune|list)/.test(text))
+      .filter(({ path }) => !path.startsWith('src/adapters/git/'))
+      .filter(({ text }) => /worktree\s+(add|remove|prune|list|lock|unlock)/.test(text))
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('one module spawns git, and it isolates hooks (M2-02, I-7, S-8, S-12)', () => {
+  // §26.1 rule 1. Before M2-02 there were three spawners — `git-client.ts`,
+  // `discovery-cache.ts` and `doctor.ts`'s tool probe — and each was a place an
+  // internal Git command could run with the user's hooks attached. `--no-verify`
+  // would not have covered them: probed on Git 2.52.0, a `reference-transaction`
+  // hook fires for a plain `git update-ref`, the flag does not exist there, and
+  // the same is true of the `post-checkout` hook `git worktree add` runs.
+  const SPAWNER = 'src/adapters/git/git-command.ts';
+
+  it('builds a git command line in exactly one module', () => {
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => path !== SPAWNER)
+      // Both shapes: the object literal a `ProcessRunner` takes, and passing
+      // `'git'` as the executable argument of a helper — which is how the
+      // `doctor` probe got there and how the next one would.
+      .filter(({ text }) => /command:\s*'git'|\(\s*[\w.]+\s*,\s*'git'\s*,/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('injects an owned empty core.hooksPath, before the subcommand', () => {
+    // Guards the rule above from passing vacuously, and pins the *position*.
+    // Probed: with two `-c core.hooksPath=` flags on one command line the last
+    // one wins, so "the safe value is somewhere in the argv" is not the
+    // property — "no caller-supplied argument can be in a configuration
+    // position" is. Git only reads configuration before the subcommand.
+    const code = codeOnly(read(join(ROOT, SPAWNER)).text);
+
+    expect(withoutComments(read(join(ROOT, SPAWNER)).text)).toMatch(/core\.hooksPath=/);
+    expect(code).toMatch(/\.\.\.this\.safetyConfig\(\)[\s\S]*invocation\.subcommand[\s\S]*\.\.\.args/);
+  });
+
+  it('refuses configuration smuggled in as an operation argument', () => {
+    // The §45 attack, pinned as a rule rather than only as a behaviour test:
+    // the validator has to exist and has to be reached before argv is built.
+    const code = withoutComments(read(join(ROOT, SPAWNER)).text);
+
+    expect(code).toMatch(/assertOperationArgs\s*\(/);
+    expect(code).toMatch(/git_unsafe_argument/);
+  });
+
+  it('uses --no-verify nowhere', () => {
+    // §26.1 rule 8. It is not a weaker form of hook isolation; it covers a
+    // different and smaller set, and reaching for it would mean the wrapper had
+    // been bypassed by something that needed a per-command escape hatch.
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /--no-verify/.test(withoutComments(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('uses git commit nowhere — commit-tree is the only commit maker', () => {
+    // §26.1 rule 9, §12.1. `git commit` reads a checked-out index and runs
+    // hooks, which would make a marker a function of whatever the worktree held
+    // at that instant rather than of the tree that was validated.
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /\bgit commit\b(?!-tree)|subcommand:\s*'commit'/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('owns every worktree operation in one adapter', () => {
+    // One spawner and one workspace adapter (§42 of the M2-02 brief). Splitting
+    // the operations across two modules would give two answers to "where does a
+    // worktree path come from", and only one of them would be the one being
+    // audited for containment.
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => path !== 'src/adapters/git/git-workspaces.ts')
+      .filter(({ text }) => /'worktree',?\s*$|args:\s*\[\s*'add'/m.test(codeOnly(text)))
+      .filter(({ path }) => path !== 'src/adapters/git/git-command.ts')
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('sanitises the Git environment only at the Git boundary', () => {
+    // `unsetEnv` exists for one reason — an inherited `GIT_DIR` relocates a
+    // repository regardless of `cwd`, and there is no value that reads as unset
+    // (probed: `GIT_DIR=` fails with `not a git repository: ''`). It is a sharp
+    // tool: a module that started removing variables from a coding agent's
+    // environment would be breaking the authentication those CLIs depend on,
+    // which is the one thing §54 says must keep working.
+    const users = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /\bunsetEnv\b/.test(codeOnly(text)))
+      .map(({ path }) => path)
+      .sort();
+
+    expect(users).toEqual([
+      'src/adapters/git/git-command.ts',
+      // Declares it, and implements the removal.
+      'src/adapters/process/node-process-runner.ts',
+      'src/ports/process-runner.ts',
+    ]);
+  });
+
+  it('removes the inherited variables rather than blanking them', () => {
+    const code = withoutComments(read(join(ROOT, SPAWNER)).text);
+
+    expect(code).toMatch(/GIT_HOSTILE_ENVIRONMENT/);
+    expect(code).toMatch(/GIT_DIR/);
+    expect(code).toMatch(/GIT_INDEX_FILE/);
+    // The workaround that does not work, pinned so it cannot come back.
+    expect(code).not.toMatch(/GIT_DIR:\s*''/);
+    expect(code).not.toMatch(/GIT_DIR=['"]{2}/);
+  });
+
+  it('derives every worktree path from a validated location, never from a caller', () => {
+    // S-3 and D-F02. `startsWith` is the wrong primitive — `/foo/bar2` starts
+    // with `/foo/bar` and is not inside it — and on Windows it matches nothing
+    // at all, which is a boundary that silently permits everything.
+    const { text } = read(join(ROOT, 'src/adapters/git/git-workspaces.ts'));
+    const code = codeOnly(text);
+
+    expect(importSpecifiers(text)).toContain('node:path');
+    expect(code).toMatch(/resolveWithinRoot\s*\(/);
+    expect(code).toMatch(/\.relative\(/);
+    expect(code).not.toMatch(/startsWith\(\s*root/);
+    // S-4: ownership is decided on resolved locations. A registered path is a
+    // string Git recorded, and the directory it names today may be a symlink to
+    // somewhere else — which matters because the answer authorises a removal.
+    expect(code).toMatch(/realPath\s*\(/);
   });
 });
 
@@ -455,9 +608,24 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
 
   it('lets no production module declare a run isolated', () => {
     // The mode is captured at run creation (M2-03) and read from the run. Until
-    // that exists, the only places the word may appear are the two that *define*
-    // it: the contract's enum and the resolver's ceiling.
-    const allowed = new Set(['src/contracts/common.schema.ts', RESOLVER, POLICY]);
+    // that exists, the only places the word may appear are the ones that *define*
+    // it: the contract's enum, the resolver's ceiling, and — since M2-02 — the
+    // Git adapter, where `'worktree'` is the name of a Git subcommand and has
+    // nothing to do with a run's isolation mode. The assertion below keeps that
+    // exemption honest by requiring the adapter to say nothing about the mode.
+    const allowed = new Set([
+      'src/contracts/common.schema.ts',
+      RESOLVER,
+      POLICY,
+      'src/adapters/git/git-command.ts',
+      'src/adapters/git/git-workspaces.ts',
+    ]);
+
+    for (const file of ['src/adapters/git/git-command.ts', 'src/adapters/git/git-workspaces.ts']) {
+      expect(codeOnly(read(join(ROOT, file)).text), `${file} names the run's mode`).not.toMatch(
+        /isolationMode/,
+      );
+    }
 
     // Read raw and strip comments only: `codeOnly` blanks string literals, and a
     // string literal is exactly what this rule is looking for.

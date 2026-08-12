@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { testGitCommand } from '../fakes/test-git-command.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
@@ -154,6 +155,7 @@ async function world(options: { globalConfig?: ReturnType<typeof config> } = {})
     store,
     stageRunner,
     processRunner,
+    git: testGitCommand(processRunner),
     config: { global, project: projectConfig },
     capabilities: { claude: CAPS, codex: CAPS },
     providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),

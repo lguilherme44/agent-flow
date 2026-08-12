@@ -9,9 +9,18 @@ import {
   type ObservedRunner,
 } from '../core/health.js';
 import { probeRunner, type ProbeResult } from '../app/runner-probe.js';
+import { NodeHost } from '../adapters/host/node-host.js';
+import { createGitCommand } from '../adapters/git/git-command.js';
+import {
+  createGitWorkspaces,
+  MINIMUM_SUPPORTED_GIT_VERSION,
+  compareGitVersions,
+  formatGitVersion,
+} from '../adapters/git/git-workspaces.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
+import type { FileSystem } from '../ports/file-system.js';
 import type { ProcessRunner } from '../ports/process-runner.js';
 
 export interface DoctorOptions {
@@ -47,7 +56,11 @@ export async function runDoctorCommand(
     const lines: string[] = ['Agent Flow Doctor', ''];
 
     const node = await checkTool(processRunner, 'node', ['--version']);
-    const git = await checkTool(processRunner, 'git', ['--version']);
+    // Through the wrapper, not through `checkTool`. `git --version` runs no
+    // hooks and could not have hurt anything, but "only one module spawns git"
+    // (§26.1 rule 1) is worth exactly as much as its least-defended exception,
+    // and a probe is the easiest place for the next one to appear.
+    const git = await checkGit(processRunner, fs, new NodeHost().homeDir);
     lines.push(renderTool('Node', node), renderTool('Git', git), '');
 
     const registry = buildRegistry(config.global, { processRunner, fs });
@@ -184,6 +197,37 @@ async function probeAll(
 interface ToolStatus {
   readonly present: boolean;
   readonly version?: string;
+}
+
+/**
+ * Git's version, read through the one wrapper that may spawn it.
+ *
+ * Reports the floor alongside the installed version so the answer to "is my Git
+ * new enough for worktree mode" is on the same screen as the version itself
+ * (§23). It is **information, not a gate**: M2-02 pins the floor and offers the
+ * probe, and M2-03 is the milestone that turns a version below it into
+ * `git_version_unsupported` on a run.
+ */
+async function checkGit(
+  processRunner: ProcessRunner,
+  fs: FileSystem,
+  homeDir: string,
+): Promise<ToolStatus> {
+  const git = await createGitCommand({ processRunner, fs, homeDir });
+  const workspaces = await createGitWorkspaces({ git, fs, homeDir });
+
+  const version = await workspaces.version(process.cwd());
+  if (!version.ok) return { present: false };
+
+  const floor = formatGitVersion(MINIMUM_SUPPORTED_GIT_VERSION);
+  const supported = compareGitVersions(version.value, MINIMUM_SUPPORTED_GIT_VERSION) >= 0;
+
+  return {
+    present: true,
+    version: supported
+      ? `${version.value.raw}  (worktree mode needs ${floor} or newer)`
+      : `${version.value.raw}  ⚠ below the ${floor} worktree-mode floor`,
+  };
 }
 
 async function checkTool(

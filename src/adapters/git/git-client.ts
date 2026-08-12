@@ -1,9 +1,17 @@
-import type { ProcessRunner } from '../../ports/process-runner.js';
+import {
+  GIT_TIMEOUT_SECONDS,
+  type GitCommand,
+  type GitOutcome,
+  type GitSubcommand,
+} from './git-command.js';
 
 export interface GitChange {
   readonly path: string;
   readonly status: string;
 }
+
+/** What the old direct `ProcessRunner` call used, kept so prompts do not change size. */
+const REVIEW_MAX_OUTPUT_BYTES = 256 * 1024;
 
 /**
  * The bits of git the workflow needs.
@@ -13,21 +21,33 @@ export interface GitChange {
  * pasting that into a prompt is how a reviewer runs out of context before it
  * reaches the interesting part (R-12). The reviewer gets a summary and the file
  * list, and reads what it needs: it has the repository, read-only.
+ *
+ * **Routed through `GitCommand` since M2-02.** It used to build
+ * `{ command: 'git' }` for `ProcessRunner` itself, which made it a second place
+ * where an internal Git invocation could be issued without hook isolation (I-7)
+ * — the exact shape §26.1 rule 1 now forbids. Nothing about what it reports
+ * changed, and the regression tests in `test/adapters/git-client.test.ts` are
+ * what say so.
+ *
+ * Truncated output is tolerated here, unlike in `GitWorkspaces`. This produces
+ * prose for a prompt, not a decision: a `diff --stat` over an enormous change
+ * being cut short costs the reviewer some context, whereas a truncated
+ * `worktree list` would cost the cleanup code its notion of what exists.
  */
 export class GitClient {
   constructor(
-    private readonly processRunner: ProcessRunner,
+    private readonly git: GitCommand,
     private readonly cwd: string,
   ) {}
 
   async isRepository(): Promise<boolean> {
-    const result = await this.run(['rev-parse', '--is-inside-work-tree']);
+    const result = await this.run('rev-parse', ['--is-inside-work-tree']);
     return result.exitCode === 0 && result.stdout.trim() === 'true';
   }
 
   /** `git diff --stat` against HEAD, including untracked files. */
   async diffStat(): Promise<string> {
-    const result = await this.run(['diff', '--stat', 'HEAD']);
+    const result = await this.run('diff', ['--stat', 'HEAD']);
     const tracked = result.exitCode === 0 ? result.stdout.trim() : '';
 
     const untracked = await this.untrackedFiles();
@@ -40,7 +60,7 @@ export class GitClient {
 
   /** Changed paths with their status letters, plus untracked files. */
   async changedFiles(): Promise<GitChange[]> {
-    const result = await this.run(['status', '--porcelain=v1']);
+    const result = await this.run('status', ['--porcelain=v1']);
     if (result.exitCode !== 0) return [];
 
     return result.stdout
@@ -56,20 +76,37 @@ export class GitClient {
   }
 
   private async untrackedFiles(): Promise<string[]> {
-    const result = await this.run(['ls-files', '--others', '--exclude-standard']);
+    const result = await this.run('ls-files', ['--others', '--exclude-standard']);
     return result.exitCode === 0
       ? result.stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
       : [];
   }
 
-  private async run(args: string[]) {
-    return this.processRunner.run({
-      command: 'git',
+  /**
+   * Every method here treats "git could not run" the same way it treated a
+   * non-zero exit before M2-02: as no information rather than as an exception.
+   * `review` is expected to work in a directory that is not a repository, and a
+   * throw from here would turn that into a crash.
+   */
+  private async run(subcommand: GitSubcommand, args: string[]): Promise<GitOutcome> {
+    const result = await this.git.run({
+      subcommand,
       args,
       cwd: this.cwd,
-      timeoutSeconds: 60,
-      maxOutputBytes: 256 * 1024,
+      timeoutSeconds: GIT_TIMEOUT_SECONDS.read,
+      maxOutputBytes: REVIEW_MAX_OUTPUT_BYTES,
     });
+
+    if (result.ok) return result.value;
+
+    return {
+      exitCode: null,
+      stdout: '',
+      stderr: result.failure.message,
+      durationMs: 0,
+      truncated: false,
+      argv: [],
+    };
   }
 }
 
