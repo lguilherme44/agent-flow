@@ -26,6 +26,41 @@
     border-radius: 4px;
   }
 
+  /**
+   * Motion, when the operating system has asked for less of it (§97).
+   *
+   * The blunt selector is the deliberate choice, not laziness. Today the app moves
+   * in four places — the running marker spins, buttons transition their colours,
+   * a dimmed graph node fades, a progress bar grows — and a rule naming those four
+   * would cover them and silently miss the fifth. The fifth is the one nobody
+   * remembers adding. This covers every animation and transition in the app and in
+   * any library rendered inside it, which is the only version of this rule that
+   * stays true as the code grows.
+   *
+   * **Nothing is lost by stopping the spinner, and that is a property of the design
+   * rather than luck.** §97 already requires status to be icon *plus text*, so every
+   * marker that spins sits beside a word that does not move: "RUNNING" in the table
+   * and in the graph, "Running…" in the job pill, and the stage's own status under
+   * the pipeline chip — which is additionally the only violet-washed thing on the
+   * screen. The animation was always reinforcement, never the signal. A dashboard
+   * that had to spin to say a run was alive could not honour this setting at all.
+   *
+   * `0.01ms` rather than `none`: Radix decides whether to wait for an `animationend`
+   * before unmounting by reading the computed animation, so a hard `none` would
+   * quietly change dismissal behaviour the day a dialog gains an exit animation. An
+   * immeasurably short duration ends instantly *and* still fires the event.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;

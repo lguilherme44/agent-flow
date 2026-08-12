@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { FIXTURE_RUN_ID, RUN } from './fixtures';
 import { settle, stubApi } from './harness';
 
@@ -389,5 +389,64 @@ test.describe('settings', () => {
     await expect(page.getByRole('heading', { name: 'Execution' })).toBeVisible();
 
     await expect(page).toHaveScreenshot('settings.png', { fullPage: false });
+  });
+});
+
+/**
+ * `prefers-reduced-motion`, from both sides (§97).
+ *
+ * The control case is not padding: an assertion that nothing moves, run against a
+ * page that never moved, passes for the wrong reason — and would keep passing after
+ * somebody deleted the base rule. So the first test proves the fixture genuinely
+ * animates something before the second one claims it stopped.
+ *
+ * Durations are read as numbers rather than compared as strings. The rule is written
+ * `0.01ms` and Chromium reports it back as `0.00001s`, so an equality check against
+ * the authored text would be asserting a serialisation format instead of a fact.
+ */
+const MOVING_MS = 1;
+
+/** Every element whose computed animation or transition lasts long enough to see. */
+async function movingElements(page: Page): Promise<string[]> {
+  return page.evaluate((limit) => {
+    const asMs = (value: string): number => {
+      const text = value.trim();
+      const amount = Number.parseFloat(text);
+      if (Number.isNaN(amount)) return 0;
+      return text.endsWith('ms') ? amount : amount * 1000;
+    };
+
+    return [...document.querySelectorAll('body *')]
+      .filter((node) => {
+        const style = getComputedStyle(node);
+        return [style.animationDuration, style.transitionDuration]
+          .flatMap((value) => value.split(','))
+          .some((value) => asMs(value) > limit);
+      })
+      .map((node) => `${node.tagName.toLowerCase()}.${node.getAttribute('class') ?? ''}`);
+  }, MOVING_MS);
+}
+
+test.describe('motion', () => {
+  test('stops under reduce, and loses nothing by stopping', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/dashboard');
+    await settle(page);
+
+    // The control half, on the same DOM rather than in a second test: the fixture
+    // has a stage in flight and a running task, so their markers spin. Without
+    // this the assertion below would pass just as happily against a page that
+    // never moved — including after somebody deleted the base rule.
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    expect((await movingElements(page)).length).toBeGreaterThan(0);
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(await movingElements(page), 'elements still moving under reduce').toEqual([]);
+
+    // And the reason stopping it is safe rather than lossy: the status was never
+    // in the animation. If a future state ever needs its spinner to be legible,
+    // this fails — which is the point.
+    await expect(page.getByText('RUNNING').first()).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Pipeline' })).toContainText('running');
   });
 });
