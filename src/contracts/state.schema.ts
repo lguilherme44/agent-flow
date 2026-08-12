@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { IsoTimestampSchema, RunIdSchema } from './common.schema.js';
+import {
+  CommitOidSchema,
+  GitRunKeySchema,
+  IsolationModeSchema,
+  IsoTimestampSchema,
+  RunIdSchema,
+} from './common.schema.js';
 import { TaskStateSchema } from './task.schema.js';
 
 /** Pipeline stages, in order. `stage` on a run points at the last one reached. */
@@ -121,6 +127,34 @@ export const RunStateSchema = z.object({
 
   degradations: z.array(DegradationSchema).default([]),
   tasks: z.array(TaskProgressSchema).default([]),
+
+  /**
+   * The commit the repository was on when the run was created (MVP 2 §6.1).
+   *
+   * Not "the current HEAD" — the HEAD the plan was written against. In worktree
+   * mode it is the commit the integration branch is cut from; in sequential mode
+   * it is what the gates compare the working tree against.
+   */
+  planningBase: CommitOidSchema.optional(),
+  /** This run's Git namespace, captured at creation with the two above. §5.2. */
+  gitRunKey: GitRunKeySchema.optional(),
+  /**
+   * How this run isolates its tasks, decided once at creation (I-13).
+   *
+   * Nothing else writes it: not an execution, not a retry, not a resume and above
+   * all not a configuration change. Every reader downstream takes this value
+   * rather than asking the configuration again.
+   */
+  isolationMode: IsolationModeSchema.optional(),
+  /**
+   * The integration branch's head as this run last recorded it (§5.3, §14.3).
+   *
+   * The only mutable Git fact a run persists, and deliberately so: it is the
+   * discriminator that tells "my own namespace, resumed" apart from "somebody
+   * else's wreckage", which is a question `events.jsonl` must not be asked to
+   * answer (I-1).
+   */
+  integrationHead: CommitOidSchema.optional(),
 
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,

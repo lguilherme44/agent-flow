@@ -5,6 +5,7 @@ export * from './plan.schema.js';
 export * from './state.schema.js';
 export * from './review.schema.js';
 export * from './result.schema.js';
+export * from './attempt.schema.js';
 export * from './health.schema.js';
 export * from './json-schema.js';
 export * from './api.schema.js';

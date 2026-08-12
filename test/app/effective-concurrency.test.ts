@@ -191,10 +191,13 @@ describe('a configured parallelism above one does not become concurrent executio
   // switching it on changes the isolation of exactly nothing. Until task
   // workspaces genuinely exist, turning it on must not raise concurrency.
   //
-  // **Change this test when isolation ships, and not before.** When M2-01 lands,
-  // the expectation below becomes "four", and the reason it may change is that
-  // there is real isolation to point at — not that somebody wanted the number
-  // to go up.
+  // **Change this test when isolation ships, and not before.** M2-01 landed the
+  // *policy* — `resolveTaskConcurrency` can now be told a run is isolated, and
+  // `MAX_ISOLATED_TASK_CONCURRENCY` is 8 — and deliberately changed nothing here:
+  // no caller passes the mode, and no worktree exists to pass it about. **M2-11 is
+  // the milestone that edits this expectation**, once workspaces, receipts and the
+  // integrator are real. The reason it may change is that there is isolation to
+  // point at, never that somebody wanted the number to go up.
   it('still runs one task at a time with useWorktrees: true, because no worktree exists', async () => {
     const world = await approvedRun(CONFIG('parallelism:\n  maxTasks: 4\ngit:\n  useWorktrees: true\n'));
 

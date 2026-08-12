@@ -12,7 +12,10 @@ import {
   PlanSchema,
   RunStateSchema,
   DegradationSchema,
+  DEGRADATION_KINDS,
   TaskResultSchema,
+  TaskAttemptResultSchema,
+  type TaskAttemptResult,
   ReviewResultSchema,
   FindingSchema,
   HealthReportSchema,
@@ -345,6 +348,93 @@ describe('Degradation and RunState (R-16)', () => {
     expect(RunStateSchema.safeParse({ ...base, runId: 'AF-2026-1' }).success).toBe(false);
     expect(RunStateSchema.safeParse({ ...base, runId: 'AF-2026-001' }).success).toBe(true);
   });
+
+  it('adds no degradation kind for MVP 2 (§25.1)', () => {
+    // The whole isolation milestone is covered by `parallelism_clamped`, which
+    // already exists. A new kind would be a contract change for a run that
+    // behaves exactly as before, and every reader of the channel would have to
+    // learn a word for something that is not new.
+    expect([...DEGRADATION_KINDS]).toEqual([
+      'runner_unavailable_with_fallback',
+      'single_provider',
+      'auth_unverified',
+      'reasoning_clamped',
+      'forced_approval',
+      'parallelism_clamped',
+    ]);
+  });
+});
+
+describe('the run carries its Git identity, and only optionally (MVP 2 §6.1)', () => {
+  const LEGACY = {
+    runId: 'AF-2026-001',
+    feature: 'recurring-bookings',
+    stage: 'sdd',
+    status: 'running',
+    createdAt: '2026-08-09T20:00:00.000Z',
+    updatedAt: '2026-08-09T20:00:00.000Z',
+  } as const;
+
+  const OID = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+  it('loads a state file written before any of the four fields existed (§25.2)', () => {
+    // Not a nicety — it is what a legacy run *is*. The fields being absent is the
+    // shape that says this run predates the question, and it must keep parsing,
+    // displaying and resuming exactly as it did.
+    const parsed = RunStateSchema.parse(LEGACY);
+
+    expect(parsed.planningBase).toBeUndefined();
+    expect(parsed.gitRunKey).toBeUndefined();
+    expect(parsed.isolationMode).toBeUndefined();
+    expect(parsed.integrationHead).toBeUndefined();
+  });
+
+  it('carries all four when a run was born with them', () => {
+    const parsed = RunStateSchema.parse({
+      ...LEGACY,
+      planningBase: OID,
+      gitRunKey: 'AF-2026-001-0f3a91c4bd27e615',
+      isolationMode: 'worktree',
+      integrationHead: OID,
+    });
+
+    expect(parsed.planningBase).toBe(OID);
+    expect(parsed.gitRunKey).toBe('AF-2026-001-0f3a91c4bd27e615');
+    expect(parsed.isolationMode).toBe('worktree');
+    expect(parsed.integrationHead).toBe(OID);
+  });
+
+  it('accepts the sequential mode, which is not the same as absent', () => {
+    expect(RunStateSchema.parse({ ...LEGACY, isolationMode: 'none' }).isolationMode).toBe('none');
+  });
+
+  it('refuses an object id that is not a full lowercase SHA', () => {
+    for (const field of ['planningBase', 'integrationHead'] as const) {
+      for (const bad of [OID.toUpperCase(), OID.slice(0, 39), `${OID}0`, 'HEAD', '']) {
+        expect(RunStateSchema.safeParse({ ...LEGACY, [field]: bad }).success, `${field}=${bad}`).toBe(
+          false,
+        );
+      }
+    }
+  });
+
+  it('refuses a run key that could be injected into a ref (S-2)', () => {
+    for (const bad of [
+      'AF-2026-001',
+      'AF-2026-001-0F3A91C4BD27E615',
+      'AF-2026-001-0f3a91c4bd27e61',
+      'AF-2026-001-0f3a91c4bd27e615 --exec=sh',
+      '../AF-2026-001-0f3a91c4bd27e615',
+    ]) {
+      expect(RunStateSchema.safeParse({ ...LEGACY, gitRunKey: bad }).success, bad).toBe(false);
+    }
+  });
+
+  it('refuses an isolation mode nobody implements', () => {
+    for (const bad of ['worktrees', 'container', 'true', '']) {
+      expect(RunStateSchema.safeParse({ ...LEGACY, isolationMode: bad }).success, bad).toBe(false);
+    }
+  });
 });
 
 describe('TaskResult (§21)', () => {
@@ -377,6 +467,178 @@ describe('TaskResult (§21)', () => {
     });
     expect(parsed.reasoningClamped).toBe(false);
     expect(parsed.filesChanged).toEqual([]);
+  });
+});
+
+describe('TaskAttemptResult is one execution, never an outcome (MVP 2 §10)', () => {
+  const TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+  const BASE = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
+  const NONCE = '9f8e7d6c5b4a39281706f5e4d3c2b1a0';
+
+  const RECEIPT = {
+    nonce: NONCE,
+    validatedTree: TREE,
+    issuedAt: '2026-08-09T20:01:00.000Z',
+  };
+
+  const ATTEMPT = {
+    run: 'AF-2026-001',
+    task: 'TASK-003',
+    attempt: 1,
+    base: BASE,
+    branch: 'agent-flow/AF-2026-001-0f3a91c4bd27e615/TASK-003/attempt-1',
+    workspace: 'agent-flow-0f3a91c4bd27/AF-2026-001-0f3a91c4bd27e615/TASK-003/attempt-1',
+    runner: 'claude',
+    reasoning: 'high',
+    startedAt: '2026-08-09T20:00:00.000Z',
+    finishedAt: '2026-08-09T20:01:00.000Z',
+    agentReport: { status: 'COMPLETED' },
+    validation: { expectation: 'pass', passed: true },
+    validationJudgement: 'satisfied',
+    receipt: RECEIPT,
+  } as const;
+
+  const withJudgement = (
+    judgement: string,
+    receipt: typeof RECEIPT | undefined,
+  ): Record<string, unknown> => {
+    const { receipt: _dropped, ...rest } = ATTEMPT;
+    return {
+      ...rest,
+      validationJudgement: judgement,
+      ...(receipt === undefined ? {} : { receipt }),
+    };
+  };
+
+  it('records what ran, where, and what the validation found', () => {
+    const parsed = TaskAttemptResultSchema.parse(ATTEMPT);
+
+    expect(parsed.task).toBe('TASK-003');
+    expect(parsed.attempt).toBe(1);
+    expect(parsed.receipt?.validatedTree).toBe(TREE);
+    // The workspace is relative, so the artifact says nothing about this machine.
+    expect(parsed.workspace.startsWith('/')).toBe(false);
+    expect(parsed.filesChanged).toEqual([]);
+    expect(parsed.reasoningClamped).toBe(false);
+  });
+
+  it('has no status field, so nothing here can be read as a task outcome (I-3)', () => {
+    // `TaskResult` carries `status: TaskState`. Reusing it would put
+    // `"status": "completed"` on disk for work that has not been integrated —
+    // and recovery would believe it. The word is absent from this artifact by
+    // construction, not by convention.
+    const parsed = TaskAttemptResultSchema.parse({ ...ATTEMPT, status: 'completed' });
+
+    expect('status' in parsed).toBe(false);
+
+    // @ts-expect-error — TaskAttemptResult carries no TaskState, and the type
+    // says so. If this line ever compiles, the artifact grew an outcome.
+    const forbidden: unknown = (parsed satisfies TaskAttemptResult).status;
+    expect(forbidden).toBeUndefined();
+  });
+
+  it('pairs a receipt with a satisfied judgement, in both directions', () => {
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('satisfied', RECEIPT)).success).toBe(
+      true,
+    );
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('unsatisfied', undefined)).success).toBe(
+      true,
+    );
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('not_reached', undefined)).success).toBe(
+      true,
+    );
+  });
+
+  it('refuses every other combination of the two', () => {
+    // The `.refine` is what makes "a receipt means validation passed here" a
+    // property of the data. A convention would be re-argued by every reader.
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('satisfied', undefined)).success).toBe(
+      false,
+    );
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('unsatisfied', RECEIPT)).success).toBe(
+      false,
+    );
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('not_reached', RECEIPT)).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a judgement outside the three', () => {
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('passed', RECEIPT)).success).toBe(false);
+    expect(TaskAttemptResultSchema.safeParse(withJudgement('completed', RECEIPT)).success).toBe(
+      false,
+    );
+  });
+
+  it('holds the receipt to exact widths', () => {
+    for (const nonce of [NONCE.slice(0, 31), `${NONCE}0`, NONCE.toUpperCase(), '']) {
+      expect(
+        TaskAttemptResultSchema.safeParse({ ...ATTEMPT, receipt: { ...RECEIPT, nonce } }).success,
+        nonce,
+      ).toBe(false);
+    }
+
+    for (const tree of [TREE.slice(0, 39), `${TREE}0`, TREE.toUpperCase(), 'HEAD']) {
+      expect(
+        TaskAttemptResultSchema.safeParse({
+          ...ATTEMPT,
+          receipt: { ...RECEIPT, validatedTree: tree },
+        }).success,
+        tree,
+      ).toBe(false);
+    }
+  });
+
+  it('counts attempts from one', () => {
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, attempt: 0 }).success).toBe(false);
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, attempt: -1 }).success).toBe(false);
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, attempt: 1.5 }).success).toBe(false);
+    expect(TaskAttemptResultSchema.parse({ ...ATTEMPT, attempt: 7 }).attempt).toBe(7);
+  });
+
+  it('records provenance, including a fallback that actually fired', () => {
+    const parsed = TaskAttemptResultSchema.parse({
+      ...ATTEMPT,
+      model: 'a-model',
+      reasoningClamped: true,
+      fallback: { from: 'codex', errorCode: 'quota_exceeded' },
+      filesChanged: ['src/a.ts', 'src/b.ts'],
+    });
+
+    expect(parsed.fallback?.from).toBe('codex');
+    expect(parsed.fallback?.errorCode).toBe('quota_exceeded');
+    expect(parsed.reasoningClamped).toBe(true);
+    expect(parsed.filesChanged).toHaveLength(2);
+  });
+
+  it('refuses a fallback triggered by something a fallback may not react to', () => {
+    expect(
+      TaskAttemptResultSchema.safeParse({
+        ...ATTEMPT,
+        fallback: { from: 'codex', errorCode: 'vibes' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('keeps the three validation expectations, including a test-first task', () => {
+    for (const expectation of ['pass', 'fail', 'none'] as const) {
+      const parsed = TaskAttemptResultSchema.parse({
+        ...ATTEMPT,
+        validation: { expectation, passed: expectation !== 'fail', ids: ['unit'], commands: [] },
+      });
+
+      expect(parsed.validation.expectation).toBe(expectation);
+      expect(parsed.validation.ids).toEqual(['unit']);
+    }
+  });
+
+  it('refuses an absolute workspace, an empty one, and a task id it cannot place', () => {
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, workspace: '' }).success).toBe(false);
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, branch: '' }).success).toBe(false);
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, task: '../../etc' }).success).toBe(
+      false,
+    );
+    expect(TaskAttemptResultSchema.safeParse({ ...ATTEMPT, base: 'HEAD' }).success).toBe(false);
   });
 });
 

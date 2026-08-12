@@ -319,10 +319,13 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     expect(code).not.toMatch(/maxConcurrency:\s*config\.global\.parallelism\.maxTasks/);
   });
 
-  it('keeps the ceiling in the resolver, so raising it is one edit', () => {
+  it('keeps both ceilings in the resolver, so raising either is one edit', () => {
     // Guards the rule above from passing vacuously if the resolver were emptied.
+    // Two ceilings from M2-01 on: one for tasks sharing a working tree, one for
+    // tasks that each own a worktree (§4.4). The first never moves.
     const { text } = read(join(ROOT, HOME));
     expect(text).toMatch(/MAX_SUPPORTED_TASK_CONCURRENCY\s*=\s*1/);
+    expect(text).toMatch(/MAX_ISOLATED_TASK_CONCURRENCY\s*=\s*8/);
   });
 
   it('reads git.useWorktrees nowhere that could grant isolation it does not have', () => {
@@ -355,6 +358,153 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     const offenders = sourceFiles('src')
       .map(read)
       .filter(({ text }) => /worktree\s+(add|remove|prune|list)/.test(text))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('the isolation policy is decided in core, and switched on by nobody yet (M2-01)', () => {
+  // M2-01 lands the *naming* half of MVP 2: what a worktree, a branch and a run
+  // namespace are called. Nothing creates one, nothing asks Git anything, and no
+  // execution path resolves more than one concurrent task. Every rule here exists
+  // because the cheapest way to break that is to land the next milestone by
+  // accident — a helper here, a second argument there.
+  const POLICY = 'src/core/worktree-policy.ts';
+  const RESOLVER = 'src/core/concurrency.ts';
+
+  it('keeps the policy free of anything that could look at a machine', () => {
+    const { text } = read(join(ROOT, POLICY));
+    const code = codeOnly(text);
+
+    // Not a paraphrase of "src/core imports no Node built-in" — that rule is
+    // about imports, and this module could reach the filesystem through a port
+    // handed to it. It takes no dependencies at all, and that is the property.
+    for (const forbidden of [
+      'readFile',
+      'writeFile',
+      'readdir',
+      'realpath',
+      'existsSync',
+      'spawn',
+      'execFile',
+      'process.',
+      'createHash',
+      'Math.random',
+      'Date.now',
+    ]) {
+      expect(code, `${POLICY} reaches for ${forbidden}`).not.toContain(forbidden);
+    }
+
+    // Contracts only. A port, an adapter or an app module would each be a way for
+    // an answer to depend on something other than its arguments.
+    for (const specifier of importSpecifiers(text)) {
+      expect(specifier, `${POLICY} imports ${specifier}`).toMatch(/^\.\.\/contracts\//);
+    }
+  });
+
+  it('spawns no Git command from the policy', () => {
+    const code = codeOnly(read(join(ROOT, POLICY)).text);
+
+    expect(code).not.toMatch(/\bgit\b/i);
+    expect(code).not.toMatch(/command:\s*/);
+  });
+
+  it('resolves an absolute path nowhere in core', () => {
+    // The worktree root is `~/.agent-flow/worktrees`, resolved by the `Host` port
+    // in an adapter. A core module that named it would be deciding a machine fact
+    // from the one layer that cannot observe one — and §7.2's guarantee that no
+    // absolute path is ever persisted would rest on a habit instead of a shape.
+    const offenders = sourceFiles('src/core')
+      .map(read)
+      .filter(({ text }) => /\.agent-flow\/worktrees|homedir|os\.homedir/.test(text))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('hands no production caller the isolated ceiling (I-11, M2-11)', () => {
+    // Having the capability is not using it. `resolveTaskConcurrency` grew a
+    // second parameter in M2-01 and every production call still passes one
+    // argument, so the effective concurrency of a real run is one — whatever the
+    // configuration says and whatever mode a run records.
+    //
+    // M2-11 is the milestone that changes this, and this is the test it has to
+    // come and edit. Until then, a second argument appearing anywhere in `src` is
+    // parallelism arriving without the machinery that makes it safe.
+    const passesTheMode = (source: string): boolean =>
+      /resolveTaskConcurrency\s*\([^)]*,/.test(codeOnly(source));
+
+    // A rule that cannot see the thing it forbids passes forever. The literal is
+    // blanked by `codeOnly`, so the detection is on the argument, not its value.
+    expect(passesTheMode("resolveTaskConcurrency(config.parallelism.maxTasks, 'worktree')")).toBe(
+      true,
+    );
+    expect(passesTheMode('resolveTaskConcurrency(config.parallelism.maxTasks, mode)')).toBe(true);
+    expect(passesTheMode('resolveTaskConcurrency(config.parallelism.maxTasks)')).toBe(false);
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      // The resolver's own signature is where the second parameter is declared.
+      .filter(({ path }) => path !== RESOLVER)
+      .filter(({ text }) => passesTheMode(text))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('lets no production module declare a run isolated', () => {
+    // The mode is captured at run creation (M2-03) and read from the run. Until
+    // that exists, the only places the word may appear are the two that *define*
+    // it: the contract's enum and the resolver's ceiling.
+    const allowed = new Set(['src/contracts/common.schema.ts', RESOLVER, POLICY]);
+
+    // Read raw and strip comments only: `codeOnly` blanks string literals, and a
+    // string literal is exactly what this rule is looking for.
+    const declaresIsolated = (source: string): boolean =>
+      /'worktree'|"worktree"/.test(
+        source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 '),
+      );
+
+    expect(declaresIsolated("const mode = 'worktree';")).toBe(true);
+    // Prose about the milestone is not the milestone arriving.
+    expect(declaresIsolated("// one day this will be 'worktree'\nconst mode = 'none';")).toBe(
+      false,
+    );
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !allowed.has(path))
+      .filter(({ text }) => declaresIsolated(text))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps Git out of the StateStore (I-1)', () => {
+    // The store persists an opaque, schema-validated string and knows nothing
+    // about refs. The day it runs a Git command, `state.json` has become a second
+    // index and the repository a second source of truth.
+    const { text } = read(join(ROOT, 'src/app/state-store.ts'));
+
+    expect(codeOnly(text)).not.toMatch(/\bgit\b/i);
+    expect(importSpecifiers(text).filter((s) => s.includes('adapters/git'))).toEqual([]);
+  });
+
+  it('writes no attempt artifact yet', () => {
+    // The attempt artifact is M2-05. The contract lands early so the adapters can
+    // be built against it, but a *writer* appearing before the receipt machinery
+    // would put a file on disk claiming evidence nothing produced.
+    const declaresIt = new Set(['src/contracts/attempt.schema.ts', 'src/contracts/index.ts']);
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !declaresIt.has(path))
+      .filter(
+        ({ text }) =>
+          /TaskAttemptResult|AttemptReceipt/.test(codeOnly(text)) ||
+          importSpecifiers(text).some((specifier) => specifier.includes('attempt.schema')),
+      )
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
