@@ -10,6 +10,7 @@ import {
   chmodSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
 import { GIT_HOSTILE_ENVIRONMENT } from '../../src/adapters/git/git-command.js';
 import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
@@ -460,5 +461,169 @@ describe('the hooks directory Agent Flow owns stays empty', () => {
     writeFileSync(join(noHooks, 'marker'), 'test-owned');
     await repoA.workspaces.status({ cwd: repoA.dir });
     expect(readFileSync(join(noHooks, 'marker'), 'utf8')).toBe('test-owned');
+  });
+});
+
+describe('commit identity is not inherited from the shell (§12.2)', () => {
+  // The blocker this file grew for. `GitCommand` fixes the identity with
+  // `-c user.name` / `-c user.email` and the dates through the environment, and
+  // that was not enough: probed, `GIT_AUTHOR_NAME` and friends **outrank the
+  // `-c` flags**. Two processes with the same tree, parent, message, identity
+  // and dates therefore produced different commit ids depending on the shell
+  // Agent Flow was started from — which is §12.2's determinism gone, and with it
+  // the property that makes re-running `commit-tree` after a crash free (§17.4).
+  const HOSTILE_A = {
+    GIT_AUTHOR_NAME: 'Evil',
+    GIT_AUTHOR_EMAIL: 'evil@example.com',
+    GIT_COMMITTER_NAME: 'Evil',
+    GIT_COMMITTER_EMAIL: 'evil@example.com',
+  } as const;
+
+  const HOSTILE_B = {
+    GIT_AUTHOR_NAME: 'Someone Else',
+    GIT_AUTHOR_EMAIL: 'someone@example.invalid',
+    GIT_COMMITTER_NAME: 'A Third Party',
+    GIT_COMMITTER_EMAIL: 'third@example.invalid',
+    GIT_AUTHOR_DATE: '2001-09-09T01:46:40Z',
+    GIT_COMMITTER_DATE: '2001-09-09T01:46:40Z',
+  } as const;
+
+  const AGENT_FLOW = { name: 'Agent Flow', email: 'agent-flow@local' } as const;
+  const FIXED_DATES = { author: '2026-01-01T00:00:00Z', committer: '2026-01-01T00:00:00Z' } as const;
+
+  /**
+   * A commit's headers, read back with real Git.
+   *
+   * `cat-file commit` rather than a `--format` string, because the raw object is
+   * what the id is computed over — a pretty-printer could normalise away exactly
+   * the difference under test.
+   */
+  function headersOf(repo: TempRepo, commit: string): { author: string; committer: string } {
+    const raw = repo.userGit(['cat-file', 'commit', commit]);
+    const author = /^author (.+)$/m.exec(raw)?.[1] ?? '';
+    const committer = /^committer (.+)$/m.exec(raw)?.[1] ?? '';
+    return { author, committer };
+  }
+
+  it('a git outside the wrapper takes the hostile identity — the positive control', async () => {
+    repoA = await makeTempRepoWithCommit();
+    for (const [name, value] of Object.entries(HOSTILE_A)) poison(name, value);
+
+    // Deliberately not `repo.userGit`, which pins its own author for
+    // reproducibility — this has to inherit `process.env` exactly as a user's
+    // shell would, or the control proves nothing.
+    const commit = execFileSync(
+      'git',
+      [
+        '-c',
+        'user.name=Agent Flow',
+        '-c',
+        'user.email=agent-flow@local',
+        'commit-tree',
+        repoA.userGit(['rev-parse', 'HEAD^{tree}']).trim(),
+        '-p',
+        repoA.head(),
+        '-m',
+        'control',
+      ],
+      { cwd: repoA.dir, encoding: 'utf8', env: process.env },
+    ).trim();
+
+    const headers = headersOf(repoA, commit);
+    // The `-c` flags lost. This is the defect, reproduced.
+    expect(headers.author).toContain('Evil <evil@example.com>');
+    expect(headers.committer).toContain('Evil <evil@example.com>');
+  });
+
+  it('commitTree keeps the Agent Flow identity and the supplied dates', async () => {
+    repoA = await makeTempRepoWithCommit();
+    for (const [name, value] of Object.entries(HOSTILE_B)) poison(name, value);
+
+    const tree = repoA.userGit(['rev-parse', 'HEAD^{tree}']).trim();
+    const marker = await repoA.workspaces.commitTree({
+      cwd: repoA.dir,
+      tree,
+      parents: [repoA.head()],
+      message: 'agent-flow: TASK-001 attempt 1',
+      identity: AGENT_FLOW,
+      dates: FIXED_DATES,
+    });
+
+    expect(marker.ok).toBe(true);
+    if (!marker.ok) return;
+
+    const headers = headersOf(repoA, marker.value);
+    expect(headers.author).toContain('Agent Flow <agent-flow@local>');
+    expect(headers.committer).toContain('Agent Flow <agent-flow@local>');
+    // 2026-01-01T00:00:00Z as Git stores it: seconds since the epoch.
+    expect(headers.author).toContain('1767225600');
+    expect(headers.committer).toContain('1767225600');
+    // And nothing of the hostile date (2001-09-09T01:46:40Z) survived.
+    expect(headers.author).not.toContain('1000000000');
+    expect(headers.committer).not.toContain('1000000000');
+  });
+
+  it('produces the same SHA under two different hostile environments', async () => {
+    // The main test of the fix. Same tree, same parent, same message, same
+    // identity, same dates — different shells.
+    repoA = await makeTempRepoWithCommit();
+    const tree = repoA.userGit(['rev-parse', 'HEAD^{tree}']).trim();
+    const parent = repoA.head();
+
+    const makeMarker = () =>
+      repoA?.workspaces.commitTree({
+        cwd: repoA.dir,
+        tree,
+        parents: [parent],
+        message: 'agent-flow: TASK-001 attempt 1',
+        identity: AGENT_FLOW,
+        dates: FIXED_DATES,
+      });
+
+    for (const [name, value] of Object.entries(HOSTILE_A)) poison(name, value);
+    const first = await makeMarker();
+
+    unpoison();
+    for (const [name, value] of Object.entries(HOSTILE_B)) poison(name, value);
+    const second = await makeMarker();
+
+    expect(first?.ok).toBe(true);
+    expect(second?.ok).toBe(true);
+    if (!first?.ok || !second?.ok) return;
+
+    // §12.2: re-running `commit-tree` from the same artifact yields the same
+    // commit, Git stores it once, and `update-ref` becomes idempotent — which is
+    // what closes the "crashed after commit-tree, before update-ref" window
+    // with no bookkeeping at all.
+    expect(second.value).toBe(first.value);
+  });
+
+  it('does not inherit dates for an invocation that supplies none', async () => {
+    // Removal happens before the overrides, so an invocation naming no dates
+    // gets neither the caller's nor the shell's. `merge` is the case: §14.5
+    // takes its timestamps from the injected Clock, and a leaked
+    // `GIT_COMMITTER_DATE` would silently backdate every merge commit.
+    repoA = await makeTempRepoWithCommit();
+    const base = repoA.head();
+    repoA.userGit(['checkout', '--quiet', '-b', 'sibling', base]);
+    repoA.write('sibling.ts', 'export {};\n');
+    const marker = repoA.commitAll('sibling');
+    repoA.userGit(['checkout', '--quiet', 'main']);
+
+    poison('GIT_COMMITTER_DATE', '2001-09-09T01:46:40Z');
+    poison('GIT_AUTHOR_DATE', '2001-09-09T01:46:40Z');
+
+    const merged = await repoA.workspaces.merge({
+      cwd: repoA.dir,
+      commit: marker,
+      message: 'agent-flow: integrate TASK-001 (attempt 1)',
+      identity: AGENT_FLOW,
+      dates: FIXED_DATES,
+    });
+
+    expect(merged.ok).toBe(true);
+    const headers = headersOf(repoA, repoA.head());
+    expect(headers.committer).toContain('1767225600');
+    expect(headers.committer).not.toContain('1000000000');
   });
 });

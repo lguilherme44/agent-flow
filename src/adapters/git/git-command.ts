@@ -456,6 +456,8 @@ function identityConfig(identity: GitIdentity | undefined): string[] {
  * | `GIT_CEILING_DIRECTORIES` | Stops repository discovery walking up, turning a valid `cwd` into "not a git repository". |
  * | `GIT_EXEC_PATH` | Names the directory Git loads its own subcommand programs from — the environment form of `--exec-path`, which the argument denylist already refuses. Probed: with it pointing at a directory holding an executable `git-sentinel`, `git sentinel` runs it. Leaving the variable inherited while refusing the flag would have been an asymmetry an attacker only has to notice once. |
  * | `GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS` | Inject configuration. A command-line `-c` outranks both (probed), so this is defence in depth rather than the primary mechanism — the closed subcommand list is that. |
+ * | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | **Outrank `-c user.name` / `-c user.email`, which is the opposite of what the wrapper assumed.** Probed: the same tree, parent, message, identity flags and dates produce `author Agent Flow <agent-flow@local>` with a clean environment and `author Evil <evil@example.com>` with these set — two different commit ids. |
+ * | `GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE` | Removed for the same reason and then set again by {@link environmentFor} when a caller supplies them. Removal comes first, so an inherited value cannot survive into an invocation that names no dates. |
  *
  * Deliberately **not** removed: `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM`
  * point at the user's own configuration files, which Agent Flow has no business
@@ -475,6 +477,19 @@ export const GIT_HOSTILE_ENVIRONMENT = [
   'GIT_EXEC_PATH',
   'GIT_CONFIG_COUNT',
   'GIT_CONFIG_PARAMETERS',
+  // Identity and dates. These do not redirect *which* repository is acted on —
+  // they decide what a commit Agent Flow makes actually says, and therefore what
+  // its id is. §12.2 requires a marker to be a deterministic function of the
+  // persisted artifact, so that re-running `commit-tree` after a crash yields the
+  // same SHA and `update-ref` becomes idempotent for free (§17.4). An inherited
+  // `GIT_AUTHOR_NAME` breaks exactly that: the marker becomes a function of the
+  // shell Agent Flow was started from.
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'GIT_AUTHOR_DATE',
+  'GIT_COMMITTER_DATE',
 ] as const;
 
 /**
@@ -488,6 +503,10 @@ export const GIT_HOSTILE_ENVIRONMENT = [
  * `GIT_TERMINAL_PROMPT=0` so a repository with a credential-requiring remote
  * cannot turn an orchestrated command into a process waiting on a terminal
  * nobody is watching.
+ *
+ * The dates are set here and removed by {@link GIT_HOSTILE_ENVIRONMENT}, in that
+ * order — `unsetEnv` is applied before `env`, so a caller that supplies dates
+ * gets them and one that does not gets neither theirs nor the shell's.
  */
 function environmentFor(dates: GitDates | undefined): Record<string, string> {
   const env: Record<string, string> = {

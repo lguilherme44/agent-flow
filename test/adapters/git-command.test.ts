@@ -323,7 +323,33 @@ describe('what a caller controls, and what it does not', () => {
       'GIT_EXEC_PATH',
       'GIT_CONFIG_COUNT',
       'GIT_CONFIG_PARAMETERS',
+      // Identity and dates. Probed: these outrank `-c user.name` /
+      // `-c user.email`, so with them inherited the same inputs produce a
+      // different commit id — which is §12.2's determinism gone. Removing any
+      // one of the six must fail this test.
+      'GIT_AUTHOR_NAME',
+      'GIT_AUTHOR_EMAIL',
+      'GIT_COMMITTER_NAME',
+      'GIT_COMMITTER_EMAIL',
+      'GIT_AUTHOR_DATE',
+      'GIT_COMMITTER_DATE',
     ]);
+  });
+
+  it('removes every variable that decides what a commit says', () => {
+    // A second, independent assertion on the same list, phrased as the property
+    // rather than as the order — so a reorder does not silently satisfy it and a
+    // deletion cannot pass by editing the array above to match.
+    for (const name of [
+      'GIT_AUTHOR_NAME',
+      'GIT_AUTHOR_EMAIL',
+      'GIT_COMMITTER_NAME',
+      'GIT_COMMITTER_EMAIL',
+      'GIT_AUTHOR_DATE',
+      'GIT_COMMITTER_DATE',
+    ]) {
+      expect([...GIT_HOSTILE_ENVIRONMENT], name).toContain(name);
+    }
   });
 
   it('leaves the user their own configuration files and transport setup', () => {
