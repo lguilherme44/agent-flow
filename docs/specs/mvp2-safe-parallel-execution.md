@@ -2221,19 +2221,36 @@ afterthought.
 
 ## 29. Dependency graph and critical path
 
+Edges, as declared by each item:
+
+| Item | Depends on |
+|---|---|
+| M2-01 policies | — |
+| M2-02 Git adapter | M2-01 |
+| M2-03 run identity | M2-01, M2-02 |
+| M2-04 workspace lifecycle | M2-02, M2-03 |
+| M2-05 receipt + marker | M2-04 |
+| M2-06 integrator + verification | M2-05 |
+| M2-07 crash recovery | M2-06 |
+| M2-08 retry | M2-05, M2-06 |
+| M2-09 cleanup | M2-02, M2-03 |
+| M2-10 read models | M2-03 … M2-08 |
+| M2-11 **activation** | M2-01 … M2-08, M2-10 |
+| M2-12 E2E + dogfood + docs | M2-11 |
+
 ```text
-M2-01 ──┬──► M2-02 ──┬──► M2-03 ──► M2-04 ──► M2-05 ──► M2-06 ──► M2-07 ──┐
-        │            │                          │         │              │
-        │            └──────────────► M2-09     └───┬─────┘              │
-        │                                           │                    │
-        └───────────────────────────────────────►  M2-08 ────────────────┤
-                                                                         │
-                              M2-10 ◄──────────────────────────────────  │
-                                │                                        │
-                                └──────────────► M2-11 ◄─────────────────┘
-                                                   │
-                                                   ▼
-                                                 M2-12
+                         ┌─► M2-09 cleanup ──────────────────────────┐
+                         │                                           │
+M2-01 ─► M2-02 ─► M2-03 ─┴─► M2-04 ─► M2-05 ─► M2-06 ─► M2-07 ───────┤
+                                          │        │                 │
+                                          └────────┴─► M2-08 ────────┤
+                                                                     │
+                                                       M2-10 ────────┤
+                                                                     ▼
+                                                                  M2-11
+                                                                     │
+                                                                     ▼
+                                                                  M2-12
 ```
 
 **Critical path:**
@@ -2242,9 +2259,11 @@ M2-01 ──┬──► M2-02 ──┬──► M2-03 ──► M2-04 ──�
 M2-01 → M2-02 → M2-03 → M2-04 → M2-05 → M2-06 → M2-07 → M2-11 → M2-12
 ```
 
-**M2-09 (cleanup)** and **M2-10 (read models)** are off the critical path and may be
-built in parallel with M2-05 … M2-08. **M2-08 (retry)** must land before M2-11: retry
-semantics under fan-out are part of what makes concurrency safe.
+**M2-09 (cleanup)** is off the critical path entirely and may be built any time after
+M2-03. **M2-10 (read models)** may be built alongside M2-06 … M2-08 but must land
+before M2-11 — a parallel run whose state cannot be read is a parallel run nobody can
+debug. **M2-08 (retry)** must land before M2-11 as well: retry semantics under fan-out
+are part of what makes concurrency safe, not a follow-up to it.
 
 ### The first moment `effectiveConcurrency > 1` may be enabled
 
