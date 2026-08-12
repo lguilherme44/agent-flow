@@ -59,7 +59,15 @@ export default {
         bottom: 'var(--af-bottom-height)',
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        /* No `Inter`, and its absence is the honest state rather than a regression.
+           It headed this stack and never once rendered: nothing loads it — no
+           `@font-face`, no stylesheet link, no font package — so every browser fell
+           through to `system-ui`. Both committed baseline sets are pictures of that
+           fallback, and so are the measured values in `tokens.css`: 132px is what
+           "Implementation" needs in the system face, not in Inter. Naming a font the
+           layout was never calibrated against is a claim this file cannot keep, and
+           adding it now would re-open every one of those measurements. */
+        sans: ['system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
       fontSize: {
