@@ -8,6 +8,7 @@ import {
   formatGitVersion,
 } from '../adapters/git/git-workspaces.js';
 import {
+  MAX_SUPPORTED_ATTEMPT,
   attemptWorkspace,
   gitRunKeyBelongsToRun,
   integrationRef,
@@ -356,11 +357,12 @@ export async function checkWorktreePreconditions(
   // 8 — without this the run refuses *itself*. `init` gitignores these three;
   // if any is tracked, the run's own state files dirty the tree and check 9
   // below reports files Agent Flow just wrote.
-  const notIgnored = await firstUnignoredStatePath(deps);
-  if (notIgnored !== null) {
+  const ignored = await checkStatePathsIgnored(deps);
+  if (ignored.kind === 'unreadable') return unreadable(ignored.detail);
+  if (ignored.kind === 'not_ignored') {
     return refuse(
       'agent_flow_state_not_ignored',
-      `${notIgnored} is not ignored by this repository, so Agent Flow's own state would dirty the tree`,
+      `${ignored.path} is not ignored by this repository, so Agent Flow's own state would dirty the tree`,
     );
   }
 
@@ -478,22 +480,32 @@ async function checkWorktreeRoot(deps: RepositoryDeps): Promise<WorktreeRefusal 
     };
   }
 
-  // The worst case this milestone can project: the deepest workspace path a run
-  // could ask for. The repository's own deepest tracked path is not added — that
-  // is a per-project measurement M2-04 makes when it creates a checkout.
-  const deepest = attemptWorkspace(repoKey, `${'AF-2026-001'}-${'0'.repeat(16)}`, 'TASK-000', 99);
+  const deepest = await deps.workspaces.deepestTrackedPathLength(deps.projectDir, (path) =>
+    deps.host.measurePathLength(path),
+  );
   if (!deepest.ok) {
+    return { code: 'git_unavailable', detail: deepest.failure.message };
+  }
+
+  const projected = projectWorstCaseWorktreePath({
+    homeDir: deps.host.homeDir,
+    repoKey,
+    deepestTrackedPathLength: deepest.value,
+    measure: (value) => deps.host.measurePathLength(value),
+  });
+  if (projected === null) {
     return {
       code: 'repository_root_unresolvable',
-      detail: `a workspace path could not be composed: ${deepest.refusal.reason}`,
+      detail: 'a worst-case workspace path could not be composed from this repository key',
     };
   }
 
-  const projected = `${deps.host.homeDir}/.agent-flow/worktrees/${deepest.value.relativePath}`;
-  if (projected.length > WORKTREE_PATH_BUDGET) {
+  if (projected > deps.host.maxPathLength) {
     return {
       code: 'worktree_path_too_long',
-      detail: `worktree paths would reach ${String(projected.length)} characters, over the ${String(WORKTREE_PATH_BUDGET)} this platform is assumed to allow`,
+      detail:
+        `the deepest file a worktree would hold projects to ${String(projected)} characters, ` +
+        `over this platform's limit of ${String(deps.host.maxPathLength)}`,
     };
   }
 
@@ -501,15 +513,60 @@ async function checkWorktreeRoot(deps: RepositoryDeps): Promise<WorktreeRefusal 
 }
 
 /**
- * The path length worktree mode assumes it can use.
+ * §23's projection, as a length: **root + repoKey + gitRunKey + taskId +
+ * attempt-<n> + the repository's own deepest tracked path**.
  *
- * Windows' classic limit is 260 characters and long-path support is opt-in per
- * machine; the repository's own deepest tracked path is added on top of this by
- * the checkout itself, so the budget is deliberately well under the limit rather
- * than at it. §23 documents the workaround — a shorter home, or long paths
- * enabled — and defers a dedicated worktree-root setting.
+ * Every term is the worst case the contracts admit rather than a typical one,
+ * because the check exists to refuse *before* a checkout discovers the same
+ * thing halfway through:
+ *
+ *   - the run key is a fixed 28 characters by construction (§5.2);
+ *   - the task id is the widest `AnyTaskIdSchema` allows;
+ *   - the attempt is `MAX_SUPPORTED_ATTEMPT`, taken from the module that
+ *     *validates* attempts rather than assumed. `retry.maxAttempts` has no
+ *     ceiling in the configuration schema, so `attempt-1000` is legal and a
+ *     three-digit assumption would under-project — in the direction that permits
+ *     a path the filesystem then refuses;
+ *   - the last term is the actual repository, measured with `ls-files`, and is
+ *     the one term nothing can bound in advance. It is why §23 names it.
+ *
+ * **Measured in the platform's unit**, through `Host.measurePathLength`: on
+ * POSIX `PATH_MAX` bounds a byte string, so a repository of accented or CJK
+ * filenames is longer than its JavaScript length; on Windows `MAX_PATH` bounds
+ * UTF-16 units, where the two agree.
+ *
+ * Returned as a number rather than a string because nothing needs the path — and
+ * a function that produced one would be a function somebody could be tempted to
+ * create a directory from.
  */
-const WORKTREE_PATH_BUDGET = 200;
+export function projectWorstCaseWorktreePath(inputs: {
+  readonly homeDir: string;
+  readonly repoKey: string;
+  readonly deepestTrackedPathLength: number;
+  readonly measure: (value: string) => number;
+}): number | null {
+  const worstCase = attemptWorkspace(
+    inputs.repoKey,
+    // `AF-YYYY-NNN-<16 hex>`: the widest a `gitRunKey` can be (§5.2).
+    'AF-2026-001-0000000000000000',
+    // The widest task id the plan contracts admit.
+    'TASK-000',
+    MAX_SUPPORTED_ATTEMPT,
+  );
+  if (!worstCase.ok) return null;
+
+  // Composed from measured segments plus a separator count rather than by
+  // building the string, so this cannot drift from what `GitWorkspaces` would
+  // join — and so no absolute path is ever materialised here.
+  const root = `${inputs.homeDir}/.agent-flow/worktrees`;
+  const separators = worstCase.value.segments.length + 1;
+  const segments = worstCase.value.segments.reduce(
+    (total, part) => total + inputs.measure(part),
+    0,
+  );
+
+  return inputs.measure(root) + separators + segments + inputs.deepestTrackedPathLength;
+}
 
 async function deriveRepoKey(deps: RepositoryDeps): Promise<string | null> {
   const commonDir = await deps.workspaces.commonDir(deps.projectDir);
@@ -533,8 +590,21 @@ async function hasSubmodules(deps: RepositoryDeps): Promise<boolean | null> {
   return status.ok ? status.value : null;
 }
 
-/** The three paths `init` gitignores, checked one at a time (§6.3 check 8). */
-async function firstUnignoredStatePath(deps: RepositoryDeps): Promise<string | null> {
+/**
+ * The three paths `init` gitignores, checked one at a time (§6.3 check 8).
+ *
+ * Three answers, kept apart. Collapsing the third into the second is the bug
+ * this shape exists to prevent: *"the repository says this is not ignored"* and
+ * *"Git could not tell me"* are different facts, and only the first has
+ * `.gitignore` as its fix. Telling somebody to edit a file when the real problem
+ * is that Git would not run teaches them the message is unreliable.
+ */
+type StatePathVerdict =
+  | { readonly kind: 'all_ignored' }
+  | { readonly kind: 'not_ignored'; readonly path: string }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+async function checkStatePathsIgnored(deps: RepositoryDeps): Promise<StatePathVerdict> {
   const paths = agentFlowPaths(deps.projectDir);
   const relative = [
     `${relativeName(paths.runsDir, deps.projectDir)}/`,
@@ -544,12 +614,11 @@ async function firstUnignoredStatePath(deps: RepositoryDeps): Promise<string | n
 
   for (const path of relative) {
     const ignored = await deps.workspaces.isIgnored({ cwd: deps.projectDir, path });
-    // A read failure is not "ignored". Reporting the path is the safe direction:
-    // the fix is one line in .gitignore either way.
-    if (!ignored.ok || !ignored.value) return path;
+    if (!ignored.ok) return { kind: 'unreadable', detail: ignored.failure.message };
+    if (!ignored.value) return { kind: 'not_ignored', path };
   }
 
-  return null;
+  return { kind: 'all_ignored' };
 }
 
 function relativeName(absolute: string, projectDir: string): string {

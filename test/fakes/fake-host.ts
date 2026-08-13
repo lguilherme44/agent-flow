@@ -32,8 +32,23 @@ export class FakeHost implements Host {
      * and can force the collision case rather than waiting 2^64 runs for it.
      */
     private entropy: string = 'a93f085c23dd9321',
+    /**
+     * The platform path limit §23's projection is judged against. Generous by
+     * default so that no existing test starts refusing on path length, and
+     * lowered explicitly by the tests that are about the limit itself.
+     */
+    readonly maxPathLength = 4096,
+    /**
+     * The unit {@link maxPathLength} is counted in. Defaults to POSIX bytes,
+     * which is what CI runs on; a test about Windows passes `'utf16'`.
+     */
+    private readonly pathUnit: 'bytes' | 'utf16' = 'bytes',
   ) {
     this.alive = new Set(alive);
+  }
+
+  measurePathLength(value: string): number {
+    return this.pathUnit === 'utf16' ? value.length : Buffer.byteLength(value, 'utf8');
   }
 
   randomHex(byteLength: number): string {

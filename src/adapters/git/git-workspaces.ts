@@ -588,6 +588,50 @@ export class GitWorkspaces {
     return gitFailure(commandFailed(outcome.value, 'git check-ignore'));
   }
 
+  /**
+   * The length of the longest path Git tracks here, in characters.
+   *
+   * §23 projects the worst-case worktree path as *root + repoKey + gitRunKey +
+   * taskId + attempt-<n> + **the repository's own deepest tracked path***, so
+   * this is the last term. It is a length rather than the path itself because
+   * that is all the projection needs, and returning the path would put a
+   * repository-relative filename into a refusal message for no gain.
+   *
+   * `-z`, so a filename containing a newline is one record rather than two —
+   * and a repository whose deepest path contains one is exactly the repository
+   * that would under-report without it. `--cached` because the question is what
+   * a fresh checkout would write, which is the index, not the working tree.
+   *
+   * `measure` is supplied rather than assumed, because the unit is a platform
+   * fact this adapter has no business deciding: `PATH_MAX` bounds bytes on
+   * POSIX and UTF-16 units on Windows, and `String.length` is only right for one
+   * of them. Zero for a repository that tracks nothing; a truncated listing is
+   * refused rather than measured, because a partial answer here is an
+   * under-estimate and the check it feeds exists to refuse.
+   */
+  async deepestTrackedPathLength(
+    cwd: string,
+    measure: (path: string) => number,
+  ): Promise<GitResult<number>> {
+    const outcome = await this.run({
+      subcommand: 'ls-files',
+      cwd,
+      timeout: 'read',
+      args: ['--cached', '-z'],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectParsableSuccess(outcome.value, 'git ls-files');
+    if (failed !== null) return failed;
+
+    let deepest = 0;
+    for (const path of outcome.value.stdout.split('\0')) {
+      const length = measure(path);
+      if (length > deepest) deepest = length;
+    }
+    return gitOk(deepest);
+  }
+
   // -- worktrees ----------------------------------------------------------
 
   /** The absolute path a location resolves to, proven to be under the root. */

@@ -240,8 +240,20 @@ function validTaskId(taskId: string): WorktreePolicyRefusal | null {
     : { code: 'invalid_task_id', reason: `expected TASK-000 or FIX-000, got "${taskId}"` };
 }
 
+/**
+ * The largest attempt number this policy admits.
+ *
+ * `retry.maxAttempts` has no ceiling in the configuration schema, so the bound
+ * is the one `validAttempt` actually enforces — a safe integer — and it is
+ * exported so that anything projecting a worst-case path uses the *same* number
+ * rather than a plausible-looking one. A projection built on "three digits ought
+ * to be enough" is a projection that is wrong for `attempt-1000`, and wrong in
+ * the direction that permits a path the filesystem will refuse.
+ */
+export const MAX_SUPPORTED_ATTEMPT = Number.MAX_SAFE_INTEGER;
+
 function validAttempt(attempt: number): WorktreePolicyRefusal | null {
-  return Number.isSafeInteger(attempt) && attempt >= 1
+  return Number.isSafeInteger(attempt) && attempt >= 1 && attempt <= MAX_SUPPORTED_ATTEMPT
     ? null
     : {
         code: 'invalid_attempt',

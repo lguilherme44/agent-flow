@@ -48,6 +48,35 @@ export interface Host {
    */
   randomHex(byteLength: number): string;
   /**
+   * The longest **pathname** this machine accepts, in the unit it counts in.
+   *
+   * **Excluding the NUL terminator.** `PATH_MAX` and `MAX_PATH` both bound a
+   * NUL-terminated buffer, so their documented figures are one more than the
+   * longest name that fits; this is the usable width, and a caller compares
+   * `projected > maxPathLength` with no further adjustment. One semantic,
+   * applied once, where the platform fact lives — the alternative is an
+   * off-by-one that every call site has to remember and that shows up as a
+   * checkout failing at its deepest file.
+   *
+   * A machine fact, and the one §23's `worktree_path_too_long` is judged
+   * against: "the projected worst case … exceeds the platform limit **and long
+   * paths are not enabled**". Both halves are answered here, because whether
+   * long paths are enabled is a property of the operating system rather than a
+   * policy Agent Flow gets to have an opinion about.
+   */
+  readonly maxPathLength: number;
+  /**
+   * How long a path is, in the unit {@link maxPathLength} is expressed in.
+   *
+   * Here rather than at the call site because the unit is a platform fact and
+   * getting it wrong is invisible: `PATH_MAX` on Linux and macOS bounds a byte
+   * string, so a path of accented or CJK characters is longer than its
+   * JavaScript length — while `MAX_PATH` on Windows bounds UTF-16 units, where
+   * the two agree. A projection measured in the wrong unit under-reports
+   * precisely the repositories most likely to be near a limit.
+   */
+  measurePathLength(value: string): number;
+  /**
    * Whether a process id currently exists on *this* machine.
    *
    * Only meaningful for a lock written by this hostname. Asking about a pid from

@@ -7,15 +7,22 @@ import {
   checkWorktreePreconditions,
   composeRunIdentity,
   decideNamespace,
+  projectWorstCaseWorktreePath,
   describeIsolation,
   observePlanningBaseDrift,
   resolveRunGitIdentity,
 } from '../../src/app/run-git-identity.js';
+import {
+  MAX_SUPPORTED_ATTEMPT,
+  repoKeyFromCanonicalRoot,
+} from '../../src/core/worktree-policy.js';
+import { createHash } from 'node:crypto';
+import { PATH_LIMITS } from '../../src/adapters/host/node-host.js';
 import type { EffectiveConfig } from '../../src/contracts/index.js';
 import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { join } from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 
 /**
  * M2-03: a run is **born** with its Git identity, and nothing later changes it.
@@ -68,6 +75,43 @@ function workspacesWith(
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+}
+
+/**
+ * The real filesystem with one method replaced, for the same reason
+ * {@link workspacesWith} exists: `NodeFileSystem`'s methods live on the
+ * prototype, so a spread produces an object with the override and none of the
+ * rest.
+ */
+function fsWith(overrides: Record<string, unknown>): NodeFileSystem {
+  return new Proxy(new NodeFileSystem(), {
+    get(target, property, receiver) {
+      if (property in overrides) return overrides[property as string];
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * The `repoKey` the preconditions will derive for this repository.
+ *
+ * The boundary cases need the *exact* projection, and the repository key is the
+ * one term a test cannot guess: it is a slug of the temporary directory's name
+ * plus twelve hex characters of its hash. Derived the same way production does —
+ * realpath of the parent of the common directory, hashed verbatim (§5.1).
+ */
+async function deriveRepoKeyOf(temp: TempRepo): Promise<string | null> {
+  const commonDir = await temp.workspaces.commonDir(temp.dir);
+  if (!commonDir.ok) return null;
+
+  const parent = commonDir.value.replace(/[\\/][^\\/]*$/, '');
+  const canonical = await new NodeFileSystem().realPath(parent);
+  if (canonical === null) return null;
+
+  const digest = createHash('sha256').update(canonical).digest('hex');
+  const key = repoKeyFromCanonicalRoot(canonical, digest);
+  return key.ok ? key.value : null;
 }
 
 function storeIn(fs: InMemoryFileSystem): StateStore {
@@ -840,22 +884,480 @@ describe('every precondition code, and the order §6.3 fixes', () => {
     expect(result).toMatchObject({ satisfied: false, code: 'git_version_unsupported' });
   });
 
-  it('6 — worktree_path_too_long', async () => {
+  it('6 — worktree_path_too_long, from a deep home', async () => {
     repo = await makeTempRepoWithCommit();
     ignoreAgentFlowState(repo);
-    // A home so deep that the projected worst-case workspace path exceeds the
-    // budget. §23 defers a worktree-root setting and documents the workaround.
+    // §23 projects root + repoKey + gitRunKey + taskId + attempt-<n> + the
+    // repository's deepest tracked path. A home long enough on its own pushes
+    // the projection past the platform limit before the repository contributes.
     const deepHome = `/${'very-long-directory-name'.repeat(9)}`;
 
     const result = await checkWorktreePreconditions(
       {
         ...repositoryDeps(repo),
-        host: new FakeHost(1000, 'test-host', [1000], deepHome),
+        // Windows' classic limit, which is the case §23 is written for.
+        host: new FakeHost(1000, 'test-host', [1000], deepHome, 'a93f085c23dd9321', 260),
       },
       isolatedState(repo),
     );
 
     expect(result).toMatchObject({ satisfied: false, code: 'worktree_path_too_long' });
+  });
+
+  it('6 — a short home with shallow files is allowed', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+
+    // The same repository, a short home, and a limit that is the real POSIX one.
+    const result = await checkWorktreePreconditions(
+      {
+        ...repositoryDeps(repo),
+        host: new FakeHost(1000, 'test-host', [1000], '/home/dev', 'a93f085c23dd9321', 260),
+      },
+      isolatedState(repo),
+    );
+
+    expect(result.satisfied).toBe(true);
+  });
+
+  it('6 — a short home with a very deep tracked path is refused', async () => {
+    // The term §23 names explicitly and that nothing else can bound: the
+    // repository's own deepest tracked file. Same home, same limit, same
+    // everything — only the repository changed.
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+
+    const host = new FakeHost(1000, 'test-host', [1000], '/home/dev', 'a93f085c23dd9321', 260);
+    const before = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), host },
+      isolatedState(repo),
+    );
+    expect(before.satisfied).toBe(true);
+
+    // A real tracked file, nested deeply enough to consume the remaining budget.
+    const deepDir = join(repo.dir, ...Array.from({ length: 12 }, () => 'a-nested-directory-name'));
+    mkdirSync(deepDir, { recursive: true });
+    writeFileSync(join(deepDir, 'a-file-with-a-long-name.ts'), 'export {};\n');
+    repo.commitAll('a deeply nested tracked file');
+
+    const after = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), host },
+      isolatedState(repo),
+    );
+
+    expect(after).toMatchObject({ satisfied: false, code: 'worktree_path_too_long' });
+  });
+
+  it('6 — the platform limit is what decides, not a fixed budget', async () => {
+    // §23: "exceeds the platform limit **and long paths are not enabled**". The
+    // two halves are one number from the `Host`, so a Windows machine with long
+    // paths enabled and one without differ here and nowhere else.
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    const home = '/home/dev';
+
+    const classic = await checkWorktreePreconditions(
+      {
+        ...repositoryDeps(repo),
+        host: new FakeHost(1000, 'test-host', [1000], home, 'a93f085c23dd9321', 100),
+      },
+      isolatedState(repo),
+    );
+    const longPaths = await checkWorktreePreconditions(
+      {
+        ...repositoryDeps(repo),
+        host: new FakeHost(1000, 'test-host', [1000], home, 'a93f085c23dd9321', 32_767),
+      },
+      isolatedState(repo),
+    );
+
+    expect(classic).toMatchObject({ satisfied: false, code: 'worktree_path_too_long' });
+    expect(longPaths.satisfied).toBe(true);
+  });
+
+  it('6 — the projection is the sum §23 names', () => {
+    // Pure, so the arithmetic is checkable without a repository. Each term
+    // moving the answer is what says the term is actually in the sum.
+    const bytes = (value: string) => Buffer.byteLength(value, 'utf8');
+    const base = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: 'repo-0f3a91c4bd27',
+      deepestTrackedPathLength: 0,
+      measure: bytes,
+    });
+    const deeperRepo = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: 'repo-0f3a91c4bd27',
+      deepestTrackedPathLength: 40,
+      measure: bytes,
+    });
+    const deeperHome = projectWorstCaseWorktreePath({
+      homeDir: '/home/a-much-longer-name',
+      repoKey: 'repo-0f3a91c4bd27',
+      deepestTrackedPathLength: 0,
+      measure: bytes,
+    });
+
+    expect(base).not.toBeNull();
+    expect(deeperRepo).toBe((base ?? 0) + 40);
+    expect(deeperHome).toBeGreaterThan(base ?? 0);
+    expect(base ?? 0).toBeGreaterThan('/home/dev/.agent-flow/worktrees/repo-0f3a91c4bd27'.length);
+  });
+
+  it('6 — the attempt term is the widest the contract admits, not three digits', () => {
+    // `validAttempt` accepts any safe integer and `retry.maxAttempts` has no
+    // ceiling, so `attempt-1000` is legal. A three-digit assumption would
+    // under-project by exactly the digits it left out — in the direction that
+    // permits a path the filesystem then refuses.
+    const bytes = (value: string) => Buffer.byteLength(value, 'utf8');
+    const projected = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: 'repo-0f3a91c4bd27',
+      deepestTrackedPathLength: 0,
+      measure: bytes,
+    });
+
+    // The widest `attempt-<n>` the policy allows, straight from the constant the
+    // validator uses — so policy and projection cannot drift apart.
+    const widest = `attempt-${String(MAX_SUPPORTED_ATTEMPT)}`;
+    expect(widest.length).toBeGreaterThan('attempt-999'.length);
+
+    // The projection contains the widest form, not a three-digit one.
+    const withThreeDigits =
+      '/home/dev/.agent-flow/worktrees'.length +
+      5 +
+      'repo-0f3a91c4bd27'.length +
+      'AF-2026-001-0000000000000000'.length +
+      'TASK-000'.length +
+      'attempt-999'.length;
+
+    expect(projected).toBe(withThreeDigits + (widest.length - 'attempt-999'.length));
+  });
+
+  it('6 — a four-digit attempt is inside the projection already', async () => {
+    // Behavioural: the same repository and host, and a limit set just under the
+    // real projection. A projection built on three digits would have thought
+    // there was room.
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+
+    const bytes = (value: string) => Buffer.byteLength(value, 'utf8');
+    const real = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: 'temp-repo-0f3a91c4bd',
+      deepestTrackedPathLength: 10,
+      measure: bytes,
+    });
+    const asIfThreeDigits = (real ?? 0) - (String(MAX_SUPPORTED_ATTEMPT).length - 3);
+
+    const host = new FakeHost(
+      1000,
+      'test-host',
+      [1000],
+      '/home/dev',
+      'a93f085c23dd9321',
+      asIfThreeDigits,
+    );
+
+    const result = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), host },
+      isolatedState(repo),
+    );
+
+    expect(result).toMatchObject({ satisfied: false, code: 'worktree_path_too_long' });
+  });
+
+  it('6 — linux keeps its own limit; the same path is refused at darwin’s and allowed at linux’s', async () => {
+    // §23 says "the platform limit", not a portable minimum. Giving Linux
+    // macOS's 1024 would refuse runs that work, with advice the user cannot act
+    // on — the path was already short enough.
+    //
+    // The tracked depth is injected rather than created on disk, and that is not
+    // convenience: this suite runs on macOS, where `PATH_MAX` is 1024, so a real
+    // directory deep enough to sit between the two limits **cannot be created**.
+    // The subject here is the comparison, and the `ls-files` half is covered by
+    // the real-file case above.
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+
+    const here = repo;
+    const between = 1500;
+    const workspaces = workspacesWith(here, {
+      deepestTrackedPathLength: async () => ({ ok: true as const, value: between }),
+    });
+
+    const at = async (limit: number) =>
+      checkWorktreePreconditions(
+        {
+          ...repositoryDeps(here),
+          workspaces,
+          host: new FakeHost(1000, 'test-host', [1000], '/home/dev', 'a93f085c23dd9321', limit),
+        },
+        isolatedState(here),
+      );
+
+    expect(await at(PATH_LIMITS.darwin)).toMatchObject({
+      satisfied: false,
+      code: 'worktree_path_too_long',
+    });
+    expect((await at(PATH_LIMITS.linux)).satisfied).toBe(true);
+    // Usable widths — the NUL terminator is subtracted where the platform fact
+    // lives, so nothing here adjusts for it.
+    expect(PATH_LIMITS.linux).toBe(4095);
+    expect(PATH_LIMITS.darwin).toBe(1023);
+  });
+
+  it('6 — a multibyte tracked path is measured in bytes, not UTF-16 units', async () => {
+    // `PATH_MAX` bounds a NUL-terminated byte string, so a repository of CJK
+    // filenames is three times longer than its JavaScript length. Measuring with
+    // `String.length` would under-report exactly the repositories most likely to
+    // be near a limit — which is why the unit is the `Host`'s to decide and the
+    // adapter is handed a measuring function rather than assuming one.
+    repo = await makeTempRepoWithCommit();
+    const name = '\u4e2d'.repeat(60);
+    writeFileSync(join(repo.dir, `${name}.ts`), 'export {};\n');
+    repo.commitAll('a multibyte tracked path');
+
+    const inBytes = await repo.workspaces.deepestTrackedPathLength(repo.dir, (path) =>
+      Buffer.byteLength(path, 'utf8'),
+    );
+    const inUtf16 = await repo.workspaces.deepestTrackedPathLength(repo.dir, (path) => path.length);
+
+    expect(inBytes.ok).toBe(true);
+    expect(inUtf16.ok).toBe(true);
+    if (!inBytes.ok || !inUtf16.ok) return;
+
+    // 60 CJK characters: 60 UTF-16 units, 180 UTF-8 bytes, plus `.ts`.
+    expect(inUtf16.value).toBe(63);
+    expect(inBytes.value).toBe(183);
+    expect(inBytes.value).toBeGreaterThan(inUtf16.value);
+  });
+
+  it('6 — the unit changes the projection for the same repository', () => {
+    // Pure, because the end-to-end version of this needs the *real* `repoKey` of
+    // a temporary repository to pick a limit between the two measurements, and a
+    // test that guesses that number is a test that passes for the wrong reason.
+    //
+    // The chain is covered in three pieces instead: the adapter measures in the
+    // unit it is given (above), the projection uses that measurement (here), and
+    // the policy compares the projection against `Host.maxPathLength` (the
+    // platform-limit case above).
+    const cjkPathLength = { utf16: 63, bytes: 183 };
+
+    const asWindows = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: 'repo-0f3a91c4bd27',
+      deepestTrackedPathLength: cjkPathLength.utf16,
+      measure: (value) => value.length,
+    });
+    const asPosix = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: 'repo-0f3a91c4bd27',
+      deepestTrackedPathLength: cjkPathLength.bytes,
+      measure: (value) => Buffer.byteLength(value, 'utf8'),
+    });
+
+    expect(asPosix).toBeGreaterThan(asWindows ?? 0);
+    expect((asPosix ?? 0) - (asWindows ?? 0)).toBe(cjkPathLength.bytes - cjkPathLength.utf16);
+  });
+
+  it('6 — the boundary is exact: a path of exactly the limit is allowed', async () => {
+    // `Host.maxPathLength` is the longest pathname that **fits** — the NUL
+    // terminator is already subtracted where the platform fact lives, so the
+    // comparison here is `projected > limit` with no second adjustment. These
+    // two cases are what say the contract is applied once rather than
+    // approximately: a limit published as the documented `PATH_MAX` would let
+    // exactly one character too many through, and it would surface at the
+    // deepest file, halfway into a checkout.
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    const here = repo;
+
+    const measured = 200;
+    const workspaces = workspacesWith(here, {
+      deepestTrackedPathLength: async () => ({ ok: true as const, value: measured }),
+    });
+
+    const projected = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: (await deriveRepoKeyOf(here)) ?? '',
+      deepestTrackedPathLength: measured,
+      measure: (value) => Buffer.byteLength(value, 'utf8'),
+    });
+    expect(projected).not.toBeNull();
+
+    const at = async (limit: number) =>
+      checkWorktreePreconditions(
+        {
+          ...repositoryDeps(here),
+          workspaces,
+          host: new FakeHost(1000, 'test-host', [1000], '/home/dev', 'a93f085c23dd9321', limit),
+        },
+        isolatedState(here),
+      );
+
+    // POSIX, measured in bytes.
+    expect((await at(projected ?? 0)).satisfied).toBe(true);
+    expect(await at((projected ?? 0) - 1)).toMatchObject({
+      satisfied: false,
+      code: 'worktree_path_too_long',
+    });
+  });
+
+  it('6 — the boundary is exact in UTF-16 units too', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    const here = repo;
+
+    const measured = 200;
+    const workspaces = workspacesWith(here, {
+      deepestTrackedPathLength: async () => ({ ok: true as const, value: measured }),
+    });
+
+    const projected = projectWorstCaseWorktreePath({
+      homeDir: '/home/dev',
+      repoKey: (await deriveRepoKeyOf(here)) ?? '',
+      deepestTrackedPathLength: measured,
+      measure: (value) => value.length,
+    });
+    expect(projected).not.toBeNull();
+
+    const at = async (limit: number) =>
+      checkWorktreePreconditions(
+        {
+          ...repositoryDeps(here),
+          workspaces,
+          host: new FakeHost(
+            1000,
+            'test-host',
+            [1000],
+            '/home/dev',
+            'a93f085c23dd9321',
+            limit,
+            'utf16',
+          ),
+        },
+        isolatedState(here),
+      );
+
+    expect((await at(projected ?? 0)).satisfied).toBe(true);
+    expect(await at((projected ?? 0) - 1)).toMatchObject({
+      satisfied: false,
+      code: 'worktree_path_too_long',
+    });
+  });
+
+  it('6 — the refusal names lengths, never a filename', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    const secret = 'a-file-name-that-must-not-appear';
+    writeFileSync(join(repo.dir, `${secret}.ts`), 'export {};\n');
+    repo.commitAll('a tracked file with a distinctive name');
+
+    const result = await checkWorktreePreconditions(
+      {
+        ...repositoryDeps(repo),
+        host: new FakeHost(1000, 'test-host', [1000], '/home/dev', 'a93f085c23dd9321', 100),
+      },
+      isolatedState(repo),
+    );
+
+    expect(result).toMatchObject({ satisfied: false, code: 'worktree_path_too_long' });
+    if (result.satisfied) return;
+    expect(result.detail).not.toContain(secret);
+    expect(result.detail).not.toContain(repo.dir);
+    expect(result.detail).toMatch(/\d+ characters/);
+  });
+
+  it('repository_root_unresolvable — a root that cannot be canonicalised', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    // §5.1: "If `realpath` fails, worktree mode is refused with
+    // `repository_root_unresolvable` rather than guessed." A guessed root
+    // produces a `repoKey` that is not stable, and an unstable key means two
+    // invocations disagree about which directory a run's worktrees live in.
+    const unresolvable = fsWith({ realPath: async () => null });
+
+    const result = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), fs: unresolvable },
+      isolatedState(repo),
+    );
+
+    expect(result).toMatchObject({ satisfied: false, code: 'repository_root_unresolvable' });
+  });
+
+  it('git_unavailable — a required primitive fails, and stays its own answer', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    // A real typed failure from the boundary, not an absent repository. It must
+    // not be reported as one of the repository-shape codes: "git could not run"
+    // and "your repository is bare" have different fixes.
+    const broken = workspacesWith(repo, {
+      isWorkTree: async () => ({
+        ok: false as const,
+        failure: { code: 'git_unavailable' as const, message: 'git could not be started: ENOENT' },
+      }),
+    });
+
+    const result = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), workspaces: broken },
+      isolatedState(repo),
+    );
+
+    expect(result).toMatchObject({ satisfied: false, code: 'git_unavailable' });
+  });
+
+  it('git_unavailable — a timeout is not mistaken for a clean tree', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    const timingOut = workspacesWith(repo, {
+      status: async () => ({
+        ok: false as const,
+        failure: { code: 'git_timed_out' as const, message: 'git status exceeded its 60s timeout' },
+      }),
+    });
+
+    const result = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), workspaces: timingOut },
+      isolatedState(repo),
+    );
+
+    // The dangerous shape would be `satisfied: true` — a run proceeding because
+    // the cleanliness check could not answer.
+    expect(result).toMatchObject({ satisfied: false, code: 'git_unavailable' });
+  });
+
+  it('a check-ignore failure is not "not ignored"', async () => {
+    repo = await makeTempRepoWithCommit();
+    ignoreAgentFlowState(repo);
+    // The two are different facts and only one of them has `.gitignore` as its
+    // fix. Telling somebody to edit a file when Git would not run teaches them
+    // the message is unreliable.
+    const cannotAnswer = workspacesWith(repo, {
+      isIgnored: async () => ({
+        ok: false as const,
+        failure: { code: 'git_command_failed' as const, message: 'git check-ignore exited 128' },
+      }),
+    });
+
+    const result = await checkWorktreePreconditions(
+      { ...repositoryDeps(repo), workspaces: cannotAnswer },
+      isolatedState(repo),
+    );
+
+    expect(result).toMatchObject({ satisfied: false, code: 'git_unavailable' });
+    if (result.satisfied) return;
+    expect(result.code).not.toBe('agent_flow_state_not_ignored');
+  });
+
+  it('a genuine "not ignored" still says so', async () => {
+    // The other half of the pair, so the change above did not simply hide the
+    // check-8 refusal behind a failure path.
+    repo = await makeTempRepoWithCommit();
+
+    const result = await checkWorktreePreconditions(repositoryDeps(repo), isolatedState(repo));
+
+    expect(result).toMatchObject({ satisfied: false, code: 'agent_flow_state_not_ignored' });
   });
 
   it('7 — git_identity_missing', async () => {
