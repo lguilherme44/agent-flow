@@ -8,6 +8,7 @@ import { RunExecutionLock, LOCK_VERSION } from '../../src/app/run-execution-lock
 import {
   buildHarness,
   heldIntervals,
+  maxSimultaneous,
   overlaps,
   RUN,
   type Harness,
@@ -53,24 +54,36 @@ function inProcessLock(projectDir: string): RunExecutionLock {
 
 describe('two real processes, one run', () => {
   it('lets exactly one of eight concurrent processes in', async () => {
-    // The test this whole mechanism exists for. Eight separate OS processes, started
-    // together, racing for one lock file. `exists()` then `write()` would let several
-    // through here; `open(path, 'wx')` cannot.
+    // The test this whole mechanism exists for. Eight separate OS processes racing
+    // for one lock file. `exists()` then `write()` would let several through here;
+    // `open(path, 'wx')` cannot.
+    //
+    // **They are held at a barrier first**, and that is what makes the count below
+    // a statement about the lock. The earlier version spawned eight children and
+    // hoped they all reached `acquire()` inside the winner's 250ms hold; under load
+    // a straggler arrived after the winner had released and acquired the lock
+    // legitimately, which the count read as a failure. Probed: with the hold
+    // removed the distribution was 1, 2, 3 and 4 acquisitions across 25 rounds —
+    // and `overlaps` was empty in every one of them, because nothing was ever
+    // wrong. The barrier removes the assumption instead of widening the window.
     const projectDir = harness.project();
 
-    const results = await Promise.all(
-      Array.from({ length: 8 }, () => harness.attempt(projectDir, 250)),
-    );
+    const results = await harness.race(projectDir, 8, 250);
 
     const held = heldIntervals(results);
     const refused = results.filter((result) => result.stdout.startsWith('REFUSED'));
 
-    // Exactly one gets in, and the other seven are told who has it. With a 250ms hold
-    // and an immediate refusal for a live holder, nobody has a chance to retry into a
-    // released lock — so the count is meaningful here as well as the overlap.
+    // Exactly one gets in, and the other seven are told who has it. Legitimate as a
+    // count now: every contender had finished starting up and was waiting on GO, so
+    // all eight were genuinely contending when the first one won.
     expect(held).toHaveLength(1);
     expect(refused).toHaveLength(7);
+    // The property itself, which held even when the count above did not.
     expect(overlaps(held)).toEqual([]);
+    // At most one holder at any instant, stated directly rather than inferred.
+    expect(maxSimultaneous(held)).toBe(1);
+    // And nothing is left behind for the next caller to recover.
+    expect(await harness.generations(projectDir)).toEqual([]);
 
     for (const result of refused) {
       expect(result.stdout).toContain('"sameHost":true');
@@ -160,9 +173,7 @@ describe('a process that died holding the lock', () => {
     const abandoned = await harness.attempt(projectDir, 0, 'abandon');
     expect(abandoned.stdout).toMatch(/^ACQUIRED/);
 
-    const results = await Promise.all(
-      Array.from({ length: 8 }, () => harness.attempt(projectDir, 250)),
-    );
+    const results = await harness.race(projectDir, 8, 250);
 
     const held = heldIntervals(results);
 
@@ -173,8 +184,10 @@ describe('a process that died holding the lock', () => {
     // and a retry that lands after the holder released is correct. What must never
     // happen is two holders at once.
     expect(overlaps(held)).toEqual([]);
+    expect(maxSimultaneous(held)).toBe(1);
     // Nobody ended up holding a lock somebody else had reclaimed underneath them.
     expect(new Set(held.map((entry) => entry.pid)).size).toBe(held.length);
+    expect(await harness.generations(projectDir)).toEqual([]);
   }, 60_000);
 });
 

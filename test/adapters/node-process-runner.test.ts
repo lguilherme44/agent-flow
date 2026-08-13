@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { spawn } from 'node:child_process';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
 
 /**
@@ -83,6 +84,46 @@ describe('stdin', () => {
   });
 });
 
+/**
+ * A child that traps SIGTERM, says so, and then stays alive.
+ *
+ * The handler is installed *before* the announcement, so READY on stdout means
+ * "a SIGTERM from here on will be ignored" rather than merely "the process
+ * exists".
+ */
+const READY_CHILD =
+  'process.on("SIGTERM",()=>{});process.stdout.write("READY");setInterval(()=>{},1000)';
+
+/**
+ * How long this machine needs to get that child to READY, right now.
+ *
+ * Spawned directly rather than through the runner, because the runner's timeout
+ * is the thing being calibrated. Three samples and the worst one, tripled: the
+ * intent is a timeout comfortably past start-up without being a number somebody
+ * picked, so that a real escalation failure still fails.
+ */
+async function readyWithin(script: string): Promise<{ timeoutSeconds: number }> {
+  const samples: number[] = [];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    samples.push(
+      await new Promise<number>((resolve) => {
+        const startedAt = Date.now();
+        const child = spawn(node, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+        const finish = (ms: number) => {
+          child.kill('SIGKILL');
+          resolve(ms);
+        };
+        child.stdout.on('data', () => finish(Date.now() - startedAt));
+        child.on('error', () => finish(1_000));
+      }),
+    );
+  }
+
+  const slowest = Math.max(...samples);
+  return { timeoutSeconds: Math.max(0.2, (slowest * 3) / 1000) };
+}
+
 describe('timeout (R-11)', () => {
   it('kills a process that outruns its timeout', async () => {
     const result = await runNode('setTimeout(() => {}, 60_000)', { timeoutSeconds: 0.2 });
@@ -92,12 +133,45 @@ describe('timeout (R-11)', () => {
 
   it('escalates to SIGKILL when the child ignores SIGTERM', async () => {
     // A CLI that traps SIGTERM must not be able to hold the pipeline hostage.
-    const result = await runNode(
-      'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)',
-      { timeoutSeconds: 0.2, killGraceMs: 100 },
-    );
+    //
+    // **The child announces readiness, and the timeout is derived from how long
+    // that actually took.** The property under test is the escalation — SIGTERM,
+    // grace, SIGKILL — and it used to be entangled with a second, unrelated
+    // question: whether Node finishes starting up within 200ms. Measured, that
+    // is 18–24ms on an idle machine and **51–600ms under a fork storm, with 38
+    // of 40 samples over 200ms**. When start-up loses that race the child dies
+    // on the default SIGTERM disposition, the signal is SIGTERM, and the test
+    // reports a broken escalation that is not broken.
+    //
+    // So `readyWithin` measures the handshake on this machine, now, and the
+    // timeout is set from it. Nothing about the escalation is relaxed: the grace
+    // period is unchanged, and a runner that failed to escalate still fails
+    // here. What is no longer asserted is a claim about interpreter start-up.
+    const startup = await readyWithin(READY_CHILD);
+
+    const result = await runNode(READY_CHILD, {
+      timeoutSeconds: startup.timeoutSeconds,
+      killGraceMs: 100,
+    });
+
+    // The condition was genuinely established before the signal arrived: the
+    // handler is installed on the line before READY is written. Without this the
+    // assertion below could pass for the wrong reason on a very slow machine.
+    expect(result.stdout, 'the child never reported readiness').toContain('READY');
     expect(result.timedOut).toBe(true);
     expect(result.signal).toBe('SIGKILL');
+  });
+
+  it('kills a child that does not trap SIGTERM with SIGTERM', async () => {
+    // The other side of the pair, and what says the escalation above is real
+    // rather than the runner always reaching for SIGKILL.
+    const result = await runNode('process.stdout.write("READY");setInterval(()=>{},1000)', {
+      timeoutSeconds: 0.5,
+      killGraceMs: 5_000,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.signal).toBe('SIGTERM');
   });
 
   it('returns whatever output arrived before the kill', async () => {

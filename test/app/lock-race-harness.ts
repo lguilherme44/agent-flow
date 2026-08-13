@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -40,6 +40,27 @@ const lock = new RunExecutionLock({
   clock: new SystemClock(),
   host: new NodeHost(),
   projectDir,
+});
+
+// The barrier. Everything expensive — process start-up, the module graph, the
+// lock object — is done by the time READY is written, so what happens after GO
+// is the acquisition and nothing else.
+//
+// On stderr, deliberately: stdout carries the result the assertions parse, and
+// putting a handshake line in front of ACQUIRED would change what every existing
+// test reads.
+process.stderr.write('READY\\n');
+
+await new Promise((resolve) => {
+  let seen = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    seen += chunk;
+    if (seen.includes('GO')) resolve(undefined);
+  });
+  // A closed stdin means the parent is not coordinating this one — proceed
+  // rather than hang, so a caller that wants one child does not need the dance.
+  process.stdin.on('end', () => resolve(undefined));
 });
 
 const result = await lock.acquire({ runId, owner: 'cli', operation: 'run' });
@@ -101,8 +122,19 @@ export interface Harness {
   readonly dir: string;
   /** A fresh project directory, so no two tests share a lock file. */
   project(): string;
-  /** Spawns one child. Resolves when it exits. */
+  /** Spawns one child, releases it immediately, and resolves when it exits. */
   attempt(projectDir: string, holdMs: number, mode?: string): Promise<Attempt>;
+  /**
+   * Spawns `contenders` children, waits for every one to report READY, and only
+   * then releases them together.
+   *
+   * This is what makes "exactly one gets in" a statement about the lock rather
+   * than about process start-up. Without it the eight children reach `acquire()`
+   * whenever the scheduler gets to them, and under load a straggler can arrive
+   * after the winner has already released — a second acquisition that is
+   * perfectly correct and that a count-based assertion reads as a failure.
+   */
+  race(projectDir: string, contenders: number, holdMs: number): Promise<Attempt[]>;
   /** The generation files present in a project, ascending. */
   generations(projectDir: string): Promise<number[]>;
   lockPath(projectDir: string, generation: number): string;
@@ -111,6 +143,60 @@ export interface Harness {
 export interface Attempt {
   readonly stdout: string;
   readonly code: number | null;
+}
+
+interface Contender {
+  /** Resolves when the child has announced it is ready to acquire. */
+  readonly ready: Promise<void>;
+  /** Releases the child from the barrier. */
+  go(): void;
+  readonly finished: Promise<Attempt>;
+}
+
+/**
+ * One contender, held at the barrier until `go()`.
+ *
+ * `spawn` with piped stdio rather than `execFile`, because the handshake needs
+ * both directions: READY comes back on stderr and GO goes out on stdin.
+ */
+function start(bundle: string, projectDir: string, holdMs: number, mode: string): Contender {
+  const child = spawn(process.execPath, [bundle, projectDir, RUN, String(holdMs), mode], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  let announceReady: () => void = () => undefined;
+  const ready = new Promise<void>((resolve) => {
+    announceReady = resolve;
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', (chunk: string) => {
+    stderr += chunk;
+    if (stderr.includes('READY')) announceReady();
+  });
+  // A child that dies before announcing must not hang the barrier; the failure
+  // then shows up in the assertions rather than as a timeout with no detail.
+  child.on('error', () => announceReady());
+  child.on('close', () => announceReady());
+
+  const finished = new Promise<Attempt>((settle) => {
+    child.on('close', (code) => settle({ stdout, code }));
+    child.on('error', () => settle({ stdout, code: null }));
+  });
+
+  return {
+    ready,
+    go() {
+      child.stdin.end('GO\n');
+    },
+    finished,
+  };
 }
 
 export async function buildHarness(root: string): Promise<Harness> {
@@ -143,18 +229,23 @@ export async function buildHarness(root: string): Promise<Harness> {
     },
 
     attempt(projectDir, holdMs, mode = 'release') {
-      return new Promise((settle) => {
-        execFile(
-          process.execPath,
-          [bundle, projectDir, RUN, String(holdMs), mode],
-          (error, stdout) => {
-            settle({
-              stdout,
-              code: error === null ? 0 : ((error as { code?: number }).code ?? null),
-            });
-          },
-        );
-      });
+      const child = start(bundle, projectDir, holdMs, mode);
+      child.go();
+      return child.finished;
+    },
+
+    async race(projectDir, contenders, holdMs) {
+      const children = Array.from({ length: contenders }, () =>
+        start(bundle, projectDir, holdMs, 'release'),
+      );
+
+      // Every child has started, loaded its modules and built its lock object.
+      // Nothing below this line is waiting on the scheduler to catch up.
+      await Promise.all(children.map((child) => child.ready));
+
+      for (const child of children) child.go();
+
+      return Promise.all(children.map((child) => child.finished));
     },
 
     async generations(projectDir) {
@@ -223,4 +314,32 @@ export function overlaps(held: readonly Held[]): string[] {
   }
 
   return found;
+}
+
+/**
+ * The most holders inside the lock at any single instant.
+ *
+ * `overlaps` reports *which* pairs collided and this reports *how many* were in
+ * at once; both are the same invariant seen from two directions, and stating it
+ * as a number is what lets a test assert the property directly instead of
+ * inferring it from an acquisition count.
+ */
+export function maxSimultaneous(held: readonly Held[]): number {
+  const edges = held
+    .flatMap((entry) => [
+      { at: entry.from, delta: 1 },
+      { at: entry.to, delta: -1 },
+    ])
+    // A release at exactly the moment of an acquisition is not an overlap, so the
+    // exit is processed first.
+    .sort((a, b) => a.at - b.at || a.delta - b.delta);
+
+  let inside = 0;
+  let most = 0;
+  for (const edge of edges) {
+    inside += edge.delta;
+    if (inside > most) most = inside;
+  }
+
+  return most;
 }
