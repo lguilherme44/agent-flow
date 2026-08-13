@@ -568,7 +568,7 @@ export function projectWorstCaseWorktreePath(inputs: {
   return inputs.measure(root) + separators + segments + inputs.deepestTrackedPathLength;
 }
 
-async function deriveRepoKey(deps: RepositoryDeps): Promise<string | null> {
+export async function deriveRepoKey(deps: RepositoryDeps): Promise<string | null> {
   const commonDir = await deps.workspaces.commonDir(deps.projectDir);
   if (!commonDir.ok) return null;
 

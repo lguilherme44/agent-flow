@@ -11,6 +11,8 @@ import {
 import { probeRunner, type ProbeResult } from '../app/runner-probe.js';
 import { NodeHost } from '../adapters/host/node-host.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
+import { runCommands } from '../app/verification-commands.js';
+import type { EffectiveConfig } from '../contracts/index.js';
 import {
   createGitWorkspaces,
   MINIMUM_SUPPORTED_GIT_VERSION,
@@ -21,6 +23,7 @@ import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
 import type { FileSystem } from '../ports/file-system.js';
+import type { Host } from '../ports/host.js';
 import type { ProcessRunner } from '../ports/process-runner.js';
 
 export interface DoctorOptions {
@@ -60,8 +63,25 @@ export async function runDoctorCommand(
     // hooks and could not have hurt anything, but "only one module spawns git"
     // (§26.1 rule 1) is worth exactly as much as its least-defended exception,
     // and a probe is the easiest place for the next one to appear.
-    const git = await checkGit(processRunner, fs, new NodeHost().homeDir);
+    const host = new NodeHost();
+    const git = await checkGit(processRunner, fs, host.homeDir);
     lines.push(renderTool('Node', node), renderTool('Git', git), '');
+
+    // §8.4, before a run rather than after. The default Node install rewrites
+    // `package-lock.json` when the lock drifts from `package.json`, which is a
+    // tracked modification, which fails the post-setup cleanliness assertion,
+    // which refuses every task in worktree mode. That is the gate working
+    // correctly and it is also a wall most Node projects walk into on their
+    // first run, so it is worth one throwaway checkout to say so in advance.
+    for (const line of await probeInstallCleanliness({
+      fs,
+      processRunner,
+      config,
+      projectDir: globals.cwd,
+      host,
+    })) {
+      lines.push(line);
+    }
 
     const registry = buildRegistry(config.global, { processRunner, fs });
     const health = await registry.health();
@@ -208,6 +228,120 @@ interface ToolStatus {
  * probe, and M2-03 is the milestone that turns a version below it into
  * `git_version_unsupported` on a run.
  */
+/**
+ * Does the configured install leave a fresh checkout clean? (§8.4)
+ *
+ * Diagnostic only: it reports and **never edits configuration**. A warning here
+ * is the difference between "worktree mode refused every task and I do not know
+ * why" and one line naming the file the install rewrote.
+ *
+ * Runs in a throwaway worktree under Agent Flow's own root — never in the user's
+ * working tree — and removes it afterwards. That removal is the *only* one in
+ * this milestone: a **failed attempt's** worktree is retained for diagnosis
+ * (§7.4), and this one holds nothing anybody needs.
+ *
+ * Silent unless there is something to say. Nothing is reported for a project
+ * with no install command, for one that is not a repository, or for a Git that
+ * cannot answer — `doctor` has other checks for all three, and a second voice
+ * saying the same thing is noise.
+ */
+export async function probeInstallCleanliness(options: {
+  fs: FileSystem;
+  processRunner: ProcessRunner;
+  config: EffectiveConfig;
+  projectDir: string;
+  host: Host;
+}): Promise<string[]> {
+  const install = options.config.project?.commands?.install;
+  if (install === undefined || install.trim().length === 0) return [];
+
+  const homeDir = options.host.homeDir;
+  const git = await createGitCommand({
+    processRunner: options.processRunner,
+    fs: options.fs,
+    homeDir,
+  });
+  const workspaces = await createGitWorkspaces({ git, fs: options.fs, homeDir });
+
+  const head = await workspaces.resolveHead(options.projectDir);
+  if (!head.ok || head.value === null) return [];
+
+  // A single segment under the owned root, named so it cannot collide with a
+  // run's workspace. Flat on purpose: `git worktree remove` deletes the worktree
+  // directory and not its parent, so a nested layout would leave an empty
+  // directory behind on every `doctor`.
+  // Through the `Host` port rather than `process.pid`, for the reason the port's
+  // own doc-comment gives: a use case that reads the process table directly is a
+  // use case a test cannot pin down.
+  const probeDirectory = `doctor-install-probe-pid-${String(options.host.pid)}`;
+  const location = { segments: [probeDirectory], relativePath: probeDirectory };
+
+  const added = await workspaces.addWorktree({
+    cwd: options.projectDir,
+    location,
+    base: head.value,
+    reason: 'agent-flow doctor install probe',
+  });
+  if (!added.ok) return [];
+
+  try {
+    const before = await workspaces.status({ cwd: added.value });
+    if (!before.ok) return [];
+    if (!before.value.clean) {
+      return [
+        'Install probe',
+        `  ${CROSS} a fresh checkout of this repository is not clean before installing`,
+        ...before.value.entries.slice(0, 5).map((entry) => `      ${entry.path}`),
+        '  Worktree mode refuses a task whose checkout is dirty (phase: checkout).',
+        '',
+      ];
+    }
+
+    const ran = await runCommands({
+      processRunner: options.processRunner,
+      commands: [install],
+      cwd: added.value,
+    });
+    if (!ran.passed) {
+      return [
+        'Install probe',
+        `  ${CROSS} \`${install}\` failed in a fresh checkout`,
+        '  Worktree mode runs it before every task, so every task would fail here.',
+        '',
+      ];
+    }
+
+    const after = await workspaces.status({ cwd: added.value });
+    if (!after.ok) return [];
+    if (after.value.clean) {
+      return ['Install probe', `  ${TICK} \`${install}\` leaves a fresh checkout clean`, ''];
+    }
+
+    return [
+      'Install probe',
+      `  ${CROSS} \`${install}\` modifies files that are tracked or not ignored:`,
+      ...after.value.entries.slice(0, 5).map((entry) => `      ${entry.path}`),
+      '  Worktree mode will refuse every task in this project (phase: setup).',
+      '  Use a lockfile-respecting install — for npm, `commands.install: npm ci`.',
+      '',
+    ];
+  } finally {
+    // The probe's own worktree, and only it. Unlocked first because it was
+    // created locked, and removed through Git rather than with `rm -rf` (§20.2).
+    //
+    // Forced, and this is the one place in the milestone where that is right.
+    // The probe's whole job is to find out whether the install dirties a fresh
+    // checkout, so on the path that matters it has *just made one dirty* — and
+    // Git refuses to reclaim a worktree holding a modified tracked file or an
+    // untracked non-ignored one. Without `force` a `doctor` run would leak a
+    // worktree every time it had something to warn about. Nothing here is
+    // evidence: the report already names the changed paths, and a *failed
+    // attempt's* worktree is retained precisely because it is evidence (§7.4).
+    await workspaces.unlockWorktree({ cwd: options.projectDir, location });
+    await workspaces.removeWorktree({ cwd: options.projectDir, location, force: true });
+  }
+}
+
 async function checkGit(
   processRunner: ProcessRunner,
   fs: FileSystem,

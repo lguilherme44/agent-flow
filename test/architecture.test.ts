@@ -238,6 +238,35 @@ describe('nothing a model wrote reaches a shell (V-01)', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('takes the setup command from project config and from nowhere else (S-11)', () => {
+    // §8.1 reuses `project.commands.install` rather than adding a
+    // `git.worktreeSetup` key (§30.1), which means workspace preparation now runs
+    // a shell command before every task in worktree mode. That is only safe while
+    // the string is one a human wrote in a config file.
+    //
+    // So: the preparation service reads it from the effective config, routes it
+    // through the one module allowed to name a shell, and its request type — the
+    // part a caller fills in per task — carries no command at all.
+    const { text } = read(join(ROOT, 'src/app/task-workspaces.ts'));
+    const code = codeOnly(text);
+
+    expect(code).toContain('config.project?.commands?.install');
+    expect(code).toContain('runCommands');
+
+    // A per-attempt command would be a second, caller-supplied answer to "what
+    // should run here" — and the caller is the scheduler, holding a plan. Read as
+    // the interface body rather than by regex over the file: a pattern loose
+    // enough to span from the declaration to the next brace also spans into
+    // `runInstall(command: string)`, and would fail on correct code.
+    const request = code.slice(code.indexOf('interface PrepareRequest'));
+    const body = request.slice(request.indexOf('{'), request.indexOf('\n}') + 2);
+
+    expect(body, 'PrepareRequest was not found').toContain('taskId');
+    for (const field of ['command', 'install', 'setup', 'script']) {
+      expect(body, `PrepareRequest carries a ${field}`).not.toContain(field);
+    }
+  });
+
   it('resolves validation ids through the registry, never straight from a task', () => {
     // The executor must not read `task.validation` into a command position. It
     // maps ids through buildValidationRegistry, which only knows what the
@@ -416,34 +445,136 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     expect(offenders).toEqual([]);
   });
 
-  it('calls no worktree lifecycle method outside the Git adapter (M2-03 scope)', () => {
-    // M2-03 captures identity and evaluates preconditions. It creates nothing:
-    // no worktree, no branch, no ref, no commit. The primitives exist in the
-    // adapter thanks to M2-02 and do not yet participate in a run, and this is
-    // the test M2-04 and M2-06 have to come and edit when they do.
-    const LIFECYCLE = [
-      'addWorktree',
-      'removeWorktree',
-      'unlockWorktree',
-      'pruneWorktrees',
-      'commitTree',
-      'updateRef',
-      'stageAll',
-      'writeTree',
-      'abortMerge',
-    ];
+  it('creates a worktree from one application service only (M2-04 scope)', () => {
+    // M2-03's version of this forbade calling the lifecycle at all, because
+    // nothing was allowed to create a workspace yet. M2-04 builds the service
+    // that does, so the rule becomes a location rule — which is the shape that
+    // survives: one module owns preparation, and the milestones above it get a
+    // prepared workspace rather than a Git API.
+    //
+    // The rest of the lifecycle is still nobody's. Removing, unlocking and
+    // pruning a worktree belong to cleanup (M2-09) and are deliberately absent:
+    // a failed attempt's worktree is retained, and the first module to delete
+    // one should have to come and edit this list.
+    // Two owners, and the distinction between them is the rule. The preparation
+    // service creates an attempt's workspace and never reclaims one — a failed
+    // attempt's worktree is the only copy of what its agent produced (§7.4).
+    // `doctor`'s §8.4 probe creates a *throwaway* checkout that holds nothing
+    // and removes it in a `finally`; it is the one place a removal is correct,
+    // and it must go through Git rather than `rm -rf` (§20.2).
+    const PREPARES = ['src/app/task-workspaces.ts', 'src/cli/doctor.ts'];
+    const RECLAIMS = ['src/cli/doctor.ts'];
 
     const offenders: string[] = [];
     for (const file of sourceFiles('src')) {
       const { path, text } = read(file);
       if (path.startsWith('src/adapters/git/')) continue;
-
       const code = codeOnly(text);
-      const hits = LIFECYCLE.filter((method) => new RegExp(`\\.${method}\\s*\\(`).test(code));
-      if (hits.length > 0) offenders.push(`${path}: ${hits.join(', ')}`);
+
+      if (!PREPARES.includes(path) && /\.addWorktree\s*\(/.test(code)) {
+        offenders.push(`${path}: addWorktree`);
+      }
+      for (const method of ['removeWorktree', 'unlockWorktree', 'pruneWorktrees']) {
+        if (!RECLAIMS.includes(path) && new RegExp(`\\.${method}\\s*\\(`).test(code)) {
+          offenders.push(`${path}: ${method}`);
+        }
+      }
+      // M2-05's, and still nobody's.
+      for (const method of ['commitTree', 'updateRef', 'writeTree', 'stageAll', 'abortMerge']) {
+        if (new RegExp(`\\.${method}\\s*\\(`).test(code)) {
+          offenders.push(`${path}: ${method}`);
+        }
+      }
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  it('writes a task result from the executor only (M2-04)', () => {
+    // `TaskResult` is the record of *what ran*: a runner id, a model, a reasoning
+    // level, the validation it went through. Only the module that actually ran
+    // something can fill those in honestly, so only that module may write one.
+    //
+    // The rule exists because of a specific near-miss: the scheduler's workspace
+    // refusal wants a value to return, and a `TaskResult` is right there. Filling
+    // it in for an attempt where no runner was invoked would put a fiction in the
+    // artifact recovery, the read models and the CLI all read as evidence — so a
+    // refusal returns its own shape instead (`DispatchOutcome`), and this test
+    // keeps the shortcut closed.
+    const WRITER = 'src/app/task-executor.ts';
+
+    const offenders = sourceFiles('src')
+      .map((file) => read(file))
+      .filter(({ path }) => path !== WRITER && path !== 'src/app/paths.ts')
+      // `state-store.ts` reads one back; reading is not writing.
+      .filter(({ path }) => path !== 'src/app/state-store.ts')
+      .filter(({ text }) => /taskResult\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+
+    // Positive control: the writer still writes, so the rule is guarding a real
+    // call rather than a name nothing uses any more.
+    expect(codeOnly(read(join(ROOT, WRITER)).text)).toMatch(/taskResult\s*\(/);
+
+    // And the scheduler does not build one. `TaskResultSchema` is how the fiction
+    // would be assembled — parsed, so it would even look careful.
+    const scheduler = codeOnly(read(join(ROOT, 'src/app/scheduler.ts')).text);
+    expect(scheduler).not.toContain('TaskResultSchema');
+  });
+
+  it('forces a worktree removal from the throwaway probe and nowhere else (§7.4)', () => {
+    // `git worktree remove --force` discards the working tree's contents. That is
+    // correct for exactly one worktree in this milestone: the checkout §8.4's
+    // probe made dirty on purpose, which holds nothing anybody needs and which
+    // Git would otherwise refuse to reclaim, leaking one per `doctor` run.
+    //
+    // It is wrong everywhere else, and most wrong on an attempt worktree — the
+    // only remaining copy of what an agent produced (§7.4). So the caller list is
+    // one module, and the next milestone that wants this has to come and edit
+    // this test rather than inherit a footgun.
+    const FORCES = ['src/cli/doctor.ts'];
+    // Scoped to a worktree removal on purpose. `force: true` is ordinary and
+    // correct on a filesystem call — `node-file-system.ts` and `node-host.ts`
+    // both pass it to `fs.rm` — and a rule that flagged those would be noise
+    // someone eventually deletes.
+    const FORCED_REMOVAL = /removeWorktree\s*\(\s*\{[^}]*force\s*:\s*true/;
+
+    const offenders = sourceFiles('src')
+      .map((file) => read(file))
+      .filter(({ path }) => !path.startsWith('src/adapters/git/') && !FORCES.includes(path))
+      .filter(({ text }) => FORCED_REMOVAL.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+
+    // And the positive control: the rule is worth nothing if the pattern it
+    // searches for no longer matches the one call it is meant to allow.
+    expect(FORCED_REMOVAL.test(codeOnly(read(join(ROOT, 'src/cli/doctor.ts')).text))).toBe(true);
+
+    // One `--force`, never two. Git needs it twice to remove a *locked* worktree,
+    // and the lock is what protects a workspace an agent may be writing into
+    // (§7.3). The adapter sends one, so a caller reaching for `force` to tidy up
+    // still cannot delete a locked workspace.
+    //
+    // Read raw rather than through `codeOnly`, which blanks string literals — and
+    // the argv *is* string literals here. The patterns are quoted-and-comma'd so
+    // they cannot match the prose in the doc-comment that explains the rule.
+    const adapter = read(join(ROOT, 'src/adapters/git/git-workspaces.ts')).text;
+    expect(adapter).not.toMatch(/'--force'\s*,\s*'--force'/);
+    expect(adapter).toMatch(/'remove'\s*,\s*'--force'/);
+  });
+
+  it('retains a failed attempt workspace rather than reclaiming it (§7.4)', () => {
+    // A worktree in any state other than integrated is the only remaining copy
+    // of what an agent produced. The preparation service must not tidy one away
+    // to save disk — that would delete the evidence explaining the refusal.
+    const { text } = read(join(ROOT, 'src/app/task-workspaces.ts'));
+    const code = codeOnly(text);
+
+    for (const reclaim of ['removeWorktree', 'unlockWorktree', 'pruneWorktrees', 'remove(']) {
+      expect(code, `task-workspaces reclaims with ${reclaim}`).not.toContain(reclaim);
+    }
   });
 
   it('reaches Git from the identity module through the adapter only', () => {
@@ -706,6 +837,7 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       // Comparisons against the run's recorded mode — never an assignment.
       'src/app/run-actions.ts',
       'src/app/execution-context.ts',
+      'src/app/task-workspaces.ts',
     ]);
 
     const offenders = sourceFiles('src')

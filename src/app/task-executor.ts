@@ -11,6 +11,7 @@ import { StageFailure, type StageExecution, type StageRunner } from './stage-run
 import type { StateStore } from './state-store.js';
 import { runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
+import type { TaskWorkspace } from './task-workspaces.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { judgeValidation } from '../core/validation-outcome.js';
 
@@ -38,8 +39,29 @@ export interface TaskExecutorOptions {
 export class TaskExecutor {
   constructor(private readonly options: TaskExecutorOptions) {}
 
-  async execute(task: Task, runId: string, sdd: string): Promise<TaskResult> {
-    const { store, clock, stageRunner, config, projectDir } = this.options;
+  /**
+   * Runs one task, in the workspace it was given.
+   *
+   * `workspace` is optional and defaults to the project directory, which is what
+   * every sequential run gets and what keeps §25's compatibility promise: with
+   * no workspace this method behaves exactly as it did before M2-04. In worktree
+   * mode the scheduler prepares one and the three places that touch a directory
+   * — the agent's cwd, the validation cwd and `AGENTS.md` — all move to it.
+   *
+   * That last one is load-bearing. `AGENTS.md` used to be read from the mutable
+   * project directory, so a task would observe whatever the user happened to
+   * have saved in their editor while agents were running, rather than the
+   * `AGENTS.md` of its own base.
+   */
+  async execute(
+    task: Task,
+    runId: string,
+    sdd: string,
+    workspace?: TaskWorkspace,
+  ): Promise<TaskResult> {
+    const { store, clock, stageRunner, config } = this.options;
+    const projectDir = this.options.projectDir;
+    const workingDirectory = workspace?.path ?? projectDir;
 
     const role = routeTask(task, this.options.routingPolicy);
     const startedAt = clock.now();
@@ -69,8 +91,9 @@ export class TaskExecutor {
           task: toYaml(task).trim(),
           sdd,
           projectConfig: config.project === undefined ? 'None.' : toYaml(config.project).trim(),
-          agentsMd: await this.readAgentsMd(),
+          agentsMd: await this.readAgentsMd(workingDirectory),
         },
+        { workingDirectory },
       );
       text = result.text;
       execution = result.execution;
@@ -143,7 +166,10 @@ export class TaskExecutor {
         : await runCommands({
             processRunner: this.options.processRunner,
             commands: commands.map((entry) => entry.command as string),
-            cwd: projectDir,
+            // The same tree the agent wrote in. Validating the project directory
+            // while the work happened elsewhere would judge a tree the task never
+            // touched (§4.2, I-4).
+            cwd: workingDirectory,
           });
 
     // Judged against what the task expected, not against exit zero. A test-first
@@ -194,8 +220,8 @@ export class TaskExecutor {
     return parsed;
   }
 
-  private async readAgentsMd(): Promise<string> {
-    const path = `${this.options.projectDir}/AGENTS.md`;
+  private async readAgentsMd(workingDirectory: string): Promise<string> {
+    const path = `${workingDirectory}/AGENTS.md`;
     return (await this.options.fs.exists(path))
       ? this.options.fs.readFile(path)
       : 'No AGENTS.md in this repository.';

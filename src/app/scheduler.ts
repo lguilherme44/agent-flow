@@ -1,4 +1,5 @@
 import type { Plan, TaskResult, TaskState } from '../contracts/index.js';
+import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
 import { blockedByFailure, buildDag, readyTasks, topologicalOrder } from '../core/dag.js';
 import type { StateStore } from './state-store.js';
 import type { TaskExecutor } from './task-executor.js';
@@ -21,6 +22,15 @@ export interface SchedulerOptions {
    * ever have to change.
    */
   readonly maxConcurrency?: number;
+  /**
+   * Prepares one workspace per dispatched attempt (M2-04, §8).
+   *
+   * Optional so that every caller predating this milestone — and every
+   * sequential run — keeps working with no workspace at all, which the executor
+   * reads as "the project directory". When it is present the §8.1 sequence runs
+   * before the agent is invoked, and a refusal fails the task without one.
+   */
+  readonly workspaces?: TaskWorkspaces;
   /** Bounds recovery of interrupted tasks. Comes from `retry.maxAttempts`. */
   readonly maxAttempts?: number;
   readonly onTaskStart?: (taskId: string) => void;
@@ -67,6 +77,40 @@ export interface SchedulerOutcome {
   /** Set when the run stopped before finishing, with the reason. */
   readonly haltedBy?: string;
 }
+
+/**
+ * What one dispatched attempt produced.
+ *
+ * Two shapes, because there are two genuinely different outcomes and only one of
+ * them is an execution. A `TaskResult` records *what ran* — the runner, the model,
+ * the reasoning level, the validation it went through — and a workspace that was
+ * refused ran nothing at all. Describing that as a `TaskResult` would mean naming
+ * a runner that was never invoked, which puts a fiction in the one artifact
+ * everything downstream reads as evidence.
+ *
+ * So a refusal carries the four facts §8.3 defines and no more, and never becomes
+ * a result: no `result.json` is written, `onTaskFinish` is not called, and
+ * `SchedulerOutcome.results` has no entry for it. The task's `failed` state and
+ * the `task_workspace_preparation_failed` event are the record.
+ */
+type DispatchOutcome =
+  | { readonly kind: 'executed'; readonly result: TaskResult }
+  | {
+      readonly kind: 'workspace_preparation_failed';
+      readonly task: string;
+      readonly code: 'task_workspace_preparation_failed';
+      readonly phase: 'checkout' | 'setup';
+      /** Repository-relative and bounded. Never absolute (§7.2, §21.3). */
+      readonly changes: readonly string[];
+      /**
+       * A sentence for a person, path-free by construction.
+       *
+       * Reaches the halt reason and therefore the CLI, and nothing else — it is
+       * deliberately absent from the event, whose payload is the closed shape
+       * Appendix B specifies.
+       */
+      readonly detail: string;
+    };
 
 /**
  * Executes a plan in dependency order.
@@ -127,24 +171,57 @@ export class Scheduler {
       // The batch is named, because this is the write that spends the attempts.
       await this.persist(runId, states, batch);
 
-      const executed = await Promise.all(
-        batch.map(async (id) => {
+      const dispatched = await Promise.all(
+        batch.map(async (id): Promise<DispatchOutcome> => {
           const task = byId.get(id);
           if (task === undefined) throw new Error(`plan has no task ${id}`);
 
           this.options.onTaskStart?.(id);
-          const result = await this.options.executor.execute(task, runId, sdd);
+
+          // §8.1: the workspace is prepared *after* the attempt was spent by the
+          // dispatch above (M2-00.2) and *before* the agent is invoked. A failed
+          // preparation therefore costs an attempt and produces no agent call,
+          // which is what §8.3 specifies — the counter already moved, and
+          // pretending otherwise would make a retry policy count wrong.
+          const prepared = await this.prepareWorkspace(runId, id);
+          if (prepared.kind === 'workspace_preparation_failed') return prepared;
+
+          const result = await this.options.executor.execute(
+            task,
+            runId,
+            sdd,
+            prepared.workspace,
+          );
+          // Only an execution reaches this callback, because its argument is a
+          // `TaskResult` and there is no honest one to pass for a refusal.
           this.options.onTaskFinish?.(result);
-          return result;
+          return { kind: 'executed', result };
         }),
       );
 
-      for (const result of executed) {
-        states[result.task] = result.status;
-        results.push(result);
+      // Iterated in `batch` order, which `readyTasks` sorts — so which task sets
+      // the halt reason is a property of the plan and the state, never of which
+      // worker happened to finish first.
+      for (const outcome of dispatched) {
+        if (outcome.kind === 'executed') {
+          states[outcome.result.task] = outcome.result.status;
+          results.push(outcome.result);
 
-        if (result.status !== 'completed' && haltedBy === undefined) {
-          haltedBy = `${result.task} ended as ${result.status}`;
+          if (outcome.result.status !== 'completed' && haltedBy === undefined) {
+            haltedBy = `${outcome.result.task} ended as ${outcome.result.status}`;
+          }
+          continue;
+        }
+
+        // No result to push: nothing executed. The state transition and the event
+        // are the whole record, and the halt reason says which task and why so a
+        // person is not left reading "not all tasks completed".
+        states[outcome.task] = 'failed';
+
+        if (haltedBy === undefined) {
+          haltedBy =
+            `${outcome.task} never started: workspace preparation failed ` +
+            `at the ${outcome.phase} check — ${outcome.detail}`;
         }
       }
 
@@ -243,6 +320,90 @@ export class Scheduler {
    * coincidence. Naming the dispatch makes the counter mean what it says whatever
    * the dispatch shape becomes.
    */
+  /**
+   * The workspace for one dispatched attempt, or the refusal that stopped it.
+   *
+   * Absent `workspaces`, every task gets the project directory — which is what
+   * keeps the sequential path unchanged for callers that never wired one.
+   *
+   * On failure the worktree is **retained and still locked** (§7.4, §9). It is
+   * the only remaining copy of what the checkout and the install produced, and
+   * deleting it to save disk would be deleting the evidence that explains the
+   * refusal. Reclaiming it is M2-09's.
+   *
+   * Writes the event and nothing else: the state transition and the halt reason
+   * belong to the loop, which is where every other transition already happens.
+   */
+  private async prepareWorkspace(
+    runId: string,
+    taskId: string,
+  ): Promise<
+    | { readonly kind: 'prepared'; readonly workspace?: TaskWorkspace }
+    | Extract<DispatchOutcome, { kind: 'workspace_preparation_failed' }>
+  > {
+    const workspaces = this.options.workspaces;
+    // Nothing wired: the executor falls back to the project directory, which is
+    // every sequential caller and every test that predates M2-04.
+    if (workspaces === undefined) return { kind: 'prepared' };
+
+    const state = await this.options.store.loadRun(runId);
+    const attempt = state.tasks.find((task) => task.id === taskId)?.attempts ?? 1;
+
+    // §9.1 step 1: one wave base, and every task in the wave is cut from it.
+    // Until the Integrator advances the integration branch (M2-06) that commit is
+    // always `planningBase`, which is the base §9.1 says the first wave uses.
+    //
+    // Passed as-is when it is absent, rather than coerced to an empty string:
+    // preparation re-validates the base against `CommitOidSchema` before it
+    // composes an argv, so a worktree-mode run that somehow reached here without
+    // a `planningBase` refuses with a sentence saying so instead of handing Git
+    // an empty commit-ish and reporting whatever Git says about it.
+    const outcome = await workspaces.prepare({
+      state,
+      taskId,
+      attempt,
+      base: state.planningBase,
+    });
+
+    if (outcome.ok) {
+      if (outcome.workspace.isolation !== undefined) {
+        await this.options.store.appendEvent(runId, 'task_workspace_created', {
+          task: taskId,
+          attempt,
+          branch: outcome.workspace.isolation.branch,
+          base: outcome.workspace.isolation.base,
+        });
+      }
+      return { kind: 'prepared', workspace: outcome.workspace };
+    }
+
+    // Exactly the four keys Appendix B specifies, and the shape is closed: no
+    // absolute path (§7.2, §21.3), and no free-text `detail` either. The sentence
+    // a person reads is diagnostic, and diagnostics belong on the internal
+    // outcome and in the halt reason — a fifth key here would be a payload the
+    // Appendix does not describe, which is how an event contract stops being one.
+    await this.options.store.appendEvent(runId, 'task_workspace_preparation_failed', {
+      task: taskId,
+      attempt,
+      phase: outcome.failure.phase,
+      changes: outcome.failure.changes,
+    });
+
+    // A value rather than a throw, so the wave completes and its siblings still
+    // run to their own conclusion (§9.2). Deliberately **not** a `TaskResult`:
+    // nothing executed, so there is no runner, no model and no reasoning level to
+    // record, and inventing them would put a fiction in the artifact everything
+    // downstream reads as evidence of what ran.
+    return {
+      kind: 'workspace_preparation_failed',
+      task: taskId,
+      code: 'task_workspace_preparation_failed',
+      phase: outcome.failure.phase,
+      changes: outcome.failure.changes,
+      detail: outcome.failure.detail,
+    };
+  }
+
   private async persist(
     runId: string,
     states: Record<string, TaskState>,

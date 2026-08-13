@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ABSENT_OID,
@@ -136,6 +136,58 @@ describe('worktree add, list, unlock, remove, prune (§7.3, §23, §47)', () => 
     expect(removed.ok).toBe(false);
     if (removed.ok) return;
     expect(removed.failure.code).toBe('git_command_failed');
+    expect(existsSync(join(repo.worktreeRoot, ...location.segments))).toBe(true);
+  });
+
+  it('refuses to remove a dirty worktree, and forces one only when asked', async () => {
+    // Git will not reclaim a worktree holding a modified tracked file or an
+    // untracked non-ignored one, which is the state §8.4's `doctor` probe makes on
+    // purpose: an install that rewrites a lockfile. Without `force` the probe
+    // would leak a worktree on every warning it produced.
+    //
+    // Both halves matter. The default must still refuse — `force` discarding a
+    // tree by accident is exactly what §7.4 forbids on an attempt worktree — and
+    // the forced form must actually work, or the probe's `finally` is decoration.
+    repo = await makeTempRepoWithCommit();
+    const location = attemptAt('TASK-001', 1);
+    const path = join(repo.worktreeRoot, ...location.segments);
+    await repo.workspaces.addWorktree({
+      cwd: repo.dir,
+      location,
+      branch: `agent-flow/${RUN_KEY}/TASK-001/attempt-1`,
+      base: repo.head(),
+      reason: 'held',
+    });
+    expect((await repo.workspaces.unlockWorktree({ cwd: repo.dir, location })).ok).toBe(true);
+    writeFileSync(join(path, 'README.md'), 'rewritten by an install\n');
+
+    const refused = await repo.workspaces.removeWorktree({ cwd: repo.dir, location });
+    expect(refused.ok).toBe(false);
+    expect(existsSync(path)).toBe(true);
+
+    const forced = await repo.workspaces.removeWorktree({ cwd: repo.dir, location, force: true });
+    expect(forced.ok).toBe(true);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('does not let force past a lock', async () => {
+    // `force` is about content, not about the lock: Git needs `--force` twice to
+    // remove a locked worktree, and this adapter never sends the second one. So a
+    // caller that reaches for `force` to tidy up still cannot delete a workspace
+    // an agent may be writing into (§7.3).
+    repo = await makeTempRepoWithCommit();
+    const location = attemptAt('TASK-001', 1);
+    await repo.workspaces.addWorktree({
+      cwd: repo.dir,
+      location,
+      branch: `agent-flow/${RUN_KEY}/TASK-001/attempt-1`,
+      base: repo.head(),
+      reason: 'held',
+    });
+
+    const removed = await repo.workspaces.removeWorktree({ cwd: repo.dir, location, force: true });
+
+    expect(removed.ok).toBe(false);
     expect(existsSync(join(repo.worktreeRoot, ...location.segments))).toBe(true);
   });
 

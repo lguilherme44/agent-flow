@@ -697,14 +697,34 @@ export class GitWorkspaces {
   }
 
   /**
-   * `git worktree remove -- <path>`.
+   * `git worktree remove [--force] -- <path>`.
    *
    * Never `rm -rf` (§20.2). A locked worktree is refused by Git with a message
    * naming the lock, and that refusal is passed through rather than forced: the
-   * caller unlocks deliberately, or leaves the workspace alone.
+   * caller unlocks deliberately, or leaves the workspace alone. `force` does not
+   * change that — a locked worktree needs `--force` twice, which this method
+   * never sends.
+   *
+   * **`force` is about content, not about the lock, and it discards content.**
+   * Git refuses to remove a worktree holding a modified tracked file or an
+   * untracked non-ignored one, which is exactly the state §8.4's probe *creates
+   * on purpose*: an install that rewrites a lockfile leaves a worktree Git will
+   * not reclaim, and a `doctor` that leaked one per invocation would fill the
+   * owned root with checkouts nobody asked for. Ignored files alone do not
+   * trigger the refusal, so the clean case never needs this.
+   *
+   * It is therefore correct for precisely one kind of worktree: one Agent Flow
+   * created, whose contents nobody needs, and which no run's state points at. It
+   * is **wrong for an attempt worktree** — that one is retained because it is the
+   * only remaining copy of what an agent produced (§7.4) — and an architecture
+   * test keeps the caller list at one module so the next milestone that wants
+   * this has to come and justify itself.
    */
   async removeWorktree(
-    options: RepoContext & { readonly location: WorkspaceLocation },
+    options: RepoContext & {
+      readonly location: WorkspaceLocation;
+      readonly force?: boolean;
+    },
   ): Promise<GitResult<void>> {
     const path = this.workspacePath(options.location);
     if (!path.ok) return path;
@@ -713,7 +733,10 @@ export class GitWorkspaces {
       subcommand: 'worktree',
       cwd: options.cwd,
       timeout: 'checkout',
-      args: ['remove', '--', path.value],
+      args:
+        options.force === true
+          ? ['remove', '--force', '--', path.value]
+          : ['remove', '--', path.value],
     });
     if (!outcome.ok) return outcome;
 

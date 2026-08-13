@@ -1,10 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
+import { FakeHost } from '../fakes/fake-host.js';
+import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
+import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
 import { Scheduler } from '../../src/app/scheduler.js';
 import { StateStore } from '../../src/app/state-store.js';
-import { PlanSchema, TaskResultSchema, type Task, type TaskResult } from '../../src/contracts/index.js';
+import { TaskWorkspaces } from '../../src/app/task-workspaces.js';
+import { runPaths } from '../../src/app/paths.js';
+import {
+  PlanSchema,
+  TaskResultSchema,
+  type EffectiveConfig,
+  type Task,
+  type TaskResult,
+} from '../../src/contracts/index.js';
 import type { TaskExecutor } from '../../src/app/task-executor.js';
+import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
 
 const PROJECT = '/repo';
 
@@ -730,5 +742,376 @@ describe('recovery obeys the state machine on a persisted run', () => {
 
     expect(executed).toEqual([]);
     expect(outcome.states['TASK-001']).toBe('interrupted');
+  });
+});
+
+describe('workspace preparation, per dispatched attempt (M2-04 §8)', () => {
+  // The ordering M2-00.2 fixed and this milestone must not disturb: the attempt
+  // is spent by the dispatch, *then* the workspace is prepared, *then* the agent
+  // runs. A refusal therefore costs an attempt and produces no agent call.
+
+  /** A `TaskWorkspaces` stand-in that answers without touching Git. */
+  function workspaces(answer: 'ok' | { phase: 'checkout' | 'setup'; changes: string[] }) {
+    const asked: { taskId: string; attempt: number }[] = [];
+    const service = {
+      prepare: async (request: { taskId: string; attempt: number }) => {
+        asked.push({ taskId: request.taskId, attempt: request.attempt });
+        if (answer === 'ok') {
+          return {
+            ok: true as const,
+            workspace: {
+              path: '/tmp/workspace',
+              attempt: request.attempt,
+              isolation: {
+                base: 'a'.repeat(40),
+                branch: `agent-flow/AF-2026-001-0f3a91c4bd27e615/${request.taskId}/attempt-1`,
+                relativePath: `repo-x/AF-2026-001-0f3a91c4bd27e615/${request.taskId}/attempt-1`,
+              },
+            },
+          };
+        }
+        return {
+          ok: false as const,
+          failure: {
+            code: 'task_workspace_preparation_failed' as const,
+            phase: answer.phase,
+            changes: answer.changes,
+            detail: 'the install command changed files that are tracked or not ignored',
+            at: '2026-01-01T00:00:00.000Z',
+          },
+        };
+      },
+    };
+    return { service, asked };
+  }
+
+  it('prepares after the attempt is spent and before the agent runs', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+    const prepared = workspaces('ok');
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const scheduler = new Scheduler({
+      store,
+      executor,
+      workspaces: prepared.service as never,
+    });
+
+    await scheduler.run(plan, run.runId, 'SDD');
+
+    // The attempt the workspace was asked for is the one the dispatch spent.
+    expect(prepared.asked).toEqual([{ taskId: 'TASK-001', attempt: 1 }]);
+    expect(executed).toEqual(['TASK-001']);
+    expect((await store.loadRun(run.runId)).tasks[0]?.attempts).toBe(1);
+  });
+
+  it('records the workspace without an absolute path', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const prepared = workspaces('ok');
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor, workspaces: prepared.service as never }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+
+    const created = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'task_workspace_created',
+    );
+    expect(created).toBeDefined();
+    expect(created?.detail['branch']).toContain('TASK-001/attempt-1');
+    // §21.3: no filesystem path in an event, ever.
+    expect(JSON.stringify(created?.detail)).not.toContain('/tmp/workspace');
+  });
+
+  it('fails the task without invoking the agent when preparation refuses', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+    const prepared = workspaces({ phase: 'setup', changes: ['package-lock.json'] });
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: prepared.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    // The agent is not invoked, which is the point of §8.3: an agent that starts
+    // in a dirty workspace produces a validated tree containing changes nobody
+    // attributed to the task.
+    expect(executed).toEqual([]);
+
+    const state = await store.loadRun(run.runId);
+    expect(state.tasks[0]?.state).toBe('failed');
+    // Spent: the counter moved at dispatch and a refusal does not give it back.
+    expect(state.tasks[0]?.attempts).toBe(1);
+
+    // The halt reason names the task and the phase, so a person is not left
+    // reading "not all tasks completed" with nothing to act on.
+    expect(outcome.haltedBy).toContain('TASK-001');
+    expect(outcome.haltedBy).toContain('setup');
+
+    const failure = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'task_workspace_preparation_failed',
+    );
+    expect(failure?.detail['phase']).toBe('setup');
+    expect(failure?.detail['changes']).toEqual(['package-lock.json']);
+  });
+
+  it('invents no TaskResult for an attempt that never executed', async () => {
+    // `TaskResult` records *what ran* — the runner, the model, the reasoning
+    // level, the validation it went through. A refused workspace ran nothing, so
+    // every one of those fields would have to be made up, and the artifact
+    // everything downstream reads as evidence would be carrying a fiction.
+    //
+    // Two tasks in one wave, one refused and one executed, because "no
+    // `result.json` was written" is worth nothing on its own: a fake executor
+    // writes none either, so the assertion would be green against a scheduler
+    // that fabricated results and a test bench that could not tell. The sibling
+    // is the positive control — it writes one the same way `TaskExecutor` does,
+    // through the same `runPaths`, so the absence next to it means something.
+    const { store, run, fs } = await harness();
+    const finished: TaskResult[] = [];
+    const executed: string[] = [];
+
+    const resultPath = (taskId: string): string =>
+      runPaths(PROJECT, run.runId).taskResult(taskId);
+
+    const executor = {
+      execute: async (t: Task) => {
+        executed.push(t.id);
+        const produced = result(t.id, 'completed');
+        await fs.mkdirp(`${PROJECT}/.agent-flow/runs/${run.runId}/tasks/${t.id}`);
+        await fs.writeFileAtomic(resultPath(t.id), JSON.stringify(produced));
+        return produced;
+      },
+    } as unknown as TaskExecutor;
+
+    const refused = { phase: 'setup' as const, changes: ['package-lock.json'] };
+    const service = {
+      prepare: async (request: { taskId: string; attempt: number }) =>
+        request.taskId === 'TASK-001'
+          ? {
+              ok: false as const,
+              failure: {
+                code: 'task_workspace_preparation_failed' as const,
+                ...refused,
+                detail: 'the install command changed files that are tracked or not ignored',
+                at: '2026-01-01T00:00:00.000Z',
+              },
+            }
+          : {
+              ok: true as const,
+              workspace: { path: '/tmp/workspace', attempt: request.attempt },
+            },
+    };
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002')],
+    });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: service as never,
+      maxConcurrency: 2,
+      onTaskFinish: (entry) => finished.push(entry),
+    }).run(plan, run.runId, 'SDD');
+
+    // The refused task: no agent, no result anywhere.
+    expect(executed).not.toContain('TASK-001');
+    expect(outcome.results.map((entry) => entry.task)).toEqual(['TASK-002']);
+    expect(finished.map((entry) => entry.task)).toEqual(['TASK-002']);
+    expect(await store.readTaskResult(run.runId, 'TASK-001')).toBeNull();
+    expect(await fs.exists(resultPath('TASK-001'))).toBe(false);
+
+    // The control: the same wave, the same bench, and a result really does appear
+    // when something really did run.
+    expect(executed).toContain('TASK-002');
+    expect(await fs.exists(resultPath('TASK-002'))).toBe(true);
+    expect((await store.readTaskResult(run.runId, 'TASK-002'))?.task).toBe('TASK-002');
+
+    // And the state machine still moved: the record is the task state plus the
+    // event, not a synthesised result.
+    const state = await store.loadRun(run.runId);
+    expect(state.tasks.find((entry) => entry.id === 'TASK-001')?.state).toBe('failed');
+    expect(outcome.complete).toBe(false);
+    expect(outcome.planComplete).toBe(false);
+    // §9.2: the wave completed before the run halted, so the sibling's work was
+    // not thrown away because a peer was refused.
+    expect(state.tasks.find((entry) => entry.id === 'TASK-002')?.state).toBe('completed');
+    expect(outcome.haltedBy).toContain('TASK-001');
+  });
+
+  it('reports a checkout refusal as its own phase', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+    const prepared = workspaces({ phase: 'checkout', changes: ['content.txt'] });
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: prepared.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(executed).toEqual([]);
+    expect(outcome.haltedBy).toContain('checkout');
+    const failure = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'task_workspace_preparation_failed',
+    );
+    expect(failure?.detail['phase']).toBe('checkout');
+  });
+
+  it('writes exactly the four keys Appendix B specifies, and no more', async () => {
+    // A closed shape, asserted by key set rather than by presence. `detail` lived
+    // here once and read as harmless; it carried the install command's output,
+    // which names the absolute directory it ran in. The general rule is worth
+    // more than the specific fix: a field the Appendix does not describe has no
+    // business in a persisted event, whatever it happens to contain today.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const prepared = workspaces({ phase: 'setup', changes: ['package-lock.json'] });
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor, workspaces: prepared.service as never }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+
+    const failure = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'task_workspace_preparation_failed',
+    );
+    expect(failure).toBeDefined();
+    expect(Object.keys(failure?.detail ?? {}).sort()).toEqual([
+      'attempt',
+      'changes',
+      'phase',
+      'task',
+    ]);
+
+    // And the sibling event, for the same reason.
+    const okPrepared = workspaces('ok');
+    const second = await harness();
+    await new Scheduler({
+      store: second.store,
+      executor,
+      workspaces: okPrepared.service as never,
+    }).run(plan, second.run.runId, 'SDD');
+
+    const created = (await second.store.readEvents(second.run.runId)).find(
+      (event) => event.type === 'task_workspace_created',
+    );
+    expect(Object.keys(created?.detail ?? {}).sort()).toEqual([
+      'attempt',
+      'base',
+      'branch',
+      'task',
+    ]);
+  });
+
+  it('runs unchanged when no workspace service is wired', async () => {
+    // Every caller predating M2-04, and every sequential run.
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD');
+
+    expect(executed).toEqual(['TASK-001']);
+  });
+});
+
+describe('what a refused workspace writes to disk (§7.2, §21.3)', () => {
+  // The two halves of this guarantee are tested separately — preparation produces
+  // a path-free refusal, and the scheduler copies its fields into an event — and
+  // separately is not enough. The claim is about `events.jsonl`, so this is the
+  // real scheduler, the real `TaskWorkspaces`, real Git and a real install that
+  // rewrites a tracked file, with the assertion made against what was persisted.
+
+  let repo: TempRepo | undefined;
+  afterEach(() => {
+    repo?.cleanup();
+    repo = undefined;
+  });
+
+  it('names no absolute path anywhere in the run record', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.write('package-lock.json', '{"lockfileVersion":3}\n');
+    const base = repo.commitAll('a lockfile');
+
+    const fs = new InMemoryFileSystem();
+    const store = new StateStore({ fs, clock: new FixedClock(), projectDir: PROJECT });
+    // Through `createRun`, because it is the only writer of these three (I-13).
+    const run = await store.createRun('f', (runId) => ({
+      isolationMode: 'worktree' as const,
+      planningBase: base,
+      gitRunKey: `${runId}-0f3a91c4bd27e615`,
+    }));
+
+    const workspaces = new TaskWorkspaces({
+      workspaces: repo.workspaces,
+      fs: new NodeFileSystem(),
+      host: new FakeHost(1000, 'test-host', [1000], repo.home),
+      projectDir: repo.dir,
+      processRunner: new NodeProcessRunner(),
+      config: {
+        global: {},
+        // `pwd` on stdout as well, so a leak has two routes to take.
+        project: { commands: { install: 'pwd && echo rewritten > package-lock.json' } },
+      } as unknown as EffectiveConfig,
+      clock: new FixedClock(),
+    });
+
+    const { executor, executed } = fakeExecutor();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({ store, executor, workspaces }).run(plan, run.runId, 'SDD');
+
+    expect(executed).toEqual([]);
+
+    const events = await store.readEvents(run.runId);
+    const refusal = events.find((event) => event.type === 'task_workspace_preparation_failed');
+    expect(refusal).toBeDefined();
+    expect(refusal?.detail['phase']).toBe('setup');
+    // Repository-relative and bounded, against a real `git status` (§8.3).
+    expect(refusal?.detail['changes']).toEqual(['package-lock.json']);
+    // The closed shape, asserted here too rather than only against the fake: this
+    // is the path that actually runs Git and a real install, and it is the one a
+    // fifth key would slip back in through.
+    expect(Object.keys(refusal?.detail ?? {}).sort()).toEqual([
+      'attempt',
+      'changes',
+      'phase',
+      'task',
+    ]);
+
+    // Nothing executed, so there is nothing to have produced a result.
+    expect(await store.readTaskResult(run.runId, 'TASK-001')).toBeNull();
+
+    // Retained and still locked (§7.4). The `--force` removal the `doctor` probe
+    // uses is deliberately not reachable from here: this worktree is the only
+    // remaining copy of what the checkout and the install produced, and it is the
+    // evidence explaining the refusal. Reclaiming it is M2-09's.
+    const listed = repo.userGit(['worktree', 'list', '--porcelain']);
+    const record = listed.split('\n\n').find((block) => block.includes('TASK-001')) ?? '';
+    expect(record).not.toBe('');
+    expect(record).toContain('locked agent-flow');
+    // The attempt branch survives too, at the base it was cut from.
+    expect(repo.userGit(['rev-parse', `agent-flow/${run.runId}-0f3a91c4bd27e615/TASK-001/attempt-1`]).trim()).toBe(base);
+
+    // The whole record, not just the one event: the state file is written by the
+    // same dispatch and a leak there would be just as durable.
+    const persisted = JSON.stringify(events) + JSON.stringify(await store.loadRun(run.runId));
+    for (const absolute of [repo.dir, repo.home, repo.worktreeRoot]) {
+      expect(persisted, `an absolute path reached the run record: ${absolute}`).not.toContain(
+        absolute,
+      );
+    }
+    // A control: the assertion above is worthless if the paths were never
+    // plausible strings to find. The install genuinely printed one.
+    expect(repo.worktreeRoot.startsWith('/')).toBe(true);
   });
 });

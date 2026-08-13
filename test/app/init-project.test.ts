@@ -91,6 +91,29 @@ describe('existing files are not clobbered (§7.7)', () => {
     expect(await fs.readFile('/repo/.agent-flow/config.yaml')).toContain('name: mine');
   });
 
+  it('does not upgrade an existing project to the lockfile-respecting install (§8.4)', async () => {
+    // §8.4 changes what a *new* Node project is given — `npm ci` rather than
+    // `npm install` — and says in the same breath that it MUST NOT rewrite an
+    // existing `.agent-flow/config.yaml`. Worth its own case rather than trusting
+    // the general skip rule above: "how do I install this project" is the one
+    // setting where a silent upgrade would change what runs on someone's machine,
+    // and `npm ci` deletes `node_modules` before it starts.
+    const existing = 'project:\n  name: mine\n  type: node\ncommands:\n  install: npm install\n';
+    const fs = seeded({
+      ...nodeRepo,
+      'package-lock.json': '{"lockfileVersion":3}',
+      '.agent-flow/config.yaml': existing,
+    });
+
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    expect(result.skipped).toContain('/repo/.agent-flow/config.yaml');
+    expect(await fs.readFile('/repo/.agent-flow/config.yaml')).toBe(existing);
+    // And the detection itself did notice the lockfile — so the config survived
+    // on purpose rather than because nothing wanted to change it.
+    expect(result.stack.commands.install).toBe('npm ci');
+  });
+
   it('overwrites only when explicitly asked', async () => {
     const fs = seeded({ ...nodeRepo, '.agent-flow/config.yaml': 'project:\n  name: mine\n' });
     const result = await initProject({ fs, projectDir: PROJECT, force: true });

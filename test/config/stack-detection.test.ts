@@ -210,3 +210,59 @@ describe('Python and Rust read their manifests too', () => {
     expect(stack.name).toBe('slugkit');
   });
 });
+
+describe('the install command a new project is given (§8.4)', () => {
+  // `npm install` rewrites `package-lock.json` whenever the lock drifts from
+  // `package.json`. That is a tracked modification, so it fails the post-setup
+  // cleanliness assertion, so worktree mode refuses every task in the project.
+  // A new project should not be handed that by default.
+
+  it('uses npm ci when there is an npm lockfile', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/package.json', JSON.stringify({ name: 'demo' }));
+    fs.seed('/repo/package-lock.json', '{"lockfileVersion":3}');
+
+    const detected = await detectStack(fs, '/repo');
+
+    expect(detected.commands.install).toBe('npm ci');
+  });
+
+  it('keeps npm install when there is no lockfile to respect', async () => {
+    // `npm ci` refuses without `package-lock.json`, so handing it to a project
+    // that has none would break `init` rather than harden it.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/package.json', JSON.stringify({ name: 'demo' }));
+
+    const detected = await detectStack(fs, '/repo');
+
+    expect(detected.commands.install).toBe('npm install');
+  });
+
+  it('leaves the other package managers alone', async () => {
+    // Their frozen-lockfile flags differ per major version, and §23's rule about
+    // unprobed claims applies to a flag as much as to a Git version. Naming one
+    // this milestone has not verified would be exactly the kind of assertion the
+    // Findings document exists because of.
+    for (const [lockfile, expected] of [
+      ['pnpm-lock.yaml', 'pnpm install'],
+      ['yarn.lock', 'yarn install'],
+      ['bun.lockb', 'bun install'],
+    ] as const) {
+      const fs = new InMemoryFileSystem();
+      fs.seed('/repo/package.json', JSON.stringify({ name: 'demo' }));
+      fs.seed(`/repo/${lockfile}`, 'lock');
+
+      expect((await detectStack(fs, '/repo')).commands.install, lockfile).toBe(expected);
+    }
+  });
+
+  it('invents no flag for Flutter', async () => {
+    // §8.4 leaves the correct Flutter invocation to the dogfood run: `flutter
+    // pub get` may rewrite `pubspec.lock`, and the flag that prevents it has not
+    // been probed on the versions this project targets.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/pubspec.yaml', 'name: demo\n');
+
+    expect((await detectStack(fs, '/repo')).commands.install).toBe('flutter pub get');
+  });
+});

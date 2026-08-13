@@ -130,6 +130,12 @@ export interface StageRunnerOptions {
  * loop, persistence, logging and events. Adding a stage should mean writing a
  * prompt and a definition, never repeating infrastructure.
  */
+/** Per-invocation overrides. Only the working directory so far. */
+export interface StageRunOptions {
+  /** Absolute. Defaults to the project directory. */
+  readonly workingDirectory?: string;
+}
+
 export class StageRunner {
   constructor(private readonly options: StageRunnerOptions) {}
 
@@ -148,10 +154,18 @@ export class StageRunner {
     );
   }
 
+  /**
+   * Where the agent runs, when it is not the project directory.
+   *
+   * Added for M2-04: in worktree mode a task's agent must run in that task's own
+   * checkout (§4.2). Defaulted rather than required, so every planning stage —
+   * which observes the project and writes nothing — keeps the behaviour it has.
+   */
   async run(
     stage: StageDefinition,
     runId: string,
     vars: Record<string, string>,
+    options: StageRunOptions = {},
   ): Promise<StageResult> {
     const { store, clock, config, capabilities, promptLoader, getRunner } = this.options;
 
@@ -206,7 +220,7 @@ export class StageRunner {
       const result = await runner.run({
         prompt: promptText,
         reasoning: resolved.reasoning,
-        workingDirectory: this.options.projectDir,
+        workingDirectory: options.workingDirectory ?? this.options.projectDir,
         permissions: prompt.meta.permissions,
         timeoutSeconds: resolved.timeoutSeconds,
         ...(resolved.model === undefined ? {} : { model: resolved.model }),

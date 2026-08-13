@@ -17,6 +17,7 @@ import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveTaskConcurrency, type ConcurrencyDecision } from '../core/concurrency.js';
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
+import { TaskWorkspaces } from './task-workspaces.js';
 import {
   checkWorktreePreconditions,
   observePlanningBaseDrift,
@@ -154,9 +155,22 @@ export async function buildExecutionContext(
   // agents against one working tree — see core/concurrency.ts.
   const concurrency = resolveTaskConcurrency(config.global.parallelism.maxTasks);
 
+  // §8: one prepared workspace per dispatched attempt. Sequential and legacy
+  // runs take the project directory from it without reaching Git.
+  const taskWorkspaces = new TaskWorkspaces({
+    workspaces,
+    fs,
+    host: options.host,
+    projectDir: options.projectDir,
+    processRunner,
+    config,
+    clock,
+  });
+
   const scheduler = new Scheduler({
     store,
     executor,
+    workspaces: taskWorkspaces,
     maxConcurrency: concurrency.effective,
     maxAttempts: config.global.retry.maxAttempts,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),

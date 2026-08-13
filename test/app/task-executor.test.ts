@@ -621,3 +621,79 @@ describe('a failed task records where the work was actually routed', () => {
     expect(failed.reasoning).toBe(ok.reasoning);
   });
 });
+
+describe('where a task runs (M2-04 §4.2)', () => {
+  // Three places touch a directory, and in worktree mode all three must be the
+  // task's own checkout. The third is the one that is easy to miss: `AGENTS.md`
+  // used to be read from the mutable project directory, so a task would observe
+  // whatever the user happened to have saved in their editor while agents were
+  // running rather than the `AGENTS.md` of its own base.
+
+  const WORKSPACE = '/workspace/TASK-001/attempt-1';
+
+  function workspace() {
+    return {
+      path: WORKSPACE,
+      attempt: 1,
+      isolation: {
+        base: 'a'.repeat(40),
+        branch: 'agent-flow/AF-2026-001-0f3a91c4bd27e615/TASK-001/attempt-1',
+        relativePath: 'repo-x/AF-2026-001-0f3a91c4bd27e615/TASK-001/attempt-1',
+      },
+    };
+  }
+
+  it('runs the agent in the workspace', async () => {
+    const world = await harness();
+    world.fs.seed(`${WORKSPACE}/AGENTS.md`, '# Workspace rules\n');
+
+    await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+    expect(world.runner.calls.at(-1)?.workingDirectory).toBe(WORKSPACE);
+  });
+
+  it('runs the validation commands in the workspace', async () => {
+    const processRunner = new FakeProcessRunner().always({ exitCode: 0 });
+    const world = await harness({ processRunner });
+    world.fs.seed(`${WORKSPACE}/AGENTS.md`, '# Workspace rules\n');
+
+    // A task with a validation id, so commands actually run.
+    await world.executor.execute(
+      task({ validation: ['test'] }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    const validation = processRunner.calls.filter((call) => call.command === '/bin/sh');
+    expect(validation.length).toBeGreaterThan(0);
+    for (const call of validation) expect(call.cwd).toBe(WORKSPACE);
+  });
+
+  it('reads AGENTS.md from the workspace, not from the project', async () => {
+    const world = await harness();
+    world.fs.seed(`${PROJECT}/AGENTS.md`, '# The user just edited this\n');
+    world.fs.seed(`${WORKSPACE}/AGENTS.md`, '# The rules of this task\u2019s base\n');
+
+    await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+    const prompt = world.runner.calls.at(-1)?.prompt ?? '';
+    expect(prompt).toContain('The rules of this task');
+    expect(prompt).not.toContain('The user just edited this');
+  });
+
+  it('keeps every one of them in the project directory without a workspace', async () => {
+    // Sequential mode, unchanged (§25).
+    const processRunner = new FakeProcessRunner().always({ exitCode: 0 });
+    const world = await harness({ processRunner });
+    world.fs.seed(`${PROJECT}/AGENTS.md`, '# Project rules\n');
+
+    await world.executor.execute(task({ validation: ['test'] }), world.run.runId, 'SDD');
+
+    expect(world.runner.calls.at(-1)?.workingDirectory).toBe(PROJECT);
+    for (const call of processRunner.calls.filter((entry) => entry.command === '/bin/sh')) {
+      expect(call.cwd).toBe(PROJECT);
+    }
+    expect(world.runner.calls.at(-1)?.prompt ?? '').toContain('Project rules');
+  });
+});

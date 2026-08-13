@@ -112,9 +112,11 @@ async function detectNode(
   projectDir: string,
   directoryName: string,
 ): Promise<Omit<DetectedStack, 'paths'>> {
+  // The runner for `run <script>` is still the plain manager name; only the
+  // install form is lockfile-aware.
   const manager = await packageManager(fs, projectDir);
   const commands: DetectedStack['commands'] = {
-    install: manager === 'npm' ? 'npm install' : `${manager} install`,
+    install: await installCommand(fs, projectDir, manager),
   };
 
   let name = directoryName;
@@ -138,6 +140,39 @@ async function detectNode(
   return { type: 'node', name, commands };
 }
 
+/**
+ * The install command a **new** project is given, lockfile-respecting where the
+ * package manager has such a form (§8.4).
+ *
+ * `npm install` rewrites `package-lock.json` whenever the lock is even slightly
+ * out of date with `package.json`. That is a tracked modification, so it fails
+ * the post-setup cleanliness assertion, so worktree mode refuses every task in
+ * the project — the gate working correctly, over a wall most Node projects walk
+ * into on their first run. `npm ci` respects the lock, matches what CI does, and
+ * fails loudly when the lock is genuinely stale rather than quietly editing it.
+ *
+ * Only where the manager actually has a lockfile-respecting form, and only where
+ * the lockfile is present to respect: `npm ci` requires `package-lock.json` and
+ * refuses without one, so a project that has none keeps `npm install`. The other
+ * three managers keep their plain form here — their frozen-lockfile flags differ
+ * per major version, and §23's rule about unprobed claims applies to a flag as
+ * much as to a Git version. Naming one this milestone has not verified would be
+ * exactly the kind of assertion the Findings document exists because of.
+ *
+ * **This changes what `init` writes for a new project and nothing else.** An
+ * existing `.agent-flow/config.yaml` is never rewritten (§8.4), so no project
+ * silently changes how it installs.
+ */
+async function installCommand(
+  fs: FileSystem,
+  projectDir: string,
+  manager: string,
+): Promise<string> {
+  if (manager === 'npm' && (await fs.exists(`${projectDir}/package-lock.json`))) return 'npm ci';
+  return `${manager} install`;
+}
+
+/** Which package manager this project uses, from its lockfile. */
 async function packageManager(fs: FileSystem, projectDir: string): Promise<string> {
   if (await fs.exists(`${projectDir}/pnpm-lock.yaml`)) return 'pnpm';
   if (await fs.exists(`${projectDir}/yarn.lock`)) return 'yarn';
