@@ -41,6 +41,65 @@ export type DegradationInput = Omit<Degradation, 'detectedAt'>;
  * has no use for; replaying a log to answer "what stage am I on" is work that a
  * single JSON file already does.
  */
+/**
+ * The three fields a run is born with and never rewrites (I-13, §6.1).
+ *
+ * `integrationHead` is deliberately **not** here: it is the one mutable Git fact
+ * a run persists, advanced by each merge in the same write that completes a task
+ * (§14.3).
+ */
+export const FROZEN_IDENTITY_FIELDS = ['planningBase', 'gitRunKey', 'isolationMode'] as const;
+
+export type FrozenIdentityField = (typeof FROZEN_IDENTITY_FIELDS)[number];
+
+/**
+ * Supplies the identity fields once the run id exists.
+ *
+ * A function rather than a value because `gitRunKey` is derived from the run id,
+ * and the id is allocated inside `createRun`. Deliberately synchronous: it
+ * composes strings the application layer already decided, and a store that
+ * awaited a caller here would be a store that could be made to do I/O.
+ *
+ * Omitting it produces a run with none of the three fields — the *legacy* shape
+ * (§25.2), which is what every test that does not care about Git gets. The one
+ * production caller always supplies it.
+ */
+export type RunIdentityFor = (runId: string) => Partial<Pick<RunState, FrozenIdentityField>>;
+
+function frozenIdentityOf(state: RunState): Partial<Pick<RunState, FrozenIdentityField>> {
+  const frozen: Record<string, unknown> = {};
+  for (const field of FROZEN_IDENTITY_FIELDS) {
+    if (state[field] !== undefined) frozen[field] = state[field];
+  }
+  return frozen as Partial<Pick<RunState, FrozenIdentityField>>;
+}
+
+/**
+ * Refuses a patch that would move the run's Git identity.
+ *
+ * The invariant this protects is not a tidiness rule. `isolationMode` decides
+ * which tree the work is built in; `planningBase` is the commit the plan was
+ * written against; `gitRunKey` is the namespace the run's refs live under. A
+ * write that changed any of them would make the run's own history describe
+ * something that did not happen — and unlike a bad transition, nothing later
+ * would notice.
+ *
+ * A *legacy* run gaining a field is refused by the same rule, and that is the
+ * point of §25.2: there is no path from absent to `'worktree'`, and the absence
+ * of the path is the guarantee rather than a check that happens to refuse.
+ */
+export function assertIdentityUnchanged(current: RunState, next: RunState): void {
+  for (const field of FROZEN_IDENTITY_FIELDS) {
+    if (current[field] === next[field]) continue;
+
+    throw new StateError(
+      `Run ${current.runId}: ${field} is captured when the run is created and cannot be changed ` +
+        `(${String(current[field] ?? 'absent')} → ${String(next[field] ?? 'absent')}). ` +
+        'Start a new run to execute in a different mode.',
+    );
+  }
+}
+
 export class StateStore {
   private readonly fs: FileSystem;
   private readonly clock: Clock;
@@ -57,7 +116,7 @@ export class StateStore {
     return this.clock.now();
   }
 
-  async createRun(feature: string): Promise<RunState> {
+  async createRun(feature: string, identityFor?: RunIdentityFor): Promise<RunState> {
     const runId = await this.nextRunId();
     const paths = runPaths(this.projectDir, runId);
     const now = this.clock.now();
@@ -67,11 +126,19 @@ export class StateStore {
     await this.fs.mkdirp(paths.tasksDir);
     await this.fs.mkdirp(paths.logsDir);
 
+    // Opaque, schema-validated strings decided by the application layer. This
+    // store executes no Git, reads no configuration and generates no randomness
+    // (I-1) — it is handed three values and writes them once, together, in the
+    // same write that creates the run. `identityFor` takes the run id because
+    // `gitRunKey` is derived from it and only this method knows it yet.
+    const identity = identityFor?.(runId) ?? {};
+
     const state = RunStateSchema.parse({
       runId,
       feature,
       stage: 'discovery',
       status: 'running',
+      ...identity,
       createdAt: now,
       updatedAt: now,
     });
@@ -133,7 +200,21 @@ export class StateStore {
   ): Promise<RunState> {
     return serializeStateWrite(runPaths(this.projectDir, runId).state, async () => {
       const current = await this.loadRun(runId);
-      const next = RunStateSchema.parse({ ...mutate(current), updatedAt: this.clock.now() });
+      // Once. A callback is allowed to be expensive and is not required to be
+      // free of side effects, so calling it twice to compare would be both.
+      const mutated = mutate(current);
+
+      // Raises before the write, so an attempt to move the run's Git identity
+      // leaves the run exactly as it was rather than half-applied.
+      assertIdentityUnchanged(current, mutated);
+
+      const next = RunStateSchema.parse({
+        ...mutated,
+        // Belt and braces: even if the guard above were ever loosened, the
+        // persisted identity is what gets written (I-13).
+        ...frozenIdentityOf(current),
+        updatedAt: this.clock.now(),
+      });
 
       // Raises before the write, so a refused transition leaves the run exactly
       // as it was rather than half-applied. Raising in here also releases the

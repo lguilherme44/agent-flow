@@ -32,6 +32,22 @@ export interface Host {
    */
   readonly homeDir: string;
   /**
+   * `byteLength` bytes from a cryptographic source, as lowercase hex.
+   *
+   * Here rather than in a utility module because it is a fact about the machine
+   * — the operating system's entropy pool — and because `gitRunKey` depends on
+   * it being genuinely unpredictable (§5.2). The suffix exists so a new run
+   * cannot adopt the refs of a deleted run with the same id; a `Math.random`
+   * behind this signature would look unpredictable and would not be, and the
+   * failure would be invisible until two runs collided.
+   *
+   * A port rather than a direct `randomBytes` call for one practical reason:
+   * a test can make it deterministic, which is the only way to assert that two
+   * runs refuse to share a namespace rather than merely observing that they
+   * happened not to.
+   */
+  randomHex(byteLength: number): string;
+  /**
    * Whether a process id currently exists on *this* machine.
    *
    * Only meaningful for a lock written by this hostname. Asking about a pid from

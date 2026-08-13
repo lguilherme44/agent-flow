@@ -439,6 +439,155 @@ export class GitWorkspaces {
     return found;
   }
 
+  // -- repository shape (§6.3 checks 1-4, 8) ------------------------------
+
+  /**
+   * `rev-parse --is-inside-work-tree` — is this directory a working tree at all.
+   *
+   * Answers `false` rather than failing when the directory is not a repository,
+   * because §6.3 check 1 is a question with a legitimate negative answer: Agent
+   * Flow has always run in directories that are not repositories, and §25
+   * promises that stays true for sequential runs.
+   */
+  async isWorkTree(cwd: string): Promise<GitResult<boolean>> {
+    const outcome = await this.run({
+      subcommand: 'rev-parse',
+      cwd,
+      timeout: 'quick',
+      args: ['--is-inside-work-tree'],
+    });
+    if (!outcome.ok) return outcome;
+    if (outcome.value.exitCode === 0) return gitOk(outcome.value.stdout.trim() === 'true');
+    // 128 here means "not a repository", which is an answer.
+    if (outcome.value.exitCode === 128) return gitOk(false);
+    return gitFailure(commandFailed(outcome.value, 'git rev-parse --is-inside-work-tree'));
+  }
+
+  /** `rev-parse --is-bare-repository` (§6.3 check 2). */
+  async isBareRepository(cwd: string): Promise<GitResult<boolean>> {
+    const outcome = await this.run({
+      subcommand: 'rev-parse',
+      cwd,
+      timeout: 'quick',
+      args: ['--is-bare-repository'],
+    });
+    if (!outcome.ok) return outcome;
+    if (outcome.value.exitCode === 0) return gitOk(outcome.value.stdout.trim() === 'true');
+    if (outcome.value.exitCode === 128) return gitOk(false);
+    return gitFailure(commandFailed(outcome.value, 'git rev-parse --is-bare-repository'));
+  }
+
+  /**
+   * The commit `HEAD` names, or `null` when HEAD is unborn (§6.3 check 3).
+   *
+   * `null` and a failure are different answers and are kept apart: a repository
+   * with no commits is a state §23 refuses early *by name*, while a repository
+   * that cannot be read is `git_command_failed`. Collapsing them would make
+   * "you have not committed yet" and "your repository is broken" the same
+   * message.
+   */
+  async resolveHead(cwd: string): Promise<GitResult<string | null>> {
+    const outcome = await this.run({
+      subcommand: 'rev-parse',
+      cwd,
+      timeout: 'quick',
+      args: ['--verify', '--quiet', '--end-of-options', 'HEAD'],
+    });
+    if (!outcome.ok) return outcome;
+    // `--quiet` turns "no such ref" into a silent exit 1, which is what an
+    // unborn HEAD looks like. 128 is "not a repository" and is also not a commit.
+    if (outcome.value.exitCode === 1 || outcome.value.exitCode === 128) return gitOk(null);
+
+    const failed = expectSuccess(outcome.value, 'git rev-parse HEAD');
+    if (failed !== null) return failed;
+
+    return validOid(outcome.value.stdout.trim(), 'the commit HEAD names');
+  }
+
+  /**
+   * `rev-parse --path-format=absolute --git-common-dir` (§5.1).
+   *
+   * The *common* directory rather than the toplevel, and the distinction is the
+   * whole reason `repoKey` is stable: started from a linked worktree, the
+   * toplevel is that worktree while the common dir points at the main
+   * repository, so two invocations from two worktrees of one repository agree.
+   * It is used to **identify** a repository and never as a place to write into.
+   */
+  async commonDir(cwd: string): Promise<GitResult<string>> {
+    const outcome = await this.run({
+      subcommand: 'rev-parse',
+      cwd,
+      timeout: 'quick',
+      args: ['--path-format=absolute', '--git-common-dir'],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectParsableSuccess(outcome.value, 'git rev-parse --git-common-dir');
+    if (failed !== null) return failed;
+
+    const path = outcome.value.stdout.trim();
+    if (path.length === 0) {
+      return gitFailure({
+        code: 'git_invalid_output',
+        message: 'git rev-parse --git-common-dir produced no path',
+      });
+    }
+    return gitOk(path);
+  }
+
+  /**
+   * `git submodule status` — non-empty output means this repository has them.
+   *
+   * §23 refuses submodules early because `git worktree add` does not populate
+   * them, so the worktree would build against missing code and fail validation
+   * for a reason the failure message would not explain. The caller pairs this
+   * with a `.gitmodules` check, as the spec requires both.
+   */
+  async hasSubmodules(cwd: string): Promise<GitResult<boolean>> {
+    const outcome = await this.run({
+      subcommand: 'submodule',
+      cwd,
+      timeout: 'read',
+      args: ['status'],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectParsableSuccess(outcome.value, 'git submodule status');
+    if (failed !== null) return failed;
+
+    return gitOk(outcome.value.stdout.trim().length > 0);
+  }
+
+  /**
+   * `git check-ignore -q -- <path>` (§6.3 check 8).
+   *
+   * Exit 0 means ignored, 1 means not ignored, and anything else is an error —
+   * the same three-way shape as `cat-file -e`, and refused the same way rather
+   * than folded into `false`. Without this check the run refuses *itself*: its
+   * own state files make the tree dirty and check 9 then names files Agent Flow
+   * just wrote.
+   */
+  async isIgnored(options: RepoContext & { readonly path: string }): Promise<GitResult<boolean>> {
+    if (options.path.length === 0 || options.path.startsWith('-')) {
+      return gitFailure({
+        code: 'git_unsafe_argument',
+        message: `"${options.path}" is not a path this tool asks about`,
+      });
+    }
+
+    const outcome = await this.run({
+      subcommand: 'check-ignore',
+      cwd: options.cwd,
+      timeout: 'quick',
+      args: ['-q', '--', options.path],
+    });
+    if (!outcome.ok) return outcome;
+
+    if (outcome.value.exitCode === 0) return gitOk(true);
+    if (outcome.value.exitCode === 1) return gitOk(false);
+    return gitFailure(commandFailed(outcome.value, 'git check-ignore'));
+  }
+
   // -- worktrees ----------------------------------------------------------
 
   /** The absolute path a location resolves to, proven to be under the root. */

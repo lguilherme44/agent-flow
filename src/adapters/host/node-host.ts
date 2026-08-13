@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { homedir, hostname } from 'node:os';
 import type { Host } from '../../ports/host.js';
 
@@ -25,6 +26,13 @@ export class NodeHost implements Host {
    * *removes* directories from.
    */
   readonly homeDir = homedir();
+
+  randomHex(byteLength: number): string {
+    // `randomBytes`, not `pseudoRandomBytes` and not `Math.random`: the whole
+    // point of the 64 bits in a `gitRunKey` is that a stale namespace cannot be
+    // adopted by accident, and that argument rests on the source being real.
+    return randomBytes(byteLength).toString('hex');
+  }
 
   isAlive(pid: number): boolean {
     if (!Number.isInteger(pid) || pid <= 0) return false;

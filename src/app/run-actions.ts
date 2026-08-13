@@ -30,6 +30,13 @@ import {
 import type { SchedulerOutcome } from './scheduler.js';
 import { StateStore } from './state-store.js';
 import type { Host } from '../ports/index.js';
+import {
+  checkWorktreePreconditions,
+  observePlanningBaseDrift,
+  worktreeRefusalAction,
+  type PlanningBaseMoment,
+  type WorktreeRefusalCode,
+} from './run-git-identity.js';
 
 /**
  * Every state transition a person can ask for, as use cases (UI-27).
@@ -77,7 +84,12 @@ export type ActionErrorCode =
   | 'attempts_exhausted'
   | 'unmet_dependencies'
   | 'run_busy'
-  | 'invalid_input';
+  | 'invalid_input'
+  // MVP 2 §6.3. Every one of these names a repository state a user changes with
+  // one command, and none of them is forcible: there is no `--force` for a moved
+  // planning base or a dirty tree, and adding one would be adding a flag whose
+  // only function is to produce an unexplainable tree.
+  | WorktreeRefusalCode;
 
 export interface ActionError {
   readonly code: ActionErrorCode;
@@ -431,6 +443,66 @@ export async function approve(
   );
 }
 
+/**
+ * §6.2 at one of its four moments: enforce for an isolated run, observe for a
+ * sequential one, ask nothing of a legacy one.
+ *
+ * One function for both halves, because they are two outcomes of the *same*
+ * question and splitting them is how a caller ends up enforcing at approve and
+ * observing at start. Keyed on `state.isolationMode` and never on
+ * `config.global.git.useWorktrees` (I-13): a run created sequential stays
+ * sequential when the flag is switched on afterwards, and a run created isolated
+ * stays isolated when it is switched off.
+ *
+ * The sequential half is §6.2's stated deviation. Enforcing the gates
+ * unconditionally would refuse every existing user who plans a feature on a
+ * dirty working tree — which sequential mode has always allowed and which is the
+ * normal way people work — so the checks still run and their result is recorded.
+ * The information exists without the refusal.
+ *
+ * **This writes no run state.** It appends to the audit trail and returns; a
+ * refusal reports that the repository is not ready and does not reclassify the
+ * run (§6.4).
+ */
+async function planningBaseGate(
+  context: Awaited<ReturnType<typeof buildExecutionContext>>,
+  state: RunState,
+  moment: PlanningBaseMoment,
+): Promise<ActionError | undefined> {
+  const repository = {
+    workspaces: context.workspaces,
+    fs: context.fs,
+    host: context.host,
+    projectDir: context.projectDir,
+  };
+
+  if (state.isolationMode !== 'worktree') {
+    const observation = await observePlanningBaseDrift(repository, state);
+    if (observation !== null) {
+      await context.store.appendEvent(state.runId, 'planning_base_observation', {
+        moment,
+        ...observation,
+      });
+    }
+    return undefined;
+  }
+
+  const preconditions = await checkWorktreePreconditions(repository, state);
+  if (preconditions.satisfied) return undefined;
+
+  await context.store.appendEvent(state.runId, 'worktree_mode_refused', {
+    moment,
+    code: preconditions.code,
+    detail: preconditions.detail,
+  });
+
+  return {
+    code: preconditions.code,
+    message: `${state.runId} is an isolated run and this repository is not ready: ${preconditions.detail}.`,
+    action: worktreeRefusalAction(preconditions.code),
+  };
+}
+
 async function grantApproval(
   deps: RunActionDeps,
   runId: string,
@@ -439,6 +511,13 @@ async function grantApproval(
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
   if (state === null) return failed(noSuchRun(runId));
+
+  // §6.2 moment three. The gate binds a human decision to a plan, and a plan
+  // written against a tree that has since moved is a decision about something
+  // else. Here rather than in `describeApprovalGate`, which is a read: showing
+  // somebody the gate must not append to the audit trail.
+  const notReady = await planningBaseGate(context, state, 'approve');
+  if (notReady !== undefined) return failed(notReady);
 
   const plan = await loadPlanArtifact(context.store, runId);
   const review = await loadReview(context.store, runId);
@@ -693,6 +772,13 @@ async function execute(
       action: 'Revise the plan and approve the result, or start a new run.',
     });
   }
+
+  // Implementation start. In worktree mode this is where the integration branch
+  // would be cut from `planningBase`, so a moved HEAD or a dirty tree has to
+  // stop the run rather than be built on. Checked on every entry, including a
+  // resume.
+  const notReady = await planningBaseGate(context, state, 'implementation start');
+  if (notReady !== undefined) return failed(notReady);
 
   const current = await requireCurrent(context, runId);
   if (current !== undefined) return failed(current);

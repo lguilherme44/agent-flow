@@ -61,6 +61,11 @@ export const GIT_SUBCOMMANDS = [
   'cat-file',
   'for-each-ref',
   'add',
+  // Added for the M2-03 execution preconditions (§6.3). `submodule` answers
+  // check 4 and `check-ignore` answers check 8 — the one that stops the run
+  // refusing itself over its own state files.
+  'submodule',
+  'check-ignore',
 ] as const;
 
 export type GitSubcommand = (typeof GIT_SUBCOMMANDS)[number];

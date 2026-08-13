@@ -330,3 +330,79 @@ describe('a plan that was rejected', () => {
     expect((await store.loadRun(runId)).tasks[0]?.state).toBe('queued');
   });
 });
+
+describe('a run executes in the mode it was born in (M2-03, I-13)', () => {
+  // The defect this milestone exists to prevent: a run whose execution strategy
+  // changed because a YAML file did. Both directions are asserted, because §6.4
+  // requires both to be stated rather than left to inference — and the second is
+  // the one that surprises people.
+
+  /** Rewrites the project config a *later* command would read. */
+  function flipWorktrees(fs: InMemoryFileSystem, useWorktrees: boolean): void {
+    fs.seed('/repo/.agent-flow/config.yaml', `${PROJECT_CONFIG}\ngit:\n  useWorktrees: ${String(useWorktrees)}\n`);
+  }
+
+  it('stays sequential through approve when the flag is switched on afterwards', async () => {
+    const world = await project();
+
+    // Created sequential — the harness supplies no identity, which is the
+    // legacy shape, so this also covers "a legacy run is never promoted".
+    expect((await world.store.loadRun(world.runId)).isolationMode).toBeUndefined();
+
+    flipWorktrees(world.fs, true);
+
+    const outcome = await approve(world.deps, world.runId);
+
+    // Approve succeeded: no worktree precondition was evaluated, because the run
+    // is not in worktree mode. Had the gate read the configuration instead of
+    // the run, this would have failed on a project that is not a repository.
+    expect(outcome.ok).toBe(true);
+    expect((await world.store.loadRun(world.runId)).isolationMode).toBeUndefined();
+  });
+
+  it('stays sequential through start when the flag is switched on afterwards', async () => {
+    const world = await project();
+    await approve(world.deps, world.runId);
+
+    flipWorktrees(world.fs, true);
+
+    const outcome = await start(world.deps, world.runId);
+
+    // Whatever the run's outcome, the mode did not move and no Git precondition
+    // refused it. `/repo` is an in-memory directory and not a repository at all:
+    // a config-keyed gate would have refused here with `not_a_git_repository`.
+    expect(outcome.ok || outcome.error.code !== 'not_a_git_repository').toBe(true);
+    expect((await world.store.loadRun(world.runId)).isolationMode).toBeUndefined();
+  });
+
+  it('refuses an isolated run whose repository is not ready, and changes nothing', async () => {
+    const world = await project();
+    // A run born isolated. `/repo` is in-memory and not a repository, so the
+    // preconditions cannot be satisfied — which is the point: the refusal must
+    // report the repository, not reclassify the run.
+    await world.store.updateRun(world.runId, (state) => ({ ...state }));
+    const isolated = new StateStore({
+      fs: world.fs,
+      clock: new FixedClock(),
+      projectDir: '/repo',
+    });
+    const born = await isolated.createRun('an isolated feature', (runId) => ({
+      isolationMode: 'worktree' as const,
+      planningBase: 'a'.repeat(40),
+      gitRunKey: `${runId}-a93f085c23dd9321`,
+    }));
+
+    const before = await isolated.loadRun(born.runId);
+    const outcome = await approve(world.deps, born.runId);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    // A refusal is not a downgrade, not a degradation and not permanent (§6.4).
+    const after = await isolated.loadRun(born.runId);
+    expect(after.isolationMode).toBe('worktree');
+    expect(after.planningBase).toBe(before.planningBase);
+    expect(after.gitRunKey).toBe(before.gitRunKey);
+    expect(after.degradations).toEqual(before.degradations);
+    expect(after.approved).toBe(false);
+  });
+});

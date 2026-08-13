@@ -17,7 +17,12 @@ import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveTaskConcurrency, type ConcurrencyDecision } from '../core/concurrency.js';
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
+import {
+  checkWorktreePreconditions,
+  observePlanningBaseDrift,
+} from './run-git-identity.js';
 import { createGitCommand, type GitCommand } from '../adapters/git/git-command.js';
+import { createGitWorkspaces, type GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 
 /**
@@ -63,6 +68,14 @@ export interface ExecutionContext {
    * `core.hooksPath` somewhere else.
    */
   readonly git: GitCommand;
+  /**
+   * The typed Git operations. Present so the M2-03 preconditions read the
+   * repository through the same boundary everything else does; no run path
+   * calls a worktree lifecycle method on it yet.
+   */
+  readonly workspaces: GitWorkspaces;
+  /** The machine, for the home directory the worktree root is projected under. */
+  readonly host: Host;
   /** The adapter type behind a runner id — what independence is judged on. */
   readonly providerOf: (runnerId: string) => string | undefined;
   readonly projectDir: string;
@@ -92,6 +105,7 @@ export async function buildExecutionContext(
   const { fs, clock, processRunner } = options;
 
   const git = await createGitCommand({ processRunner, fs, homeDir: options.host.homeDir });
+  const workspaces = await createGitWorkspaces({ git, fs, homeDir: options.host.homeDir });
 
   const config = await loadConfig({
     fs,
@@ -162,6 +176,8 @@ export async function buildExecutionContext(
     concurrency,
     processRunner,
     git,
+    workspaces,
+    host: options.host,
     providerOf: (id) => registry.providerOf(id),
     projectDir: options.projectDir,
   };
@@ -183,6 +199,44 @@ export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeli
     stageRunner: context.stageRunner,
     processRunner: context.processRunner,
     git: context.git,
+    // §6.2's between-stage gate. Sequential and legacy runs never reach Git
+    // through it: `checkWorktreePreconditions` returns satisfied for them before
+    // asking anything.
+    planningBaseGate: async (runId, moment) => {
+      const state = await context.store.loadRun(runId);
+      const repository = {
+        workspaces: context.workspaces,
+        fs: context.fs,
+        host: context.host,
+        projectDir: context.projectDir,
+      };
+
+      if (state.isolationMode !== 'worktree') {
+        // §6.2's stated deviation: a sequential run is observed, never refused.
+        // Recorded whatever the result, because Appendix B's payload is
+        // `{ clean, head, planningBase, matches }` — a shape that exists to say
+        // "clean and matching" as readily as the opposite.
+        const observation = await observePlanningBaseDrift(repository, state);
+        if (observation !== null) {
+          await context.store.appendEvent(runId, 'planning_base_observation', {
+            moment,
+            ...observation,
+          });
+        }
+        return null;
+      }
+
+      const preconditions = await checkWorktreePreconditions(repository, state);
+      if (preconditions.satisfied) return null;
+
+      await context.store.appendEvent(runId, 'worktree_mode_refused', {
+        moment,
+        code: preconditions.code,
+        detail: preconditions.detail,
+      });
+
+      return `${preconditions.code}: ${preconditions.detail}`;
+    },
     config: context.config,
     capabilities: context.capabilities,
     providerOf: context.providerOf,

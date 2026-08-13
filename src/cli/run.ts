@@ -1,3 +1,4 @@
+import { describeIsolation } from '../app/run-git-identity.js';
 import { buildExecutionContext, loadPlan } from '../app/execution-context.js';
 import { retryTask, start } from '../app/run-actions.js';
 import { explainRouting, routeTask } from '../core/router.js';
@@ -151,6 +152,25 @@ export async function runRetryCommand(
  * checked against declared capabilities; no runner is invoked, which is the
  * promise the last line makes.
  */
+/**
+ * The run's isolation mode beside the current configuration.
+ *
+ * Without this line the tool looks broken to the one user who did exactly what
+ * the documentation told them to do and then wondered why it had no effect.
+ */
+function renderIsolation(
+  state: Parameters<typeof describeIsolation>[0],
+  config: Parameters<typeof describeIsolation>[1],
+): string {
+  const report = describeIsolation(state, config);
+  const lines = [
+    `Run isolation:    ${report.runMode ?? 'legacy (predates workspace isolation)'}`,
+    `Current config:   useWorktrees: ${String(report.configuredWorktrees)}`,
+  ];
+  if (report.note !== undefined) lines.push(`  ${report.note}`);
+  return lines.join('\n');
+}
+
 async function printExecutionPlan(
   deps: ReturnType<typeof actionDeps>,
   runId: string,
@@ -182,6 +202,12 @@ async function printExecutionPlan(
   process.stdout.write(`\nParallelism requested: ${String(requested)}\n`);
   process.stdout.write(`Parallelism effective: ${String(effective)}\n`);
   if (clamped && reason !== undefined) process.stdout.write(`  ${reason}\n`);
+
+  // §21.4. This is the command that answers "why is this still running one task
+  // at a time", so the run's frozen mode and the configuration in front of the
+  // user are printed as two separate facts — and when they disagree, which one
+  // applies is said in words rather than left to be worked out.
+  process.stdout.write(`\n${renderIsolation(state, context.config)}\n`);
 
   process.stdout.write('\nNo runner was invoked.\n');
   return ExitCode.OK;

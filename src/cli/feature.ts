@@ -7,6 +7,11 @@ import { actionDeps, currentRunId, exitCodeFor, render } from './approve.js';
 import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
+import {
+  composeRunIdentity,
+  resolveRunGitIdentity,
+  worktreeRefusalAction,
+} from '../app/run-git-identity.js';
 import type { GlobalOptions } from './index.js';
 
 export interface FeatureOptions {
@@ -48,7 +53,7 @@ export async function runFeatureCommand(
     // stages `--from` exists to skip — the opposite of the intent, at full cost.
     const run =
       from === undefined
-        ? await context.store.createRun(description)
+        ? await createRunWithIdentity(context, description)
         : ((await context.store.loadCurrentRun()) ??
           (() => {
             throw new Error(
@@ -217,4 +222,39 @@ export function nextStepAfterPlanning(verdict: 'PASS' | 'FAIL' | undefined): str
     'Fix the plan with: agent-flow revise "<instruction>"',
     'Or approve anyway with: agent-flow approve --force  (recorded on the run)',
   ].join('\n');
+}
+
+/**
+ * Creates a run with its Git identity, in that order and only that order.
+ *
+ * The decision comes first and can refuse: a run born `worktree` in a
+ * repository that cannot supply a base is refused **at creation**, before
+ * discovery, planning and a plan review have been paid for (§6.1). Only once it
+ * is settled does `createRun` allocate an id and write all three fields in the
+ * same write that creates the run — so there is no moment at which a run exists
+ * with half an identity.
+ */
+async function createRunWithIdentity(
+  context: Awaited<ReturnType<typeof buildExecutionContext>>,
+  description: string,
+) {
+  const identity = await resolveRunGitIdentity({
+    workspaces: context.workspaces,
+    fs: context.fs,
+    host: context.host,
+    config: context.config,
+    projectDir: context.projectDir,
+  });
+
+  if (!identity.ok) {
+    throw new Error(
+      `Worktree mode was requested and this repository cannot support it ` +
+        `(${identity.refusal.code}): ${identity.refusal.detail}\n` +
+        `  ${worktreeRefusalAction(identity.refusal.code)}`,
+    );
+  }
+
+  return context.store.createRun(description, (runId) =>
+    composeRunIdentity(runId, identity.value),
+  );
 }

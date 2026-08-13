@@ -4,6 +4,7 @@ import type { EffectiveConfig, Plan, ReviewResult, RunStage } from '../contracts
 import { PlanSchema } from '../contracts/index.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import type { GitCommand } from '../adapters/git/git-command.js';
+import type { PlanningBaseMoment } from './run-git-identity.js';
 import type { StageRunner } from './stage-runner.js';
 import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -42,6 +43,13 @@ export interface PlanningPipelineOptions {
   readonly processRunner: ProcessRunner;
   /** The hook-isolated `git` wrapper the discovery fingerprint reads through. */
   readonly git: GitCommand;
+  /**
+   * Evaluates §6.2's gate between stages. Injected as a function rather than as
+   * a `GitWorkspaces` so that the pipeline cannot grow a second opinion about
+   * what a precondition is — there is one implementation, in
+   * `run-git-identity.ts`, and this is a call to it.
+   */
+  readonly planningBaseGate?: PlanningGate;
   readonly store: StateStore;
   readonly stageRunner: StageRunner;
   readonly config: EffectiveConfig;
@@ -50,6 +58,18 @@ export interface PlanningPipelineOptions {
   readonly providerOf: (runnerId: string) => string | undefined;
   readonly projectDir: string;
 }
+
+/**
+ * Asked between planning stages, and at planning start.
+ *
+ * Resolves to a refusal reason when the run cannot proceed, and to `null` when
+ * it can — including, without asking Git anything, for every run that is not in
+ * worktree mode.
+ */
+export type PlanningGate = (
+  runId: string,
+  moment: PlanningBaseMoment,
+) => Promise<string | null>;
 
 export interface PipelineOptions {
   /** Re-runs discovery even when a valid cache exists. */
@@ -97,6 +117,9 @@ export class PlanningPipeline {
 
     await store.writeArtifact(runId, 'request', `${featureRequest}\n`);
 
+    // §6.2, moment one: the map, the SDD and the plan must describe one tree.
+    await this.assertReady(runId, 'planning start');
+
     // ---- Discovery: feature-agnostic, therefore cacheable across runs (R-07).
     const architecture = await this.discover(runId, {
       projectConfig,
@@ -105,6 +128,11 @@ export class PlanningPipeline {
       onProgress: options.onProgress,
       stagesRun,
     });
+
+    // §6.2, moment two: a stage that observed a different tree from its
+    // predecessor produces an artifact that silently disagrees with the one
+    // before it. Checked between stages rather than only at the ends.
+    await this.assertReady(runId, 'architecture-impact');
 
     // ---- Architecture impact: what this particular feature reaches.
     const architectureImpact = await this.stageOrExisting(
@@ -117,6 +145,8 @@ export class PlanningPipeline {
       options.onProgress,
     );
 
+    await this.assertReady(runId, 'sdd');
+
     // ---- SDD: the contract every later stage is judged against.
     const sdd = await this.stageOrExisting(
       'sdd',
@@ -127,6 +157,8 @@ export class PlanningPipeline {
       stagesRun,
       options.onProgress,
     );
+
+    await this.assertReady(runId, 'planning');
 
     // ---- Planning.
     options.onProgress?.('planning', 'started');
@@ -189,6 +221,21 @@ export class PlanningPipeline {
     }));
 
     return { runId, plan, stagesRun, review };
+  }
+
+  /**
+   * Refuses to continue when the run's frozen mode says it must not.
+   *
+   * One source of truth, asked at each boundary — rather than a second state
+   * machine inside the pipeline, or a stage that reads the configuration while
+   * its neighbour reads the run. When no gate is wired the pipeline proceeds,
+   * which is what keeps every existing sequential caller unchanged.
+   */
+  private async assertReady(runId: string, moment: PlanningBaseMoment): Promise<void> {
+    const reason = await this.options.planningBaseGate?.(runId, moment);
+    if (reason === null || reason === undefined) return;
+
+    throw new StageFailure('planning', 'invalid_output', reason);
   }
 
   /** Shared with the corrective loop, so both plans are judged the same way. */

@@ -27,8 +27,23 @@ export class FakeHost implements Host {
      * developer's home.
      */
     readonly homeDir = '/fake-home',
+    /**
+     * Deterministic entropy, so a test can assert on the `gitRunKey` it expects
+     * and can force the collision case rather than waiting 2^64 runs for it.
+     */
+    private entropy: string = 'a93f085c23dd9321',
   ) {
     this.alive = new Set(alive);
+  }
+
+  randomHex(byteLength: number): string {
+    const wanted = byteLength * 2;
+    return this.entropy.repeat(Math.ceil(wanted / this.entropy.length)).slice(0, wanted);
+  }
+
+  /** Test helper: the next `randomHex` answer. */
+  setEntropy(hex: string): void {
+    this.entropy = hex;
   }
 
   isAlive(pid: number): boolean {

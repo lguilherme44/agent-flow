@@ -7,6 +7,8 @@ import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
+import { loadConfig } from '../config/loader.js';
+import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
 import type { GlobalOptions } from './index.js';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -72,12 +74,19 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
       return ExitCode.OK;
     }
 
+    // Read for display only. `status` reports what the configuration currently
+    // says; it never uses it to decide anything about this run — that was
+    // settled when the run was created (I-13). An unreadable configuration
+    // costs the isolation line and nothing else.
+    const isolation = await describeIsolationFor(state, fs, globals);
+
     process.stdout.write(
       `${render(
         state,
         plan?.success ? plan.data.tasks.length : 0,
         review?.success ? review.data : null,
         completedStages,
+        isolation,
       )}\n`,
     );
     return ExitCode.OK;
@@ -119,11 +128,29 @@ export function renderPlanningProgress(
   });
 }
 
+async function describeIsolationFor(
+  state: RunState,
+  fs: NodeFileSystem,
+  globals: GlobalOptions,
+): Promise<IsolationReport | null> {
+  try {
+    const config = await loadConfig({
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: globals.cwd,
+    });
+    return describeIsolation(state, config);
+  } catch {
+    return null;
+  }
+}
+
 function render(
   state: RunState,
   taskCount: number,
   review: ReturnType<typeof ReviewResultSchema.parse> | null,
   completedStages: readonly string[],
+  isolation: IsolationReport | null,
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -137,6 +164,17 @@ function render(
 
   lines.push(`  ${'Approval'.padEnd(16)}${state.approved ? '✓' : '·'}`);
   lines.push('');
+
+  // §21.4: the run's mode and the current configuration are two different facts,
+  // and a run created before a flag was flipped is not governed by it. Shown
+  // always rather than only on a mismatch, so that "worktree" on this screen is
+  // a statement about the run rather than an echo of a setting.
+  if (isolation !== null) {
+    lines.push(`Isolation: ${isolation.runMode ?? 'legacy'}  (captured when this run was created)`);
+    lines.push(`  configuration now says useWorktrees: ${String(isolation.configuredWorktrees)}`);
+    if (isolation.note !== undefined) lines.push(`  ${isolation.note}`);
+    lines.push('');
+  }
 
   if (taskCount > 0) lines.push(`${String(taskCount)} tasks`, '');
 

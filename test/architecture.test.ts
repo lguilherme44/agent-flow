@@ -339,19 +339,25 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     expect(text).toMatch(/MAX_ISOLATED_TASK_CONCURRENCY\s*=\s*8/);
   });
 
-  it('reads git.useWorktrees nowhere that could grant isolation it does not have', () => {
-    // The flag is part of the MVP 2 design and deliberately stays in the schema.
-    // Deciding concurrency from it would be worse than deciding it from
-    // `maxTasks` alone, because it would *look* deliberate — nothing in the
-    // execution path creates a worktree, so switching it on isolates nothing.
+  it('reads git.useWorktrees in exactly one deciding module (M2-03, I-13)', () => {
+    // Stronger than the M2-00 version of this rule, not weaker. Then the flag
+    // could be declared and displayed and nothing else, because nothing could
+    // act on it. Now one module acts on it — at `createRun`, once — and every
+    // other consumer reads `state.isolationMode` instead.
     //
-    // So the flag may be declared and it may be displayed, and that is all. The
-    // day it becomes real, this list is where the change announces itself.
+    // The distinction this protects is the whole of §6.1: a flag consulted at
+    // each execution is a property of *the machine at that moment*, and a field
+    // captured at creation is a property of *the run*. A run is the thing this
+    // tool makes promises about.
     const allowed = new Set([
       // Declares it.
       'src/contracts/config.schema.ts',
+      // The default value.
+      'src/config/defaults.ts',
       // Shows what is configured, on a page about configuration.
       'src/server/config-reader.ts',
+      // Decides the mode of a NEW run, and nothing else.
+      'src/app/run-git-identity.ts',
     ]);
 
     const offenders = sourceFiles('src')
@@ -363,25 +369,90 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     expect(offenders).toEqual([]);
   });
 
+  it('cannot let a precondition read the configuration, by construction', () => {
+    // The first version of this rule searched the file for `useWorktrees` inside
+    // each function, and it was the wrong tool twice over: `codeOnly` does not
+    // fully blank a multi-line template literal, so the search drifted, and a
+    // text rule would have been satisfiable by renaming a variable.
+    //
+    // So the property is structural instead. `checkWorktreePreconditions` takes
+    // `RepositoryDeps`, which has no `config` member — a precondition cannot
+    // consult the live configuration because it is never handed it, and the
+    // compiler says so rather than a regex. That matters because a precondition
+    // asking the configuration a second time is precisely the §6.2 sequence that
+    // capturing the mode at creation exists to remove.
+    const { text } = read(join(ROOT, 'src/app/run-git-identity.ts'));
+    const code = codeOnly(text);
+
+    const repositoryDeps = code.slice(
+      code.indexOf('export interface RepositoryDeps'),
+      code.indexOf('export interface RunGitIdentityDeps'),
+    );
+
+    expect(repositoryDeps).toMatch(/workspaces/);
+    expect(repositoryDeps, 'preconditions can see the configuration').not.toMatch(/config/);
+    // And the check really does take the narrower type.
+    expect(code).toMatch(/checkWorktreePreconditions\([\s\S]{0,120}RepositoryDeps/);
+  });
+
   it('names a git worktree operation only inside the Git adapter (M2-02)', () => {
     // Until M2-02 this read "creates no git worktree anywhere in production
     // code", which was the right rule while no module was allowed to know what a
-    // worktree was. M2-02 builds the one module that is, so the rule becomes a
-    // *location* rule rather than a prohibition — which is stronger, not weaker:
-    // a prohibition is deleted the day the feature lands, and a location rule is
-    // the thing that keeps it in one place afterwards.
+    // worktree was. M2-02 builds the one module that is, so the rule became a
+    // *location* rule — which is stronger, not weaker: a prohibition is deleted
+    // the day the feature lands, and a location rule is what keeps it in one
+    // place afterwards.
     //
-    // Read from the raw text rather than `codeOnly`, so that prose describing a
-    // worktree operation is caught too. A comment in the scheduler explaining how
-    // it would run `worktree add` is exactly the draft of the code that must not
-    // be there.
+    // Read through `codeOnly` since M2-03, because prose outside the adapter is
+    // now legitimate: `run-git-identity.ts` has to explain why a repository with
+    // submodules is refused, and the explanation is that `git worktree add` does
+    // not populate them. The rule about *calling* the lifecycle is the one below.
     const offenders = sourceFiles('src')
       .map(read)
       .filter(({ path }) => !path.startsWith('src/adapters/git/'))
-      .filter(({ text }) => /worktree\s+(add|remove|prune|list|lock|unlock)/.test(text))
+      .filter(({ text }) => /worktree\s+(add|remove|prune|list|lock|unlock)/.test(codeOnly(text)))
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
+  });
+
+  it('calls no worktree lifecycle method outside the Git adapter (M2-03 scope)', () => {
+    // M2-03 captures identity and evaluates preconditions. It creates nothing:
+    // no worktree, no branch, no ref, no commit. The primitives exist in the
+    // adapter thanks to M2-02 and do not yet participate in a run, and this is
+    // the test M2-04 and M2-06 have to come and edit when they do.
+    const LIFECYCLE = [
+      'addWorktree',
+      'removeWorktree',
+      'unlockWorktree',
+      'pruneWorktrees',
+      'commitTree',
+      'updateRef',
+      'stageAll',
+      'writeTree',
+      'abortMerge',
+    ];
+
+    const offenders: string[] = [];
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path.startsWith('src/adapters/git/')) continue;
+
+      const code = codeOnly(text);
+      const hits = LIFECYCLE.filter((method) => new RegExp(`\\.${method}\\s*\\(`).test(code));
+      if (hits.length > 0) offenders.push(`${path}: ${hits.join(', ')}`);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('reaches Git from the identity module through the adapter only', () => {
+    // The preconditions read the repository, so this module is allowed to know
+    // Git exists — through `GitWorkspaces`, never by building a command.
+    const { text } = read(join(ROOT, 'src/app/run-git-identity.ts'));
+
+    expect(codeOnly(text)).not.toMatch(/command:\s*'git'/);
+    expect(importSpecifiers(text).filter((s) => s.includes('adapters/git'))).not.toEqual([]);
   });
 });
 
@@ -606,39 +677,36 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
     expect(offenders).toEqual([]);
   });
 
-  it('lets no production module declare a run isolated', () => {
-    // The mode is captured at run creation (M2-03) and read from the run. Until
-    // that exists, the only places the word may appear are the ones that *define*
-    // it: the contract's enum, the resolver's ceiling, and — since M2-02 — the
-    // Git adapter, where `'worktree'` is the name of a Git subcommand and has
-    // nothing to do with a run's isolation mode. The assertion below keeps that
-    // exemption honest by requiring the adapter to say nothing about the mode.
+  it('decides a run\'s isolation in one module, and compares it everywhere else (M2-03)', () => {
+    // Until M2-03 nothing could put a run into worktree mode, so the rule was
+    // that the word may not appear outside the two modules defining it. M2-03 is
+    // the milestone that changes that, and the replacement rule is the one that
+    // will still be true in M2-11: exactly one module *assigns* the mode, and
+    // everyone else *reads* `state.isolationMode`.
+    const ASSIGNS = 'src/app/run-git-identity.ts';
+
+    // Read raw with comments stripped: `codeOnly` blanks string literals, and a
+    // string literal is exactly what this rule is looking for.
+    const literals = (source: string): string =>
+      source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+
+    const declaresIsolated = (source: string): boolean => /'worktree'|"worktree"/.test(literals(source));
+
+    expect(declaresIsolated("const mode = 'worktree';")).toBe(true);
+    expect(declaresIsolated("// one day this will be 'worktree'\nconst mode = 'none';")).toBe(false);
+
     const allowed = new Set([
       'src/contracts/common.schema.ts',
       RESOLVER,
       POLICY,
+      ASSIGNS,
+      // The Git adapter, where `'worktree'` is the name of a Git subcommand.
       'src/adapters/git/git-command.ts',
       'src/adapters/git/git-workspaces.ts',
+      // Comparisons against the run's recorded mode — never an assignment.
+      'src/app/run-actions.ts',
+      'src/app/execution-context.ts',
     ]);
-
-    for (const file of ['src/adapters/git/git-command.ts', 'src/adapters/git/git-workspaces.ts']) {
-      expect(codeOnly(read(join(ROOT, file)).text), `${file} names the run's mode`).not.toMatch(
-        /isolationMode/,
-      );
-    }
-
-    // Read raw and strip comments only: `codeOnly` blanks string literals, and a
-    // string literal is exactly what this rule is looking for.
-    const declaresIsolated = (source: string): boolean =>
-      /'worktree'|"worktree"/.test(
-        source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 '),
-      );
-
-    expect(declaresIsolated("const mode = 'worktree';")).toBe(true);
-    // Prose about the milestone is not the milestone arriving.
-    expect(declaresIsolated("// one day this will be 'worktree'\nconst mode = 'none';")).toBe(
-      false,
-    );
 
     const offenders = sourceFiles('src')
       .map(read)
@@ -647,6 +715,79 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
+  });
+
+  it('compares rather than assigns, everywhere but the deciding module', () => {
+    // What keeps the exemption above honest. A module that reads
+    // `state.isolationMode !== 'worktree'` is doing the right thing; one that
+    // writes `isolationMode:` is claiming an authority only `createRun` has.
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path === 'src/app/run-git-identity.ts') continue;
+      // The store persists what it is handed, and the contract declares it.
+      if (path === 'src/app/state-store.ts' || path === 'src/contracts/state.schema.ts') continue;
+
+      if (/isolationMode\s*:/.test(codeOnly(text))) offenders.push(path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('lets no production path create a run without its Git identity (M2-03)', () => {
+    // `createRun`'s identity argument is optional so that the ~90 fixtures that
+    // do not care about Git keep working — they get the legacy shape, which is
+    // exactly what a run created before MVP 2 looks like. That convenience must
+    // not extend to production: a *new* run without an `isolationMode` would be
+    // indistinguishable from a run that predates the question, and §25.2 says
+    // nothing may ever promote one of those.
+    //
+    // So the rule is not "the parameter is required" — it is "every production
+    // caller passes it", which is checkable and does not cost the fixtures.
+    const callers = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => path !== 'src/app/state-store.ts')
+      .filter(({ text }) => /\.createRun\s*\(/.test(codeOnly(text)));
+
+    // There is one, and if a second appears it has to come and satisfy this too.
+    expect(callers.map(({ path }) => path)).toEqual(['src/cli/feature.ts']);
+
+    for (const { path, text } of callers) {
+      const code = codeOnly(text);
+      // The call passes a second argument, and that argument composes an
+      // identity rather than inventing one.
+      expect(code, `${path} creates a run with no identity`).toMatch(
+        /\.createRun\s*\([^)]*,\s*\(runId\)/,
+      );
+      expect(code, `${path} does not compose the identity`).toMatch(/composeRunIdentity/);
+      expect(code, `${path} does not resolve the identity first`).toMatch(/resolveRunGitIdentity/);
+    }
+  });
+
+  it('composes a run identity only where the identity is decided', () => {
+    // Guards the rule above from being satisfied by a caller that assembles the
+    // three fields itself — which would be a second answer to "what mode is this
+    // run in", and the one nobody audits.
+    const users = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /composeRunIdentity|resolveRunGitIdentity/.test(codeOnly(text)))
+      .map(({ path }) => path)
+      .sort();
+
+    expect(users).toEqual(['src/app/run-git-identity.ts', 'src/cli/feature.ts']);
+  });
+
+  it('keeps the run identity out of every request contract (I-8)', () => {
+    // The browser sends ids. A request that carried a `gitRunKey` or a
+    // `planningBase` would let a caller name the namespace a run writes into,
+    // or the commit it claims to have been planned against.
+    const contracts = read(join(ROOT, 'src/contracts/api.schema.ts')).text;
+    const requests = contracts.slice(0, contracts.indexOf('// Responses'));
+
+    for (const field of ['gitRunKey', 'planningBase', 'isolationMode', 'integrationHead']) {
+      expect(requests, `a request accepts ${field}`).not.toMatch(new RegExp(`${field}\\s*:`));
+    }
   });
 
   it('keeps Git out of the StateStore (I-1)', () => {
