@@ -148,6 +148,12 @@ export async function buildExecutionContext(
     processRunner,
     config,
     projectDir: options.projectDir,
+    // §11.2: an isolated attempt captures its validated tree and mints its
+    // receipt here, after the agent has exited. Wired unconditionally — a
+    // sequential run never reaches either of them, because the executor only
+    // asks when the workspace it was handed carries an isolation block.
+    workspaces,
+    host: options.host,
   });
 
   // The configured number is an intention; the scheduler needs an instruction.

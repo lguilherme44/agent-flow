@@ -4,16 +4,19 @@ import {
   type EffectiveConfig,
   type Task,
   type TaskResult,
+  type ValidationJudgement,
 } from '../contracts/index.js';
-import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
+import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
+import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
 import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
-import { runPaths } from './paths.js';
+import { attemptLogName, runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
 import type { TaskWorkspace } from './task-workspaces.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { judgeValidation } from '../core/validation-outcome.js';
+import { recordAttempt, type AttemptDraft } from './attempt-receipt.js';
 
 /** Marker the implementation prompt asks the agent to end with. */
 const RESULT_BLOCK = /##\s*RESULT\s*([\s\S]*)$/i;
@@ -27,6 +30,31 @@ export interface TaskExecutorOptions {
   readonly config: EffectiveConfig;
   readonly projectDir: string;
   readonly routingPolicy?: RoutingPolicy;
+  /**
+   * Git, for the §11.2 sequence. Present only where worktree mode can happen.
+   *
+   * Optional together with {@link host}, because every sequential caller — and
+   * every test predating M2-05 — runs in the project directory and never reaches
+   * this code. An isolated attempt with neither wired cannot produce evidence,
+   * and says so rather than completing without any.
+   */
+  readonly workspaces?: GitWorkspaces;
+  /** For `randomHex`: the receipt nonce must come from a cryptographic source. */
+  readonly host?: Host;
+}
+
+/**
+ * What the executor knows about an attempt that the `TaskResult` does not.
+ *
+ * Three facts, and each is one the result shape has no room for: the agent's own
+ * report as it was parsed, the validation *ids* the plan named (the result keeps
+ * only the resolved commands), and the judgement §10.2 records — which is a
+ * three-valued answer where `TaskState` is not.
+ */
+interface AttemptEvidenceInput {
+  readonly judgement: ValidationJudgement;
+  readonly report: ParsedReport;
+  readonly validationIds: readonly string[];
 }
 
 /**
@@ -81,10 +109,15 @@ export class TaskExecutor {
           name: 'implementation',
           role,
           prompt: 'implementation',
-          // One log per task. The stage name is not unique here — it runs once
-          // per task — and sharing the file meant every task but the last one
-          // lost its log.
-          logName: `implementation-${task.id}`,
+          // One log per task, and per attempt once attempts are isolated. The
+          // stage name is not unique here — it runs once per task — and sharing
+          // the file meant every task but the last one lost its log; sharing it
+          // across attempts loses the log of exactly the attempt somebody is
+          // retrying because they wanted to read it.
+          logName:
+            workspace?.isolation === undefined
+              ? `implementation-${task.id}`
+              : attemptLogName(task.id, workspace.attempt),
         },
         runId,
         {
@@ -99,16 +132,27 @@ export class TaskExecutor {
       execution = result.execution;
     } catch (error) {
       const failure = error instanceof StageFailure ? error : undefined;
-      return this.persist(runId, {
-        task: task.id,
-        status: 'failed',
-        ...provenanceOf(failure?.execution ?? execution ?? stageRunner.plannedExecution(role)),
-        startedAt,
-        finishedAt: clock.now(),
-        validation: { passed: false, commands: [] },
-        notes: [failure?.message ?? String(error)],
-        ...(failure === undefined ? {} : { errorCode: failure.errorCode }),
-      });
+      // No attempt artifact, and deliberately: the agent produced no report, so
+      // there is nothing to record as an attempt's evidence. §17.3 windows 1 and
+      // 2 read "no `attempt-<n>.json`" as *the attempt's work was never
+      // observed*, and that is precisely what happened here — inventing an
+      // `agentReport` to have something to write would be evidence of a report
+      // nobody made.
+      return this.finish(
+        runId,
+        {
+          task: task.id,
+          status: 'failed',
+          ...provenanceOf(failure?.execution ?? execution ?? stageRunner.plannedExecution(role)),
+          startedAt,
+          finishedAt: clock.now(),
+          validation: { passed: false, commands: [] },
+          notes: [failure?.message ?? String(error)],
+          ...(failure === undefined ? {} : { errorCode: failure.errorCode }),
+        },
+        workspace,
+        undefined,
+      );
     }
 
     const report = parseResultBlock(text);
@@ -116,17 +160,24 @@ export class TaskExecutor {
     if (report.status === 'BLOCKED') {
       // Not retried, by design (§23). BLOCKED means a decision is missing, and
       // running the same prompt again produces the same gap — or worse, a guess.
-      return this.persist(runId, {
-        task: task.id,
-        status: 'blocked',
-        ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
-        startedAt,
-        finishedAt: clock.now(),
-        filesChanged: report.filesChanged,
-        validation: { passed: false, commands: [] },
-        notes: report.notes,
-        errorCode: 'blocked',
-      });
+      return this.finish(
+        runId,
+        {
+          task: task.id,
+          status: 'blocked',
+          ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
+          startedAt,
+          finishedAt: clock.now(),
+          filesChanged: report.filesChanged,
+          validation: { passed: false, commands: [] },
+          notes: report.notes,
+          errorCode: 'blocked',
+        },
+        workspace,
+        // §10.2's third value, by its own definition: "the agent reported
+        // BLOCKED". No validation ran, so there is nothing to be unsatisfied by.
+        { judgement: 'not_reached', report, validationIds: task.validation },
+      );
     }
 
     // Run the task's own validation ourselves rather than trusting the agent's
@@ -144,20 +195,27 @@ export class TaskExecutor {
       // checkPlan rejects unknown ids at planning time. Treated as a failure
       // rather than skipped, because silently not validating is worse than
       // stopping.
-      return this.persist(runId, {
-        task: task.id,
-        status: 'review_required',
-        ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
-        startedAt,
-        finishedAt: clock.now(),
-        filesChanged: report.filesChanged,
-        validation: { passed: false, commands: [] },
-        notes: [
-          ...report.notes,
-          `validation ${unresolved.map((entry) => `"${entry.id}"`).join(', ')} ` +
-            `is not defined by the project configuration`,
-        ],
-      });
+      return this.finish(
+        runId,
+        {
+          task: task.id,
+          status: 'review_required',
+          ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
+          startedAt,
+          finishedAt: clock.now(),
+          filesChanged: report.filesChanged,
+          validation: { passed: false, commands: [] },
+          notes: [
+            ...report.notes,
+            `validation ${unresolved.map((entry) => `"${entry.id}"`).join(', ')} ` +
+              `is not defined by the project configuration`,
+          ],
+        },
+        workspace,
+        // Not `unsatisfied`: that value means validation ran and the expectation
+        // was not met. Nothing ran here, so the expectation was never reached.
+        { judgement: 'not_reached', report, validationIds: task.validation },
+      );
     }
 
     const verification =
@@ -183,33 +241,190 @@ export class TaskExecutor {
       ran: verification.results.length,
     });
 
-    return this.persist(runId, {
-      task: task.id,
-      status: judgement.state,
-      ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
-      startedAt,
-      finishedAt: clock.now(),
-      filesChanged: report.filesChanged,
-      validation: {
-        passed: verification.passed,
-        expectation: task.validationExpectation,
-        commands: verification.results,
+    return this.finish(
+      runId,
+      {
+        task: task.id,
+        status: judgement.state,
+        ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
+        startedAt,
+        finishedAt: clock.now(),
+        filesChanged: report.filesChanged,
+        validation: {
+          passed: verification.passed,
+          expectation: task.validationExpectation,
+          commands: verification.results,
+        },
+        notes: [
+          ...report.notes,
+          ...report.deviations.map((d) => `deviation: ${d}`),
+          ...(judgement.note === undefined ? [] : [judgement.note]),
+        ],
       },
-      notes: [
-        ...report.notes,
-        ...report.deviations.map((d) => `deviation: ${d}`),
-        ...(judgement.note === undefined ? [] : [judgement.note]),
-      ],
-    });
+      workspace,
+      {
+        // The same decision, in the attempt's vocabulary. `judgeValidation` is
+        // unchanged and is still the only thing that decides it (I-4): the
+        // expectation is evaluated once, here, and never re-evaluated later.
+        judgement: judgement.state === 'completed' ? 'satisfied' : 'unsatisfied',
+        report,
+        validationIds: task.validation,
+      },
+    );
   }
 
-  private async persist(runId: string, result: unknown): Promise<TaskResult> {
+  /**
+   * Records what happened, in the form the run's mode calls for.
+   *
+   * Two modes, two artifacts, and the difference is what each one *means*
+   * (§10.1). A sequential run writes `result.json`, exactly as it always has.
+   * An isolated run writes `attempt-<n>.json` — evidence of one local execution
+   * — and **does not write `result.json` at all**, because in worktree mode a
+   * task's outcome is decided at integration and a file on disk saying
+   * `"status": "completed"` for work that has not reached the integration branch
+   * is a lie recovery would believe (I-3). The Integrator writes that file, and
+   * it does not exist yet (M2-06).
+   */
+  private async finish(
+    runId: string,
+    result: unknown,
+    workspace: TaskWorkspace | undefined,
+    evidence: AttemptEvidenceInput | undefined,
+  ): Promise<TaskResult> {
     const parsed = TaskResultSchema.parse(result);
-    const path = runPaths(this.options.projectDir, runId).taskResult(parsed.task);
 
-    await this.options.fs.mkdirp(path.slice(0, path.lastIndexOf('/')));
-    await this.options.fs.writeFileAtomic(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    if (workspace === undefined || workspace.isolation === undefined) {
+      const path = runPaths(this.options.projectDir, runId).taskResult(parsed.task);
+      await this.options.fs.mkdirp(path.slice(0, path.lastIndexOf('/')));
+      await this.options.fs.writeFileAtomic(path, `${JSON.stringify(parsed, null, 2)}\n`);
+      return this.announce(runId, parsed);
+    }
 
+    if (evidence === undefined) return this.announce(runId, parsed);
+
+    const recorded = await this.recordAttempt(runId, parsed, workspace, evidence);
+    if (recorded === null) return this.announce(runId, parsed);
+
+    // Evidence could not be produced. The judgement itself is untouched — it was
+    // made by `judgeValidation` and is not revisited (I-4) — but a task cannot be
+    // reported as done when nothing recorded that it was: without an artifact
+    // there is no receipt, without a receipt there is no marker, and without a
+    // marker nothing can ever be integrated. This is the same shape as a crash in
+    // the same window (§17.3 window 2), and it is reported the same way.
+    //
+    // **No `errorCode`, deliberately.** `RunnerErrorCodeSchema` is the vocabulary
+    // of *runner* failures — adapters translate their CLI's errors into it, and
+    // `doctor`, the health model and the CLI's hints all read it as "the agent's
+    // process went wrong". Here the runner did its work and Git could not record
+    // it, so any code in that enum would name the wrong subsystem and send a
+    // person to read the wrong log. The note carries the module's own code
+    // (`validated_tree_uncapturable`, `attempt_artifact_exists`, …), which is the
+    // one that is true.
+    const demoted =
+      parsed.status === 'completed'
+        ? TaskResultSchema.parse({
+            ...parsed,
+            status: 'failed',
+            notes: [...parsed.notes, recorded],
+          })
+        : TaskResultSchema.parse({ ...parsed, notes: [...parsed.notes, recorded] });
+
+    return this.announce(runId, demoted);
+  }
+
+  /**
+   * The §11.2 sequence, and the two events Appendix B defines for it.
+   *
+   * Returns `null` on success and a path-free sentence when the evidence could
+   * not be produced. The events are emitted here rather than inside
+   * `attempt-receipt.ts` so that module keeps no `StateStore`: it decides what is
+   * true about an attempt, and this decides what the run is told.
+   */
+  private async recordAttempt(
+    runId: string,
+    result: TaskResult,
+    workspace: TaskWorkspace,
+    evidence: AttemptEvidenceInput,
+  ): Promise<string | null> {
+    const isolation = workspace.isolation;
+    const { workspaces, host } = this.options;
+
+    if (isolation === undefined || workspaces === undefined || host === undefined) {
+      return 'this attempt ran in an isolated workspace and no Git access was wired to record it';
+    }
+
+    const state = await this.options.store.loadRun(runId);
+    if (state.gitRunKey === undefined) {
+      return 'this run has no Git namespace, so an attempt marker cannot be named';
+    }
+
+    const draft: AttemptDraft = {
+      run: runId,
+      task: result.task,
+      attempt: workspace.attempt,
+      base: isolation.base,
+      branch: isolation.branch,
+      // Workspace-relative, never the absolute path the agent actually ran in
+      // (§7.2, §21.3). The absolute root is a machine fact this process resolved
+      // and is about to forget.
+      workspace: isolation.relativePath,
+      runner: result.runner,
+      ...(result.model === undefined ? {} : { model: result.model }),
+      reasoning: result.reasoning,
+      reasoningClamped: result.reasoningClamped,
+      ...(result.fallback === undefined ? {} : { fallback: result.fallback }),
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+      filesChanged: result.filesChanged,
+      agentReport: {
+        status: evidence.report.status,
+        notes: evidence.report.notes,
+        deviations: evidence.report.deviations,
+      },
+      validation: {
+        expectation: result.validation.expectation,
+        passed: result.validation.passed,
+        ids: [...evidence.validationIds],
+        commands: result.validation.commands,
+      },
+      validationJudgement: evidence.judgement,
+      ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+    };
+
+    const outcome = await recordAttempt(
+      {
+        workspaces,
+        fs: this.options.fs,
+        clock: this.options.clock,
+        host,
+        projectDir: this.options.projectDir,
+      },
+      { draft, workspacePath: workspace.path, gitRunKey: state.gitRunKey },
+    );
+
+    if (!outcome.ok) return `${outcome.failure.code}: ${outcome.failure.detail}`;
+
+    await this.options.store.appendEvent(runId, 'task_attempt_validated', {
+      task: draft.task,
+      attempt: draft.attempt,
+      judgement: draft.validationJudgement,
+      validationIds: draft.validation.ids,
+    });
+
+    const marker = outcome.value.marker;
+    if (marker !== undefined) {
+      await this.options.store.appendEvent(runId, 'task_attempt_marker_created', {
+        task: draft.task,
+        attempt: draft.attempt,
+        marker: marker.oid,
+        tree: marker.tree,
+      });
+    }
+
+    return null;
+  }
+
+  private async announce(runId: string, parsed: TaskResult): Promise<TaskResult> {
     await this.options.store.appendEvent(runId, 'task_finished', {
       task: parsed.task,
       status: parsed.status,

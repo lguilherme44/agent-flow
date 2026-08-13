@@ -9,9 +9,18 @@ import { TaskExecutor, parseResultBlock } from '../../src/app/task-executor.js';
 import { StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
-import { GlobalConfigSchema, ProjectConfigSchema, TaskSchema } from '../../src/contracts/index.js';
-import { runPaths } from '../../src/app/paths.js';
+import {
+  GlobalConfigSchema,
+  ProjectConfigSchema,
+  TaskAttemptResultSchema,
+  TaskSchema,
+} from '../../src/contracts/index.js';
+import { attemptLogName, runPaths } from '../../src/app/paths.js';
 import { createRunnerFactory } from '../../src/app/runner-factory.js';
+import { FakeHost } from '../fakes/fake-host.js';
+import { testGitCommand } from '../fakes/test-git-command.js';
+import { GitWorkspaces } from '../../src/adapters/git/git-workspaces.js';
+import type { ProcessResult } from '../../src/ports/index.js';
 
 const PROJECT = '/repo';
 const PROMPTS = '/pkg/prompts';
@@ -695,5 +704,480 @@ describe('where a task runs (M2-04 §4.2)', () => {
       expect(call.cwd).toBe(PROJECT);
     }
     expect(world.runner.calls.at(-1)?.prompt ?? '').toContain('Project rules');
+  });
+});
+
+describe('worktree mode records an attempt, not a result (M2-05 §10.1)', () => {
+  // The one place the two artifacts are told apart in practice. `result.json`
+  // means "this is what the task came to"; in worktree mode that is decided at
+  // integration, so the executor writes evidence of one execution instead —
+  // `attempt-<n>.json`, with a receipt when validation was satisfied.
+
+  const BASE = 'a'.repeat(40);
+  const TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+  const MARKER = 'ffee0011223344556677889900aabbccddeeff00';
+  const KEY = 'AF-2026-001-0f3a91c4bd27e615';
+  const WORKSPACE = '/home/.agent-flow/worktrees/repo-0f3a91c4bd27/AF-2026-001-0f3a91c4bd27e615/TASK-001/attempt-1';
+
+  function subcommandOf(args: readonly string[]): string {
+    let index = 0;
+    while (args[index] === '-c') index += 2;
+    return args[index] ?? '';
+  }
+
+  function workspace(attempt = 1) {
+    return {
+      path: WORKSPACE,
+      attempt,
+      isolation: {
+        base: BASE,
+        branch: `agent-flow/${KEY}/TASK-001/attempt-${String(attempt)}`,
+        relativePath: `repo-0f3a91c4bd27/${KEY}/TASK-001/attempt-${String(attempt)}`,
+      },
+    };
+  }
+
+  async function isolated(
+    options: {
+      readonly validation?: Partial<ProcessResult>;
+      /** Fails one Git subcommand of the §11.2 sequence, by name. */
+      readonly failing?: string;
+    } = {},
+  ) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude', CAPS);
+    const host = new FakeHost();
+
+    const processRunner = new FakeProcessRunner().always((spawn) => {
+      if (spawn.command !== 'git') return options.validation ?? { exitCode: 0 };
+      const subcommand = subcommandOf(spawn.args);
+      if (subcommand === options.failing) {
+        return { exitCode: 128, stderr: `fatal: something went wrong in ${WORKSPACE}` };
+      }
+      if (subcommand === 'write-tree') return { stdout: `${TREE}\n` };
+      if (subcommand === 'commit-tree') return { stdout: `${MARKER}\n` };
+      return {};
+    });
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f', () => ({
+      isolationMode: 'worktree',
+      planningBase: BASE,
+      gitRunKey: KEY,
+    }));
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: globalConfig,
+        capabilities: { claude: CAPS },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner,
+      config: {
+        global: globalConfig,
+        project: ProjectConfigSchema.parse({
+          project: { name: 'x', type: 'node' },
+          commands: { test: 'npm test' },
+        }),
+      },
+      projectDir: PROJECT,
+      workspaces: new GitWorkspaces({
+        git: testGitCommand(processRunner),
+        fs,
+        worktreeRoot: '/home/.agent-flow/worktrees',
+      }),
+      host,
+    });
+
+    return { fs, store, run, runner, processRunner, executor };
+  }
+
+  const attemptOf = async (fs: InMemoryFileSystem, runId: string, attempt = 1) =>
+    TaskAttemptResultSchema.parse(
+      JSON.parse(await fs.readFile(runPaths(PROJECT, runId).taskAttempt('TASK-001', attempt))),
+    );
+
+  it('writes attempt-1.json with a receipt and no result.json', async () => {
+    const world = await isolated();
+    world.runner.pushText(COMPLETED);
+
+    const result = await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+    // The task still ends where `judgeValidation` put it — the executor's
+    // decision is unchanged, only what it persists is different.
+    expect(result.status).toBe('completed');
+
+    const persisted = await attemptOf(world.fs, world.run.runId);
+    expect(persisted.validationJudgement).toBe('satisfied');
+    expect(persisted.receipt?.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(persisted.receipt?.validatedTree).toBe(TREE);
+    expect(persisted.base).toBe(BASE);
+    expect(persisted.workspace.startsWith('/')).toBe(false);
+
+    // §10.3: `result.json` is written only after integration, and integration
+    // does not exist yet. A file here saying `"status": "completed"` for work
+    // that has not reached the integration branch is a lie recovery believes.
+    expect(await world.fs.exists(runPaths(PROJECT, world.run.runId).taskResult('TASK-001'))).toBe(
+      false,
+    );
+  });
+
+  it('records the provenance of what actually ran', async () => {
+    const world = await isolated();
+    world.runner.pushText(COMPLETED);
+
+    await world.executor.execute(
+      task({ complexity: 'complex', risk: 'high', validation: ['test'] }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    const persisted = await attemptOf(world.fs, world.run.runId);
+    expect(persisted.runner).toBe('claude');
+    expect(persisted.reasoning).toBe('high');
+    expect(persisted.agentReport.status).toBe('COMPLETED');
+    expect(persisted.filesChanged).toEqual(['src/recurrence.ts']);
+    // The *ids* the plan named, which `TaskResult` does not keep — it holds the
+    // resolved commands, and an id is what a person recognises.
+    expect(persisted.validation.ids).toEqual(['test']);
+  });
+
+  it('announces the attempt and its marker (Appendix B)', async () => {
+    const world = await isolated();
+    world.runner.pushText(COMPLETED);
+
+    await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+    const events = await world.store.readEvents(world.run.runId);
+    const validated = events.find((event) => event.type === 'task_attempt_validated');
+    const marker = events.find((event) => event.type === 'task_attempt_marker_created');
+
+    expect(validated?.detail).toMatchObject({ task: 'TASK-001', attempt: 1, judgement: 'satisfied' });
+    expect(marker?.detail).toMatchObject({ task: 'TASK-001', attempt: 1, marker: MARKER, tree: TREE });
+    // No absolute path in either payload (§7.2, §21.3).
+    expect(JSON.stringify([validated, marker])).not.toContain(WORKSPACE);
+  });
+
+  it('gives an unsatisfied attempt no receipt, no marker and no Git at all', async () => {
+    const world = await isolated({ validation: { exitCode: 1 } });
+    world.runner.pushText(COMPLETED);
+
+    const result = await world.executor.execute(
+      task({ validation: ['test'] }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    // RED/GREEN is untouched: `judgeValidation` said review_required and that is
+    // what the task is.
+    expect(result.status).toBe('review_required');
+
+    const persisted = await attemptOf(world.fs, world.run.runId);
+    expect(persisted.validationJudgement).toBe('unsatisfied');
+    expect(persisted.receipt).toBeUndefined();
+    expect(world.processRunner.calls.filter((call) => call.command === 'git')).toEqual([]);
+  });
+
+  it('completes a RED task and gives it a receipt, because its expectation was met', async () => {
+    // `validationExpectation: 'fail'` with a failing command is a satisfied
+    // attempt. Reading "the command exited non-zero" as unsatisfied would be the
+    // V-04 defect one layer down.
+    const world = await isolated({ validation: { exitCode: 1 } });
+    world.runner.pushText(COMPLETED);
+
+    const result = await world.executor.execute(
+      task({ validation: ['test'], validationExpectation: 'fail' }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    expect(result.status).toBe('completed');
+
+    const persisted = await attemptOf(world.fs, world.run.runId);
+    expect(persisted.validationJudgement).toBe('satisfied');
+    expect(persisted.validation.passed).toBe(false);
+    expect(persisted.validation.expectation).toBe('fail');
+    expect(persisted.receipt?.validatedTree).toBe(TREE);
+  });
+
+  it('records a BLOCKED agent as not_reached', async () => {
+    const world = await isolated();
+    world.runner.pushText('## RESULT\nSTATUS: BLOCKED\nNOTES:\n- missing decision\n');
+
+    const result = await world.executor.execute(
+      task({ validation: ['test'] }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    expect(result.status).toBe('blocked');
+
+    const persisted = await attemptOf(world.fs, world.run.runId);
+    expect(persisted.validationJudgement).toBe('not_reached');
+    expect(persisted.agentReport.status).toBe('BLOCKED');
+    expect(persisted.receipt).toBeUndefined();
+    expect(persisted.errorCode).toBe('blocked');
+  });
+
+  it('writes no evidence for an attempt the agent never reported on', async () => {
+    // §17.3 windows 1 and 2: with no artifact there is no evidence, and the
+    // milestone does not infer evidence. Inventing an `agentReport` so there
+    // would be something to write is exactly the inference it forbids.
+    const world = await isolated();
+    world.runner.pushFailure('quota_exceeded');
+
+    const result = await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+    expect(result.status).toBe('failed');
+    expect(result.errorCode).toBe('quota_exceeded');
+    expect(
+      await world.fs.exists(runPaths(PROJECT, world.run.runId).taskAttempt('TASK-001', 1)),
+    ).toBe(false);
+  });
+
+  it('refuses to call a task done when its evidence could not be captured', async () => {
+    // Not a re-judgement: `judgeValidation` already said the expectation was
+    // met, and nothing re-evaluates it. But without an artifact there is no
+    // receipt, without a receipt there is no marker, and without a marker
+    // nothing can ever be integrated — so `completed` would be a claim about a
+    // future that cannot happen.
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude', CAPS);
+
+    const processRunner = new FakeProcessRunner().always((spawn) => {
+      if (spawn.command !== 'git') return { exitCode: 0 };
+      return subcommandOf(spawn.args) === 'write-tree'
+        ? { exitCode: 128, stderr: `fatal: cannot read ${WORKSPACE}` }
+        : {};
+    });
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f', () => ({
+      isolationMode: 'worktree',
+      planningBase: BASE,
+      gitRunKey: KEY,
+    }));
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: globalConfig,
+        capabilities: { claude: CAPS },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner,
+      config: { global: globalConfig },
+      projectDir: PROJECT,
+      workspaces: new GitWorkspaces({
+        git: testGitCommand(processRunner),
+        fs,
+        worktreeRoot: '/home/.agent-flow/worktrees',
+      }),
+      host: new FakeHost(),
+    });
+
+    runner.pushText(COMPLETED);
+    const result = await executor.execute(task(), run.runId, 'SDD', workspace());
+
+    expect(result.status).toBe('failed');
+    // And it does *not* borrow the runner's error vocabulary to say so. The
+    // runner produced its report; Git could not record it. `execution_failed`
+    // here would tell `doctor`, the health model and the CLI's hint that the
+    // agent's process went wrong, and send a person to read the wrong log.
+    expect(result.errorCode).toBeUndefined();
+    // The code that is true travels in the note instead.
+    expect(result.notes.join(' ')).toContain('validated_tree_uncapturable');
+    // And the sentence a person reads names no directory on this machine.
+    expect(result.notes.join(' ')).not.toContain(WORKSPACE);
+  });
+
+  it('keeps one log per attempt, so a retry does not erase the first', async () => {
+    const world = await isolated();
+    world.runner.pushText(COMPLETED);
+
+    await world.executor.execute(task(), world.run.runId, 'SDD', workspace(2));
+
+    expect(
+      await world.fs.exists(
+        runPaths(PROJECT, world.run.runId).log(attemptLogName('TASK-001', 2)),
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves a sequential run writing result.json and asking Git nothing (§25.1)', async () => {
+    const world = await isolated();
+    world.runner.pushText(COMPLETED);
+
+    await world.executor.execute(task({ validation: ['test'] }), world.run.runId, 'SDD');
+
+    expect(await world.fs.exists(runPaths(PROJECT, world.run.runId).taskResult('TASK-001'))).toBe(
+      true,
+    );
+    expect(
+      await world.fs.exists(runPaths(PROJECT, world.run.runId).taskAttempt('TASK-001', 1)),
+    ).toBe(false);
+    expect(world.processRunner.calls.filter((call) => call.command === 'git')).toEqual([]);
+  });
+
+  /**
+   * A satisfied validation whose evidence could not be captured.
+   *
+   * This is the combination worth being careful about, because two plausible
+   * repairs are both wrong. Reporting the task `completed` claims a future that
+   * cannot happen — no artifact, no receipt, no marker, nothing to integrate.
+   * Recording the attempt as `unsatisfied` to make the receipt-iff-satisfied
+   * `.refine` fit writes a false statement about what the validation commands
+   * found, into the one file §17.1 tells recovery to trust first.
+   *
+   * What the code does instead: the judgement stands wherever it was written,
+   * the task does not claim completion, and the note carries the module's own
+   * failure code — which names the step that failed rather than borrowing a
+   * vocabulary that means something else.
+   */
+  describe('a satisfied attempt whose evidence could not be captured', () => {
+    const attemptPathOf = (runId: string) => runPaths(PROJECT, runId).taskAttempt('TASK-001', 1);
+
+    for (const [step, failing, code] of [
+      ['stageAll', 'add', 'validated_tree_uncapturable'],
+      ['writeTree', 'write-tree', 'validated_tree_uncapturable'],
+      ['commitTree', 'commit-tree', 'attempt_marker_unpublishable'],
+      ['updateRef', 'update-ref', 'attempt_marker_unpublishable'],
+    ] as const) {
+      it(`does not report the task completed when ${step} fails`, async () => {
+        const world = await isolated({ failing });
+        world.runner.pushText(COMPLETED);
+
+        const result = await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+        expect(result.status).not.toBe('completed');
+        expect(result.status).toBe('failed');
+        // Not the runner's vocabulary. The runner produced its report; Git could
+        // not record it, and `RunnerErrorCodeSchema` would name the wrong
+        // subsystem to `doctor`, to the health model and to the CLI's hint.
+        expect(result.errorCode).toBeUndefined();
+        expect(result.notes.join(' ')).toContain(code);
+        expect(result.notes.join(' ')).not.toContain(WORKSPACE);
+      });
+    }
+
+    for (const [step, failing] of [
+      ['commitTree', 'commit-tree'],
+      ['updateRef', 'update-ref'],
+    ] as const) {
+      it(`leaves the persisted judgement satisfied when ${step} fails`, async () => {
+        const world = await isolated({ failing });
+        world.runner.pushText(COMPLETED);
+
+        await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+        const raw = await world.fs.readFile(attemptPathOf(world.run.runId));
+        const persisted = TaskAttemptResultSchema.parse(JSON.parse(raw));
+
+        expect(persisted.validationJudgement).toBe('satisfied');
+        expect(persisted.receipt?.validatedTree).toBe(TREE);
+        // Written once. A rewrite here would mint a second nonce for an attempt
+        // that already has one, and the marker recovery rebuilds is a function
+        // of the file — two files, two markers, and no way to tell which was
+        // the one validation ran against.
+        expect(world.fs.writes.filter((path) => path === attemptPathOf(world.run.runId))).toHaveLength(
+          1,
+        );
+      });
+    }
+
+    for (const [step, failing] of [
+      ['stageAll', 'add'],
+      ['writeTree', 'write-tree'],
+    ] as const) {
+      it(`writes no artifact at all when ${step} fails`, async () => {
+        const world = await isolated({ failing });
+        world.runner.pushText(COMPLETED);
+
+        await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+        // Neither a forged one nor a downgraded one. §17.3 windows 1 and 2 read
+        // "no artifact" as *the attempt's work was never observed*, which is the
+        // truth here — the tree it would have been about was never captured.
+        expect(await world.fs.exists(attemptPathOf(world.run.runId))).toBe(false);
+        expect(await world.fs.exists(runPaths(PROJECT, world.run.runId).taskResult('TASK-001'))).toBe(
+          false,
+        );
+      });
+    }
+
+    it('does not report the task completed when the artifact cannot be written', async () => {
+      const world = await isolated();
+      world.fs.failWrite = (_operation, path) =>
+        path.includes('attempt-1.json') ? new Error('ENOSPC: no space left on device') : undefined;
+      world.runner.pushText(COMPLETED);
+
+      const result = await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+      expect(result.status).toBe('failed');
+      expect(result.errorCode).toBeUndefined();
+      expect(result.notes.join(' ')).toContain('attempt_artifact_unwritable');
+      expect(await world.fs.exists(attemptPathOf(world.run.runId))).toBe(false);
+      // And no marker was built from an artifact that does not exist.
+      expect(
+        world.processRunner.calls.map((call) => subcommandOf(call.args)),
+      ).not.toContain('commit-tree');
+    });
+
+    it('announces the attempt only when the evidence was actually recorded', async () => {
+      // Appendix B's events describe what happened, so an event for an attempt
+      // whose artifact was never written would be the same forgery one layer up
+      // — a run history claiming evidence that recovery will not find.
+      const world = await isolated({ failing: 'write-tree' });
+      world.runner.pushText(COMPLETED);
+
+      await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+      const events = await world.store.readEvents(world.run.runId);
+      expect(events.map((event) => event.type)).not.toContain('task_attempt_validated');
+      expect(events.map((event) => event.type)).not.toContain('task_attempt_marker_created');
+    });
+
+    it('announces no marker when the marker was not published', async () => {
+      const world = await isolated({ failing: 'update-ref' });
+      world.runner.pushText(COMPLETED);
+
+      await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+      const events = await world.store.readEvents(world.run.runId);
+      expect(events.map((event) => event.type)).not.toContain('task_attempt_marker_created');
+    });
   });
 });

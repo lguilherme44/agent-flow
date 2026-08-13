@@ -136,7 +136,75 @@ makes.
 
 ---
 
+## An attempt's evidence cannot be confused with the agent's output
+
+An implementation agent runs with write permission inside its own worktree. Files,
+commits, a report block — all of it is the raw material of the task, and all of it is
+something the agent chose to write. So the orchestrator's evidence that validation
+actually happened has to be *structurally* separate from anything the agent could
+produce. Without that separation, "the branch has a commit that looks like a marker" is
+the only signal, and a commit that looks like a marker is a commit an agent can write.
+
+The separation is an ordering, and the ordering is the whole mechanism:
+
+```text
+the agent's process exits                    ← nothing below can start earlier
+        ↓
+validation commands run                      agent-flow runs them, not the agent
+        ↓
+the expectation is judged
+        ↓
+git add -A · git write-tree                → the tree validation ran over
+128 random bits from the OS                  ← the nonce first exists HERE
+        ↓
+attempt-<n>.json, written atomically         ← the authority
+        ↓
+git commit-tree <tree> -p <base>             the marker, built from that file
+git update-ref <attempt branch>
+```
+
+Four properties fall out of it, and each closes something specific:
+
+- **The nonce does not exist while the agent is alive.** There is no moment at which a
+  running agent could read it, guess it or copy it.
+- **The tree is captured after validation, not before**, so what is recorded is the tree
+  the commands actually ran against rather than the one the checkout started with.
+- **The artifact is written once, atomically, outside every worktree.** `.agent-flow/runs/`
+  lives in the project directory and is gitignored, so it is not part of any checkout an
+  agent receives. A second write to an existing `attempt-<n>.json` is refused, not merged
+  and not overwritten — including when the bytes are identical, because "it is the same
+  content" is the argument that turns an append-only record into a mutable one.
+- **The marker is a deterministic function of that file.** Its tree, its parent, its
+  message, its identity and both its dates are read back off disk, so re-running
+  `commit-tree` after a crash produces the *same* commit id. That is what makes recovery
+  need no bookkeeping, and it is why the author is a fixed `Agent Flow <agent-flow@local>`
+  rather than your `user.name`: a marker attributed to a person is a statement that is not
+  true, and it would also make the commit id depend on the machine it was produced on.
+
+The schema enforces the pairing that makes half-forgery useless: a receipt exists **if and
+only if** the judgement is `satisfied`. An artifact with a receipt and an unsatisfied
+judgement does not parse, and neither does the reverse. Recovery cross-checks the nonce
+**and** the tree — the tree alone would accept any commit that happens to have the right
+contents, and the nonce alone would accept a commit whose trailers were copied.
+
+Marker trailers (`Agent-Flow-Receipt`, `Agent-Flow-Tree`, …) are diagnostic. They are text,
+and text is what an agent can write; nothing trusts them.
+
+---
+
 ## The limits, stated plainly
+
+**The receipt is not unforgeable against an agent that escapes its worktree.** This is a
+stated limit rather than a hidden one. An agent that can write into
+`<projectDir>/.agent-flow/runs/` can write a fabricated attempt artifact *and* a matching
+ref, and no scheme available to a local-first tool without a secret store changes that —
+the same capability lets it write `state.json` directly, at which point there are no
+defences left at all.
+
+So the honest claim, and the only one made: the receipt raises the bar from *structurally
+indistinguishable from normal agent output* to *requires escaping the worktree and writing
+into orchestrator-private state*. Containment during execution remains the runner's job,
+below, unchanged.
 
 **Containment during execution is the runner's, not ours.** Read-only stages run under
 `--permission-mode plan` (Claude Code) or `-s read-only` (Codex), and Agent Flow never
@@ -145,6 +213,15 @@ cannot intercept what that process runs. Anything stronger needs a container.
 
 **A read-only sandbox is not "writes nothing anywhere".** See
 [`engineering/findings.md`](engineering/findings.md) for what was measured.
+
+**No Git hook runs inside an Agent Flow operation.** Every internal Git command carries
+`-c core.hooksPath=<an owned, empty directory>`, placed before the subcommand where no
+caller-supplied argument can reach. `--no-verify` was rejected as the mechanism: it does
+not exist for `update-ref`, does not cover the `post-checkout` that `git worktree add`
+runs, and covers only some merge paths. Your hooks are untouched and still run normally
+when *you* merge the integration branch — the repository's configuration is never
+modified, and `agent-flow` never writes to `git config`. Hooks are also **not** isolated
+from `project.commands.*`: those are your commands, run as you wrote them.
 
 **There is no authorisation model.** Anyone who can reach the port can approve a plan and
 start a run. On loopback that is the person at the keyboard; bound elsewhere, it is

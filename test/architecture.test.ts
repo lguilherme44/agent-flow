@@ -60,14 +60,28 @@ function withoutComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
 }
 
-/** Strips comments and string literals so identifier scans do not hit prose. */
+/**
+ * Strips comments and string literals so identifier scans do not hit prose.
+ *
+ * **The three quote styles are blanked in one alternation, left to right, and
+ * that is load-bearing.** Three sequential passes look equivalent and are not:
+ * the single-quote pass ran first over the whole file, so an apostrophe inside a
+ * double-quoted or backtick string — `"the coding agent's history"` — opened a
+ * literal that closed at the *next* apostrophe anywhere below it, blanking every
+ * line in between. Measured when M2-05 landed: it was hiding two thousand
+ * characters of `run-git-identity.ts` and most of `attempt-receipt.ts` from every
+ * rule in this file, and a rule that cannot see the thing it forbids passes
+ * forever. One alternation consumes whichever delimiter opens first, which is
+ * what a scanner would do.
+ */
 function codeOnly(text: string): string {
   return text
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+    .replace(
+      /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g,
+      (literal) => `${literal[0] ?? ''}${literal[0] ?? ''}`,
+    );
 }
 
 describe('src/core stays pure (AD-03)', () => {
@@ -464,6 +478,10 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // and it must go through Git rather than `rm -rf` (§20.2).
     const PREPARES = ['src/app/task-workspaces.ts', 'src/cli/doctor.ts'];
     const RECLAIMS = ['src/cli/doctor.ts'];
+    // M2-05: the four operations of the §11.2 sequence, in the one module that
+    // owns it. Splitting them would give two answers to "which tree was
+    // validated", and only one of them would be the one bound to a receipt.
+    const RECORDS_EVIDENCE = ['src/app/attempt-receipt.ts'];
 
     const offenders: string[] = [];
     for (const file of sourceFiles('src')) {
@@ -479,12 +497,13 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
           offenders.push(`${path}: ${method}`);
         }
       }
-      // M2-05's, and still nobody's.
-      for (const method of ['commitTree', 'updateRef', 'writeTree', 'stageAll', 'abortMerge']) {
-        if (new RegExp(`\\.${method}\\s*\\(`).test(code)) {
+      for (const method of ['commitTree', 'updateRef', 'writeTree', 'stageAll']) {
+        if (!RECORDS_EVIDENCE.includes(path) && new RegExp(`\\.${method}\\s*\\(`).test(code)) {
           offenders.push(`${path}: ${method}`);
         }
       }
+      // Integration's, and still nobody's (M2-06, M2-07).
+      if (/\.abortMerge\s*\(|\.merge\s*\(/.test(code)) offenders.push(`${path}: merge`);
     }
 
     expect(offenders).toEqual([]);
@@ -932,23 +951,96 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
     expect(importSpecifiers(text).filter((s) => s.includes('adapters/git'))).toEqual([]);
   });
 
-  it('writes no attempt artifact yet', () => {
-    // The attempt artifact is M2-05. The contract lands early so the adapters can
-    // be built against it, but a *writer* appearing before the receipt machinery
-    // would put a file on disk claiming evidence nothing produced.
-    const declaresIt = new Set(['src/contracts/attempt.schema.ts', 'src/contracts/index.ts']);
+  it('writes the attempt artifact from one module only (M2-05)', () => {
+    // Until M2-05 this read "writes no attempt artifact yet", because a writer
+    // appearing before the receipt machinery would have put a file on disk
+    // claiming evidence nothing produced. M2-05 builds that machinery, so the
+    // rule becomes a location rule — the shape that survives the milestone.
+    //
+    // One module composes the artifact, and one path on disk holds it. The
+    // executor supplies the facts and is not on this list: it hands a draft to
+    // `recordAttempt` and never assembles a `TaskAttemptResult` itself, which is
+    // what keeps the receipt out of reach of everything that merely knows what a
+    // task did.
+    const allowed = new Set([
+      'src/contracts/attempt.schema.ts',
+      'src/contracts/index.ts',
+      'src/app/attempt-receipt.ts',
+    ]);
 
     const offenders = sourceFiles('src')
       .map(read)
-      .filter(({ path }) => !declaresIt.has(path))
+      .filter(({ path }) => !allowed.has(path))
       .filter(
         ({ text }) =>
-          /TaskAttemptResult|AttemptReceipt/.test(codeOnly(text)) ||
+          /TaskAttemptResultSchema|AttemptReceipt/.test(codeOnly(text)) ||
           importSpecifiers(text).some((specifier) => specifier.includes('attempt.schema')),
       )
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
+
+    // And the path is composed in `paths.ts`, like every other artifact — so
+    // "the artifact lives outside every worktree" is a property of one function
+    // rather than of a string somebody wrote next to a `writeFileAtomic`.
+    const writer = codeOnly(read(join(ROOT, 'src/app/attempt-receipt.ts')).text);
+    expect(writer).toMatch(/taskAttempt\s*\(/);
+    expect(writer, 'the artifact writer builds a path itself').not.toMatch(/attempt-\$\{/);
+  });
+
+  it('mints the receipt nonce from the machine, after the tree exists (M2-05, §11.2)', () => {
+    // Two properties of the sequence, both checkable in the file that owns it.
+    //
+    // The source: 128 bits that decide whether an agent could have known the
+    // nonce. `Math.random` behind the same signature would look unpredictable and
+    // would not be, and the failure would be invisible.
+    //
+    // The order: `stageAll` → `writeTree` → `randomHex`. A nonce generated one
+    // line earlier is a nonce that existed while the agent's process could still
+    // be running, which is the entire threat §11.1 describes.
+    const { text } = read(join(ROOT, 'src/app/attempt-receipt.ts'));
+    const code = codeOnly(text);
+
+    expect(code).toMatch(/host\.randomHex\s*\(/);
+    expect(code, 'the nonce comes from a non-cryptographic source').not.toMatch(/Math\.random/);
+    expect(code).toMatch(/stageAll[\s\S]*writeTree[\s\S]*randomHex/);
+  });
+
+  it('dates the marker from the artifact, never from the clock (M2-05, §12.2)', () => {
+    // The determinism the whole recovery design rests on: every input to
+    // `commit-tree` is read out of the persisted artifact, so re-running it after
+    // a crash yields the same commit id and `update-ref` is idempotent for free.
+    // A `clock.now()` anywhere in the marker's construction breaks that, and
+    // breaks it in the direction where nothing fails and two commits exist.
+    const { text } = read(join(ROOT, 'src/app/attempt-receipt.ts'));
+    const code = codeOnly(text);
+
+    const marker = code.slice(code.indexOf('export async function publishMarker'));
+
+    expect(marker).toMatch(/receipt\.issuedAt/);
+    expect(marker, 'the marker is dated from the clock').not.toMatch(/clock\.now/);
+    expect(marker, 'the marker is dated from the system clock').not.toMatch(/new Date|Date\.now/);
+    // Fixed identity, and not the user's. A marker attributed to a person is a
+    // statement that is not true, and `user.name` would also make the commit id
+    // a function of the machine it was produced on.
+    expect(code).toMatch(/MARKER_IDENTITY/);
+    // Read with literals kept, because the identity *is* a literal.
+    expect(withoutComments(text)).toMatch(/agent-flow@local/);
+  });
+
+  it('keeps the evidence module out of scheduling, integration and recovery (M2-05)', () => {
+    // The module decides what is true about one attempt. It does not decide what
+    // the run does next — and the cheapest way to lose that boundary is a single
+    // import that looks convenient on the day.
+    const { text } = read(join(ROOT, 'src/app/attempt-receipt.ts'));
+
+    const forbidden = importSpecifiers(text).filter((specifier) =>
+      ['scheduler', 'integrator', 'state-store', 'task-workspaces', 'run-actions'].some((module) =>
+        specifier.includes(module),
+      ),
+    );
+
+    expect(forbidden).toEqual([]);
   });
 });
 
