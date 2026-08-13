@@ -85,10 +85,47 @@ describe('two real processes, one run', () => {
     // And nothing is left behind for the next caller to recover.
     expect(await harness.generations(projectDir)).toEqual([]);
 
+    // Every loser refused, and refused for a reason the lock actually has.
+    //
+    // The earlier version required all seven to report `sameHost: true` and
+    // `holderAlive: true`, and CI on Node 20 found the assumption: production has a
+    // *second* legitimate refusal. When the generation exists but the file is
+    // half-written, `acquire` cannot parse a holder, treats the lock as held anyway
+    // — the one move that cannot double-execute a run — and refuses with no holder
+    // to compare a hostname against, so `sameHost` is false and `holderAlive` is
+    // absent. That is the fail-closed branch working, not an exclusion failure: the
+    // five assertions above had already passed when this one fired.
+    //
+    // So the shape is checked as a shape, parsed rather than string-matched, and
+    // both refusals are accepted. Shape B is deliberately **not** required — a test
+    // that demanded a half-written read would be timing-dependent in the direction
+    // the barrier above exists to remove.
     for (const result of refused) {
-      expect(result.stdout).toContain('"sameHost":true');
-      expect(result.stdout).toContain('"holderAlive":true');
       expect(result.code).toBe(3);
+
+      const refusal = JSON.parse(result.stdout.replace('REFUSED ', '')) as {
+        runId: string;
+        holder?: { pid: number; hostname: string };
+        sameHost: boolean;
+        holderAlive?: boolean;
+      };
+      expect(refusal.runId).toBe(RUN);
+
+      if (refusal.holder === undefined) {
+        // Shape B — the holder's file could not be read on the final attempt.
+        expect(refusal.sameHost).toBe(false);
+        expect(refusal.holderAlive).toBeUndefined();
+        continue;
+      }
+
+      // Shape A — the holder was read, and it is this machine's live process.
+      //
+      // `sameHost: true` is the load-bearing half. Every contender here is this
+      // process's own child, so a *readable* holder reported as foreign would mean
+      // the hostname comparison is broken — which is why the check is written as
+      // "holder present implies sameHost", and not as "either shape will do".
+      expect(refusal.sameHost).toBe(true);
+      expect(refusal.holderAlive).toBe(true);
     }
   }, 60_000);
 

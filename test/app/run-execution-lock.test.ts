@@ -323,6 +323,33 @@ describe('a lock file that will not parse', () => {
     expect(result.refusal.holder).toBeUndefined();
     expect(await fs.readFile(path())).toBe('not json at all');
   });
+
+  it('reports no host judgement and no liveness, because it has neither', async () => {
+    // The whole shape, pinned here where it is deterministic.
+    //
+    // `sameHost: false` on this branch does **not** mean "another machine holds it".
+    // It means no comparison was attempted: there is no parsed holder to read a
+    // hostname from, and `false` is the fail-closed answer — a lock that might be
+    // foreign is left alone. `holderAlive` is absent for the same reason, since
+    // liveness is only knowable for a pid this machine can ask about.
+    //
+    // This case belongs here rather than in the race test. The race test proves
+    // mutual exclusion across real processes and cannot make a half-written read
+    // happen on demand; requiring it there made the suite timing-dependent and red
+    // on CI. Here the unreadable file is seeded, so the semantics are asserted every
+    // run — which is what lets the race test accept the shape without demanding it.
+    const { fs, lock, path } = lockFor();
+    fs.seed(path(), '{"version":1,"generation":1,'); // truncated mid-write
+
+    const result = await lock.acquire({ runId: RUN, owner: 'cli', operation: 'run' });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toEqual({ runId: RUN, sameHost: false });
+    expect(result.refusal.holder).toBeUndefined();
+    expect(result.refusal.sameHost).toBe(false);
+    expect(result.refusal.holderAlive).toBeUndefined();
+  });
 });
 
 describe('releasing', () => {
