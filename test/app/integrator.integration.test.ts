@@ -6,6 +6,7 @@ import { StateStore } from '../../src/app/state-store.js';
 import { runPaths } from '../../src/app/paths.js';
 import { TaskResultSchema } from '../../src/contracts/index.js';
 import { makeWorktreeRun, type PlantedAttempt, type WorktreeRun } from '../fixtures/worktree-run.js';
+import { delegating } from '../fixtures/crash.js';
 
 /**
  * Deterministic integration, against real Git (§26.3, §26.4).
@@ -47,20 +48,28 @@ function waveOf(
 }
 
 /**
- * The real collaborator with one method replaced.
+ * Leaves the integration worktree mid-merge, the way a dead process leaves it.
  *
- * A spread would not do: these are class instances, and `{ ...instance }` copies
- * own properties and leaves every prototype method behind — a fake that silently
- * loses `revParse` proves nothing about the code that calls it.
+ * The real adapter issues the merge and the conflict stops it with `MERGE_HEAD`
+ * on disk and an unmerged index. Nothing aborts it, which is the state §17.3
+ * window 6 is about.
  */
-function delegating<T extends object>(target: T, overrides: Partial<Record<keyof T, unknown>>): T {
-  return new Proxy(target, {
-    get(subject, property, receiver) {
-      if (property in overrides) return overrides[property as keyof T];
-      const value = Reflect.get(subject, property, receiver) as unknown;
-      return typeof value === 'function' ? value.bind(subject) : value;
-    },
+async function leaveMidMerge(
+  current: WorktreeRun,
+  workspace: { path: string },
+  marker: string,
+): Promise<void> {
+  const merged = await current.repo.workspaces.merge({
+    cwd: workspace.path,
+    commit: marker,
+    message: 'agent-flow: an interrupted integration',
+    identity: { name: 'Agent Flow', email: 'agent-flow@local' },
+    dates: { author: current.clock.now(), committer: current.clock.now() },
   });
+  if (!merged.ok) throw new Error(merged.failure.message);
+  if (merged.value.kind !== 'conflict') {
+    throw new Error('expected the planted merge to conflict, so a merge is left in progress');
+  }
 }
 
 async function readyWorkspace(current: WorktreeRun) {
@@ -1256,6 +1265,208 @@ describe('completion is the merge, recorded once (§14.3 step 7, §14.4, I-3)', 
     expect(
       run.repo.userGit(['show', `refs/heads/${run.integrationBranch}:new.txt`]).trim(),
     ).toBe('new');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2-07 seams — §17.3 windows 6 and 7
+// ---------------------------------------------------------------------------
+
+describe('an attempt offered without a TaskResult (§17.3 window 7)', () => {
+  it('produces the same result.json the executor’s own would have', async () => {
+    // The equivalence the recovery path rests on: a recovered attempt has no
+    // `TaskResult` in memory, so the Integrator reconstructs one from the
+    // artifact. If the two disagreed, a crash would change what a task's record
+    // says about what ran — which is exactly the fiction §26.1 keeps out of that
+    // file.
+    run = await makeWorktreeRun();
+    const workspace = await readyWorkspace(run);
+    await run.seed(['TASK-001']);
+
+    const planted = await run.plant('TASK-001', 1, { write: { 'a.txt': 'a\n' } });
+    await run.integrator.integrate(waveOf(run, workspace, [planted]));
+    const withExecutorResult = await run.store.readTaskResult(run.runId, 'TASK-001');
+
+    // Now the same attempt, reconciled from the artifact alone. The merge is
+    // already on the branch, so this exercises the reconstruction rather than a
+    // second merge.
+    rmSync(runPaths(run.repo.dir, run.runId).taskResult('TASK-001'));
+    const statePath = runPaths(run.repo.dir, run.runId).state;
+    const crashed = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+    writeFileSync(
+      statePath,
+      JSON.stringify(
+        { ...crashed, tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }] },
+        null,
+        2,
+      ),
+    );
+
+    const again = await run.integrator.integrate({
+      runId: run.runId,
+      workspace,
+      dag: run.dag([{ id: 'TASK-001' }]),
+      // No `result`: this is what recovery offers.
+      attempts: [{ task: 'TASK-001', attempt: 1 }],
+    });
+
+    expect(again.outcomes[0]?.kind).toBe('integrated');
+    const reconstructed = await run.store.readTaskResult(run.runId, 'TASK-001');
+
+    // Every field the executor recorded, read back out of the artifact.
+    expect(reconstructed?.status).toBe('completed');
+    // Asserted against the artifact rather than against the pre-crash file: where
+    // the two differ, the artifact is the better source, because it records what
+    // the agent actually changed. The fixture's synthetic `TaskResult` carries no
+    // `filesChanged`, and pinning to it would pin to the fixture's omission.
+    const evidence = JSON.parse(
+      readFileSync(runPaths(run.repo.dir, run.runId).taskAttempt('TASK-001', 1), 'utf8'),
+    ) as { filesChanged: string[]; validation: { expectation: string } };
+    expect(reconstructed?.filesChanged).toEqual(evidence.filesChanged);
+    expect(reconstructed?.validation.expectation).toBe(evidence.validation.expectation);
+    expect(reconstructed?.runner).toBe(withExecutorResult?.runner);
+    expect(reconstructed?.reasoning).toBe(withExecutorResult?.reasoning);
+    expect(reconstructed?.startedAt).toBe(withExecutorResult?.startedAt);
+    expect(reconstructed?.finishedAt).toBe(withExecutorResult?.finishedAt);
+    expect(reconstructed?.validation).toEqual(withExecutorResult?.validation);
+    expect(reconstructed?.integration).toEqual(withExecutorResult?.integration);
+  });
+
+  it('does not accumulate conflict notes across repeated attempts', async () => {
+    // Reconstructing rather than reading `result.json` back is what makes a
+    // repeated conflict idempotent. `abortConflict` appends to `notes`, so a path
+    // that fed the previous file in would grow the same sentences every pass —
+    // and a person reading the task would see five copies of one conflict.
+    run = await makeWorktreeRun();
+    const workspace = await readyWorkspace(run);
+    await run.seed(['TASK-001', 'TASK-002']);
+
+    const first = await run.plant('TASK-001', 1, { write: { 'shared.txt': 'from one\n' } });
+    await run.integrator.integrate(waveOf(run, workspace, [first]));
+
+    await run.plant('TASK-002', 1, { write: { 'shared.txt': 'from two\n' } });
+    const conflicting = {
+      runId: run.runId,
+      workspace,
+      dag: run.dag([{ id: 'TASK-002' }]),
+      attempts: [{ task: 'TASK-002', attempt: 1 }],
+    };
+
+    await run.integrator.integrate(conflicting);
+    const once = await run.store.readTaskResult(run.runId, 'TASK-002');
+
+    await run.integrator.integrate(conflicting);
+    const twice = await run.store.readTaskResult(run.runId, 'TASK-002');
+
+    expect(once?.status).toBe('review_required');
+    expect(twice?.notes).toEqual(once?.notes);
+  });
+});
+
+describe('clearing an interrupted merge (§17.3 window 6)', () => {
+  it('reports that there was nothing to abort, which is not a failure', async () => {
+    run = await makeWorktreeRun();
+    const workspace = await readyWorkspace(run);
+
+    const cleared = await run.integrator.clearInterruptedMerge(workspace);
+
+    expect(cleared.ok).toBe(true);
+    expect(cleared.ok && cleared.aborted).toBe(false);
+  });
+
+  it('aborts a merge a dead process left behind, and leaves the branch where it was', async () => {
+    run = await makeWorktreeRun();
+    const workspace = await readyWorkspace(run);
+    await run.seed(['TASK-001', 'TASK-002']);
+
+    const first = await run.plant('TASK-001', 1, { write: { 'shared.txt': 'from one\n' } });
+    await run.integrator.integrate(waveOf(run, workspace, [first]));
+    const head = run.repo.userGit(['rev-parse', `refs/heads/${run.integrationBranch}`]).trim();
+
+    const second = await run.plant('TASK-002', 1, { write: { 'shared.txt': 'from two\n' } });
+    // A genuinely interrupted merge, left exactly as a dead process leaves one:
+    // the real adapter issues the merge, it conflicts, and nothing aborts it. The
+    // adapter is used rather than `userGit` because a conflicted merge exits 1 and
+    // `execFileSync` would throw on it — the adapter is the layer that knows exit
+    // 1 here is an outcome rather than an error.
+    await leaveMidMerge(run, workspace, second.marker);
+    const before = await run.repo.workspaces.mergeHead({ cwd: workspace.path });
+    expect(before.ok && before.value).toBe(second.marker);
+
+    const cleared = await run.integrator.clearInterruptedMerge(workspace);
+
+    expect(cleared.ok).toBe(true);
+    expect(cleared.ok && cleared.aborted).toBe(true);
+    // Back to the last consistent state: the branch did not move and the
+    // worktree is clean, so the next integration starts from a known tree.
+    expect(run.repo.userGit(['rev-parse', `refs/heads/${run.integrationBranch}`]).trim()).toBe(head);
+    expect(run.repo.userGit(['status', '--porcelain=v1'], workspace.path).trim()).toBe('');
+  });
+
+  it('refuses rather than forcing when the abort itself fails', async () => {
+    run = await makeWorktreeRun();
+    const workspace = await readyWorkspace(run);
+    await run.seed(['TASK-001', 'TASK-002']);
+
+    const first = await run.plant('TASK-001', 1, { write: { 'shared.txt': 'from one\n' } });
+    await run.integrator.integrate(waveOf(run, workspace, [first]));
+    const second = await run.plant('TASK-002', 1, { write: { 'shared.txt': 'from two\n' } });
+    await leaveMidMerge(run, workspace, second.marker);
+
+    const failing = new Integrator({
+      workspaces: delegating(run.repo.workspaces, {
+        abortMerge: async () => ({
+          ok: false as const,
+          failure: { code: 'git_command_failed' as const, message: 'refused' },
+        }),
+      }),
+      fs: run.fs,
+      host: run.host,
+      projectDir: run.repo.dir,
+      store: run.store,
+      clock: run.clock,
+    });
+
+    const cleared = await failing.clearInterruptedMerge(workspace);
+
+    expect(cleared.ok).toBe(false);
+    if (cleared.ok) return;
+    expect(cleared.refusal.code).toBe('integration_worktree_unavailable');
+    // Nothing was reset over: the merge is still there for a person to look at.
+    const still = await run.repo.workspaces.mergeHead({ cwd: workspace.path });
+    expect(still.ok && still.value).toBe(second.marker);
+  });
+
+  it('reports unreadable rather than aborting when MERGE_HEAD cannot be asked about', async () => {
+    run = await makeWorktreeRun();
+    const workspace = await readyWorkspace(run);
+
+    const aborts: number[] = [];
+    const blind = new Integrator({
+      workspaces: delegating(run.repo.workspaces, {
+        mergeHead: async () => ({
+          ok: false as const,
+          failure: { code: 'git_command_failed' as const, message: 'unreadable' },
+        }),
+        abortMerge: async () => {
+          aborts.push(1);
+          return { ok: true as const, value: undefined };
+        },
+      }),
+      fs: run.fs,
+      host: run.host,
+      projectDir: run.repo.dir,
+      store: run.store,
+      clock: run.clock,
+    });
+
+    const cleared = await blind.clearInterruptedMerge(workspace);
+
+    expect(cleared.ok).toBe(false);
+    if (cleared.ok) return;
+    expect(cleared.refusal.code).toBe('integration_unreadable');
+    // And it did not abort on the strength of an answer it never got.
+    expect(aborts).toEqual([]);
   });
 });
 

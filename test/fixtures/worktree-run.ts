@@ -50,6 +50,14 @@ export interface PlantOptions {
   /** Defaults to `satisfied`, which is the only judgement that gets a marker. */
   readonly judgement?: 'satisfied' | 'unsatisfied' | 'not_reached';
   /**
+   * What the agent's own report said. Defaults to `COMPLETED`.
+   *
+   * The one field that tells `not_reached`'s two provenances apart: the agent
+   * reported BLOCKED, or the plan named a validation id the configuration no
+   * longer resolves. Recovery reads it structurally rather than parsing a note.
+   */
+  readonly reported?: 'COMPLETED' | 'BLOCKED';
+  /**
    * The validation ids the plan named. Defaults to one.
    *
    * An empty list is a real case — a `validationExpectation: 'none'` task — and
@@ -164,7 +172,7 @@ export async function makeWorktreeRun(): Promise<WorktreeRun> {
         startedAt: '2026-08-09T19:59:00.000Z',
         finishedAt: '2026-08-09T20:00:00.000Z',
         filesChanged: Object.keys(options.write ?? {}),
-        agentReport: { status: 'COMPLETED', notes: [], deviations: [] },
+        agentReport: { status: options.reported ?? 'COMPLETED', notes: [], deviations: [] },
         validation: {
           expectation: options.expectation ?? 'pass',
           passed: judgement === 'satisfied',

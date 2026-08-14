@@ -577,6 +577,67 @@ describe('merge, conflict and abort (§14.5, §15, §30)', () => {
   });
 });
 
+describe('MERGE_HEAD is the interrupted-merge discriminator (§17.3 window 6)', () => {
+  it('answers null in a worktree with no merge in progress', async () => {
+    repo = await makeTempRepoWithCommit();
+
+    const head = await repo.workspaces.mergeHead({ cwd: repo.dir });
+
+    expect(head.ok).toBe(true);
+    if (!head.ok) return;
+    expect(head.value).toBeNull();
+  });
+
+  it('answers the merged commit while a merge is in progress', async () => {
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    repo.userGit(['checkout', '--quiet', '-b', 'sideline', base]);
+    repo.write('shared.ts', 'from the sibling\n');
+    const marker = repo.commitAll('sibling change');
+    repo.userGit(['checkout', '--quiet', 'main']);
+    repo.write('shared.ts', 'from main\n');
+    repo.commitAll('main change');
+
+    // A genuinely interrupted merge, produced the way a crash produces one: the
+    // merge stops with an unmerged index and MERGE_HEAD on disk. Nothing here
+    // fakes the state — a fake would agree with whatever the parser believed.
+    await repo.workspaces.merge({
+      cwd: repo.dir,
+      commit: marker,
+      message: 'm',
+      identity: IDENTITY,
+      dates: DATES,
+    });
+
+    const head = await repo.workspaces.mergeHead({ cwd: repo.dir });
+
+    expect(head.ok).toBe(true);
+    if (!head.ok) return;
+    expect(head.value).toBe(marker);
+
+    // And it goes away when the merge does, which is what makes the answer a
+    // discriminator rather than a fact about the repository's history.
+    await repo.workspaces.abortMerge({ cwd: repo.dir });
+    const after = await repo.workspaces.mergeHead({ cwd: repo.dir });
+    expect(after.ok && after.value).toBeNull();
+  });
+
+  it('fails rather than answering null when the repository cannot be read', async () => {
+    // **The whole reason this method exists instead of `revParse`.** `resolveHead`
+    // folds exit 128 into `null`, because there "not a repository" and "no
+    // commits" both mean *there is no base here*. Here they do not: folding 128
+    // into `null` would report "no merge is in progress" for a worktree nobody
+    // could ask, and window 6 would then skip an abort it owed.
+    repo = await makeTempRepoWithCommit();
+
+    const head = await repo.workspaces.mergeHead({ cwd: join(repo.home, 'not-a-repository') });
+
+    expect(head.ok).toBe(false);
+    if (head.ok) return;
+    expect(head.failure.code).not.toBe('git_invalid_output');
+  });
+});
+
 describe('ancestry, object existence and rev-parse (§31, §32, §33)', () => {
   it('answers ancestry both ways', async () => {
     repo = await makeTempRepoWithCommit();

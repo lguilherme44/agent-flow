@@ -1188,6 +1188,167 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
   });
 });
 
+describe('crash recovery orchestrates, and owns nothing else (M2-07, §17)', () => {
+  const RECOVERY = 'src/app/worktree-recovery.ts';
+
+  it('reads the attempt artifact before it reads any ref (§26.1 rule 5, I-5)', () => {
+    // The rule the whole milestone turns on, and the one shape a review has to be
+    // able to recognise: *the ref exists and looks like a marker, so trust it*. That
+    // trusts text an agent with a shell in a worktree can write.
+    //
+    // Checked as an ordering within the file, because "receipt-first" is an order
+    // rather than a set of calls. `readAttempt` must appear before the first ref
+    // read, and the tree binding must be named at all.
+    // **Call forms, not bare names.** `readAttempt` also appears in the import
+    // block at the top of the file, so a rule written against the name would be
+    // satisfied by the import and would pass however the body was ordered — which
+    // is the "green test proving nothing" shape §28 warns about.
+    const code = codeOnly(read(join(ROOT, RECOVERY)).text);
+
+    const artifact = code.indexOf('readAttempt(');
+    expect(artifact, 'recovery never calls readAttempt').toBeGreaterThan(-1);
+
+    for (const refRead of [
+      '.revParse(',
+      '.isAncestor(',
+      '.refsUnder(',
+      '.readCommit(',
+      '.objectExistsAs(',
+      '.mergeHead(',
+      'publishMarker(',
+    ]) {
+      const at = code.indexOf(refRead);
+      if (at === -1) continue;
+      expect(at, `recovery calls ${refRead} before it reads the artifact`).toBeGreaterThan(artifact);
+    }
+
+    // The rule can see what it forbids: both call forms are really in the file.
+    expect(code).toContain('.revParse(');
+    expect(code).toContain('.objectExistsAs(');
+
+    // And it binds to the tree rather than to a name.
+    expect(code).toMatch(/validatedTree/);
+  });
+
+  it('runs no validation command and invokes no coding agent', () => {
+    // §13.2 for the Integrator, and the same rule here for the same reason: the
+    // expectation was judged exactly once, inside the task's own worktree, against
+    // that task's own base (I-4). Recovery trusts durable validated evidence — a
+    // recovery that re-ran `lint · test · build` would be re-judging an expectation
+    // and would make a `validationExpectation: 'fail'` task fail its own recovery.
+    const code = codeOnly(read(join(ROOT, RECOVERY)).text);
+
+    for (const forbidden of [
+      'runVerification',
+      'runCommands',
+      'judgeValidation',
+      'buildValidationRegistry',
+      'processRunner',
+      'stageRunner',
+      'StageRunner',
+      'TaskExecutor',
+      'getRunner',
+    ]) {
+      expect(code, `recovery reaches ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('merges nothing, creates no worktree and publishes through the evidence module', () => {
+    // Recovery is orchestration. `git merge` and `git merge --abort` stay in the one
+    // module §26.1 allows them in, the worktree lifecycle stays with its two owners,
+    // and the marker is rebuilt through `publishMarker` — the function whose
+    // determinism is the guarantee (§12.2) — rather than by a second `commit-tree`
+    // that could drift from it.
+    const code = codeOnly(read(join(ROOT, RECOVERY)).text);
+
+    for (const forbidden of [
+      '.merge(',
+      '.abortMerge(',
+      '.addWorktree(',
+      '.removeWorktree(',
+      '.unlockWorktree(',
+      '.pruneWorktrees(',
+      '.commitTree(',
+      '.updateRef(',
+      '.writeTree(',
+      '.stageAll(',
+    ]) {
+      expect(code, `recovery calls ${forbidden} itself`).not.toContain(forbidden);
+    }
+
+    // The positive control: it does rebuild markers, through the allowed door.
+    expect(code).toMatch(/publishMarker\s*\(/);
+  });
+
+  it('never writes completed, and never composes a TaskResult', () => {
+    // I-3, and §26.1 rule 6: in worktree mode a task is completed by the Integrator
+    // and by nothing else. Recovery copies the state it is handed back — one
+    // careless literal here and the DAG would release dependents against a branch
+    // that does not contain their dependency's work.
+    const source = withoutComments(read(join(ROOT, RECOVERY)).text);
+
+    expect(source, 'recovery assigns completed').not.toMatch(/\bstate:\s*'completed'/);
+    expect(source, 'recovery assigns completed').not.toMatch(/(?<![=!<>])=\s*'completed'/);
+    expect(source, 'recovery composes a task result').not.toContain('TaskResultSchema');
+    expect(codeOnly(read(join(ROOT, RECOVERY)).text)).not.toMatch(/taskResult\s*\(/);
+  });
+
+  it('takes no lock of its own', () => {
+    // It runs inside the process that holds the run execution lease (§17.2, §18.2).
+    // A second mechanism would be one more thing to keep in step with AF-L01, which
+    // is how two locks become no lock at all.
+    const code = codeOnly(read(join(ROOT, RECOVERY)).text);
+
+    for (const mechanism of ['createExclusive', 'lockfile', 'RunExecutionLock', '.lock']) {
+      expect(code, `recovery builds its own ${mechanism}`).not.toContain(mechanism);
+    }
+  });
+
+  it('decides nothing from a commit subject or a trailer it parsed itself', () => {
+    // M2-06 made the parent count the structural discriminator, and §17.1 forbids
+    // trusting a message. Recovery must not grow its own trailer parser or match on
+    // a subject: the binding is the Integrator's, and duplicating half of it here is
+    // how two readings of one commit start to disagree.
+    const source = withoutComments(read(join(ROOT, RECOVERY)).text);
+
+    expect(source, 'recovery matches on a commit subject').not.toContain('agent-flow:');
+    expect(source, 'recovery parses trailers').not.toContain('parseTrailers');
+    expect(source, 'recovery reads a trailer').not.toContain('Agent-Flow-');
+  });
+
+  it('is reached from the scheduler and the wiring, and from nowhere else', () => {
+    // One recovery path, entered once, before the first wave (§17.2, I-2). A second
+    // entry point would be a second answer to "has this run been reconciled", and
+    // the two could disagree about whether a merge had already been recorded.
+    const ALLOWED = ['src/app/scheduler.ts', 'src/app/execution-context.ts'];
+
+    const importers = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => path !== RECOVERY)
+      .filter(({ text }) =>
+        importSpecifiers(text).some((specifier) => specifier.includes('worktree-recovery')),
+      )
+      .map(({ path }) => path);
+
+    expect(importers.filter((path) => !ALLOWED.includes(path))).toEqual([]);
+    // Positive control: both allowed importers really do import it, so the rule is
+    // guarding real edges rather than a name nothing uses.
+    expect([...importers].sort()).toEqual([...ALLOWED].sort());
+  });
+
+  it('keeps the scheduler free of the Git adapter, still (§26.1 rule 2)', () => {
+    // The scheduler gained a collaborator, and the collaborator talks to Git. The
+    // rule that matters is that the scheduler does not: it holds `RunRecovery` as a
+    // type, exactly as it holds `WaveIntegrator`.
+    const { text } = read(join(ROOT, 'src/app/scheduler.ts'));
+
+    expect(importSpecifiers(text).filter((specifier) => specifier.includes('adapters/git'))).toEqual(
+      [],
+    );
+    expect(codeOnly(text)).not.toMatch(/command:\s*'git'/);
+  });
+});
+
 describe('state writes are serialised where they happen (M2-00.1)', () => {
   // `updateRun` is a read-modify-write, and two of them interleaving lose an
   // update that the §22 machine cannot catch — each transition, seen alone, is

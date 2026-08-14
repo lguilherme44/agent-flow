@@ -14,6 +14,7 @@ import type {
   WaveAttempt,
   WaveIntegrator,
 } from './integrator.js';
+import type { RunRecovery, RunRecoveryOutcome } from './worktree-recovery.js';
 
 export interface SchedulerOptions {
   readonly store: StateStore;
@@ -59,6 +60,15 @@ export interface SchedulerOptions {
    * work is silent, and only visible three tasks later.
    */
   readonly integrator?: WaveIntegrator;
+  /**
+   * The Git half of crash recovery, before the first wave (M2-07, §17).
+   *
+   * Optional for the same reason `integrator` is: a sequential run has no durable
+   * Git evidence to reconcile, and every caller predating this milestone keeps
+   * working with none wired. With none, {@link Scheduler.recoverInterrupted} is
+   * the whole of recovery — which is byte-for-byte what M2-06 did.
+   */
+  readonly recovery?: RunRecovery;
   /** Bounds recovery of interrupted tasks. Comes from `retry.maxAttempts`. */
   readonly maxAttempts?: number;
   readonly onTaskStart?: (taskId: string) => void;
@@ -185,12 +195,6 @@ export class Scheduler {
     const states: Record<string, TaskState> = {};
     for (const id of topologicalOrder(dag)) states[id] = initialStates[id] ?? 'queued';
 
-    // Nothing is executing yet, so anything still marked `running` was left
-    // behind by a process that died. Recovered rather than left alone: the DAG
-    // admits only `queued` and `ready`, so an orphan would sit there forever
-    // and the run would make no further progress while reporting no failure.
-    const recovered = await this.recoverInterrupted(runId, states);
-
     const results: TaskResult[] = [];
     const concurrency = Math.max(1, this.options.maxConcurrency ?? 1);
     let haltedBy: string | undefined;
@@ -199,11 +203,44 @@ export class Scheduler {
     // is cut from `planningBase` and checked out, or the run's own namespace is
     // resumed. A refusal here stops the run before a single agent is invoked —
     // work built on a namespace this run does not own is work nobody can trust.
+    //
+    // **First, and before either half of recovery.** §17.3 window 0 is the run's
+    // own initialisation, checked once before the per-task loop; and the Git half
+    // below needs the integration workspace to reconcile anything into.
     const integration = await this.prepareIntegration(runId);
     if (integration?.kind === 'refused') {
-      return this.stopped(states, recovered, dag, integration.reason);
+      return this.stopped(states, [], dag, integration.reason);
     }
     const workspace = integration?.workspace;
+
+    // §17: the Git half of recovery, **before the state half below, and the order
+    // is the invariant rather than a preference.** A task whose durable evidence
+    // finished its attempt is completed from `running`, which §22 allows; demoting
+    // it to `interrupted` first would leave `interrupted → completed`, which §22
+    // does not — so the work would be thrown away and the agent run again over a
+    // tree that was already validated and merged.
+    const durable = await this.recoverDurable(runId, workspace, dag, states);
+    if (durable !== undefined && durable.outcomes.length > 0) {
+      for (const outcome of durable.outcomes) {
+        // Copied, never named: the state a recovered task ends in comes from the
+        // Integrator, which is the only module that may write `completed` (I-3).
+        if (outcome.kind !== 'requeue') states[outcome.task] = outcome.state;
+      }
+      // Written only when recovery found something. A pass that observed nothing
+      // writes nothing — the same rule §6.4 applies to a precondition refusal, and
+      // it matters for the same reason: a write that merely restates this
+      // invocation's opening view of the world can contradict what is on disk.
+      await this.persist(runId, states);
+    }
+    if (durable?.haltedBy !== undefined) haltedBy = durable.haltedBy;
+
+    // Nothing is executing yet, so anything still marked `running` was left
+    // behind by a process that died. Recovered rather than left alone: the DAG
+    // admits only `queued` and `ready`, so an orphan would sit there forever
+    // and the run would make no further progress while reporting no failure.
+    const recovered = await this.recoverInterrupted(runId, states);
+
+    if (haltedBy !== undefined) return this.stopped(states, recovered, dag, haltedBy);
 
     while (haltedBy === undefined) {
       const ready = readyTasks(dag, states)
@@ -393,6 +430,25 @@ export class Scheduler {
     }
 
     return { kind: 'ready', workspace: prepared.workspace };
+  }
+
+  /**
+   * §17: what durable evidence a dead process left, reconciled.
+   *
+   * `undefined` covers the two cases that must behave exactly as they always
+   * have: no recovery service wired, and a run that has no integration workspace
+   * because it is not isolated. Neither reaches Git through this path (§25.1).
+   */
+  private async recoverDurable(
+    runId: string,
+    workspace: IntegrationWorkspace | undefined,
+    dag: Dag,
+    states: Record<string, TaskState>,
+  ): Promise<RunRecoveryOutcome | undefined> {
+    const recovery = this.options.recovery;
+    if (recovery === undefined || workspace === undefined) return undefined;
+
+    return recovery.recoverRun({ runId, workspace, dag, states });
   }
 
   /** The commit this wave's workspaces are cut from, or none in sequential mode. */

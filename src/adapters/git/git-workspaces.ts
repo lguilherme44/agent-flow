@@ -526,6 +526,40 @@ export class GitWorkspaces {
   }
 
   /**
+   * The commit a merge in progress is merging, or `null` when there is none
+   * (§17.3 window 6).
+   *
+   * **Three answers, like {@link resolveHead}, and the third is the reason this
+   * exists.** `revParse` turns "no such ref" into `git_command_failed`, which
+   * would make *there is no merge here* and *this repository cannot be read* the
+   * same answer — and window 6 decides whether to abort a merge on exactly that
+   * difference. Aborting on the strength of an unreadable repository is how a
+   * recovery pass discards a merge that was fine.
+   *
+   * Probed on Git 2.52.0: `rev-parse --verify --quiet MERGE_HEAD` exits **1**
+   * with no output in a clean worktree, **0** with the merged commit's id while a
+   * merge is in progress, and **128** outside a repository. So 1 is the negative
+   * answer and 128 is **not** folded into it — unlike `resolveHead`, where "not a
+   * repository" and "no commits" both correctly mean *there is no base here*.
+   */
+  async mergeHead(options: RepoContext): Promise<GitResult<string | null>> {
+    const outcome = await this.run({
+      subcommand: 'rev-parse',
+      cwd: options.cwd,
+      timeout: 'quick',
+      args: ['--verify', '--quiet', '--end-of-options', 'MERGE_HEAD'],
+    });
+    if (!outcome.ok) return outcome;
+
+    if (outcome.value.exitCode === 1) return gitOk(null);
+
+    const failed = expectSuccess(outcome.value, 'git rev-parse MERGE_HEAD');
+    if (failed !== null) return failed;
+
+    return validOid(outcome.value.stdout.trim(), 'the commit MERGE_HEAD names');
+  }
+
+  /**
    * `rev-parse --path-format=absolute --git-common-dir` (§5.1).
    *
    * The *common* directory rather than the toplevel, and the distinction is the

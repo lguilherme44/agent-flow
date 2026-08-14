@@ -19,6 +19,7 @@ import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
 import { TaskWorkspaces } from './task-workspaces.js';
 import { Integrator } from './integrator.js';
+import { WorktreeRecovery } from './worktree-recovery.js';
 import {
   checkWorktreePreconditions,
   observePlanningBaseDrift,
@@ -194,11 +195,25 @@ export async function buildExecutionContext(
     clock,
   });
 
+  // §17: the Git half of crash recovery. Given **the same** Integrator rather
+  // than a second one — two would have two integration mutexes, and the
+  // serialisation of §18.2 would quietly stop existing.
+  const recovery = new WorktreeRecovery({
+    workspaces,
+    fs,
+    host: options.host,
+    projectDir: options.projectDir,
+    store,
+    clock,
+    integrator,
+  });
+
   const scheduler = new Scheduler({
     store,
     executor,
     workspaces: taskWorkspaces,
     integrator,
+    recovery,
     maxConcurrency: concurrency.effective,
     maxAttempts: config.global.retry.maxAttempts,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),

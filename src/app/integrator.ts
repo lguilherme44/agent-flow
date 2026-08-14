@@ -1,4 +1,5 @@
 import {
+  RunnerErrorCodeSchema,
   TaskResultSchema,
   type RunState,
   type TaskAttemptResult,
@@ -156,8 +157,21 @@ export interface WaveAttempt {
   readonly task: string;
   /** The attempt that actually ran, as the dispatch spent it. */
   readonly attempt: number;
-  /** What the executor produced. Gains an `integration` block and is persisted. */
-  readonly result: TaskResult;
+  /**
+   * What the executor produced. Gains an `integration` block and is persisted.
+   *
+   * **Absent when the attempt is being recovered** (§17.3): no executor ran in
+   * this process, so there is no `TaskResult` in memory and the attempt artifact
+   * is the only honest source. {@link resultFromAttempt} reconstructs one — here,
+   * in the module that already owns writing `result.json`, so there is still
+   * exactly one place that composes one (§26.1, the M2-04/M2-06 rule).
+   *
+   * Reconstructing rather than reading the previous `result.json` back is also
+   * what keeps a repeated conflict idempotent: `abortConflict` appends to
+   * `result.notes`, so a recovery pass that fed the file back in would grow the
+   * same five notes on every attempt.
+   */
+  readonly result?: TaskResult;
 }
 
 export interface WaveIntegrationRequest {
@@ -226,6 +240,26 @@ export interface WaveIntegrator {
   integrate(request: WaveIntegrationRequest): Promise<WaveIntegrationOutcome>;
 }
 
+/**
+ * The narrower view crash recovery holds (M2-07).
+ *
+ * Recovery decides *what durable evidence authorises*; it does not merge, does
+ * not write `completed` and does not know what a merge commit looks like. So it
+ * is handed the two operations §17.3 needs from this module and nothing else —
+ * which is also what keeps `git merge` and `git merge --abort` inside the one
+ * module §26.1 allows them in.
+ */
+export interface RecoveryIntegrator {
+  integrate(request: WaveIntegrationRequest): Promise<WaveIntegrationOutcome>;
+  /** §17.3 window 6. */
+  clearInterruptedMerge(workspace: IntegrationWorkspace): Promise<MergeClearance>;
+}
+
+export type MergeClearance =
+  /** `aborted` is false when there was no merge to abort — not a failure (W6). */
+  | { readonly ok: true; readonly aborted: boolean }
+  | { readonly ok: false; readonly refusal: IntegrationRefusal };
+
 // ---------------------------------------------------------------------------
 // Dependencies
 // ---------------------------------------------------------------------------
@@ -264,7 +298,7 @@ export const MARKER_TRAILERS = [
   'Agent-Flow-Validation-Ids',
 ] as const;
 
-export class Integrator implements WaveIntegrator {
+export class Integrator implements WaveIntegrator, RecoveryIntegrator {
   /**
    * Integration is serial within this process, and this is the whole mechanism.
    *
@@ -558,6 +592,11 @@ export class Integrator implements WaveIntegrator {
       return this.reconcile(request, offered, attempt, marker.value);
     }
 
+    // What the task produced, from the executor when it ran in this process and
+    // from the artifact when this is a recovery pass (§17.3). Resolved once, here,
+    // so the two writers below cannot disagree about which it was.
+    const produced = offered.result ?? resultFromAttempt(attempt);
+
     // 6 — the merge (§14.5).
     const at = this.deps.clock.now();
     const merged = await this.deps.workspaces.merge({
@@ -580,7 +619,7 @@ export class Integrator implements WaveIntegrator {
     }
 
     if (merged.value.kind === 'conflict') {
-      return this.abortConflict(request, offered, {
+      return this.abortConflict(request, offered, produced, {
         paths: merged.value.paths,
         base: attempt.base,
         marker: marker.value,
@@ -597,6 +636,49 @@ export class Integrator implements WaveIntegrator {
       integratedAt: at,
       advanceTo: mergeCommit.value,
     });
+  }
+
+  /**
+   * §17.3 window 6: leaves the integration worktree in a known state.
+   *
+   * The presence of `MERGE_HEAD` is the discriminator, asked before anything is
+   * done — because `merge --abort` exits non-zero when there is no merge to abort
+   * (deliberately, so that "there was one and it is undone" and "there never was
+   * one" stay apart), and a caller that just tried it and ignored the failure
+   * would make the window undetectable.
+   *
+   * **Never forced.** If the abort itself fails, the worktree is not in a state
+   * this module can describe, and the run halts rather than resetting over it.
+   */
+  async clearInterruptedMerge(workspace: IntegrationWorkspace): Promise<MergeClearance> {
+    const head = await this.deps.workspaces.mergeHead({ cwd: workspace.path });
+    if (!head.ok) {
+      return {
+        ok: false,
+        refusal: {
+          code: 'integration_unreadable',
+          detail:
+            'the integration worktree could not be asked whether a merge is in progress: ' +
+            head.failure.message,
+        },
+      };
+    }
+    if (head.value === null) return { ok: true, aborted: false };
+
+    const aborted = await this.deps.workspaces.abortMerge({ cwd: workspace.path });
+    if (!aborted.ok) {
+      return {
+        ok: false,
+        refusal: {
+          code: 'integration_worktree_unavailable',
+          detail:
+            `an interrupted merge of ${head.value.slice(0, 8)} could not be aborted ` +
+            `(${aborted.failure.code}), so the integration worktree is not in a known state`,
+        },
+      };
+    }
+
+    return { ok: true, aborted: true };
   }
 
   /**
@@ -690,6 +772,7 @@ export class Integrator implements WaveIntegrator {
   private async abortConflict(
     request: WaveIntegrationRequest,
     offered: WaveAttempt,
+    produced: TaskResult,
     conflict: {
       readonly paths: readonly string[];
       readonly base: string;
@@ -739,10 +822,10 @@ export class Integrator implements WaveIntegrator {
     };
 
     await this.writeResult(request.runId, {
-      ...offered.result,
+      ...produced,
       status: 'review_required',
       notes: [
-        ...offered.result.notes,
+        ...produced.notes,
         refusal.detail,
         `attempt ${String(offered.attempt)} was validated on base ${conflict.base}`,
         `its marker ${conflict.marker} was not merged`,
@@ -785,7 +868,7 @@ export class Integrator implements WaveIntegrator {
   ): Promise<TaskIntegration> {
     const receipt = attempt.receipt;
     const result = TaskResultSchema.parse({
-      ...offered.result,
+      ...(offered.result ?? resultFromAttempt(attempt)),
       status: 'completed',
       integration: {
         attempt: attempt.attempt,
@@ -1173,6 +1256,61 @@ export class Integrator implements WaveIntegrator {
     );
     return next;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reconstruction (§17.3 window 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `TaskResult` an attempt's own evidence supports.
+ *
+ * Used when no executor ran in this process — a recovery pass over an attempt
+ * that finished before the crash (§17.3). **Nothing here is invented.** Every
+ * field is read out of `attempt-<n>.json`: the runner, the model, the reasoning
+ * level and the validation commands are what actually ran, recorded by the
+ * process that ran them. `status` is deliberately absent — this module decides
+ * it, as it always has, and the artifact has no `status` field precisely so that
+ * nothing can mistake an attempt for an outcome (§10.2).
+ *
+ * It lives here rather than in the recovery module because §26.1 keeps the set of
+ * modules that may compose a `TaskResult` at two, and "only the module that
+ * actually ran something can fill those in honestly" is satisfied by reading the
+ * record that module wrote.
+ *
+ * `errorCode` is filtered rather than copied: the artifact types it as a free
+ * string and `TaskResult` types it as a `RunnerErrorCode`, so a value outside
+ * that enum would make this throw — inside a recovery pass, where a throw costs
+ * the run its chance to report anything at all.
+ */
+export function resultFromAttempt(attempt: TaskAttemptResult): TaskResult {
+  const errorCode = RunnerErrorCodeSchema.safeParse(attempt.errorCode);
+
+  return TaskResultSchema.parse({
+    task: attempt.task,
+    // Replaced by every caller. Present because the schema requires one, and
+    // `review_required` is the honest placeholder: an attempt whose outcome this
+    // module has not decided yet is one a person would have to look at.
+    status: 'review_required',
+    runner: attempt.runner,
+    ...(attempt.model === undefined ? {} : { model: attempt.model }),
+    reasoning: attempt.reasoning,
+    reasoningClamped: attempt.reasoningClamped,
+    ...(attempt.fallback === undefined ? {} : { fallback: attempt.fallback }),
+    startedAt: attempt.startedAt,
+    finishedAt: attempt.finishedAt,
+    filesChanged: attempt.filesChanged,
+    validation: {
+      passed: attempt.validation.passed,
+      expectation: attempt.validation.expectation,
+      commands: attempt.validation.commands,
+    },
+    notes: [
+      ...attempt.agentReport.notes,
+      ...attempt.agentReport.deviations.map((deviation) => `deviation: ${deviation}`),
+    ],
+    ...(errorCode.success ? { errorCode: errorCode.data } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------

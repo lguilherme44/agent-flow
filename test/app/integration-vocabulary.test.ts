@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { INTEGRATION_REFUSAL_CODES, MARKER_TRAILERS } from '../../src/app/integrator.js';
+import { RECOVERY_REFUSAL_CODES } from '../../src/app/worktree-recovery.js';
 
 /**
  * The specification and the code, pinned to each other (Appendix A, §12.4).
@@ -130,6 +131,53 @@ describe('Appendix A is the canonical refusal vocabulary', () => {
     // fails.
     expect(appendixA().has('integration_unreadable')).toBe(true);
     expect(INTEGRATION_REFUSAL_CODES).toContain('integration_unreadable');
+  });
+
+  it('documents every code crash recovery can originate (M2-07)', () => {
+    // The strong direction, and the one that catches an undocumented refusal: a
+    // code recovery can put in front of a person and the appendix does not list is
+    // a code nobody can look up. M2-07 adds no vocabulary of its own — it meets the
+    // same world the Integrator does — so every entry here must already be there.
+    const documented = appendixA();
+    const undocumented = RECOVERY_REFUSAL_CODES.filter((code) => !documented.has(code));
+
+    expect(
+      undocumented,
+      `these codes are raised by src/app/worktree-recovery.ts and absent from Appendix A: ${
+        undocumented.join(', ') || 'none'
+      }`,
+    ).toEqual([]);
+  });
+
+  it('originates every code it attributes to recovery', () => {
+    // The other direction, with the same deliberate weakness the Integrator's has:
+    // "Raised by" names the layer that *decides*, so a code recovery merely
+    // propagates — `integration_conflict`, `integration_history_unrecognised` — is
+    // the Integrator's row and is not required here. Only rows that name recovery
+    // are checked.
+    const orphaned = [...appendixA()]
+      .filter(([, raisedBy]) => /recovery/.test(raisedBy))
+      .map(([code]) => code)
+      .filter((code) => !(RECOVERY_REFUSAL_CODES as readonly string[]).includes(code));
+
+    expect(
+      orphaned,
+      `Appendix A attributes these to recovery and the module cannot originate them: ${
+        orphaned.join(', ') || 'none'
+      }`,
+    ).toEqual([]);
+  });
+
+  it('marks no recovery refusal forcible either', () => {
+    // `attempt_tree_missing` reads "no — requeues" rather than a bare "no", which
+    // is the appendix saying what happens *instead* of halting. Both are refusals
+    // nobody overrides, so the check is on the "no" rather than on the whole cell.
+    for (const line of section(spec(), 'Appendix A — Refusal codes').split('\n')) {
+      const match = /^\|\s*`([a-z_]+)`\s*\|([^|]*)\|([^|]*)\|\s*$/.exec(line.trim());
+      if (match === null) continue;
+      if (!(RECOVERY_REFUSAL_CODES as readonly string[]).includes(match[1] ?? '')) continue;
+      expect((match[3] ?? '').trim().replace(/\*/g, ''), match[1]).toMatch(/^no\b/);
+    }
   });
 
   it('marks no integration refusal forcible', () => {
