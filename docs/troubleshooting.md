@@ -83,6 +83,24 @@ in the inspector's **Tests** tab. For a test-first task, `validationExpectation:
 means a *passing* suite is also reported — either the new test asserts nothing or the
 behaviour already existed, and both are worth a person's attention.
 
+### A refusal from worktree mode
+
+Runs created with `git.useWorktrees: true` can refuse before executing anything —
+`working_tree_dirty`, `planning_base_moved`, `git_version_unsupported`,
+`agent_flow_state_not_ignored` and the rest. Every one of them is a check that **writes
+nothing**: the run is unchanged, nothing was consumed, and the next attempt is free once
+the repository is ready.
+
+The one almost everybody meets first is a workspace that setup made dirty, because the
+default `npm install` rewrites `package-lock.json`. Use a lockfile-respecting install
+(`commands.install: npm ci`), and run `agent-flow doctor` — it probes exactly this
+before a run rather than after, and names the file.
+
+The full catalogue of refusal codes, each with its fix, is owed by **M2-12** and is not
+written yet. Until then §6.3 of
+[`specs/mvp2-safe-parallel-execution.md`](specs/mvp2-safe-parallel-execution.md) lists
+every code and the condition that produces it, in the order they are checked.
+
 ---
 
 ## The dashboard

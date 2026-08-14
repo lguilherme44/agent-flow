@@ -4,12 +4,12 @@
 
 [![CI](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/lguilherme44/agent-flow/actions/workflows/ci.yml)
 
-**Local-first orchestration for AI coding agents.**
+**A local-first orchestrator for coding agents.**
 
-Agent Flow turns a feature request into a reviewed design document, a task
-breakdown and a human approval gate — and only then into code. It drives the
-coding CLIs you already have installed and logged into; nothing here talks to a
-model API.
+Agent Flow coordinates planning, execution, validation, Git-isolated task workspaces,
+deterministic integration and review — while keeping every step inspectable and under
+your control. It drives the coding CLIs you already have installed and logged into.
+Nothing here talks to a model API, and nothing leaves your machine.
 
 ```text
 feature request
@@ -19,46 +19,274 @@ feature request
   → planning
   → independent plan review
   → human approval          ← bound to one exact plan hash
-  → implementation
+  → implementation          ← optionally, one locked Git worktree per attempt
   → deterministic validation ← run by the orchestrator, never by an agent
+  → deterministic integration
   → final review
   → Definition of Done
 ```
 
-The core knows nothing about Claude Code or Codex, and nothing about your
-framework. Roles are logical (`architect`, `sdd`, `planner`, `planReviewer`,
-three `executors`, `verification`, `finalReviewer`); configuration decides which
-runner and which effort level serves each one. Claude Code and Codex are the two
-adapters that exist today.
+**Status:** `v0.1.0` · MVP 1 complete · MVP 2 in progress at **M2-06** · not published to npm.
+Parallel execution is **not enabled yet** — see [Current status](#current-status).
 
-Everything is local: run state, artifacts, the audit trail and the dashboard.
-There is no cloud control plane, no telemetry upload and no API key.
+---
 
-**Status:** `v0.1.0` · Spec v3 complete · not published to npm.
-See [Status](#status) for the full picture.
+## What is Agent Flow?
+
+An orchestration layer that sits above coding CLIs and turns "implement this feature"
+into a workflow with a shape: separate stages, separate contexts, a human gate, and
+outcomes decided by code rather than by an agent saying it finished.
+
+The core knows nothing about Claude Code or Codex, and nothing about your framework.
+Roles are logical (`architect`, `sdd`, `planner`, `planReviewer`, three `executors`,
+`verification`, `finalReviewer`); configuration decides which runner and which effort
+level serves each one. Claude Code and Codex are the two adapters that exist today.
+
+Everything is local: run state, artifacts, the audit trail and the dashboard. There is
+no cloud control plane, no telemetry upload and no API key.
+
+## Why Agent Flow?
+
+Handing a feature to a coding agent tends to produce something plausible that nobody
+reviewed. Agent Flow puts structure around that:
+
+**Planning is separate from execution.** Each stage runs in a fresh context and
+receives only the artifacts it needs, so a wrong assumption cannot travel silently from
+discovery to the diff.
+
+**A human decides.** Nothing is implemented until you have read the design document and
+the task plan. Approval is bound to a *specific* plan — revise it and the approval no
+longer applies.
+
+**A model does not review its own work.** Configure two runners and the planner, the
+reviewer and the implementer are different providers. With one runner it still works,
+degrades to a same-provider review, and says so on the artifact.
+
+**Fallback is infrastructure, never a fix.** A runner that is out of quota, not logged
+in, or missing can be routed around. A model that produced bad output cannot — retrying
+that elsewhere would replace a visible failure with a quiet one. The rule is enforced
+by the type system.
+
+**Done is decided by code.** Approved, all tasks complete, lint and tests and build
+passing, final review PASS. An agent saying "finished" is not one of the conditions —
+and in our first real run, that is exactly what caught a bad plan.
+
+---
+
+## Current status
+
+```text
+version          v0.1.0
+MVP 1            complete  (Implementation Spec v3)
+MVP 2            in progress — Safe Parallel Execution
+  completed      M2-00 · M2-01 · M2-02 · M2-03 · M2-04 · M2-05 · M2-06
+  next           M2-07 — crash recovery
+parallelism      effectiveConcurrency is still 1  (unlocked by M2-11)
+npm              not published; install from a checkout
+```
+
+**M2-06 — Deterministic Integrator and integration-tree verification** is the most
+recent milestone to land. Worktree isolation, attempt receipts, marker commits and
+deterministic integration all work today, at **one task at a time**.
+
+**Parallel execution is architecture, not yet a feature.** MVP 2's ordering is
+deliberate: isolation first, parallelism eleventh of twelve items. `parallelism.maxTasks`
+is accepted above 1 and recorded as intent, and the runtime still resolves it to 1 —
+the reduction is recorded on the run as a `parallelism_clamped` degradation rather than
+happening quietly. Raising the ceiling is M2-11, and it waits on crash recovery
+(M2-07), retry semantics (M2-08) and observability (M2-10).
+
+**Crash recovery for isolated runs is not built.** M2-07 is the next milestone, not a
+shipped capability. If a coordinator dies mid-run in worktree mode today, the evidence
+is on disk by design — but nothing yet reads it back and reconciles the run.
+
+Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
+[`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md).
+
+---
+
+## Key capabilities
+
+| Capability | Status |
+|---|---|
+| Local-first execution, no API key, no telemetry upload | Available |
+| Persistent run state and append-only event log | Available |
+| DAG scheduling with wave/barrier semantics | Available |
+| Claude Code and Codex adapters | Available |
+| Validation commands run by the orchestrator | Available |
+| Approval gate bound to a plan hash | Available |
+| Cross-provider plan review and final review | Available |
+| Local dashboard, read and write, over the same use cases | Available |
+| Inter-process run execution lock | Available |
+| Git worktree isolation, one locked worktree per attempt | Available — opt-in, `git.useWorktrees` |
+| Attempt receipts: validated tree plus a post-agent nonce | Available in worktree mode |
+| Marker commits, reproducible from the attempt artifact | Available in worktree mode |
+| Deterministic serial integration in topological order | Available in worktree mode |
+| Verification and review against the integration tree | Available in worktree mode |
+| Git hook isolation for internal operations | Available |
+| Crash recovery for isolated runs | Not built — M2-07 |
+| Retry semantics under isolation | Not closed out — M2-08 |
+| Git-aware `clean` (worktrees, refs, branch retention) | Not built — M2-09 |
+| Worktree facts in the dashboard | Not built — M2-10 |
+| More than one task at a time | **Not enabled** — M2-11 |
+| `pause` / `resume` / `cancel` | Designed, not built |
+| Configuration writes from the dashboard | Designed, not built |
+| Remote or distributed execution | Out of scope for MVP 2 |
+
+---
+
+## How it works
+
+A run's lifecycle, as the code actually implements it:
+
+```text
+feature request
+      ↓
+discovery → architecture impact → SDD → plan → independent plan review
+      ↓
+human approval                     ← bound to this plan's hash
+      ↓
+DAG over the plan's tasks
+      ↓
+ready set → one wave                ← up to effectiveConcurrency (today: 1)
+      ↓
+task attempt
+      ↓
+prepared workspace                  ← worktree mode: created, locked, asserted clean
+      ↓
+coding agent                        ← cwd = the workspace
+      ↓
+validation commands                 ← run by Agent Flow, in the same workspace
+      ↓
+attempt artifact + receipt          ← worktree mode: written outside every worktree
+      ↓
+marker commit                       ← the exact tree validation ran against
+      ↓
+deterministic integration           ← serial, topological order
+      ↓
+task completed                      ← in worktree mode, completed means integrated
+      ↓
+wave barrier → next wave
+      ↓
+final verification + final review + Definition of Done
+```
+
+Five words that are often collapsed and mean different things here:
+
+| | |
+|---|---|
+| **execution** | the agent ran in a workspace and exited |
+| **validation** | the orchestrator ran the task's commands there, and judged the expectation |
+| **marker** | a commit whose tree *is* the validated tree, built from the attempt artifact |
+| **integration** | that marker merged into the run's integration branch |
+| **completed** | in worktree mode: integrated. Not "the agent said it was done" |
+
+In sequential mode — the default — there is no workspace, no marker and no integration
+branch: a task completes when its validation is judged, exactly as it always has.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  CLI["CLI<br/>src/cli"] --> RA["run-actions<br/>use cases"]
+  WEB["Local server<br/>src/server"] --> RA
+  RA --> SS[("StateStore — source of truth")]
+  RA --> SCH["Scheduler"]
+  SCH --> TW["TaskWorkspaces"]
+  SCH --> INT["Integrator"]
+  TW --> TE["TaskExecutor"]
+  TE --> SR["StageRunner"]
+  TE --> VAL["validation commands"]
+  SR --> AD["Claude Code · Codex<br/>adapters"]
+  TW --> GW["GitWorkspaces"]
+  INT --> GW
+  GW --> GC["GitCommand<br/>the only spawner of git"]
+```
+
+The layering is enforced by executable rules, not by convention
+(`test/architecture.test.ts`):
+
+- `src/core/` imports no Node built-in and no adapter, and names no provider, model or CLI
+- topological ordering exists in exactly one module
+- the core side never imports the server; the server never imports the CLI
+- no request contract accepts a filesystem path, a command or a plan hash
+- there is one project registry, one DAG and one run execution lock
+- `StateStore` executes no Git command and imports nothing from `src/adapters/git/`
+- in worktree mode, only the Integrator may write `completed`
+
+That last rule is not stylistic. Without it, the invariant is one careless
+`status: 'completed'` away from being false, and the failure would be silent: the DAG
+would release dependents against a branch that does not contain their dependency's work.
+
+---
+
+## Safety model
+
+**Evidence before trust.** Git refs, commit messages and trailers are supporting
+evidence, never the primary authority. The authority is the attempt artifact the
+orchestrator wrote; the repository is used to confirm what that artifact already claims.
+
+**The agent cannot forge its own validation.** An implementation agent has write
+permission inside its workspace, so any evidence it could produce is evidence it chose
+to produce. The separation is an ordering:
+
+```text
+the agent's process exits          ← nothing below can start earlier
+        ↓
+validation runs, and is judged     agent-flow runs it, not the agent
+        ↓
+git add -A · git write-tree      → the tree validation ran over
+128 random bits from the OS        ← the nonce first exists HERE
+        ↓
+attempt-<n>.json, written once, atomically, outside every worktree
+        ↓
+git commit-tree <tree> -p <base>   the marker, built from that file
+```
+
+The nonce does not exist while the agent is alive. The marker's tree *is* the validated
+tree, and a mismatch is a refusal rather than a repair. The stated limit — and it is
+stated rather than hidden — is that this is not unforgeable against an agent that
+escapes its worktree and writes into `.agent-flow/runs/`. What it buys is a raised bar,
+not a proof.
+
+**No user Git hook runs inside an Agent Flow operation.** Every internal Git command
+carries `-c core.hooksPath=<an owned, empty directory>`, placed before the subcommand
+where no caller argument can override it. Your hooks are untouched and run normally
+when *you* merge the integration branch. Agent Flow never writes to `git config`.
+
+**Containment during execution is the runner's, not ours.** Read-only stages run under
+`--permission-mode plan` (Claude Code) or `-s read-only` (Codex), and Agent Flow never
+passes the flags that disable them. But it spawns a CLI as a child process and cannot
+intercept what that process runs. Anything stronger needs a container.
+
+**The browser supplies ids, never paths, refs, branches or commands.** The local server
+resolves every trusted value from run state and its own registry.
+
+Details, including what having no authentication does and does not mean:
+[`docs/security.md`](docs/security.md).
 
 ---
 
 ## Requirements
 
-- Node 20+
-- git — any version for the current sequential mode; **2.33.0 or newer** for the
-  worktree isolation mode being built in MVP 2, which needs
-  `git worktree add --lock --reason` (added in 2.33.0). `agent-flow doctor`
-  reports your version and whether it clears that floor.
+- **Node 20+**
+- **git** — any version for sequential mode; **2.33.0 or newer** for worktree
+  isolation, which needs `git worktree add --lock --reason`. `agent-flow doctor`
+  reports your version against that floor.
 - At least one agent CLI, installed and logged in:
   [Claude Code](https://claude.com/claude-code) · [Codex CLI](https://github.com/openai/codex)
 
-**No API keys.** Agent Flow invokes the CLIs you have already authenticated. It
-never reads, stores or transmits credentials. If a CLI works in your terminal,
-it works here.
+**No API keys.** Agent Flow invokes the CLIs you have already authenticated. It never
+reads, stores or transmits credentials. If a CLI works in your terminal, it works here.
 
 ---
 
-## Install
+## Installation
 
-Not on npm. Install from a checkout — the package is built, packed and verified
-to work outside one, so this is the same artifact a publish would produce:
+Not on npm. Install from a checkout — the package is built, packed and verified to work
+outside one, so this is the same artifact a publish would produce:
 
 ```bash
 git clone https://github.com/lguilherme44/agent-flow
@@ -94,98 +322,30 @@ One dashboard over several repositories:
 agent-flow ui ~/wk
 ```
 
----
+Walked through with a real four-task feature, a DAG and the artifacts it produces:
+[`docs/example-walkthrough.md`](docs/example-walkthrough.md).
 
-## Documentation
-
-**Product**
-
-| | |
-|---|---|
-| [`docs/web-ui.md`](docs/web-ui.md) | The dashboard: the two modes, the pages, the DAG, live events, what it can change and what it cannot, the HTTP API |
-| [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do about it |
-
-**Architecture & engineering**
-
-| | |
-|---|---|
-| [`docs/security.md`](docs/security.md) | The local server's boundary — no path, no command, no plan hash from the browser; symlink containment; the run lock; the limits |
-| [`docs/testing.md`](docs/testing.md) | The test layers, what each one proves, and where each one stops |
-| [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each CLI actually does, with the command that proves it and the version it was probed against |
-| [`docs/engineering/findings.md`](docs/engineering/findings.md) | Engineering log: what building this taught us, including what is still unsolved |
-
-**Specification** — what was designed and shipped, kept as written
-
-| | |
-|---|---|
-| [`docs/specs/implementation-spec-v3.md`](docs/specs/implementation-spec-v3.md) | Implementation Spec v3, complete. A historical document; the code is the current truth |
-| [`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md) | MVP 2 — Safe Parallel Execution. The current design, not yet implemented; supersedes §19 and §47–§48 of Spec v3 |
-
-**Technical reviews** — snapshots, not living documents
-
-| | |
-|---|---|
-| [`docs/reviews/validation-review.md`](docs/reviews/validation-review.md) | Structured validation review of the first complete implementation |
-| [`docs/reviews/reanalysis-post-fixes.md`](docs/reviews/reanalysis-post-fixes.md) | Re-analysis after those fixes landed |
-
-**Designs, not implementations** — written up, deliberately not built
-
-| | |
-|---|---|
-| [`docs/config-write-design.md`](docs/config-write-design.md) | `PATCH /config`: why scope has to be part of the address |
-| [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md) | `pause` / `resume` / `cancel`: the abort signal and the contract change they need |
-
----
-
-## Why
-
-Handing a feature to a coding agent tends to produce something plausible that
-nobody reviewed. Agent Flow puts structure around that:
-
-**Planning is separate from execution.** Each stage runs in a fresh context and
-receives only the artifacts it needs, so a wrong assumption cannot travel
-silently from discovery to the diff.
-
-**A human decides.** Nothing is implemented until you have read the design
-document and the task plan. Approval is bound to a *specific* plan — revise it
-and the approval no longer applies.
-
-**A model does not review its own work.** Configure two runners and the planner,
-the reviewer and the implementer are different providers. With one runner it
-still works, degrades to a same-provider review, and says so on the artifact.
-
-**Fallback is infrastructure, never a fix.** A runner that is out of quota, not
-logged in, or missing can be routed around. A model that produced bad output
-cannot — retrying that elsewhere would replace a visible failure with a quiet
-one. The rule is enforced by the type system.
-
-**Done is decided by code.** Approved, all tasks complete, lint and tests and
-build passing, final review PASS. An agent saying "finished" is not one of the
-conditions — and in our first real run, that is exactly what caught a bad plan.
-
----
-
-## Commands
+### Commands
 
 | Command | |
 |---|---|
 | `init` | Prepare a repository. Detects the stack, reads your real scripts, never overwrites without `--force`. |
-| `doctor` | Can this environment work? Reports `OK` / `DEGRADED` / `FAIL`. `--deep` probes each runner for real, which spends quota. |
+| `doctor` | Can this environment work? Reports `OK` / `DEGRADED` / `FAIL`, plus the Git version against the worktree floor and whether your install command leaves a fresh checkout clean. `--deep` probes each runner for real, which spends quota. |
 | `feature "<description>"` | Discovery → impact → SDD → plan → review. Stops at the gate. |
-| `status` | Where the run is, what it produced, what is degraded. |
+| `status` | Where the run is, what it produced, what is degraded, and which isolation mode it was born in. |
 | `approve` | Open the gate. Refuses a failed review unless `--force`. |
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
-| `review` | Run validation, inspect the code, judge it against the SDD. `--fix` turns findings into tasks and reviews the corrected plan. |
-| `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. Approve, revise, retry and run go through the same use cases this CLI does — see [`docs/web-ui.md`](docs/web-ui.md). |
-| `clean` | Remove old run state. Never the active run without `--force`. |
+| `review` | Run validation, inspect the code, judge it against the SDD. In worktree mode all three read the integration tree, under the run lock. `--fix` turns findings into tasks and reviews the corrected plan. |
+| `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. See [`docs/web-ui.md`](docs/web-ui.md). |
+| `clean` | Remove old run state. Never the active run without `--force`. **State only** — worktrees and refs are M2-09. |
 
-`--dry-run` shows the routing without invoking anything. `--verbose`, `--json`,
-`--strict` behave as you would expect.
+`--dry-run` shows the routing without invoking anything, and prints requested versus
+effective concurrency. `--verbose`, `--json`, `--strict` behave as you would expect.
 
 ---
 
-## Configuration
+## Project configuration
 
 Two files: global holds your preferences, the project file holds what makes this
 repository different.
@@ -207,70 +367,296 @@ roles:
 fallback:
   enabled: true
   on: [quota_exceeded, auth_required, runner_unavailable]
+
+parallelism:
+  maxTasks: 1
+
+retry:
+  maxAttempts: 2
+
+git:
+  useWorktrees: false
 ```
 
 `model:` is optional on purpose — omit it and each CLI uses the model you already
-configured. `effort` is logical (`low` … `very_high`); each adapter translates it.
-
-The three fallback triggers above are the only ones the schema accepts.
+configured. `effort` is logical (`low` … `very_high`); each adapter translates it. The
+three fallback triggers above are the only ones the schema accepts.
 
 ```yaml
 # <project>/.agent-flow/config.yaml
 project: { name: booking-api, type: node }
+
 commands:            # run by Agent Flow, never by an agent
+  install: npm ci
   lint: npm run lint
   test: npm test
+
+validationCommands:  # extra ids a task may reference
+  recurrence: npm test -- recurrence
+
 rules:
   architecture:
     - "Controllers do not talk to the database directly"
 ```
 
-`init` fills these from what your repository actually declares. A command it
-cannot find is left empty rather than guessed.
+`init` fills these from what your repository actually declares. A command it cannot
+find is left empty rather than guessed.
+
+### The two settings that need explaining
+
+**`git.useWorktrees`** — default `false`.
+
+| | |
+|---|---|
+| Controls | whether a run isolates each task attempt in its own Git worktree |
+| Read | **once**, by `createRun`, and captured on the run as `isolationMode` |
+| Constraint | changing it later does not move an existing run between modes; it is the default for the *next* run |
+
+That immutability is load-bearing rather than cautious. Planning under one answer and
+implementing under another builds the work against a tree nobody planned against — and
+every individual check passes while it happens. The mode is a property of the run, so
+`status` reports both the run's mode and what your configuration currently says.
+
+**`parallelism.maxTasks`** — default `1`.
+
+| | |
+|---|---|
+| Controls | *requested* concurrency. Configuration records intent |
+| Constraint | the runtime resolves it against the run's isolation mode |
+| Today | the resolver is called with `isolation: 'none'`, so **effective concurrency is 1 whatever you write** |
+
+Requested and effective are two different numbers, and the product used to answer only
+one of them. `agent-flow run --dry-run` prints both, and a run that asked for more
+carries a `parallelism_clamped` degradation. When M2-11 lands, an admissible worktree
+run will honour up to 8 — a bound with a stated basis, since each concurrent task is an
+agent process, a full checkout and an install of your dependencies.
 
 ---
 
-## What lands where
+## Coding agents
+
+Two adapters exist, both driving a CLI you have already authenticated:
+
+| Runner | `type` | Requires | Auth | Read-only mode |
+|---|---|---|---|---|
+| Claude Code | `claude-code-cli` | the `claude` binary on `PATH` | your existing CLI login | `--permission-mode plan` |
+| Codex | `codex-cli` | the `codex` binary on `PATH` | your existing CLI login | `-s read-only` |
+
+```yaml
+runners:
+  claude:
+    type: claude-code-cli
+    enabled: true
+  codex:
+    type: codex-cli
+    enabled: false      # flip once the CLI is installed and logged in
+```
+
+Only one runner is enabled out of the box, because the tool has to work on a machine
+that never installed a second CLI. Enabling the second is what makes plan review and
+final review genuinely cross-provider — and `doctor` reports the single-provider state
+as `DEGRADED`, so the loss is never silent.
+
+No third adapter is claimed. An abstract interface is not compatibility;
+[`docs/runner-capabilities.md`](docs/runner-capabilities.md) records what each CLI
+actually does, with the command that proves each claim and the version it was probed
+against.
+
+---
+
+## Validation
+
+Validation is the orchestrator's job, and structurally so:
+
+- **A plan names ids, never commands.** `validation: ["lint", "recurrence"]` is resolved
+  against `commands` and `validationCommands` in *your* project file. Model output
+  cannot reach a shell, because a plan cannot carry a shell command in the first place.
+- **Agent Flow runs them**, in the task's workspace, after the agent's process exits.
+- **The expectation is explicit.** `validationExpectation: pass | fail | none`. `fail`
+  exists because test-first work has a step where a green suite is the failure — and a
+  RED task whose tests *pass* is reported too, because either the test asserts nothing
+  or the behaviour already exists.
+
+---
+
+## Git isolation — worktrees
+
+Opt in with `git.useWorktrees: true`. The principle is one sentence:
+
+> **Isolation first, parallelism second.**
+
+The point is not to run more agents at once. It is to stop multiple tasks from sharing
+one working tree, one `git status`, one `AGENTS.md` and one set of validation commands
+— which would make each agent's validation judge a tree the others were editing. Three
+properties follow from isolation alone, and are worth having even at concurrency 1:
+
+- **Your working tree stops being the build surface.** A run no longer edits the tree
+  you have open in your editor.
+- **A task's diff is separable.** Each task has a tree, a base and a marker, instead of
+  every task's work superimposed at review time.
+- **A failed task leaves evidence rather than debris.** Its worktree is retained and
+  still locked, because it is the only remaining copy of what the agent produced.
+
+How it is laid out:
+
+```text
+~/.agent-flow/
+├── no-hooks/                       owned, empty — the hook isolation directory
+└── worktrees/
+    └── <repoKey>/
+        └── <gitRunKey>/
+            ├── integration/        the integration branch, checked out
+            ├── TASK-001/attempt-1/
+            └── TASK-002/attempt-1/
+```
+
+Worktrees live **outside** the repository and outside `.git`. Both alternatives were
+probed and rejected: Codex writes inside `.git` and Claude Code refuses to, which would
+make placement a runner-dependent behaviour in a runner-agnostic core; and a worktree
+inside the working tree is content the outer `git status` sees, which is exactly the
+surface this milestone exists to keep clean.
+
+Each attempt worktree is created **locked**, with its branch, in one command. Absolute
+paths are never persisted — the attempt artifact records a workspace-relative path, so
+a path cannot leak to the browser even by accident.
+
+Before a task runs, its workspace is asserted clean, set up with `commands.install`,
+and asserted clean **again**. A setup that dirties the checkout refuses the task without
+invoking the agent. This is the gate most people meet first, because the default
+`npm install` rewrites `package-lock.json`; `agent-flow doctor` probes it before a run
+rather than after, and names the file.
+
+---
+
+## Deterministic integration
+
+After a wave's attempts all finish, integration runs — serially, in the plan's stable
+topological order, never in completion order.
+
+Per task, in the integration worktree:
+
+1. load the attempt artifact — no artifact, no integration
+2. the receipt must be present and the judgement `satisfied`; the schema makes a
+   half-forged artifact unparseable
+3. the marker must have **exactly one** parent, and it must be the attempt's base — the
+   parent count is the structural discriminator, not the subject line
+4. `rev-parse <marker>^{tree}` must equal the receipt's validated tree
+5. if the marker is already an ancestor, the merge already happened; skip
+6. `git merge --no-ff`, hooks disabled
+7. write the task's result, set it `completed`, and advance `integrationHead` — **in one
+   state write**
+
+No validation command runs anywhere in that sequence. Integration verifies mechanical
+Git integrity; final verification is the authority on whether the code is good.
+
+Two runs of the same plan with the same agent outputs produce the same integration
+branch — the same markers, byte-identical, merged in the same order, producing the same
+trees. The merge *commits* differ in timestamp and therefore in hash, and that claim is
+deliberately not made.
+
+`--no-ff` is used even when a fast-forward would be possible: one task, one merge
+commit, always. Otherwise the shape of the branch would depend on how many tasks a wave
+happened to contain.
+
+**The product of a run is a branch.** Agent Flow never checks it out into your working
+tree, never merges it into your branch, never pushes, and never moves your `HEAD`. The
+final review prints where the code is and what to do with it — and that last command
+runs your hooks, exactly as it should.
+
+Final verification and final review both run in the integration worktree, against one
+commit, under the run execution lock. There is no "verified tree A, reviewed tree B"
+gap, and the commit all three describe is recorded on the run as `integrationHead`.
+
+---
+
+## Artifacts and auditability
 
 ```text
 <project>/.agent-flow/
-├── config.yaml           # versioned — a team convention
+├── config.yaml                     versioned — a team convention
 ├── current-run
-├── cache/architecture.md # repository map, reused across features
+├── cache/architecture.md           repository map, reused across features
 └── runs/AF-2026-001/
-    ├── state.json
-    ├── events.jsonl      # append-only audit trail
+    ├── state.json                  the source of truth
+    ├── events.jsonl                append-only audit trail
+    ├── request.md
+    ├── architecture-impact.md
     ├── sdd.md
     ├── plan.json
-    ├── reviews/ tasks/ logs/
+    ├── reviews/
+    │   ├── plan-review.json
+    │   ├── verification.json
+    │   └── final-review.json
+    ├── tasks/TASK-001/
+    │   ├── result.json             the task's outcome
+    │   └── attempt-1.json          one attempt's evidence — worktree mode only
+    └── logs/
+        └── implementation-TASK-001-attempt-1.log     ← worktree mode
+        └── implementation-TASK-001.log               ← sequential mode
 ```
 
-Everything with content lives inside a run, so two features in flight cannot
-overwrite each other. Task results record the runner, model and effort that
-actually served the call, not the ones the configuration asked for.
+Everything with content lives inside a run, so two features in flight cannot overwrite
+each other. Task results record the runner, model and effort that actually served the
+call, not the ones the configuration asked for. In worktree mode, attempt artifacts and
+logs are addressed by attempt, so a retry never overwrites the record of the attempt
+you are retrying because you wanted to read it.
+
+`state.json` and `events.jsonl` contain no worktree paths at all. The attempt artifact
+is written once, atomically — a second write to an existing `attempt-<n>.json` is a
+refusal, including when the bytes are identical.
 
 ---
 
-## Status
+## Example
 
-```text
-version:   v0.1.0
-Spec v3:   complete
-npm:       not published
-MVP 2:     not started
-```
+[`docs/example-walkthrough.md`](docs/example-walkthrough.md) runs one feature from
+`init` to a mergeable branch: a four-task plan with a real DAG, the configuration that
+matters, what each command prints, and where to look for every artifact afterwards.
 
-Implementation Spec v3 is finished: the CLI workflow, the local Web Control
-Plane and their test gates are all in. There is no GitHub release and no npm
-package yet — the install instructions above are the only supported path.
+---
 
-The Vitest suite invokes no CLI: every runner is faked, so it costs nothing to
-run and proves nothing about the CLIs themselves. What it does prove is in
-[`docs/engineering/findings.md`](docs/engineering/findings.md) — as is what it
-does not. The badge above is the current result; a number written here would not
-be current for long.
+## Current limitations
 
-### Working
+Not a roadmap — what is true today.
+
+- **More than one task at a time is not enabled.** `parallelism.maxTasks` above 1 is
+  accepted, recorded and clamped. M2-11.
+- **No crash recovery for isolated runs.** The evidence is written to disk by design,
+  and nothing reads it back yet. M2-07.
+- **`agent-flow clean` is not Git-aware.** It removes run state only; worktrees and
+  attempt refs are left behind, and `git worktree prune` will not reclaim a locked one.
+  Remove them by hand until M2-09. Note the integration branch is your run's *product* —
+  do not delete it before you have merged it.
+- **The dashboard does not show worktree facts.** Attempt numbers,
+  awaiting-integration and conflicts are not rendered yet. M2-10.
+- **A merge conflict halts the run.** Automatic conflict resolution is explicitly out of
+  scope; the task becomes `review_required` with the conflicting paths recorded.
+- **No `pause`, `resume` or `cancel`.** The core has no semantics for any of them.
+- **No configuration writes.** `/settings` reads. Deciding which of three layers a value
+  belongs in is the whole problem.
+- **Local only.** Loopback by default, no authentication, no cloud control plane. Anyone
+  who can reach the port can approve a plan and start a run.
+- **Not on npm.** No published package and no GitHub release; install from a checkout.
+- **Worktree mode is unvalidated on Windows** — no CI job, and the process timeout
+  cannot signal a process tree there, so a CLI that spawns children can outlive its
+  timeout.
+- **Visual baselines are per platform.** darwin and Linux sets are both committed and
+  never compared against each other; font rasterisation differs.
+- **A lock claim can be unreadable under contention.** Mutual exclusion is unaffected,
+  but the refusal then says the claim could not be read rather than naming who holds it.
+  Deferred deliberately — see [`docs/engineering/findings.md`](docs/engineering/findings.md).
+- **Prompt quality has no automated test and cannot have one.** It is the largest risk
+  in the project, and it is covered by judgement rather than by the suite.
+
+### Not yet validated
+
+- [ ] Flutter, Go or Rust repositories (stack detection is unit-tested only)
+- [ ] Fallback and reasoning clamping against a live CLI
+- [ ] Cost across models and repository sizes
+- [ ] Worktree mode dogfooded end to end against live CLIs — that is M2-12
+
+<details>
+<summary><b>What MVP 1 shipped</b> — the checklist, kept for the record</summary>
 
 - [x] CLI, config resolution, logical roles, reasoning abstraction
 - [x] `ClaudeCodeRunner`, `CodexRunner`, capability model, error normalisation
@@ -288,95 +674,43 @@ be current for long.
 - [x] Corrective rounds reviewed in their own right, so the loop needs no `--force`
 - [x] `doctor --deep` — live probe per runner, folded back into the verdict
 - [x] Local telemetry, derived from the run's own state and event log
-- [x] `agent-flow ui` — local server and dashboard (spec §59–§102)
-- [x] Seven pages over eight routes — run detail, runs, projects, agents & models,
-      prompts, analytics, settings; `/dashboard` renders the run-detail view for
-      whichever run wants you most
-- [x] Live updates over SSE, with polling as the documented fallback rather than the
-      default
-- [x] Write actions — approve, reject, revise, retry, start — as one set of use cases
-      the CLI and the HTTP API are both adapters over
-- [x] Inter-process run lock: the CLI and the local server cannot schedule the same
-      run at once, proved with eight real processes racing one lock file — and with an
-      opt-in stress run of 640 (`AF_LOCK_STRESS=1`), because a race is a test that has
-      to pass often rather than once
-- [x] Dependency graph — the plan's edges, ranked and drawn by the server's answer,
-      never rebuilt in the browser
-- [x] Workspace mode — `agent-flow ui ~/wk` serves several projects, bounded by
-      `ui.workspaceDepth`, and discovers nothing that resolves outside the root
-- [x] Empty, error and degraded states — what happened, where, whether the run
-      stopped, and what to do about it
-- [x] Deterministic browser E2E — sixteen scenarios across the real local server,
-      stubbing nothing; the coding CLI is replaced at the executable boundary, so no
-      quota is spent and both real adapters still parse the output
-- [x] Screenshot regression in CI, on Linux baselines, in a pinned container — and
-      a suite that cannot adopt a stale preview
+- [x] `agent-flow ui` — local server and dashboard, seven pages over eight routes
+- [x] Live updates over SSE, with polling as the documented fallback rather than the default
+- [x] Write actions — approve, reject, revise, retry, start — as one set of use cases the
+      CLI and the HTTP API are both adapters over
+- [x] Inter-process run lock, proved with eight real processes racing one lock file — and
+      with an opt-in stress run of 640 (`AF_LOCK_STRESS=1`)
+- [x] Dependency graph drawn from the server's answer, never rebuilt in the browser
+- [x] Workspace mode bounded by `ui.workspaceDepth`, discovering nothing outside the root
+- [x] Empty, error and degraded states that say what happened and what to do about it
+- [x] Deterministic browser E2E — sixteen scenarios across the real local server
+- [x] Screenshot regression in CI, on Linux baselines, in a pinned container
 - [x] Cross-platform workspace containment, with the Windows rules asserted on Linux
-- [x] Packaging proved outside the checkout: `npm pack`, a clean install into a
-      throwaway prefix, and the packaged server driven with the checkout's own bundle
-      renamed away — plus a black-box browser journey through the installed tarball
+- [x] Packaging proved outside the checkout, plus a black-box browser journey through
+      the installed tarball
 
-### Designed, not built
+**Validated end to end against live CLIs.** One Node and one Python repository have run
+the whole workflow — plan, cross-provider review, approval, implementation, verification,
+final review, Definition of Done. The Python run reached `FEATURE COMPLETE` after a
+corrective round: the final review rejected it, `--fix` turned the findings into tasks,
+and the tests those tasks produced kill the corresponding mutations.
+[Findings §10–§13](docs/engineering/findings.md) records what that surfaced.
 
-- [ ] `PATCH /config` — designed in
-      [`docs/config-write-design.md`](docs/config-write-design.md), not built.
-      Scope has to be part of the address, or a save silently edits the wrong layer
-- [ ] `pause`, `resume`, `cancel` — designed in
-      [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md),
-      not built. Pause needs an abort signal the scheduler checks between tasks;
-      cancel needs a new terminal run status and is a contract change
+</details>
 
-### Validated end to end, against live CLIs
+<details>
+<summary><b>Known defects from the MVP 1 validation review</b> — all fixed</summary>
 
-One Node and one Python repository have run the whole workflow — plan,
-cross-provider review, approval, implementation, verification, final review,
-Definition of Done. The Python run reached `FEATURE COMPLETE` after a
-corrective round: the final review rejected it, `--fix` turned the findings
-into tasks, and the tests those tasks produced kill the corresponding mutations.
-[Findings §10–§13](docs/engineering/findings.md) records what that surfaced,
-including a defect where the prompt could set the runner's error code.
-
-### Not yet validated
-
-- [ ] Flutter, Go or Rust repositories (stack detection is unit-tested only)
-- [ ] Fallback and reasoning clamping against a live CLI
-- [ ] Cost across models and repository sizes
-- [ ] Windows. Path containment now uses `node:path` and its Windows rules are
-      asserted with `path.win32`, but no CI job runs there and the process timeout
-      still cannot signal a process tree on that platform
-
-### Known limitations
-
-Not a roadmap — what is true today.
-
-- **No `pause`, `resume` or `cancel`.** The core has no semantics for any of them.
-- **No configuration writes.** `/settings` reads. Deciding which of three layers a
-  value belongs in is the whole problem.
-- **Local only.** Loopback by default, no authentication, no cloud control plane, no
-  remote auth. Anyone who can reach the port can approve a plan and start a run.
-- **Not on npm.** No published package and no GitHub release; install from a checkout.
-- **No Windows CI job**, and on Windows the process timeout cannot signal a process
-  tree, so a CLI that spawns children can outlive its timeout.
-- **Visual baselines are per platform.** darwin and Linux sets are both committed and
-  never compared against each other; font rasterisation differs.
-- **A lock claim can be unreadable under contention.** Mutual exclusion is unaffected,
-  but the refusal then says the claim could not be read rather than naming who holds
-  it. Deferred deliberately — see
-  [`docs/engineering/findings.md`](docs/engineering/findings.md).
-
-### Known defects — validation review
-
-A structured review of the first complete implementation confirmed 17 findings.
-All twelve code-level defects are fixed; each reproduction was inverted and moved
-into the suite of the feature it belongs to. The review itself is kept as written,
-in [`docs/reviews/validation-review.md`](docs/reviews/validation-review.md), with
-the re-analysis in
-[`docs/reviews/reanalysis-post-fixes.md`](docs/reviews/reanalysis-post-fixes.md).
+A structured review of the first complete implementation confirmed 17 findings. All
+twelve code-level defects are fixed; each reproduction was inverted and moved into the
+suite of the feature it belongs to. The review is kept as written, in
+[`docs/reviews/validation-review.md`](docs/reviews/validation-review.md), with the
+re-analysis in [`docs/reviews/reanalysis-post-fixes.md`](docs/reviews/reanalysis-post-fixes.md).
 
 - [x] **V-01 · critical** — planner-authored strings reach `/bin/sh -c`; no allowlist → **fixed:** `validation` holds ids resolved against the project config
 - [x] **V-09 · high** — the process timeout never fires when the child has children → **fixed:** the child runs in its own process group
-- [x] **V-02 · high** — `FallbackRunner` is never constructed at runtime → **fixed:** wired through `runner-factory`, resolving the fallback role's own model and effort
-- [x] **V-03 · high** — a task interrupted mid-flight stays `running` forever → **fixed:** recovered as `interrupted` and requeued within the attempt limit
+- [x] **V-02 · high** — `FallbackRunner` is never constructed at runtime → **fixed:** wired through `runner-factory`
+- [x] **V-03 · high** — a task interrupted mid-flight stays `running` forever → **fixed:** recovered as `interrupted` and requeued
 - [x] **V-04 · high** — test-first plans cannot express an expected failure → **fixed:** `validationExpectation: pass | fail | none`
 - [x] **V-05 · medium** — `agent-flow task` builds a graph missing its dependencies → **fixed:** the graph stays whole, execution is restricted
 - [x] **V-06 · medium** — `result.json` records a hardcoded reasoning level → **fixed:** provenance travels from the runner that actually ran
@@ -386,39 +720,75 @@ the re-analysis in
 
 See [Findings §8](docs/engineering/findings.md#8-a-structured-review-found-things-the-build-did-not).
 
-### Next
-
-Not started. Listed so the boundary of Spec v3 is visible, not as a commitment.
-
-The first two are specified in full in
-[`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md)
-— written, reviewed, and deliberately not implemented yet.
-
-- [ ] Git worktrees for task isolation
-- [ ] Parallel execution — the scheduler loop takes N; nothing may hand it more
-      than 1 until tasks are isolated, so `parallelism.maxTasks` is accepted
-      above 1 and capped at 1 at runtime
-- [ ] Model escalation after repeated failure
-- [ ] Monorepo workspaces
+</details>
 
 ---
 
-## What building this taught us
+## Roadmap
 
-[`docs/engineering/findings.md`](docs/engineering/findings.md) documents what
-driving coding CLIs from a program actually involves — including the problems
-still unsolved. Short version:
+```text
+MVP 2 — Safe Parallel Execution
 
-- Every CLI has its own dialect of JSON Schema, and they are mutually incompatible
-- Neither CLI validates its reasoning-level flag; a wrong mapping is invisible
-- Text-matching on model output will eventually misclassify a success as a failure
-- Read-only mode is real, but "read-only" does not mean "writes nothing anywhere"
-- A modal Radix dialog restores focus to a `Dialog.Trigger` and to nothing at all
-  when there is none — every dialog here supplies its own focus return
+[x] M2-00  current concurrency safety (baseline)
+[x] M2-01  pure worktree policies and naming
+[x] M2-02  GitCommand and GitWorkspaces
+[x] M2-03  run identity capture and planningBase gates
+[x] M2-04  workspace lifecycle and setup cleanliness
+[x] M2-05  TaskAttemptResult, trusted receipt, marker
+[x] M2-06  deterministic Integrator and integration-tree verification
+[ ] M2-07  crash recovery                              ← next
+[ ] M2-08  retry semantics and attempt retention
+[ ] M2-09  Git-aware cleanup
+[ ] M2-10  read models, CLI and Web observability
+[ ] M2-11  parallel scheduler activation               ← effectiveConcurrency > 1
+[ ] M2-12  E2E, dogfood and documentation
+```
 
-[`docs/runner-capabilities.md`](docs/runner-capabilities.md) records what each
-CLI actually does, with the command that proves each claim and the version it
-was probed against.
+Full roadmap, including what MVP 1 established and what is deliberately out of scope:
+[`docs/roadmap.md`](docs/roadmap.md).
+
+---
+
+## Documentation
+
+**Product**
+
+| | |
+|---|---|
+| [`docs/example-walkthrough.md`](docs/example-walkthrough.md) | One feature, four tasks, from `init` to a mergeable branch |
+| [`docs/web-ui.md`](docs/web-ui.md) | The dashboard: the two modes, the pages, the DAG, live events, what it can change and what it cannot, the HTTP API |
+| [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do about it |
+| [`docs/roadmap.md`](docs/roadmap.md) | What is done, what is next, and what is out of scope |
+
+**Architecture & engineering**
+
+| | |
+|---|---|
+| [`docs/security.md`](docs/security.md) | The trust model: the receipt, hook isolation, the server's boundary, the run lock, and the limits stated plainly |
+| [`docs/testing.md`](docs/testing.md) | The test layers, what each one proves, and where each one stops |
+| [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each CLI actually does, with the command that proves it and the version it was probed against |
+| [`docs/engineering/findings.md`](docs/engineering/findings.md) | Engineering log: what building this taught us, including what is still unsolved |
+
+**Specification**
+
+| | |
+|---|---|
+| [`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md) | **MVP 2 — Safe Parallel Execution.** The current normative spec. Supersedes §19 and §47–§48 of Spec v3 |
+| [`docs/specs/implementation-spec-v3.md`](docs/specs/implementation-spec-v3.md) | Implementation Spec v3 — MVP 1, complete. **A historical document**; the code is the current truth |
+
+**Technical reviews** — snapshots, not living documents
+
+| | |
+|---|---|
+| [`docs/reviews/validation-review.md`](docs/reviews/validation-review.md) | Structured validation review of the first complete implementation |
+| [`docs/reviews/reanalysis-post-fixes.md`](docs/reviews/reanalysis-post-fixes.md) | Re-analysis after those fixes landed |
+
+**Designs, not implementations** — written up, deliberately not built
+
+| | |
+|---|---|
+| [`docs/config-write-design.md`](docs/config-write-design.md) | `PATCH /config`: why scope has to be part of the address |
+| [`docs/pause-resume-cancel-design.md`](docs/pause-resume-cancel-design.md) | `pause` / `resume` / `cancel`: the abort signal and the contract change they need |
 
 ---
 
@@ -436,72 +806,56 @@ npm run dev:web        # dashboard against a running `agent-flow ui`
 Once built, the CLI runs from the checkout as `node dist/bin/agent-flow.js`, or
 `npm link` it and use `agent-flow` as documented above.
 
-Three further test layers, answering three different questions — and none of them
-is a cheaper version of another:
+## Tests
 
 ```bash
+npm run test                    # Vitest — unit, integration, architecture
 npm run test:e2e                # Playwright, through the real local server
 npm run test:visual             # Playwright, screenshots (this platform's baselines)
 npm run test:packaging          # pack, install elsewhere, drive the installed product
 npm run test:packaging:browser  # the same, through gsd-browser
 ```
 
-[`docs/testing.md`](docs/testing.md) explains what each one can and cannot prove,
-including why the gsd-browser smoke does not replace Playwright and why it runs
-locally rather than in CI.
+**No suite invokes a real coding CLI.** Runners are exercised through a scripted
+`AgentRunner`; adapters are tested by asserting the exact argv they build and by parsing
+recorded tool output — the two cases that could not be provoked on demand are labelled
+`SYNTHETIC-` in `test/fixtures/`. That is what keeps the suite fast, free and runnable
+in CI.
 
-No suite invokes a real CLI. Runners are exercised through a scripted
-`AgentRunner`; the adapters are tested by asserting the exact argv they build and
-by parsing recorded tool output — the two cases that could not be provoked on
-demand are labelled `SYNTHETIC-` in `test/fixtures/`. That is what keeps the suite
-fast, free and runnable in CI.
+**Git is not faked.** Everything MVP 2 touches — worktree creation and locking, hook
+isolation, `write-tree`, `commit-tree`, merges, ancestry, cleanup — is tested against
+real repositories in temporary directories, under a temporary home. Platform
+differences in worktree behaviour are exactly the class of thing only real Git catches.
 
-Architectural rules are executable (`test/architecture.test.ts`):
+[`docs/testing.md`](docs/testing.md) explains what each layer can and cannot prove,
+including why the gsd-browser smoke does not replace Playwright and why it runs locally
+rather than in CI.
 
-- `src/core/` imports no Node built-ins and no adapters
-- `src/core/` mentions no provider, model or CLI name
-- no framework name appears in `src/` outside stack detection
-- topological ordering exists in exactly one module
-- the core side never imports the server; the server never imports the CLI
-- no server module names an auth file or reads the environment
-- no request contract accepts a filesystem path, a command or a plan hash
-- there is one project registry and one run execution lock
-- no browser E2E intercepts `/api/**`
-
-The dashboard's layout is checked by screenshot against
-[`docs/assets/agent-flow-ui-reference.png`](docs/assets/agent-flow-ui-reference.png),
-at 1440, 1280, 1200 and 1024 — the last two being the sides of the boundary where
-the inspector stops sharing the row with the table and becomes a drawer. Stubbed
-API, pinned clock, fixed locale and timezone.
-
-Baselines are per platform, because font rasterisation is: `desktop-1440-darwin`
-comes from a maintainer's machine, `desktop-1440-linux` from the pinned Playwright
-container CI compares in. Regenerate the Linux set only in that container:
-
-```bash
-npm run test:visual:linux    # docker, pinned image
-npm run test:visual:update   # this platform
-```
-
-CI runs `check` on Node 20 and 22, the browser E2E and the screenshot suite in the
-pinned container, and coverage as a report rather than a gate. The packaging smokes
-run locally.
+CI runs `check` on Node 20 and 22, the browser E2E and the screenshot suite in a pinned
+container, and coverage as a report rather than a gate. The packaging smokes run
+locally.
 
 ---
 
-## Containment
+## Contributing
 
-Read-only stages run under the runner's own sandbox — `--permission-mode plan`
-for Claude Code, `-s read-only` for Codex. Agent Flow never passes the flags
-that disable them.
+The project is pre-release and the specification leads the code. Before opening a pull
+request against MVP 2 behaviour, read
+[`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md)
+— §3 lists the invariants, and §30.1 lists the designs that were considered and
+rejected, with the evidence for each. A change that violates an invariant is a change
+to the specification, not an implementation detail.
 
-Being precise about the limit: Agent Flow spawns a CLI as a child process and
-cannot intercept what that process runs. The containment is the runner's, not
-ours. Anything stronger needs a container.
+```bash
+npm run check     # must be green
+```
 
-[`docs/security.md`](docs/security.md) covers the local server: why the browser
-never sends a path, a command or a plan hash, how symlink containment works, and
-what having no authentication does and does not mean.
+Two rules that are enforced rather than requested:
+
+- **`test/architecture.test.ts` is updated, never deleted.** The layering rules are
+  executable, and a rule that becomes inconvenient is a conversation, not a diff.
+- **Milestone order is not negotiable.** `effectiveConcurrency > 1` is M2-11 for reasons
+  §29 states exactly; landing it early is the one risk the specification rates critical.
 
 ---
 

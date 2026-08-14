@@ -2,13 +2,24 @@
 
 ## 0. Status and scope
 
-**Status: specification. Nothing in this document is implemented.**
+**Status: in implementation. M2-00 … M2-06 have landed; M2-07 … M2-12 have not.**
+
+Per-item status is recorded on each work item in §28 and summarised in
+[`../roadmap.md`](../roadmap.md). **The design in this document is unchanged by
+implementation** — where a probe changed a decision, the item says so in its own
+*What landed* note, and the body was amended at the same time. Sections describing
+items that have not landed still describe a design rather than the code.
 
 Baseline commit: `e24dd48` (`fix: harden task concurrency before worktree isolation`).
 At that commit `MAX_SUPPORTED_TASK_CONCURRENCY = 1`, no production path creates a
 worktree, and an architecture test fails if one appears.
 
-This document is the implementable contract for the next milestone. It supersedes
+**`effectiveConcurrency` is still 1.** `MAX_ISOLATED_TASK_CONCURRENCY = 8` exists in
+`core/concurrency.ts`, and `execution-context.ts` deliberately does **not** pass the
+mode into the resolver — an architecture test fails if it starts to. That edit is
+M2-11 (§29), and it is the eleventh of twelve items on purpose.
+
+This document is the implementable contract for this milestone. It supersedes
 §19 and §47–§48 of [`implementation-spec-v3.md`](implementation-spec-v3.md) wherever
 the two disagree — that document describes worktrees under `.agent-flow/worktrees/`
 and a scheduler that creates them, and both decisions have since been rejected on
@@ -2283,7 +2294,7 @@ Failure semantics · Security · Risk.**
 
 ---
 
-### M2-01 — Pure worktree policies and naming
+### M2-01 — Pure worktree policies and naming · STATUS: IMPLEMENTED
 
 **Goal.** Every naming and layout decision in this document, as pure functions, with
 no filesystem and no Git.
@@ -2372,7 +2383,7 @@ run against a temporary home.
 
 ---
 
-### M2-03 — Run identity capture and `planningBase` gates
+### M2-03 — Run identity capture and `planningBase` gates · STATUS: IMPLEMENTED
 
 **Goal.** A run is **born** with its Git identity, its base and its isolation mode,
 all three immutable; and the preconditions for executing in that mode are a check that
@@ -2435,7 +2446,7 @@ above, which is the defect this item exists to make impossible rather than to de
 
 ---
 
-### M2-04 — Workspace lifecycle and setup cleanliness
+### M2-04 — Workspace lifecycle and setup cleanliness · STATUS: IMPLEMENTED
 
 **Goal.** An attempt gets a prepared, verified-clean worktree, or it does not run.
 
@@ -2468,7 +2479,7 @@ actionable one.
 
 ---
 
-### M2-05 — `TaskAttemptResult`, trusted receipt, marker
+### M2-05 — `TaskAttemptResult`, trusted receipt, marker · STATUS: IMPLEMENTED
 
 **Goal.** A satisfied attempt produces evidence that recovery can trust and a marker
 bound to it.
@@ -2498,7 +2509,7 @@ guarantee that was never true.
 
 ---
 
-### M2-06 — Deterministic Integrator and integration-tree verification
+### M2-06 — Deterministic Integrator and integration-tree verification · STATUS: IMPLEMENTED
 
 **Goal.** Serial, ordered, mechanically verified integration — the only place a task
 becomes `completed` — and the integration worktree as the single tree that final
@@ -2546,7 +2557,7 @@ nothing.
 
 ---
 
-### M2-07 — Crash recovery
+### M2-07 — Crash recovery · STATUS: NEXT
 
 **Goal.** Every window in §17.3 has a defined, tested resolution.
 
@@ -2573,7 +2584,7 @@ fault hook must be deterministic, not timing-based.
 
 ---
 
-### M2-08 — Retry semantics and attempt retention
+### M2-08 — Retry semantics and attempt retention · STATUS: NOT STARTED
 
 **Goal.** A retry is always a new attempt, a new branch and a new worktree, and never
 destroys prior evidence.
@@ -2597,7 +2608,7 @@ today. §23 of Spec v3 (no automatic retry) is unchanged.
 
 ---
 
-### M2-09 — Git-aware cleanup
+### M2-09 — Git-aware cleanup · STATUS: NOT STARTED
 
 **Goal.** `agent-flow clean` reclaims namespaces safely and touches nothing foreign.
 
@@ -2628,7 +2639,7 @@ run's own product, deleted by a housekeeping command weeks after anyone was watc
 
 ---
 
-### M2-10 — Read models, CLI and Web observability
+### M2-10 — Read models, CLI and Web observability · STATUS: NOT STARTED
 
 **Goal.** A person can see what parallel execution is doing without reading a log,
 and no filesystem path or ref reaches the browser.
@@ -2657,7 +2668,7 @@ stores a relative path.
 
 ---
 
-### M2-11 — Parallel scheduler activation
+### M2-11 — Parallel scheduler activation · STATUS: NOT STARTED
 
 **Goal.** `effectiveConcurrency > 1`. **This is the last functional item, and it is
 one edit plus its wiring.**
@@ -2690,7 +2701,7 @@ with extra steps.
 
 ---
 
-### M2-12 — E2E, dogfood and documentation
+### M2-12 — E2E, dogfood and documentation · STATUS: NOT STARTED
 
 **Goal.** The milestone is proved outside the unit suite and written down.
 

@@ -1,5 +1,16 @@
 # Agent Flow — Especificação de Implementação
 
+> **Documento histórico — Implementation Spec v3 (MVP 1), concluída.**
+>
+> Esta especificação descreve o que foi desenhado e entregue no MVP 1, e é mantida como
+> foi escrita. **O código é a verdade atual**, e onde os dois divergem, o código vence.
+>
+> Para o desenvolvimento em andamento, a autoridade normativa é
+> [`mvp2-safe-parallel-execution.md`](mvp2-safe-parallel-execution.md), que **substitui
+> §19 e §47–§48 deste documento**: a colocação de worktrees sob `.agent-flow/worktrees/`
+> e um scheduler que os cria foram ambas rejeitadas com base em evidência empírica.
+> Veja também [`../roadmap.md`](../roadmap.md) para o estado por milestone.
+
 ## 1. Objetivo
 
 Construir um workflow padronizado e reutilizável para desenvolvimento assistido por agentes de IA, aplicável a múltiplos projetos e stacks, usando:

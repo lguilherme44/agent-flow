@@ -115,8 +115,11 @@ exactly that path. It must not grow a second termination mechanism.
 What the tool cannot do is un-edit files. A cancelled task may have written half its
 changes to the repository, and Agent Flow does not own the working tree. So cancel
 has to be honest about leaving the repository in an unknown state, and the
-confirmation dialog has to say so in those words. This is the strongest argument for
-worktrees (MVP 2): with a worktree per task, cancel could discard one.
+confirmation dialog has to say so in those words. This was the strongest argument for
+worktrees, and MVP 2 has since built them: in worktree mode a cancelled task's edits
+are confined to its own workspace, so cancel could discard one instead of leaving them
+in a tree somebody is working in. That does not make cancel cheaper on the sequential
+path, which is still the default and where this paragraph still applies in full.
 
 ### What state does the terminated task get?
 

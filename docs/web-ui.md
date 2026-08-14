@@ -155,6 +155,20 @@ progress *is*. There is no second channel reporting it.
 - **Adding a project** — the button exists, disabled, because §68 lists it. Adding one
   means writing to the registry.
 
+### What it does not show yet
+
+Runs created in **worktree mode** execute, integrate and complete exactly as described
+elsewhere, but the dashboard does not yet render the facts that are specific to them:
+the attempt number a task is on, a task that is validated and awaiting integration, or
+a halted integration and the paths that conflicted. Those read models are M2-10 of
+[MVP 2](specs/mvp2-safe-parallel-execution.md); until then `agent-flow status` and the
+run's `events.jsonl` are where that detail lives.
+
+When they do land, the constraint they land under is already fixed: the browser gets
+ids and rendered facts, never a worktree path, a ref or a branch name. The attempt
+artifact stores a workspace-relative path precisely so the absolute one is structurally
+unavailable to expose.
+
 ---
 
 ## Staying current

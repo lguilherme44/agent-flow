@@ -5,9 +5,9 @@ another, and the most important thing to understand about the arrangement is whe
 one stops.
 
 ```
-Vitest        unit, integration, architecture     1063 tests, no browser, no process
+Vitest        unit, integration, architecture     1637 tests, no browser, no coding CLI
 Playwright    deterministic browser E2E           16 scenarios, real server
-              visual regression                   133 screenshots, 4 widths, 2 platforms
+              visual regression                   22 views, 4 widths, 2 platforms
 gsd-browser   black-box packaged acceptance       2 journeys, against the tarball
 ```
 
@@ -30,6 +30,16 @@ npm run test:packaging:browser # the same, through gsd-browser
 adapters are tested by asserting the exact argv they build and by parsing output
 recorded from the real tools. That is what makes the suite free, fast and runnable in
 CI — and it is also its limit: it proves nothing about the CLIs themselves.
+
+**Git, on the other hand, is never faked.** Everything MVP 2 touches has an
+`*.integration.test.ts` that runs against a real repository in a temporary directory,
+under a temporary home so a failing test costs a rerun rather than one of the
+developer's own worktrees: hook isolation, worktree creation and locking, `write-tree`,
+`commit-tree` determinism, marker/tree binding, merges, ancestry and conflict aborts.
+The reason is empirical — probing real Git during M2-02 changed three design decisions
+that had looked settled on paper, and platform differences in `worktree` behaviour are
+exactly the class of thing a mock cannot surface. Faked Git would have made those tests
+green and wrong.
 
 Some rules are executable rather than written down, in `test/architecture.test.ts`:
 `src/core/` imports no Node built-ins and names no provider; topological ordering exists

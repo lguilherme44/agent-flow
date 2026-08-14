@@ -767,10 +767,15 @@ a working login; forcing a real 429 means burning a quota limit. They are
 prefixed so nobody mistakes them for recordings, and — per §6 — normalisation
 does not depend on their exact wording.
 
-**No worktrees, so tasks share one working tree.** Concurrency is capped at 1
-and the scheduler stops on the first failure, which bounds the damage. With
-parallel execution this becomes unsafe, which is why worktrees are the first
-item of the next milestone.
+**Concurrency is still capped at 1, and now for a different reason.** When this
+was written there were no worktrees at all, so tasks shared one working tree and
+the cap was the only thing bounding the damage. MVP 2 has since built the
+isolation: `git.useWorktrees: true` gives each attempt its own locked worktree,
+its own branch and its own validation. The cap remains because raising it is
+M2-11, the eleventh of twelve items, and it waits on crash recovery, retry
+semantics and observability. Isolation without parallelism is not a half-built
+feature — see §19.3 and §1 of the MVP 2 specification for the three properties
+that are worth having at concurrency 1.
 
 This paragraph used to say concurrency was *pinned* at 1, and it was not: it was
 `parallelism.maxTasks`, which went from the configuration file straight into the

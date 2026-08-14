@@ -118,6 +118,13 @@ excluding a set of peers the other is not in.
 Proved with eight real processes racing one lock file, and with an opt-in stress run of
 640 (`AF_LOCK_STRESS=1`) — a race is a test that has to pass often rather than once.
 
+**`review` joined that list in worktree mode**, and only there. In sequential mode it
+reads the user's working tree and takes nothing. In worktree mode it reads and runs
+commands inside the *integration worktree* — the same checkout the Integrator merges
+into — so a review issued while the run holds its lease would otherwise observe a
+half-merged tree and report a verdict about a state that never existed. It gets
+`run_busy` instead.
+
 ---
 
 ## Binding somewhere other than loopback
