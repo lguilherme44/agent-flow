@@ -275,7 +275,7 @@ function GraphProblems(props: { dag: RunDagView }): JSX.Element | null {
       className="mx-3 mt-3 flex shrink-0 flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-3 py-2"
     >
       {dag.invalid === undefined ? null : (
-        <span className="flex items-start gap-2 text-label text-text">
+        <span className="flex items-start gap-2 text-body-lg text-text">
           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
           <span>
             This plan’s dependencies form a cycle, so there is no order to draw them in.
@@ -286,7 +286,7 @@ function GraphProblems(props: { dag: RunDagView }): JSX.Element | null {
         </span>
       )}
       {dag.unresolved.length === 0 ? null : (
-        <span className="flex items-start gap-2 text-label text-text">
+        <span className="flex items-start gap-2 text-body-lg text-text">
           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
           <span>
             {dag.unresolved.length === 1

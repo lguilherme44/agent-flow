@@ -41,6 +41,46 @@ export const TONE_DOT: Record<Tone, string> = {
   muted: 'bg-faint',
 };
 
+/**
+ * Magnitude, which is not a status and therefore not a tone (UI-29).
+ *
+ * Brightest first, so rank reads as brightness. Lives here because §67 says a
+ * colour is written down once, and this ramp was previously duplicated as a
+ * `SLICE_COLOURS` array in both `AnalyticsPage` and `bottom-cards` — each one
+ * built from the four reserved signal hues plus the accent.
+ *
+ * That palette failed on measurement, not on taste: the adjacent pair
+ * `--af-info` ↔ `--af-primary-bright` scores ΔE 1.1 under deuteranopia and 11.7
+ * under normal vision, against a floor of 15. It is also the pair the status
+ * system rests on — a running task is blue, a running stage is violet — so the
+ * two donuts were putting the least separable pair in the palette in the only
+ * two places where colour was the sole channel, with no ring, glyph or word to
+ * carry the meaning instead.
+ *
+ * A sixth series folds into the last step rather than generating a hue.
+ */
+export const MAGNITUDE_SCALE: readonly string[] = [
+  'var(--af-scale-5)',
+  'var(--af-scale-4)',
+  'var(--af-scale-3)',
+  'var(--af-scale-2)',
+  'var(--af-scale-1)',
+];
+
+/**
+ * Clamped at both ends, not just the top.
+ *
+ * Every caller today passes a `map` index, so the lower bound is unreachable —
+ * and the `as string` is what makes that worth closing anyway: with only
+ * `Math.min`, a negative index returns `undefined` and the cast asserts it is a
+ * colour. The failure would be a transparent chart segment with no error, which
+ * is the kind of bug that gets found by a person squinting at a donut.
+ */
+export function magnitudeStep(index: number): string {
+  const step = Math.min(Math.max(index, 0), MAGNITUDE_SCALE.length - 1);
+  return MAGNITUDE_SCALE[step] as string;
+}
+
 /** Ring colour for an outlined status marker. */
 export const TONE_BORDER: Record<Tone, string> = {
   success: 'border-success/60',

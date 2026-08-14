@@ -123,7 +123,7 @@ function SourceRow(props: {
 }): JSX.Element {
   return (
     <div className="flex min-w-0 items-baseline gap-2">
-      <dt className="w-14 shrink-0 text-micro uppercase tracking-wide text-faint">
+      <dt className="w-14 shrink-0 text-micro uppercase tracking-caps text-faint">
         {props.label}
       </dt>
       <dd className="flex min-w-0 flex-col">

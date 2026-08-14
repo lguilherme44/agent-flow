@@ -142,7 +142,9 @@ export function Badge(props: {
       className={cx(
         'inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-px',
         'text-micro font-medium',
-        props.caps === true && 'uppercase tracking-wide',
+        // `tracking-caps` is 0.08em. `tracking-wide` was 0.025em, which is
+        // under the 0.06em floor upper-case needs to stop reading as cramped.
+        props.caps === true && 'uppercase tracking-caps',
         TONE_BG[tone],
         TONE_TEXT[tone],
         props.className,
@@ -201,7 +203,14 @@ export function StatusDot(props: {
         <Icon
           className={cx(
             'h-2.5 w-2.5',
-            props.solid === true ? 'text-bg' : TONE_TEXT[props.tone],
+            // Violet is the one solid tone dark enough to need light glyph:
+            // #070b14 on #7c3aed is 3.45:1, white is 5.70:1. The other four
+            // solid tones are light, where the page ground is the readable one.
+            props.solid !== true
+              ? TONE_TEXT[props.tone]
+              : props.tone === 'primary'
+                ? 'text-white'
+                : 'text-bg',
             props.spin === true && 'animate-spin',
           )}
         />
@@ -221,7 +230,14 @@ export function StatusDot(props: {
         <Icon
           className={cx(
             'h-2.5 w-2.5',
-            props.solid === true ? 'text-bg' : TONE_TEXT[props.tone],
+            // Violet is the one solid tone dark enough to need light glyph:
+            // #070b14 on #7c3aed is 3.45:1, white is 5.70:1. The other four
+            // solid tones are light, where the page ground is the readable one.
+            props.solid !== true
+              ? TONE_TEXT[props.tone]
+              : props.tone === 'primary'
+                ? 'text-white'
+                : 'text-bg',
             props.spin === true && 'animate-spin',
           )}
         />
@@ -262,7 +278,9 @@ export function Button(props: {
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-sm font-medium',
         'transition-colors disabled:cursor-not-allowed disabled:opacity-45',
-        props.size === 'sm' ? 'h-6 px-2 text-micro' : 'h-7 px-2.5 text-label',
+        // Button text is a value a person acts on, so it takes the working
+        // size. 28px tall at 12px text was a control you had to lean in to.
+        props.size === 'sm' ? 'h-6 px-2 text-label' : 'h-7 px-2.5 text-body-lg',
         variant === 'primary' && 'bg-primary text-white hover:bg-primary-bright',
         variant === 'surface' &&
           'border border-border bg-surface-2 text-text hover:border-border-strong hover:bg-surface-3',
@@ -299,7 +317,7 @@ export function Select<T extends string>(props: {
           props.onChange(changed.target.value as T);
         }}
         className={cx(
-          'h-6 max-w-[168px] rounded-sm border border-border bg-surface-2 px-1.5 text-label text-text',
+          'h-7 max-w-[176px] rounded-sm border border-border bg-surface-2 px-2 text-body-lg text-text',
           'hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-primary-bright',
         )}
       >
@@ -337,7 +355,7 @@ export function SearchInput(props: {
           props.onChange(changed.target.value);
         }}
         placeholder={props.placeholder}
-        className="w-full bg-transparent text-label text-text placeholder:text-faint focus:outline-none"
+        className="w-full bg-transparent text-body-lg text-text placeholder:text-faint focus:outline-none"
       />
     </label>
   );
@@ -376,7 +394,7 @@ export function Tooltip(props: { content: ReactNode; children: ReactNode }): JSX
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           sideOffset={6}
-          className="z-50 max-w-xs rounded-sm border border-border-strong bg-surface-3 px-2 py-1 text-micro text-text shadow-xl"
+          className="z-50 max-w-xs rounded-sm border border-border-strong bg-surface-3 px-2 py-1 text-label text-text shadow-xl"
         >
           {props.content}
         </TooltipPrimitive.Content>
@@ -426,7 +444,9 @@ export function Notice(props: {
         props.className,
       )}
     >
-      <span className="flex items-start gap-2 text-label text-text">
+      {/* The first line is what happened, and it is the one line somebody reads
+          from across the desk — so it takes the working size, not the floor. */}
+      <span className="flex items-start gap-2 text-body-lg text-text">
         <Icon
           className={cx('mt-px h-3.5 w-3.5 shrink-0', TONE_TEXT[props.tone])}
           aria-hidden
@@ -435,13 +455,13 @@ export function Notice(props: {
       </span>
 
       {props.detail === undefined ? null : (
-        <div className="overflow-x-auto pl-5 font-mono text-micro text-muted">{props.detail}</div>
+        <div className="overflow-x-auto pl-5 font-mono text-label text-muted">{props.detail}</div>
       )}
       {props.consequence === undefined ? null : (
-        <span className="pl-5 text-micro text-muted">{props.consequence}</span>
+        <span className="pl-5 text-label text-muted">{props.consequence}</span>
       )}
       {props.action === undefined ? null : (
-        <div className="flex flex-wrap items-center gap-2 pl-5 pt-0.5 text-micro text-muted">
+        <div className="flex flex-wrap items-center gap-2 pl-5 pt-0.5 text-label text-muted">
           {props.action}
         </div>
       )}
@@ -461,8 +481,8 @@ export function Empty(props: {
         props.className,
       )}
     >
-      <p className="text-body text-muted">{props.title}</p>
-      {props.hint === undefined ? null : <p className="text-micro text-faint">{props.hint}</p>}
+      <p className="text-body-lg text-muted">{props.title}</p>
+      {props.hint === undefined ? null : <p className="text-label text-faint">{props.hint}</p>}
     </div>
   );
 }
@@ -483,7 +503,7 @@ export function StripItem(props: {
     <div className="flex flex-col gap-0.5 px-4 first:pl-0 last:pr-0">
       <span
         className={cx(
-          'whitespace-nowrap text-micro',
+          'whitespace-nowrap text-micro uppercase tracking-caps',
           props.tone === undefined ? 'text-faint' : TONE_TEXT[props.tone],
         )}
       >
@@ -518,8 +538,12 @@ export function MetaCell(props: {
 }): JSX.Element {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <dt className="whitespace-nowrap text-micro text-faint">{props.label}</dt>
-      <dd className="truncate text-label text-text" title={props.title}>
+      {/* Caption stays at the floor; the value it captions does not. This pair
+          is the single most repeated shape in the inspector. */}
+      <dt className="whitespace-nowrap text-micro uppercase tracking-caps text-faint">
+        {props.label}
+      </dt>
+      <dd className="truncate text-body-lg text-text" title={props.title}>
         {props.value}
       </dd>
     </div>
@@ -586,7 +610,7 @@ export function Dialog(props: {
                 {props.title}
               </DialogPrimitive.Title>
               {props.description === undefined ? null : (
-                <DialogPrimitive.Description className="text-label text-muted">
+                <DialogPrimitive.Description className="text-body-lg text-muted">
                   {props.description}
                 </DialogPrimitive.Description>
               )}
@@ -638,16 +662,16 @@ export function ActionRefusal(props: {
       role="alert"
       className="flex flex-col gap-1 rounded-md border border-danger/25 bg-danger-soft px-3 py-2"
     >
-      <span className="flex items-start gap-2 text-label text-text">
+      <span className="flex items-start gap-2 text-body-lg text-text">
         <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden />
         <span>
           {props.title === undefined ? null : <strong className="font-medium">{props.title} </strong>}
           {message}
         </span>
       </span>
-      {action === undefined ? null : <span className="pl-5 text-micro text-muted">{action}</span>}
+      {action === undefined ? null : <span className="pl-5 text-label text-muted">{action}</span>}
       {code === undefined ? null : (
-        <span className="pl-5 font-mono text-micro text-faint">{code}</span>
+        <span className="pl-5 font-mono text-label text-faint">{code}</span>
       )}
     </div>
   );

@@ -1,4 +1,3 @@
-import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import { Info } from 'lucide-react';
 import type { AnalyticsView, MetricBucketView } from '@contracts/index.js';
 import { useProjectSelection } from '../app/project-context';
@@ -13,7 +12,7 @@ import {
 } from '../components/ui';
 import { formatDuration, humanise } from '../lib/format';
 import { stageIndex } from '../lib/stages';
-import { TONE_DOT, runToneOf, taskToneOf } from '../lib/status';
+import { TONE_DOT, magnitudeStep as step, runToneOf, taskToneOf } from '../lib/status';
 
 /**
  * Analytics (UI-25, §84) — the operational questions, asked afterwards.
@@ -238,7 +237,7 @@ function MetricPanel(props: {
                   <span className="truncate text-label capitalize text-text">
                     {props.rename === undefined ? humanise(bucket.key) : props.rename(bucket.key)}
                   </span>
-                  <span className="tabular shrink-0 text-label text-muted">
+                  <span className="tabular shrink-0 text-body-lg text-muted">
                     {props.measure === 'duration'
                       ? formatDuration(bucket.durationMs)
                       : bucket.count}
@@ -253,9 +252,12 @@ function MetricPanel(props: {
                     failures made a stage with one bad call out of twenty-three
                     look entirely red — two dimensions in one mark, and the
                     louder one wins. The failure count below carries that. */}
+                {/* Steel, not violet. Eight rows painted in the accent made the
+                    accent the page's background texture, and magnitude is not a
+                    status — it belongs on the neutral axis. */}
                 <span className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
                   <span
-                    className="block h-full rounded-full bg-primary-bright"
+                    className="block h-full rounded-full bg-scale-4"
                     style={{ width: `${String(Math.max(2, (value / max) * 100))}%` }}
                   />
                 </span>
@@ -275,21 +277,19 @@ function MetricPanel(props: {
   );
 }
 
-const SLICE_COLOURS = [
-  'var(--af-primary-bright)',
-  'var(--af-info)',
-  'var(--af-warning)',
-  'var(--af-success)',
-  'var(--af-danger)',
-];
-
 /**
  * Model distribution, and runner distribution beneath it.
  *
- * The one donut on the page, because share-of-total is what it answers and a
- * part-of-whole is the one shape a ring reads better than a list. Falls back to
- * grouping by runner when no adapter reported a model — common in practice, since
- * a role that pins no model leaves the flag off — and says which grouping it used.
+ * Share-of-total as one stacked bar with its parts labelled directly, not as a
+ * ring. The ring was the only mark on the page where colour was the sole
+ * channel — an 8px dot and a name — which is exactly where the closest pair in
+ * the old palette did the most damage. A stacked bar carries the same
+ * part-of-whole, reads at a glance, and costs a fifth of the height; the ranked
+ * list under it answers "how many" and "how long", which a ring never could.
+ *
+ * Falls back to grouping by runner when no adapter reported a model — common in
+ * practice, since a role that pins no model leaves the flag off — and says which
+ * grouping it used.
  */
 function DistributionPanel(props: { data: AnalyticsView }): JSX.Element {
   const { byModel, byRunner } = props.data;
@@ -318,61 +318,62 @@ function DistributionPanel(props: { data: AnalyticsView }): JSX.Element {
         <Empty title="Not available yet." />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className="h-[84px] w-[84px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-                  <Pie
-                    data={slices}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={24}
-                    outerRadius={41}
-                    paddingAngle={1.5}
-                    stroke="none"
-                    isAnimationActive={false}
-                  >
-                    {slices.map((slice, index) => (
-                      <Cell
-                        key={slice.name}
-                        fill={SLICE_COLOURS[index % SLICE_COLOURS.length] as string}
-                      />
-                    ))}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+          {/* A 2px surface gap between segments, so two adjacent steps of one
+              ramp never read as a single wider segment. */}
+          <span
+            className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full bg-surface-3"
+            role="img"
+            aria-label={`Share of agent calls by ${grouping}: ${slices
+              .map((slice) => `${slice.name} ${String(slice.share)}%`)
+              .join(', ')}`}
+          >
+            {slices.map((slice, index) => (
+              <span
+                key={slice.name}
+                className="block h-full"
+                style={{ width: `${String(slice.share)}%`, background: step(index) }}
+              />
+            ))}
+          </span>
 
-            <ul className="flex min-w-0 flex-1 flex-col gap-1">
-              {slices.slice(0, 5).map((slice, index) => (
-                <li key={slice.name} className="flex items-center gap-1.5 text-label">
+          {/* One list, not a legend plus a list. The first pass named every
+              model twice in the same panel — which is the redundancy this page
+              exists to remove, and a screen reader read it twice. The swatch
+              carries the order back to the bar; the row carries the identity,
+              the share and the count. */}
+          <ul className="flex flex-col">
+            {slices.map((slice, index) => (
+              <li
+                key={slice.name}
+                className="flex items-baseline justify-between gap-2 border-t border-border py-1.5"
+              >
+                <span className="flex min-w-0 items-baseline gap-2">
                   <span
-                    className="h-2 w-2 shrink-0 rounded-full"
-                    style={{ background: SLICE_COLOURS[index % SLICE_COLOURS.length] }}
+                    className="h-2 w-2 shrink-0 rounded-sm"
+                    style={{ background: step(index) }}
                     aria-hidden
                   />
-                  <span className="min-w-0 flex-1 truncate text-text" title={slice.name}>
+                  <span className="truncate text-body-lg text-text" title={slice.name}>
                     {slice.name}
                   </span>
-                  <span className="tabular shrink-0 text-micro text-muted">
-                    {slice.share}% ({slice.value})
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+                </span>
+                <span className="tabular shrink-0 text-body-lg text-muted">
+                  {slice.share}%
+                  <span className="ml-1.5 text-micro text-faint">{slice.value} calls</span>
+                </span>
+              </li>
+            ))}
+          </ul>
 
           {/* Runner distribution as a footnote to the model one, since the same
               runner serves several models and the two answer different questions:
               which model did the work, and which provider actually executed it. */}
           {grouping === 'model' && byRunner.length > 0 ? (
             <div className="flex flex-col gap-1 border-t border-border pt-2.5">
-              <span className="text-micro uppercase tracking-wide text-faint">By runner</span>
+              <span className="text-micro uppercase tracking-caps text-faint">By runner</span>
               {byRunner.map((bucket) => (
                 <span key={bucket.key} className="flex items-baseline justify-between gap-2">
-                  <span className="truncate text-label text-text">{bucket.key}</span>
+                  <span className="truncate text-body-lg text-text">{bucket.key}</span>
                   <span className="tabular shrink-0 text-micro text-muted">
                     {bucket.count} · {formatDuration(bucket.durationMs)}
                   </span>
@@ -401,8 +402,8 @@ function RunsPerProject(props: { data: AnalyticsView }): JSX.Element {
           {rows.map((entry) => (
             <li key={entry.projectId} className="flex flex-col gap-1 py-1.5">
               <span className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-label text-text">{entry.projectId}</span>
-                <span className="tabular shrink-0 text-label text-muted">{entry.total}</span>
+                <span className="truncate text-body-lg text-text">{entry.projectId}</span>
+                <span className="tabular shrink-0 text-body-lg text-muted">{entry.total}</span>
               </span>
               {/* Stacked by status, so "twelve runs" and "twelve runs, four
                   failed" do not look the same. */}
@@ -453,7 +454,7 @@ function TasksByState(props: { data: AnalyticsView }): JSX.Element {
                     {humanise(state)}
                   </span>
                 </span>
-                <span className="tabular shrink-0 text-label text-muted">
+                <span className="tabular shrink-0 text-body-lg text-muted">
                   {count}
                   <span className="ml-1.5 text-micro text-faint">
                     {total === 0 ? '' : `${String(Math.round((count / total) * 100))}%`}

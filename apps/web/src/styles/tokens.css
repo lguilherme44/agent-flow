@@ -34,16 +34,36 @@
   /* Below the page, and only for the terminal. */
   --af-sunken: #04070d;
 
-  /* Borders carry the structure, so they are the thing that had to get more
-     subtle rather than less: at 0.14 alpha every box shouted. */
-  --af-border: rgba(148, 163, 184, 0.1);
-  --af-border-strong: rgba(148, 163, 184, 0.2);
+  /* Borders carry the structure, and the first pass made them carry nothing.
+     Measured: 0.1 alpha composites #19202c over `--af-surface`, which is
+     1.16:1 — below the ~1.5:1 where a human perceives an edge at all. The
+     brightness step between adjacent surfaces is 1.04:1, so neither channel of
+     structure was working and every region boundary was invisible.
+
+     The earlier note here read "at 0.14 alpha every box shouted", and that
+     diagnosis was wrong: 0.14 composites to 1.23:1, which cannot shout. What
+     shouted was the six-point lightness step between `bg` and `surface` — cut
+     in the same pass, so the wrong variable took the blame.
+
+     0.3 → #343d4b = 1.72:1. Perceptible, and still nowhere near loud. The
+     surfaces stay where they are: that part of the thesis was right. */
+  --af-border: rgba(148, 163, 184, 0.3);
+  --af-border-strong: rgba(148, 163, 184, 0.45); /* #495362 = 2.43:1 */
 
   --af-text: #f1f5f9;
   /* Muted must stay readable. The previous #94a3b8 on a lighter surface was
      fine; on this ground it needed lifting, or a metadata row became decoration. */
-  --af-text-muted: #a3b0c2;
-  --af-text-faint: #6b7a90;
+  --af-text-muted: #a3b0c2; /* 8.59:1 on `--af-surface` */
+  /* Was #6b7a90, which measured 4.51:1 on the page ground and then 4.33, 4.15
+     and 3.87:1 on surface, surface-2 and surface-3 — failing WCAG AA on all
+     three of the surfaces it actually renders on: column headers, count-strip
+     labels, inspector metadata labels, table sub-lines, the sidebar's Projects
+     heading, breadcrumb ancestors. It renders at 11px, which makes the failure
+     worse rather than equal.
+
+     #7d8b9f measures 5.68 / 5.46 / 5.24 / 4.88:1 across bg, surface, surface-2
+     and surface-3. Passes on all four, and stays clearly subordinate to muted. */
+  --af-text-faint: #7d8b9f;
 
   --af-primary: #7c3aed;
   --af-primary-bright: #9366f5;
@@ -58,6 +78,37 @@
   --af-warning-soft: rgba(251, 191, 36, 0.12);
   --af-danger: #f87171;
   --af-danger-soft: rgba(248, 113, 113, 0.12);
+
+  /**
+   * Magnitude, on its own axis — a low-chroma steel ramp, monotonic in
+   * lightness (UI-29).
+   *
+   * The analytics page used to encode magnitude with the four semantic signal
+   * colours plus violet, which §67 forbids in words ("never used as brand
+   * colour, and never used for decoration") and which fails on measurement.
+   * Validating that five-slot palette against this surface:
+   *
+   *   - adjacent pair #3b82f6 ↔ #9366f5 — ΔE 1.1 under deuteranopia
+   *   - the same pair — ΔE 11.7 under normal vision, below the floor of 15
+   *   - amber, green and red sit outside the lightness band, so visual weight
+   *     followed hue rather than data
+   *
+   * That pair is not incidental: it is `info` against `primary-bright`, which is
+   * the distinction the whole status system rests on — a running *task* is blue,
+   * a running *stage* is violet. The Three-Channel Status Rule carries the app
+   * everywhere the ring, the glyph and the word are present. The donut was the
+   * one place they were not, so it was the worst possible home for the closest
+   * pair in the palette.
+   *
+   * Magnitude now reads as brightness on a neutral axis, which returns all four
+   * signal hues to meaning exactly one thing. Distinguished from `info` by
+   * chroma rather than by lightness.
+   */
+  --af-scale-1: #2a3a4d; /* 1.63:1 on `--af-surface` */
+  --af-scale-2: #3b5268; /* 2.33:1 */
+  --af-scale-3: #4e6b85; /* 3.39:1 */
+  --af-scale-4: #6488a4; /* 5.04:1 */
+  --af-scale-5: #7ea6c2; /* 7.31:1 */
 
   --af-radius-sm: 6px;
   --af-radius-md: 8px;

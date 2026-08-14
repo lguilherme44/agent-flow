@@ -87,7 +87,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                     onFilterChange({ ...filter, query: changed.target.value });
                   }}
                   placeholder="id, title or requirement"
-                  className="w-full bg-transparent text-label text-text placeholder:text-faint focus:outline-none"
+                  className="w-full bg-transparent text-body-lg text-text placeholder:text-faint focus:outline-none"
                 />
               </label>
 
@@ -148,20 +148,29 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
           // lose.
           <table className="w-full table-fixed border-collapse text-body">
             <thead className="sticky top-0 z-10 bg-surface">
-              <tr className="border-b border-border text-micro uppercase tracking-wide text-faint">
+              <tr className="border-b border-border text-micro uppercase tracking-caps text-faint">
                 <Th className="w-[108px] pl-4">ID</Th>
                 <Th>Task</Th>
                 {/* Dropped below 1280. The brief calls complexity discreet, and
                     it is the column the title can most afford to take back —
                     at 1200 the title was down to 84px, which reads "Criar en…". */}
-                <Th className="hidden w-[82px] xl:table-cell">Complexity</Th>
+                {/* 90, not 82. `tracking-caps` is 0.88px per character at 11px
+                    against `tracking-wide`'s 0.275px, so "COMPLEXITY" grew to a
+                    measured 89px of content inside a column sized for the old
+                    tracking — it overflowed into "AGENT / MODEL" and the two
+                    headers touched. The no-clipping guard cannot see this: a
+                    `th` carries no `truncate`, so it has no `text-overflow` for
+                    the guard to key on. */}
+                <Th className="hidden w-[90px] xl:table-cell">Complexity</Th>
                 {/* Runner, model and effort in one cell. Effort had its own
                     column and cost the title 64px it could not spare — and the
                     reference stacks all three anyway, because they are one fact
                     about how the task was executed. */}
                 <Th className="w-[132px]">Agent / Model</Th>
                 <Th className="w-[100px]">Status</Th>
-                <Th className="w-[64px] text-right">Duration</Th>
+                {/* 74, for the same reason as Complexity above: "DURATION"
+                    measures 73px of content under `tracking-caps`. */}
+                <Th className="w-[74px] text-right">Duration</Th>
                 <Th className="w-7 pr-2 text-right">
                   <span className="sr-only">Actions</span>
                 </Th>
@@ -213,7 +222,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                           solid={task.state === 'completed'}
                           spin={task.state === 'running'}
                         />
-                        <span className="tabular whitespace-nowrap text-label font-medium">
+                        <span className="tabular whitespace-nowrap text-body-lg font-medium">
                           {task.id}
                         </span>
                       </span>
@@ -228,7 +237,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                           />
                         )}
                         <span className="flex min-w-0 flex-col">
-                          <span className="truncate text-label text-text" title={task.title}>
+                          <span className="truncate text-body-lg text-text" title={task.title}>
                             {task.title}
                           </span>
                           {/* Titled, because this line genuinely may not fit:
@@ -266,7 +275,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                           a third line cost the table two visible rows. */}
                       <span className="flex min-w-0 flex-col">
                         <span
-                          className="truncate text-label text-text"
+                          className="truncate text-body-lg text-text"
                           title={task.model ?? 'model not reported'}
                         >
                           {task.model ?? 'no model'}
@@ -290,6 +299,13 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                       </span>
                     </Td>
 
+                    {/* `text-label`, matching the same column in `RunsPage` and
+                        for the same measured reason: `w-[64px]` was sized against
+                        the longest real duration at 12px, and `formatDuration`
+                        can return `12h34m`, which does not fit at 14px. No
+                        fixture task runs that long, so the no-clipping guard has
+                        nothing to catch here — which makes it the latent half of
+                        a defect the `/runs` column exposed. */}
                     <Td className="tabular text-right text-label text-muted">
                       {formatDuration(task.durationMs)}
                     </Td>
@@ -333,7 +349,7 @@ function Td(props: {
   title?: string | undefined;
 }): JSX.Element {
   return (
-    <td className={cx('px-2 py-2', props.className)} title={props.title}>
+    <td className={cx('px-2 py-2.5', props.className)} title={props.title}>
       {props.children}
     </td>
   );

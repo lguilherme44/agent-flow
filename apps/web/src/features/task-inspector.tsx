@@ -66,7 +66,7 @@ export function TaskInspector(props: {
                 <span className="tabular text-label font-semibold text-text">{task.id}</span>
                 <span
                   className={cx(
-                    'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium uppercase tracking-wide',
+                    'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium uppercase tracking-caps',
                     TONE_BG[tone],
                     TONE_TEXT[tone],
                   )}
@@ -78,7 +78,7 @@ export function TaskInspector(props: {
                 {task.title}
               </h2>
               {task.description === '' ? null : (
-                <p className="line-clamp-2 text-label text-muted">{task.description}</p>
+                <p className="line-clamp-2 text-body-lg text-muted">{task.description}</p>
               )}
             </div>
 
@@ -111,17 +111,17 @@ export function TaskInspector(props: {
 
           {/* Provenance that differs from intent is the part worth seeing. */}
           {task.fallback === undefined ? null : (
-            <p className="rounded-sm bg-warning-soft px-2 py-1 text-micro text-warning">
+            <p className="rounded-sm bg-warning-soft px-2 py-1 text-label text-warning">
               Ran on {task.runner} after {task.fallback.from} returned {task.fallback.errorCode}.
             </p>
           )}
           {task.reasoningClamped === true ? (
-            <p className="rounded-sm bg-warning-soft px-2 py-1 text-micro text-warning">
+            <p className="rounded-sm bg-warning-soft px-2 py-1 text-label text-warning">
               Ran below the configured effort: {task.runner} does not support it.
             </p>
           ) : null}
           {task.correctiveFor === undefined ? null : (
-            <p className="rounded-sm bg-primary-soft px-2 py-1 text-micro text-text">
+            <p className="rounded-sm bg-primary-soft px-2 py-1 text-body-lg text-text">
               Corrective task, from a {task.correctiveFor.findingType} finding in{' '}
               {task.correctiveFor.stage.replace(/-/g, ' ')}.
             </p>
@@ -213,7 +213,7 @@ function LogsTab(props: { task: TaskDetailView }): JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3.5">
       <div className="flex shrink-0 items-center justify-between gap-2">
-        <span className="text-micro uppercase tracking-wide text-faint">Output</span>
+        <span className="text-micro uppercase tracking-caps text-faint">Output</span>
         <div className="flex items-center gap-1">
           <ToolbarButton
             active={autoScroll}
@@ -246,7 +246,7 @@ function LogsTab(props: { task: TaskDetailView }): JSX.Element {
         ref={(node) => {
           if (node !== null && autoScroll) node.scrollTop = node.scrollHeight;
         }}
-        className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-sunken p-2.5 font-mono text-micro leading-[1.6]"
+        className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-sunken p-2.5 font-mono text-label leading-[1.6]"
       >
         {lines.length === 0 ? (
           <p className="text-faint">No log for this task yet.</p>
@@ -482,13 +482,19 @@ function TestsTab(props: { task: TaskDetailView }): JSX.Element {
             </Badge>
           </div>
           <span className="text-micro text-faint">{formatDuration(command.durationMs)}</span>
+          {/* `text-label`, which is what stderr below already takes and what the
+              log console in `LogsTab` takes. Two `pre` blocks in one block of
+              output, at two sizes, made stdout look like the louder of the two
+              when stderr is the one that matters. 14px mono in a 160px box also
+              shows seven lines where 12px shows eleven, and command output is
+              the one surface where the line you need is rarely the first. */}
           {command.stdout === '' ? null : (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-sm border border-border bg-sunken p-2 font-mono text-micro text-muted">
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-sm border border-border bg-sunken p-2 font-mono text-label text-muted">
               {command.stdout}
             </pre>
           )}
           {command.stderr === '' ? null : (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-sm border border-danger/25 bg-danger-soft p-2 font-mono text-micro text-danger">
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-sm border border-danger/25 bg-danger-soft p-2 font-mono text-label text-danger">
               {command.stderr}
             </pre>
           )}
@@ -506,7 +512,7 @@ function ContextTab(props: { task: TaskDetailView }): JSX.Element {
     <div className="flex flex-col gap-3.5">
       <Section title="Requirements">
         {task.requirements.length === 0 ? (
-          <p className="text-label text-muted">
+          <p className="text-body-lg text-muted">
             {task.correctiveFor === undefined
               ? 'None recorded.'
               : 'None — this task answers a finding, not a requirement.'}
@@ -524,7 +530,7 @@ function ContextTab(props: { task: TaskDetailView }): JSX.Element {
 
       <Section title="Dependencies">
         {task.dependencies.length === 0 ? (
-          <p className="text-label text-muted">None.</p>
+          <p className="text-body-lg text-muted">None.</p>
         ) : (
           <div className="flex flex-wrap gap-1">
             {task.dependencies.map((dependency) => (
@@ -535,7 +541,7 @@ function ContextTab(props: { task: TaskDetailView }): JSX.Element {
       </Section>
 
       <Section title="Acceptance criteria">
-        <ul className="flex list-disc flex-col gap-0.5 pl-4 text-label text-muted">
+        <ul className="flex list-disc flex-col gap-0.5 pl-4 text-body-lg text-muted">
           {task.acceptanceCriteria.map((criterion) => (
             <li key={criterion}>{criterion}</li>
           ))}
@@ -557,7 +563,7 @@ function ContextTab(props: { task: TaskDetailView }): JSX.Element {
 function Section(props: { title: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-1.5">
-      <h3 className="text-micro uppercase tracking-wide text-faint">{props.title}</h3>
+      <h3 className="text-micro uppercase tracking-caps text-faint">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -642,7 +648,7 @@ function RetryTask(props: {
         <div className="flex flex-col gap-3">
           {/* The three consequences, because none of them is visible from a button
               label and all three are irreversible. */}
-          <ul className="flex list-disc flex-col gap-1 pl-4 text-label text-muted">
+          <ul className="flex list-disc flex-col gap-1 pl-4 text-body-lg text-muted">
             <li>
               {props.task.finishedAt === undefined
                 ? 'Whatever this task produced is replaced when it runs again.'
@@ -655,7 +661,7 @@ function RetryTask(props: {
           </ul>
 
           {canForce ? (
-            <label className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-soft px-3 py-2 text-micro text-text">
+            <label className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-soft px-3 py-2 text-body-lg text-text">
               <input
                 type="checkbox"
                 checked={force}

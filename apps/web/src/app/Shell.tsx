@@ -121,7 +121,7 @@ function Sidebar(): JSX.Element {
         >
           <span className="h-2 w-2 rounded-full bg-white" />
         </span>
-        <span className="text-body-lg font-bold uppercase tracking-wider">Agent Flow</span>
+        <span className="text-body-lg font-bold uppercase tracking-caps">Agent Flow</span>
       </div>
 
       <nav className="flex flex-col gap-px px-2 py-2" aria-label="Sections">
@@ -131,7 +131,7 @@ function Sidebar(): JSX.Element {
       </nav>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <h2 className="px-2 pb-1 pt-3 text-micro uppercase tracking-wider text-faint">
+        <h2 className="px-2 pb-1 pt-3 text-micro uppercase tracking-caps text-faint">
           Projects
         </h2>
 
@@ -175,7 +175,7 @@ function Sidebar(): JSX.Element {
                         a name and a coloured dot answers "which of these needs
                         me" only by hovering each one in turn. */}
                     <span className="flex min-w-0 flex-col">
-                      <span className="truncate text-label">{project.name}</span>
+                      <span className="truncate text-body-lg">{project.name}</span>
                       <span className="truncate text-micro text-faint">
                         {project.currentRunId === null || project.status === null
                           ? 'idle'
@@ -216,7 +216,7 @@ function SidebarLink(props: { entry: NavEntry }): JSX.Element {
       <span
         title={`${entry.label} is not implemented yet`}
         aria-disabled="true"
-        className="flex cursor-not-allowed items-center gap-2 rounded-sm px-2 py-1.5 text-label text-faint opacity-55"
+        className="flex cursor-not-allowed items-center gap-2 rounded-sm px-2 py-1.5 text-body-lg text-faint opacity-55"
       >
         <Icon className="h-4 w-4 shrink-0" aria-hidden />
         {entry.label}
@@ -232,18 +232,40 @@ function SidebarLink(props: { entry: NavEntry }): JSX.Element {
       end
       className={({ isActive }) =>
         cx(
-          'relative flex items-center gap-2 rounded-sm px-2 py-1.5 text-label',
-          // A perceptible purple surface, not a marginally different grey. The
-          // active destination is the one thing in the sidebar that must be
-          // findable without reading.
+          'relative flex items-center gap-2 rounded-sm px-2 py-1.5 text-body-lg',
+          // Perceptible without reading — the requirement is right — but not a
+          // full-strength violet fill.
+          //
+          // `bg-primary` at full strength existed in exactly three places, and
+          // all three were permanent chrome: the wordmark disc, this nav item,
+          // and the primary button. Meanwhile the running pipeline step — the
+          // one thing the One Violet Rule exists to mark — got only
+          // `bg-primary-soft`, the same 16% wash that nine other sites use, five
+          // of them meaning "selected". The accent shouted at the furniture and
+          // whispered at the signal.
+          //
+          // A 2px full-strength rail plus the soft wash and full text colour is
+          // findable at a glance without being the loudest element on a screen
+          // where nothing is happening (PRODUCT.md, principle 5). Full-strength
+          // violet now goes to the running step.
           isActive
-            ? 'bg-primary font-medium text-white'
+            ? 'bg-primary-soft font-medium text-text'
             : 'text-muted hover:bg-surface-2 hover:text-text',
         )
       }
     >
-      <Icon className="h-4 w-4 shrink-0" aria-hidden />
-      {entry.label}
+      {({ isActive }) => (
+        <>
+          {isActive ? (
+            <span
+              className="absolute inset-y-1.5 left-0 w-0.5 rounded-r bg-primary-bright"
+              aria-hidden
+            />
+          ) : null}
+          <Icon className="h-4 w-4 shrink-0" aria-hidden />
+          {entry.label}
+        </>
+      )}
     </NavLink>
   );
 }
@@ -369,7 +391,7 @@ function Topbar(): JSX.Element {
 
   return (
     <header className="flex h-topbar shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-page">
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-label">
+      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-body-lg">
         <Crumb>{workspaceName()}</Crumb>
         <Separator />
         <Crumb>{projectName}</Crumb>
@@ -390,7 +412,7 @@ function Topbar(): JSX.Element {
           href="https://github.com/lguilherme44/agent-flow#readme"
           target="_blank"
           rel="noreferrer"
-          className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2.5 text-label text-muted hover:border-border-strong hover:text-text"
+          className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2.5 text-body-lg text-muted hover:border-border-strong hover:text-text"
         >
           <BookOpen className="h-3.5 w-3.5" aria-hidden />
           Docs
@@ -476,7 +498,7 @@ function LiveIndicator(props: { connection: ConnectionState }): JSX.Element {
   return (
     <span
       className={cx(
-        'flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-label',
+        'flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-body-lg',
         connection === 'live'
           ? 'border-success/30 bg-success-soft text-success'
           : connection === 'polling'

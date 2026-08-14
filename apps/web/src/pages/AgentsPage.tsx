@@ -95,7 +95,7 @@ export function AgentsPage(): JSX.Element {
         <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full table-fixed border-collapse text-body">
             <thead className="sticky top-0 z-10 bg-surface">
-              <tr className="border-b border-border text-micro uppercase tracking-wide text-faint">
+              <tr className="border-b border-border text-micro uppercase tracking-caps text-faint">
                 {/* Role is the flexible column, and every other one is fixed.
                     The long value in this table is not a model name — those are
                     bounded — it is the list of prompts a role runs, which is

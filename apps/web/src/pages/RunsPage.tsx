@@ -183,7 +183,7 @@ function RunsBody(props: {
           id, and the feature title is what people are reading. */}
       <table className="w-full table-fixed border-collapse text-body">
         <thead className="sticky top-0 z-10 bg-surface">
-          <tr className="border-b border-border text-micro uppercase tracking-wide text-faint">
+          <tr className="border-b border-border text-micro uppercase tracking-caps text-faint">
             {/* Fixed widths measured against the longest real value in each
                 column, not guessed. Status is the widest because
                 "WAITING FOR APPROVAL" is a status this tool genuinely has, and a
@@ -197,7 +197,10 @@ function RunsBody(props: {
             <Th className="w-[176px]">Status</Th>
             <Th className="w-[118px]">Progress</Th>
             <Th className="w-[116px]">Started</Th>
-            <Th className="hidden w-[64px] pr-4 text-right xl:table-cell">Duration</Th>
+            {/* 74: "DURATION" measures 73px of content under `tracking-caps`,
+                against 64 sized for the old tracking. Same defect as the task
+                table's two headers. */}
+            <Th className="hidden w-[74px] pr-4 text-right xl:table-cell">Duration</Th>
           </tr>
         </thead>
         <tbody>
@@ -232,7 +235,7 @@ function RunRow(props: { run: RunSummaryView; showProject: boolean }): JSX.Eleme
               clicked. */}
           <Link
             to={runHref(run.runId, run.projectId)}
-            className="tabular whitespace-nowrap text-label font-medium text-text hover:text-primary-bright"
+            className="tabular whitespace-nowrap text-body-lg font-medium text-text hover:text-primary-bright"
           >
             {run.runId}
           </Link>
@@ -264,7 +267,7 @@ function RunRow(props: { run: RunSummaryView; showProject: boolean }): JSX.Eleme
 
       <Td>
         <span className="flex min-w-0 flex-col">
-          <span className="truncate text-label text-text" title={run.feature}>
+          <span className="truncate text-body-lg text-text" title={run.feature}>
             {run.feature}
           </span>
           <span className="truncate text-micro text-faint">
@@ -274,7 +277,7 @@ function RunRow(props: { run: RunSummaryView; showProject: boolean }): JSX.Eleme
       </Td>
 
       <Td className="hidden xl:table-cell">
-        <span className="truncate text-label text-muted">{humanise(run.stage)}</span>
+        <span className="truncate text-body-lg text-muted">{humanise(run.stage)}</span>
       </Td>
 
       <Td>
@@ -315,6 +318,19 @@ function RunRow(props: { run: RunSummaryView; showProject: boolean }): JSX.Eleme
         </span>
       </Td>
 
+      {/* These two stay at `text-label`, and the reason is the header comment
+          above: the widths were measured against the longest real value *at
+          12px*. Promoting them to 14px without re-measuring clipped
+          "Yesterday 14:02" inside `w-[116px]` — caught by the no-clipping guard
+          in `visual/dashboard.spec.ts`, which fires on a cell that carries
+          `truncate` and no `title`, i.e. one that promised to fit.
+
+          Widening instead would have been the wrong trade: `Feature` is the only
+          flexible column, so every pixel here comes out of the run title, which
+          is the value people actually read. `Duration` gets the same treatment
+          for the same reason — `formatDuration` can return `12h34m`, which does
+          not fit `w-[64px]` at 14px either, and it only passed because no
+          fixture run lasts ten hours. */}
       <Td className="tabular truncate text-label text-muted">
         {formatWhenCompact(run.createdAt)}
       </Td>
@@ -334,7 +350,7 @@ function Th(props: { children: ReactNode; className?: string }): JSX.Element {
 }
 
 function Td(props: { children: ReactNode; className?: string }): JSX.Element {
-  return <td className={cx('px-2 py-2', props.className)}>{props.children}</td>;
+  return <td className={cx('px-2 py-2.5', props.className)}>{props.children}</td>;
 }
 
 function messageOf(error: unknown): string | undefined {

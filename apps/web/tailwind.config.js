@@ -45,6 +45,12 @@ export default {
         'warning-soft': 'var(--af-warning-soft)',
         danger: 'var(--af-danger)',
         'danger-soft': 'var(--af-danger-soft)',
+        /* Magnitude, not status. A chart series never takes a semantic colour. */
+        'scale-1': 'var(--af-scale-1)',
+        'scale-2': 'var(--af-scale-2)',
+        'scale-3': 'var(--af-scale-3)',
+        'scale-4': 'var(--af-scale-4)',
+        'scale-5': 'var(--af-scale-5)',
       },
       borderRadius: {
         sm: 'var(--af-radius-sm)',
@@ -72,16 +78,42 @@ export default {
       },
       fontSize: {
         /* §67 plus the two the reference needs and the spec omits: an 11px
-           micro label for table sub-lines and metadata captions, and a 24px
-           run id, which is the largest thing on the screen. */
-        micro: ['11px', { lineHeight: '14px' }],
-        label: ['12px', { lineHeight: '16px' }],
+           micro label for table sub-lines and metadata captions, and a large
+           run id, which is the largest thing on the screen.
+
+           **The scale has eight steps; it used to render as two.** Measured
+           across the `.tsx` files under `src`, tests excluded: 109 uses of
+           `text-micro` and 85 of `text-label` — 194 of 209 size applications,
+           93% of the
+           interface, in two steps one pixel apart. The other six shared 15
+           uses, and `title`, `metric` and `hero` appeared once each in the
+           whole app. A hero at 24px over a floor at 11–12px with nothing
+           between them gives the eye one landing point per screen and then a
+           uniform grey field.
+
+           This file is half the fix. `body-lg` was always here at 14px and was
+           used three times; it is now the working size of the interface — table
+           primary values, nav items, metadata values, button text — and the
+           four steps above it moved up so the gaps stay legible. `micro` is
+           back to being micro: badges, column headers, unit suffixes.
+           Promoting the call sites is the other half. */
+        micro: ['11px', { lineHeight: '14px', letterSpacing: '0.02em' }],
+        label: ['12px', { lineHeight: '16px', letterSpacing: '0.01em' }],
         body: ['13px', { lineHeight: '18px' }],
+        /* The working size. Everything a person reads a value from. */
         'body-lg': ['14px', { lineHeight: '20px' }],
-        section: ['15px', { lineHeight: '22px' }],
-        title: ['17px', { lineHeight: '24px' }],
-        hero: ['24px', { lineHeight: '30px' }],
-        metric: ['18px', { lineHeight: '24px' }],
+        section: ['16px', { lineHeight: '22px', letterSpacing: '-0.005em' }],
+        title: ['18px', { lineHeight: '24px', letterSpacing: '-0.01em' }],
+        hero: ['26px', { lineHeight: '32px', letterSpacing: '-0.025em' }],
+        metric: ['22px', { lineHeight: '28px', letterSpacing: '-0.015em' }],
+      },
+      letterSpacing: {
+        /* The floor for upper-case, and it is not a preference: below 0.06em the
+           counters collide on screen and the word reads as cramped. Every
+           upper-case string in the app used `tracking-wide` (0.025em) or
+           `tracking-wider` (0.05em) — column headers, the wordmark, status
+           badges, the Projects heading. All of them were under it. */
+        caps: '0.08em',
       },
     },
   },

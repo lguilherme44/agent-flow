@@ -78,7 +78,7 @@ export function RunHeader(props: {
 
           {/* One row, hairline-separated. Six stacked label/value pairs was the
               same information at four times the height. */}
-          <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-label text-muted">
+          <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-body-lg text-muted">
             {/* Dropped below 1440, where the row would otherwise wrap and cost
                 the table 20px. It is also the least informative of the four:
                 in local mode it always says "you". */}
@@ -108,8 +108,10 @@ export function RunHeader(props: {
               recovered from anywhere else on the screen. */}
           <div className="flex w-40 flex-col gap-1 wide:w-52">
             <div className="flex items-baseline justify-between">
-              <span className="text-micro text-faint">Overall progress</span>
-              <span className="tabular text-label font-medium text-text">
+              <span className="text-micro uppercase tracking-caps text-faint">
+                Overall progress
+              </span>
+              <span className="tabular text-body-lg font-medium text-text">
                 {formatPercent(run.progress)}
               </span>
             </div>
@@ -164,8 +166,8 @@ export function RunHeader(props: {
             <li key={`${degradation.kind}:${degradation.reason}`} className="flex gap-2">
               <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
               <div className="flex min-w-0 flex-col">
-                <span className="text-label text-text">{degradation.reason}</span>
-                <span className="text-micro text-muted">{degradation.impact}</span>
+                <span className="text-body-lg text-text">{degradation.reason}</span>
+                <span className="text-label text-muted">{degradation.impact}</span>
               </div>
             </li>
           ))}
@@ -310,7 +312,13 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
             {...(stage.durationMs === undefined
               ? { decorative: true }
               : { showLabel: false })}
-            solid={stage.status === 'completed'}
+            // Solid when running, too — and this is the whole accent fix. The
+            // running step is what the One Violet Rule exists to mark, and it
+            // was getting a 16% wash while full-strength violet sat on the
+            // wordmark and the active nav item. `solid` with the `primary` tone
+            // resolves to `bg-primary`: the only full-strength violet on the
+            // page besides the wordmark, and the only one that means "right now".
+            solid={stage.status === 'completed' || running}
             spin={running}
           />
           <span className="flex min-w-0 flex-col">

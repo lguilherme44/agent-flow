@@ -129,7 +129,7 @@ function ProjectsBody(props: {
     <div className="min-h-0 flex-1 overflow-auto">
       <table className="w-full table-fixed border-collapse text-body">
         <thead className="sticky top-0 z-10 bg-surface">
-          <tr className="border-b border-border text-micro uppercase tracking-wide text-faint">
+          <tr className="border-b border-border text-micro uppercase tracking-caps text-faint">
             <th scope="col" className="w-[220px] px-2 py-1.5 pl-4 text-left font-medium">
               Project
             </th>

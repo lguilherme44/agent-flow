@@ -1,7 +1,7 @@
-import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import { ArrowRight, Check, CircleAlert, FileText, X } from 'lucide-react';
 import type { ArtifactView, RunDetailView, TaskSummaryView } from '@contracts/index.js';
 import type { TelemetryResponse } from '../lib/api';
+import { magnitudeStep as step } from '../lib/status';
 import { Card, Empty, Progress, cx } from '../components/ui';
 import { formatDuration, formatWhen } from '../lib/format';
 import { countTasks } from './run-overview';
@@ -127,9 +127,22 @@ export function ApprovalCard(props: {
               aria-hidden
             />
             <div className="flex min-w-0 flex-col">
+              {/* APPROVED / WAITING / REJECTED is the answer this card exists
+                  to give, and the line under it is the timestamp — so the
+                  status has to be the larger of the two. The first pass had it
+                  the wrong way round (12px status over a 14px caption), and
+                  fixing that by promoting the status overflowed the card: this
+                  row has a fixed height, and the `Review the plan` button below
+                  lost its label to it.
+
+                  So the pair is corrected downwards instead: 12 over 11, which
+                  is the ordering the rest of the app uses for a value over its
+                  caption and the vertical budget this card was built with.
+                  `tracking-caps` stays — 0.025em was under the 0.06em floor
+                  this pass set for upper-case everywhere else. */}
               <span
                 className={cx(
-                  'text-label font-semibold tracking-wide',
+                  'text-label font-semibold uppercase tracking-caps',
                   state.tone === 'success' && 'text-success',
                   state.tone === 'warning' && 'text-warning',
                   state.tone === 'danger' && 'text-danger',
@@ -164,10 +177,13 @@ export function ApprovalCard(props: {
                 run={run}
                 label="Review the plan"
               />
+              {/* `text-micro`: this is a caption *beside* a control, in the
+                  narrowest card of the row. At 14px it stopped fitting on the
+                  line and pushed the button into truncating its own label. */}
               <span className="truncate text-micro text-muted">verdict, findings and hash</span>
             </div>
           ) : (
-            <span className="truncate text-micro text-muted">
+            <span className="truncate text-label text-muted">
               Request a revision to produce a plan the review can pass.
             </span>
           )}
@@ -277,14 +293,6 @@ function Row(props: {
   );
 }
 
-const SLICE_COLOURS = [
-  'var(--af-primary-bright)',
-  'var(--af-info)',
-  'var(--af-warning)',
-  'var(--af-success)',
-  'var(--af-danger)',
-];
-
 /**
  * Model usage (§78, UI-19).
  *
@@ -348,54 +356,49 @@ export function ModelUsageCard(props: { telemetry: TelemetryResponse | undefined
         </span>
       }
     >
-      <div className="flex h-full min-h-0 items-center gap-3 py-1">
-        {/* A thick ring rather than a default thin one, so the chart reads as a
-            deliberate piece of the design instead of a library placed in a box. */}
-        {/* Smaller below 1440, where the legend needs the width more than the
-            ring needs the diameter. */}
-        <div className="h-[68px] w-[68px] shrink-0 wide:h-[84px] wide:w-[84px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-              <Pie
-                data={data}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                innerRadius={24}
-                outerRadius={41}
-                paddingAngle={1.5}
-                stroke="none"
-                isAnimationActive={false}
-              >
-                {data.map((entry, index) => (
-                  <Cell
-                    key={entry.name}
-                    fill={SLICE_COLOURS[index % SLICE_COLOURS.length] as string}
-                  />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
+      {/* Was a ring in the same five semantic hues the analytics donut used, and
+          it fails for the same measured reason: the adjacent pair `info` ↔
+          `primary-bright` scores ΔE 1.1 under deuteranopia. In a 68px ring with
+          an 8px legend dot, hue is the only channel there is.
 
-        <ul className="flex min-w-0 flex-1 flex-col gap-1">
+          One stacked bar carries the same part-of-whole in a tenth of the
+          height, on the neutral magnitude ramp, with every part labelled
+          directly — which also gives this card back the vertical space the ring
+          was taking from the model names. */}
+      <div className="flex h-full min-h-0 flex-col justify-center gap-2 py-1">
+        <span
+          className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full bg-surface-3"
+          role="img"
+          aria-label={`Share of executions by ${grouping}: ${data
+            .map((entry) => `${entry.name} ${String(entry.share)}%`)
+            .join(', ')}`}
+        >
+          {data.map((entry, index) => (
+            <span
+              key={entry.name}
+              className="block h-full"
+              style={{ width: `${String(entry.share)}%`, background: step(index) }}
+            />
+          ))}
+        </span>
+
+        <ul className="flex min-w-0 flex-col">
           {data.slice(0, 4).map((entry, index) => (
-            <li key={entry.name} className="flex items-center gap-1.5">
+            <li key={entry.name} className="flex items-center gap-1.5 py-0.5">
               <span
-                className="h-2 w-2 shrink-0 rounded-full"
-                style={{ background: SLICE_COLOURS[index % SLICE_COLOURS.length] }}
+                className="h-2 w-2 shrink-0 rounded-sm"
+                style={{ background: step(index) }}
                 aria-hidden
               />
-              <span className="min-w-0 flex-1 truncate text-label text-text" title={entry.name}>
+              <span className="min-w-0 flex-1 truncate text-body-lg text-text" title={entry.name}>
                 {entry.name}
               </span>
-              <span className="tabular shrink-0 text-label text-muted">
+              <span className="tabular shrink-0 text-body-lg text-muted">
                 {entry.share}%{' '}
                 {/* The execution count drops below 1280, where the 24px it
                     takes is 24px the model name does not have. The share is
                     the number the legend exists for. */}
-                <span className="hidden text-faint xl:inline">({entry.value})</span>
+                <span className="hidden text-micro text-faint xl:inline">({entry.value})</span>
               </span>
             </li>
           ))}

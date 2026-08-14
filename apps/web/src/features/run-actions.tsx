@@ -228,7 +228,7 @@ function JobIndicator(props: { job: ActionJobView }): JSX.Element {
         </span>
       }
     >
-      <span className="flex h-7 items-center gap-1.5 rounded-sm border border-primary-border bg-primary-soft px-2.5 text-label text-text">
+      <span className="flex h-7 items-center gap-1.5 rounded-sm border border-primary-border bg-primary-soft px-2.5 text-body-lg text-text">
         <Loader2 className="h-3.5 w-3.5 animate-spin text-primary-bright" aria-hidden />
         {job.kind === 'start' ? 'Running…' : 'Re-planning…'}
       </span>
@@ -305,7 +305,7 @@ function ApprovalDialog(props: {
       {gate.isError ? (
         <ActionRefusal error={gate.error} title="The gate could not be read:" />
       ) : data === undefined ? (
-        <p className="text-label text-muted">Reading the plan and its review…</p>
+        <p className="text-body-lg text-muted">Reading the plan and its review…</p>
       ) : (
         <GateBody
           gate={data}
@@ -372,7 +372,7 @@ function GateBody(props: {
       {gate.warnings.length === 0 ? null : (
         <ul className="flex flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-3 py-2">
           {gate.warnings.map((warning) => (
-            <li key={warning} className="flex gap-2 text-label text-text">
+            <li key={warning} className="flex gap-2 text-body-lg text-text">
               <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
               {warning}
             </li>
@@ -382,7 +382,7 @@ function GateBody(props: {
 
       {review === undefined || review.findings.length === 0 ? null : (
         <section className="flex flex-col gap-1.5">
-          <h3 className="text-micro uppercase tracking-wide text-faint">
+          <h3 className="text-micro uppercase tracking-caps text-faint">
             Review findings ({review.findings.length})
           </h3>
           <ul className="flex flex-col divide-y divide-border">
@@ -404,8 +404,8 @@ function GateBody(props: {
                   </Badge>
                   <span className="truncate text-micro text-faint">{finding.type}</span>
                 </span>
-                <span className="text-label text-text">{finding.description}</span>
-                <span className="text-micro text-muted">→ {finding.suggestedAction}</span>
+                <span className="text-body-lg text-text">{finding.description}</span>
+                <span className="text-body-lg text-muted">→ {finding.suggestedAction}</span>
               </li>
             ))}
           </ul>
@@ -413,7 +413,7 @@ function GateBody(props: {
       )}
 
       {gate.approved ? (
-        <p className="flex items-center gap-1.5 text-label text-success">
+        <p className="flex items-center gap-1.5 text-body-lg text-success">
           <Check className="h-3.5 w-3.5" aria-hidden />
           Already approved{gate.approvedAt === undefined ? '' : ` ${formatWhen(gate.approvedAt)}`}.
         </p>
@@ -421,7 +421,7 @@ function GateBody(props: {
 
       {gate.refusal === undefined ? null : (
         <div className="flex flex-col gap-2 rounded-md border border-danger/25 bg-danger-soft px-3 py-2">
-          <span className="text-label text-text">
+          <span className="text-body-lg text-text">
             The gate refuses this plan: {humanise(gate.refusal.kind)}.
           </span>
 
@@ -429,7 +429,7 @@ function GateBody(props: {
               act rather than a click that happens to be in the right place — the
               override says what it costs before it is available. */}
           {forcible ? (
-            <label className="flex items-start gap-2 text-micro text-muted">
+            <label className="flex items-start gap-2 text-body-lg text-muted">
               <input
                 type="checkbox"
                 checked={props.override}
@@ -511,12 +511,12 @@ function RevisionDialog(props: {
             }}
             rows={6}
             placeholder="TASK-004 is too large — split the service from the scheduling rules."
-            className="w-full rounded-md border border-border bg-sunken px-3 py-2 text-label text-text placeholder:text-faint focus:border-border-strong focus:outline-none"
+            className="w-full rounded-md border border-border bg-sunken px-3 py-2 text-body-lg text-text placeholder:text-faint focus:border-border-strong focus:outline-none"
           />
         </label>
 
         {props.approved ? (
-          <p className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-soft px-3 py-2 text-label text-text">
+          <p className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning-soft px-3 py-2 text-body-lg text-text">
             <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
             This run is approved. Requesting a revision clears that approval — the gate
             is granted to one specific plan, and this produces a different one.
@@ -572,7 +572,7 @@ function RejectDialog(props: {
     >
       <div className="flex flex-col gap-3">
         <label className="flex flex-col gap-1.5">
-          <span className="text-micro uppercase tracking-wide text-faint">
+          <span className="text-micro uppercase tracking-caps text-faint">
             Reason (optional)
           </span>
           <textarea
@@ -582,7 +582,7 @@ function RejectDialog(props: {
             }}
             rows={3}
             placeholder="The SDD misread the requirement."
-            className="w-full rounded-md border border-border bg-sunken px-3 py-2 text-label text-text placeholder:text-faint focus:border-border-strong focus:outline-none"
+            className="w-full rounded-md border border-border bg-sunken px-3 py-2 text-body-lg text-text placeholder:text-faint focus:border-border-strong focus:outline-none"
           />
         </label>
         <ActionRefusal error={reject.error} title="Rejection refused:" />
