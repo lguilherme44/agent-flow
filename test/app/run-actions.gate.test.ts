@@ -406,3 +406,97 @@ describe('a run executes in the mode it was born in (M2-03, I-13)', () => {
     expect(after.approved).toBe(false);
   });
 });
+
+
+/**
+ * Puts a task in a state, by the route §22 actually provides.
+ *
+ * Every interesting state is reached *through* `running` — a task cannot go from
+ * `queued` to `completed` any more than a real one can. Walking the legal path
+ * rather than writing the file directly is what keeps this helper from setting up
+ * a state the product could never produce.
+ */
+async function putTaskIn(
+  store: StateStore,
+  runId: string,
+  state: 'running' | 'completed' | 'interrupted' | 'review_required' | 'failed' | 'blocked',
+  attempts: number,
+): Promise<void> {
+  const walk = state === 'running' ? ['running' as const] : ['running' as const, state];
+  for (const step of walk) {
+    await store.updateRun(runId, (current) => ({
+      ...current,
+      tasks: [{ id: 'TASK-001', state: step, attempts }],
+    }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// §16 — the two states a retry must not touch (M2-08)
+// ---------------------------------------------------------------------------
+
+describe('a retry names the states it cannot act on (§16, M2-08)', () => {
+  it('refuses a completed task, and does not open it with --force', async () => {
+    // `completed` is terminal (§22), and in worktree mode it means *integrated*
+    // (I-3). A second attempt over work the integration branch already holds is a
+    // contradiction rather than a gate, so `--force` deliberately does not open it.
+    const { store, deps, runId } = await project();
+    await putTaskIn(store, runId, 'completed', 1);
+    const before = await store.loadRun(runId);
+
+    for (const force of [false, true]) {
+      const retried = await retryTask(deps, runId, 'TASK-001', { force });
+
+      expect(refusal(retried).code, `force: ${String(force)}`).toBe('task_completed');
+      // The refusal is a *value*, not the raw illegal-transition error the store
+      // would have thrown — and nothing was written on the way to producing it.
+      expect(await store.loadRun(runId)).toEqual(before);
+    }
+  });
+
+  it('refuses a running task and points at the command that reconciles it', async () => {
+    // What a killed process leaves. The attempt may have left a validated tree, a
+    // receipt, a marker — even a merge — and requeuing would throw all of it away
+    // and pay for the agent again (§17.3 windows 3–7). Recovery decides first.
+    const { store, deps, runId } = await project();
+    await putTaskIn(store, runId, 'running', 1);
+    const before = await store.loadRun(runId);
+
+    const retried = await retryTask(deps, runId, 'TASK-001');
+
+    expect(refusal(retried).code).toBe('task_in_flight');
+    expect(await store.loadRun(runId)).toEqual(before);
+    // The action has to name the command that resolves it, or the refusal is a
+    // dead end: `agent-flow run` reconciles durable evidence before requeuing.
+    if (retried.ok) return;
+    expect(retried.error.action).toContain('agent-flow run');
+  });
+
+  it('still requeues an interrupted task, because recovery already judged it', async () => {
+    // `interrupted` is what recovery leaves for a task whose work was *not*
+    // observed — no artifact, nothing durable. That one is a person's to retry, and
+    // `interrupted → queued` is exactly the transition §22 provides for it.
+    const { store, deps, runId } = await project();
+    await putTaskIn(store, runId, 'interrupted', 1);
+
+    const retried = await retryTask(deps, runId, 'TASK-001');
+
+    expect(retried.ok).toBe(true);
+    expect((await store.loadRun(runId)).tasks[0]?.state).toBe('queued');
+    // The requeue spends nothing: the next dispatch is what moves the counter
+    // (M2-00.2), which is what keeps `retry.maxAttempts` meaning dispatches.
+    expect((await store.loadRun(runId)).tasks[0]?.attempts).toBe(1);
+  });
+
+  it('requeues a task an integration conflict left for review', async () => {
+    // §15's path: the run halted, a person resolved the overlap, and the retry is
+    // how the resolved plan gets another attempt — against the moved head.
+    const { store, deps, runId } = await project();
+    await putTaskIn(store, runId, 'review_required', 1);
+
+    const retried = await retryTask(deps, runId, 'TASK-001');
+
+    expect(retried.ok).toBe(true);
+    expect((await store.loadRun(runId)).tasks[0]?.state).toBe('queued');
+  });
+});

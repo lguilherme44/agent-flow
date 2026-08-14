@@ -100,6 +100,14 @@ export type ActionErrorCode =
   | 'approval_stale'
   | 'no_such_task'
   | 'task_blocked'
+  // MVP 2 §16. Two states a retry must not touch, and neither was named before
+  // M2-07 gave them meaning: `completed` is terminal — in worktree mode it means
+  // *integrated* (I-3) — and `running` is what a dead process leaves, which
+  // recovery may still be able to finish from durable evidence (§17.3). Both used
+  // to reach `StateStore` and come back as a raw illegal-transition error, which
+  // is a stack trace where a person needed a sentence.
+  | 'task_completed'
+  | 'task_in_flight'
   | 'attempts_exhausted'
   | 'unmet_dependencies'
   | 'run_busy'
@@ -689,6 +697,43 @@ async function requeue(
       code: 'no_such_task',
       message: `${taskId} has not run in ${runId}.`,
       action: 'Only a task that has already been attempted can be retried.',
+    });
+  }
+
+  // §16: a retry is a *new* attempt on a new branch in a new worktree. Two states
+  // cannot receive one, and both refuse before anything is written.
+  //
+  // **`completed` is terminal, and in worktree mode it means integrated** (I-3).
+  // A second attempt over work that is already on the integration branch would
+  // produce a marker for a task the branch has, and `--force` deliberately does
+  // not open it: this is not a gate a person is entitled to overrule, it is a
+  // contradiction.
+  if (entry.state === 'completed') {
+    return failed({
+      code: 'task_completed',
+      message:
+        `${taskId} is already completed${
+          state.isolationMode === 'worktree' ? ', which in worktree mode means integrated' : ''
+        }.`,
+      action:
+        'Retrying finished work would build a second attempt for something the run already ' +
+        'has. Revise the plan and start a new run if the work needs to change.',
+    });
+  }
+
+  // **`running` is what a killed process leaves behind, and it is recovery's.**
+  // The attempt may have left a validated tree, a receipt and a marker — even a
+  // merge — and requeuing would throw all of it away and pay for the agent again
+  // (§17.3 windows 3–7). `agent-flow run` reconciles it first and requeues only
+  // what has no durable evidence.
+  if (entry.state === 'running') {
+    return failed({
+      code: 'task_in_flight',
+      message:
+        `${taskId} is marked running, so either it is executing now or a process died holding it.`,
+      action:
+        'Run `agent-flow run`: it reconciles what the interrupted attempt actually left before ' +
+        'requeuing anything, so a validated attempt is finished rather than repeated.',
     });
   }
 
