@@ -1,5 +1,16 @@
-import { AlertTriangle, Clock, GitBranch, ListTree, Timer, User } from 'lucide-react';
+import {
+  AlertTriangle,
+  Clock,
+  GitBranch,
+  GitMerge,
+  ListTree,
+  Split,
+  Timer,
+  User,
+} from 'lucide-react';
 import type {
+  IsolationDetailView,
+  IntegrationConflictView,
   RunDetailView,
   StageViewResponse,
   TaskSummaryView,
@@ -38,12 +49,183 @@ export function RunPanel(props: {
         asGraph={props.asGraph}
         onToggleGraph={props.onToggleGraph}
       />
+      {/* Between the header and the pipeline, because it belongs to neither: the
+          header says what this run is, the pipeline says how far it got, and this
+          says *how* it is being executed. Hairline-separated on the same surface
+          rather than a card of its own — §21.2 is facts about the run, not a
+          second widget. */}
+      <IsolationStrip isolation={props.run.isolation} conflicts={props.run.integrationConflicts} />
       {props.stages === undefined ? null : (
         <div className="border-t border-border px-4 py-3">
           <StagePipeline stages={props.stages} />
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Whether this run has anything to say about how it isolates its tasks.
+ *
+ * A sequential run whose configuration agrees with it, asking for one task at a
+ * time, is the default and says nothing — printing `isolation: none` on every run
+ * would be the tool describing machinery its user never turned on, and §21.2's
+ * failure semantics ask for omission over invention in the same spirit.
+ *
+ * Three things break that silence, and each is a question a person actually asks:
+ * an isolated run has a branch and a merge count nothing else reports; a clamp is
+ * the answer to "why is this still running one task at a time"; and a `note` is
+ * §21.4's case — the run's mode and the current configuration disagree, and
+ * without the sentence the tool looks broken to the one user who did exactly what
+ * the documentation said.
+ */
+export function hasIsolationToShow(
+  isolation: IsolationDetailView | undefined,
+  conflicts: readonly IntegrationConflictView[] = [],
+): boolean {
+  if (isolation === undefined) return false;
+
+  return (
+    isolation.mode === 'worktree' ||
+    isolation.parallelism.clamped ||
+    isolation.note !== undefined ||
+    conflicts.length > 0
+  );
+}
+
+/**
+ * §21.2 as one row: mode, parallelism, integration branch, tasks integrated.
+ *
+ * **Ref names and object ids only.** A worktree path is a machine fact the
+ * attempt artifact deliberately does not store (§7.2) and the read model
+ * deliberately does not resolve (§21.3), so there is nothing here to leak — and
+ * this component takes ids and strings from the server rather than composing any
+ * of them, because merge logic and Git live on the server (I-8).
+ *
+ * `tasksIntegrated` is shown for an isolated run and only there. In worktree mode
+ * `completed` means integrated (I-3), so this is how many tasks have their work
+ * *on the branch* rather than how many agents finished — a distinction the
+ * header's own task count cannot make.
+ */
+function IsolationStrip(props: {
+  isolation: IsolationDetailView | undefined;
+  conflicts: readonly IntegrationConflictView[];
+}): JSX.Element | null {
+  const { isolation } = props;
+  if (isolation === undefined || !hasIsolationToShow(isolation, props.conflicts)) return null;
+
+  const { parallelism } = isolation;
+  const isolated = isolation.mode === 'worktree';
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border px-4 py-2.5">
+      <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-body-lg text-muted">
+        <Fact
+          icon={<Split className="h-3.5 w-3.5" />}
+          label="Isolation"
+          value={isolation.mode}
+        />
+        <Divider />
+        {/* Both numbers when they differ, one when they do not. "4" and "1" are
+            different facts, and a reader who saw only the configured one would
+            plan around it. */}
+        <Fact
+          icon={<ListTree className="h-3.5 w-3.5" />}
+          label="Tasks at once"
+          value={
+            parallelism.clamped
+              ? `${String(parallelism.effective)} of ${String(parallelism.requested)}`
+              : String(parallelism.effective)
+          }
+        />
+
+        {isolated ? (
+          <>
+            <Divider />
+            <Fact
+              icon={<GitMerge className="h-3.5 w-3.5" />}
+              label="Integrated"
+              value={String(isolation.tasksIntegrated)}
+            />
+          </>
+        ) : null}
+
+        {isolation.integrationBranch === undefined ? null : (
+          <>
+            <Divider />
+            {/* A ref name, which §26.1 rule 4 permits in a response and §19.3
+                prints for the person who has to merge it. Monospace because it is
+                something to copy, truncated because it can be 60 characters. */}
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="text-faint" aria-hidden>
+                <GitBranch className="h-3.5 w-3.5" />
+              </span>
+              <dt className="text-faint">Branch</dt>
+              <dd
+                className="min-w-0 truncate font-mono text-label text-text"
+                title={isolation.integrationBranch}
+              >
+                {isolation.integrationBranch}
+              </dd>
+            </div>
+          </>
+        )}
+
+        {isolation.integrationHead === undefined ? null : (
+          <>
+            <Divider />
+            <div className="flex items-center gap-1.5">
+              <dt className="text-faint">Head</dt>
+              <dd
+                className="tabular font-mono text-label text-text"
+                title={isolation.integrationHead}
+              >
+                {isolation.integrationHead.slice(0, 8)}
+              </dd>
+            </div>
+          </>
+        )}
+      </dl>
+
+      {/* §21.4. The reduction and the disagreement are two different sentences
+          and both are on the record: one says the number could not be honoured,
+          the other says which of two settings applies to this run. */}
+      {parallelism.reason === undefined ? null : (
+        <p className="text-label text-muted">{parallelism.reason}</p>
+      )}
+      {isolation.note === undefined ? null : (
+        <p className="flex items-start gap-2 text-label text-warning">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0">{isolation.note}</span>
+        </p>
+      )}
+
+      {/* §15, from the event the integrator wrote. The paths are
+          repository-relative, which is exactly why they may be shown (§21.3). */}
+      {props.conflicts.length === 0 ? null : (
+        <ul className="flex flex-col gap-1 rounded-md border border-danger/25 bg-danger-soft px-2.5 py-2">
+          {props.conflicts.map((conflict) => (
+            <li key={`${conflict.task}:${String(conflict.attempt)}`} className="flex gap-2">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden />
+              <div className="flex min-w-0 flex-col">
+                <span className="text-body-lg text-text">
+                  {conflict.task} attempt {conflict.attempt} conflicted with the integration branch
+                </span>
+                <span className="truncate font-mono text-micro text-muted" title={conflict.paths.join(', ')}>
+                  {conflict.paths.join(', ')}
+                </span>
+                {conflict.previouslyIntegrated === undefined ? null : (
+                  <span className="text-label text-muted">
+                    {conflict.previouslyIntegrated} integrated first and moved the head — usually the
+                    answer to why.
+                  </span>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

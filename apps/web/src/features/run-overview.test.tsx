@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import type {
+  IsolationDetailView,
   RunDetailView,
   StageViewResponse,
   TaskSummaryView,
@@ -26,8 +27,30 @@ const run = (overrides: Partial<RunDetailView> = {}): RunDetailView => ({
   progress: 50,
   startedAt: '2026-08-10T19:34:00.000Z',
   durationMs: 2_482_000,
+  // The default a run gets: sequential, one task at a time, configuration in
+  // agreement. Overridable, because the isolation strip below is entirely about
+  // the runs where one of those three is not true.
+  isolation: SEQUENTIAL,
+  integrationConflicts: [],
   ...overrides,
 });
+
+/** Nothing to say: no clamp, no disagreement, no branch. */
+const SEQUENTIAL: IsolationDetailView = {
+  mode: 'none',
+  parallelism: { requested: 1, effective: 1, clamped: false },
+  tasksIntegrated: 0,
+};
+
+/** A run executing in worktree mode, two tasks at a time, one already merged. */
+const ISOLATED: IsolationDetailView = {
+  mode: 'worktree',
+  parallelism: { requested: 2, effective: 2, clamped: false },
+  integrationBranch: 'agent-flow/AF-2026-001-9f2c1a/integration',
+  integrationHead: 'c0ffee1234567890abcdef1234567890abcdef12',
+  planningBase: 'ba5eba11ba5eba11ba5eba11ba5eba11ba5eba11',
+  tasksIntegrated: 1,
+};
 
 const STAGES: StageViewResponse[] = [
   {
@@ -262,4 +285,153 @@ describe('RunPanel', () => {
     expect(screen.queryByRole('list', { name: 'Pipeline' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
+});
+
+/**
+ * M2-10 — §21.2's facts, and §21.3's silences.
+ *
+ * These are behaviour tests rather than snapshots on purpose: what matters is
+ * *which* runs get told about isolation and which are left alone, and a snapshot
+ * would pass whichever of those it happened to record.
+ */
+describe('the isolation strip', () => {
+  const panel = (overrides: Partial<RunDetailView>): void => {
+    render(
+      withTooltips(
+        <RunPanel
+          run={run(overrides)}
+          stages={undefined}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
+  };
+
+  it('says nothing on a sequential run whose configuration agrees with it', () => {
+    // The default. A line reading `isolation: none` on every run would be the
+    // tool describing machinery nobody turned on, and it would push the task
+    // table down a row to do it.
+    panel({});
+
+    expect(screen.queryByText('Isolation')).toBeNull();
+    expect(screen.queryByText('Tasks at once')).toBeNull();
+  });
+
+  it('says nothing on a legacy run either, while its configuration is unchanged', () => {
+    // §25.2: a run that predates MVP 2 did not answer `none`, it predates the
+    // question. There is nothing to report and nothing to promote.
+    panel({ isolation: { ...SEQUENTIAL, mode: 'legacy' } });
+
+    expect(screen.queryByText('Isolation')).toBeNull();
+  });
+
+  it('reports the branch, the head and how many tasks are on it for an isolated run', () => {
+    panel({ isolation: ISOLATED });
+
+    expect(screen.getByText('Isolation')).toBeInTheDocument();
+    expect(screen.getByText('worktree')).toBeInTheDocument();
+    expect(screen.getByText('agent-flow/AF-2026-001-9f2c1a/integration')).toBeInTheDocument();
+    // Abbreviated for the eye, whole in the tooltip — it is something to copy.
+    expect(screen.getByText('c0ffee12')).toHaveAttribute('title', ISOLATED.integrationHead);
+    // I-3 as a number: how many tasks have their work on the branch, which is a
+    // different question from how many agents finished.
+    expect(within(integratedFact()).getByText('1')).toBeInTheDocument();
+  });
+
+  it('reports one number when the requested concurrency was honoured', () => {
+    panel({ isolation: ISOLATED });
+
+    expect(within(concurrencyFact()).getByText('2')).toBeInTheDocument();
+  });
+
+  it('reports both numbers, and why, when the requested concurrency was not honoured', () => {
+    // The answer to "why is this still running one task at a time". A reader who
+    // saw only the configured 4 would plan around a number that never applied.
+    panel({
+      isolation: {
+        ...SEQUENTIAL,
+        parallelism: {
+          requested: 4,
+          effective: 1,
+          clamped: true,
+          reason: 'parallelism.maxTasks is 4, and task workspace isolation does not exist yet',
+        },
+      },
+    });
+
+    expect(within(concurrencyFact()).getByText('1 of 4')).toBeInTheDocument();
+    expect(
+      screen.getByText(/parallelism.maxTasks is 4, and task workspace isolation/),
+    ).toBeInTheDocument();
+  });
+
+  it('says which of two disagreeing settings applies to this run', () => {
+    // §21.4. Without this sentence the tool looks broken to the one user who did
+    // exactly what the documentation said and then wondered why it had no effect.
+    const note =
+      'this run was created in worktree mode; your configuration now says ' +
+      'useWorktrees: false — it does not apply to this run';
+
+    panel({ isolation: { ...ISOLATED, note } });
+
+    expect(screen.getByText(note)).toBeInTheDocument();
+  });
+
+  it('names the conflicting paths and the sibling that moved the head', () => {
+    panel({
+      isolation: ISOLATED,
+      integrationConflicts: [
+        {
+          task: 'TASK-004',
+          attempt: 1,
+          paths: ['src/recurrence.ts', 'src/index.ts'],
+          previouslyIntegrated: 'TASK-003',
+        },
+      ],
+    });
+
+    expect(
+      screen.getByText('TASK-004 attempt 1 conflicted with the integration branch'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('src/recurrence.ts, src/index.ts')).toBeInTheDocument();
+    expect(screen.getByText(/TASK-003 integrated first and moved the head/)).toBeInTheDocument();
+  });
+
+  it('shows a conflict even on a run the server no longer calls isolated', () => {
+    // A conflict is a recorded fact about what happened, and a run whose mode the
+    // server could not resolve still had one. Omitting it because the mode came
+    // back `legacy` would hide the only evidence of why the run halted.
+    panel({
+      isolation: { ...SEQUENTIAL, mode: 'legacy' },
+      integrationConflicts: [{ task: 'TASK-002', attempt: 2, paths: ['src/a.ts'] }],
+    });
+
+    expect(
+      screen.getByText('TASK-002 attempt 2 conflicted with the integration branch'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders no filesystem path, because it is handed none', () => {
+    // §21.3 and §26.1 rule 4. The guarantee is structural — the read model has no
+    // worktree path to give — and this is the assertion that would fail first if a
+    // future field smuggled one in through `note` or a conflict path.
+    panel({
+      isolation: ISOLATED,
+      integrationConflicts: [{ task: 'TASK-004', attempt: 1, paths: ['src/recurrence.ts'] }],
+    });
+
+    const text = document.body.textContent ?? '';
+    expect(text).not.toMatch(/\/(Users|home|tmp|var)\//);
+    expect(text).not.toMatch(/\.agent-flow\/worktrees/);
+    expect(text).not.toMatch(/[A-Za-z]:\\/);
+  });
+
+  /** The `Tasks at once` pair, addressed through its own term. */
+  const concurrencyFact = (): HTMLElement =>
+    screen.getByText('Tasks at once').parentElement as HTMLElement;
+
+  const integratedFact = (): HTMLElement =>
+    screen.getByText('Integrated').parentElement as HTMLElement;
 });

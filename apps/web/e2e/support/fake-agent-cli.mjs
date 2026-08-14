@@ -24,9 +24,11 @@
  * Environment:
  *   AF_FAKE_LOG   append one JSON line per invocation (dialect, role, argv)
  *   AF_FAKE_IMPL  `completed` (default) | `blocked` | `failed`
+ *   AF_FAKE_HOLD  directory: park every implementation agent until released
  */
 
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // the answers, declared before the flow that reads them
@@ -213,6 +215,44 @@ const dialect = argv[0] === 'exec' ? 'codex' : 'claude';
 
 log({ dialect, role, argv });
 
+/**
+ * The task this invocation is about, from the task the prompt renders.
+ *
+ * Content, not call order — the same rule the role detection above follows, and
+ * for the same reason: a stage that gets cached or repeated must not shift which
+ * task an invocation believes it is. The task arrives as YAML (`toYaml(task)` in
+ * the executor), and `id` is its first key, so the first `id:` line in the prompt
+ * is the task's own.
+ */
+const task = /^\s*id:\s*"?([A-Za-z][\w-]*)"?\s*$/m.exec(prompt)?.[1] ?? 'UNKNOWN';
+/** Set only when AF_FAKE_WRITE is on. What the RESULT then declares. */
+let touched;
+
+if (role === 'IMPLEMENTATION_AGENT') {
+  // A real edit, in whatever directory the agent was spawned in. In worktree mode
+  // that is the task's own isolated checkout, which is the whole point: with no
+  // edit the attempt's tree equals its base, and then the marker, the merge and
+  // the composed integration tree have nothing to be right about.
+  //
+  // Off by default, so every scenario written before this keeps its exact
+  // behaviour and its exact `FILES CHANGED` line.
+  if (process.env['AF_FAKE_WRITE'] !== undefined) {
+    touched = `src/${task.toLowerCase()}.txt`;
+    mkdirSync(dirname(touched), { recursive: true });
+    writeFileSync(touched, `${task} was here\n`);
+  }
+
+  // Parked on evidence, released on evidence. The marker file says "an agent is
+  // inside this task right now" — the fact §21.2's live workspace is derived from
+  // — and the release file is the test's hand on the clock. No sleep decides
+  // anything on either side.
+  const hold = process.env['AF_FAKE_HOLD'];
+  if (hold !== undefined) {
+    writeFileSync(join(hold, `${task}.entered`), `${String(process.pid)}\n`);
+    while (!existsSync(join(hold, 'release'))) pause(25);
+  }
+}
+
 if (role === 'IMPLEMENTATION_AGENT' && process.env['AF_FAKE_IMPL'] === 'failed') {
   // A process that failed, in both dialects: a non-zero exit with an error
   // envelope. The adapters normalise this to `execution_failed`, which is not a
@@ -281,7 +321,13 @@ function answerFor(agentRole, promptText) {
 
     case 'IMPLEMENTATION_AGENT': {
       const outcome = process.env['AF_FAKE_IMPL'] ?? 'completed';
-      return { body: IMPLEMENTATION[outcome] ?? IMPLEMENTATION.completed };
+      const body = IMPLEMENTATION[outcome] ?? IMPLEMENTATION.completed;
+      // The declared file is the file that was actually written, when one was.
+      // A result naming a file the agent did not touch is a fiction the marker
+      // and the integration tree would then disagree with.
+      return {
+        body: touched === undefined ? body : body.replace('src/recurrence.js', touched),
+      };
     }
 
     default:
@@ -289,6 +335,18 @@ function answerFor(agentRole, promptText) {
       // loudly as `invalid_output` rather than be answered with something plausible.
       return { body: `unrecognised prompt (role=${agentRole})` };
   }
+}
+
+/**
+ * A synchronous pause, because this script has no event loop to wait on.
+ *
+ * The hold above is a blocking wait inside a child process whose whole job is to
+ * be somewhere the test can observe. `Atomics.wait` is the only way to hold a
+ * Node thread without spinning a CPU, and spinning one would compete with the
+ * very coordinator the test is measuring.
+ */
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function log(entry) {

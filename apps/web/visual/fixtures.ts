@@ -120,6 +120,17 @@ export const RUN: RunDetailView = {
   progress: 33,
   startedAt: STARTED,
   durationMs: 2_482_000,
+  // A sequential run whose configuration agrees with it and which asked for one
+  // task at a time. That combination is what the isolation strip stays silent
+  // about (§21.2 omits rather than invents), which is why the reference
+  // screenshots are unchanged by M2-10: the strip has nothing to report on a run
+  // that turned none of this on.
+  isolation: {
+    mode: 'none',
+    parallelism: { requested: 1, effective: 1, clamped: false },
+    tasksIntegrated: 0,
+  },
+  integrationConflicts: [],
 };
 
 /** Six done, one in flight, two ahead — the shape the brief asks for. */

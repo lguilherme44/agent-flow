@@ -288,14 +288,39 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                     </Td>
 
                     <Td>
-                      <span
-                        className={cx(
-                          'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium',
-                          TONE_BG[tone],
-                          TONE_TEXT[tone],
-                        )}
-                      >
-                        {taskLabel(task.state)}
+                      <span className="flex min-w-0 flex-col items-start gap-0.5">
+                        <span
+                          className={cx(
+                            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium',
+                            TONE_BG[tone],
+                            TONE_TEXT[tone],
+                          )}
+                        >
+                          {taskLabel(task.state)}
+                        </span>
+                        {/* §21.2's two derived facts, and the only place on this
+                            screen where `running` is not the whole story.
+
+                            "Awaiting merge" is the state `TaskState` has no name
+                            for and the one a person watching a parallel run most
+                            needs: the attempt is validated, its marker is not on
+                            the integration branch, and `completed` would be a lie
+                            until it is (I-3). It wins over the workspace note
+                            because it is the later fact — the agent has already
+                            exited — and because 84px of column holds one line.
+
+                            Absent entirely in sequential mode, where the server
+                            omits both: a run with no worktrees has no workspace to
+                            report and nothing waiting to be merged. */}
+                        {task.awaitingIntegration === true ? (
+                          <span className="whitespace-nowrap text-micro text-warning">
+                            awaiting merge
+                          </span>
+                        ) : task.workspaceActive === true ? (
+                          <span className="whitespace-nowrap text-micro text-faint">
+                            in worktree
+                          </span>
+                        ) : null}
                       </span>
                     </Td>
 

@@ -114,3 +114,55 @@ describe('how a task ended', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+/**
+ * M2-10 — where a task's validated tree landed, and where it has not (§21.2).
+ */
+describe('integration provenance', () => {
+  const INTEGRATION = {
+    attempt: 2,
+    branch: 'agent-flow/AF-2026-001-9f2c1a/integration',
+    marker: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+    mergeCommit: 'ffff6666aaaa7777bbbb8888cccc9999dddd0000',
+    validatedTree: '1111aaaa2222bbbb3333cccc4444dddd5555eeee',
+    integratedAt: '2026-08-10T20:11:00.000Z',
+  } as const;
+
+  it('says a validated attempt is not completed until it is merged', () => {
+    // The state `TaskState` has no name for, and the one that matters most while a
+    // parallel run is in flight: the work is done and the merge is what is
+    // outstanding. Saying "completed" here would release dependents against a
+    // branch their dependency's work is not on (I-3).
+    show(task({ state: 'running', awaitingIntegration: true }));
+
+    expect(screen.getByText('TASK-004 is validated and waiting to be merged.')).toBeInTheDocument();
+    expect(screen.getByText(/completed means integrated/)).toBeInTheDocument();
+  });
+
+  it('shows the marker, the merge and the validated tree once it has landed', () => {
+    show(task({ state: 'completed', attempts: 2, integration: INTEGRATION }));
+
+    expect(screen.getByText('Integration')).toBeInTheDocument();
+    // Abbreviated on screen, whole in the tooltip: these are object ids somebody
+    // pastes into `git show`.
+    expect(screen.getByText('ffff6666')).toHaveAttribute('title', INTEGRATION.mergeCommit);
+    expect(screen.getByText('aaaa1111')).toHaveAttribute('title', INTEGRATION.marker);
+    expect(screen.getByText('1111aaaa')).toHaveAttribute('title', INTEGRATION.validatedTree);
+    expect(screen.getByText(INTEGRATION.branch)).toBeInTheDocument();
+  });
+
+  it('says nothing about integration on a sequential task', () => {
+    show(task({ state: 'completed' }));
+
+    expect(screen.queryByText('Integration')).toBeNull();
+    expect(screen.queryByText(/waiting to be merged/)).toBeNull();
+  });
+
+  it('renders no filesystem path, only refs and object ids', () => {
+    show(task({ state: 'completed', integration: INTEGRATION }));
+
+    const text = document.body.textContent ?? '';
+    expect(text).not.toMatch(/\/(Users|home|tmp|var)\//);
+    expect(text).not.toMatch(/\.agent-flow\/worktrees/);
+  });
+});

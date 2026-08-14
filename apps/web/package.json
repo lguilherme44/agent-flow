@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json",
     "test:visual": "playwright test",
     "test:visual:update": "playwright test --update-snapshots",

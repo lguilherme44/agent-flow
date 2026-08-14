@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +55,27 @@ export interface WorldOptions {
   readonly testCommand?: string;
   /** Skip the planning run, leaving a project with no runs at all. */
   readonly plan?: boolean;
+  /**
+   * Make each project a real Git repository and ask for worktree isolation.
+   *
+   * The whole of M2-10's observability is about a run in worktree mode, and a run
+   * only *enters* that mode at `createRun`, against a repository that satisfies
+   * §6.3 — so there is no way to reach these screens without a real repository
+   * with a real commit and a `.gitignore` that ignores Agent Flow's own state.
+   * Faking `isolationMode` into `state.json` would be the one thing I-13 exists to
+   * make impossible.
+   */
+  readonly worktrees?: boolean;
+  /**
+   * Park the implementation agent until the test releases it.
+   *
+   * The only way to observe a *live* isolated workspace from a browser: the fact
+   * is derived from the task being `running` in worktree mode (§21.2), which is a
+   * window of milliseconds in a run that is allowed to finish. The fake writes a
+   * marker file when it arrives and waits for a release file, so the assertion is
+   * driven by evidence on disk rather than by a sleep.
+   */
+  readonly hold?: boolean;
 }
 
 export interface CliResult {
@@ -79,7 +100,67 @@ export class World {
     readonly fakeLog: string,
     readonly url: string,
     private readonly server: ChildProcess,
+    /**
+     * What the fake coding CLI is told, whoever spawns it.
+     *
+     * Held on the world rather than re-derived per call so the server's runners
+     * and the CLI's runners cannot be given different instructions — a run
+     * started from the browser and one started from a shell have to be the same
+     * run, which is the premise every scenario here rests on.
+     */
+    private readonly fakeEnv: Readonly<Record<string, string>>,
+    /** Where the parked agents leave their markers. Absent unless `hold`. */
+    readonly holdDir?: string,
   ) {}
+
+  /**
+   * Runs `git` in one project and returns its stdout, trimmed.
+   *
+   * The test's own hand on the repository, deliberately outside the product's
+   * `GitCommand`: I-10 says the user's working tree is untouched, and a fingerprint
+   * taken through the same client the product uses would be measuring the product
+   * with its own ruler.
+   */
+  async git(project: string, args: readonly string[]): Promise<string> {
+    const result = await run('git', ['-C', this.dirOf(project), ...args]);
+    if (result.code !== 0) {
+      throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
+    }
+    return result.stdout.trim();
+  }
+
+  /**
+   * Everything about the user's working tree that must be identical afterwards.
+   *
+   * Four separate questions, because `git status` alone answers none of them
+   * conclusively: which commit is checked out, which branch, what the tree looks
+   * like including untracked files, and what is staged.
+   */
+  async workingTree(project: string): Promise<Record<string, string>> {
+    return {
+      head: await this.git(project, ['rev-parse', 'HEAD']),
+      branch: await this.git(project, ['branch', '--show-current']),
+      status: await this.git(project, ['status', '--porcelain', '--untracked-files=all']),
+      index: await this.git(project, ['ls-files', '--stage']),
+    };
+  }
+
+  /** Which tasks have a parked agent in them right now. */
+  async parked(): Promise<string[]> {
+    if (this.holdDir === undefined) return [];
+    try {
+      const names = await readdir(this.holdDir);
+      return names.filter((name) => name.endsWith('.entered')).map((name) => name.slice(0, -8)).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  /** Lets every parked agent, and every agent that arrives later, through. */
+  async release(): Promise<void> {
+    if (this.holdDir === undefined) throw new Error('this world was not built with hold');
+    await writeFile(join(this.holdDir, 'release'), 'go\n', 'utf8');
+  }
 
   /**
    * Runs the real CLI against one project.
@@ -99,7 +180,7 @@ export class World {
     return await run(
       process.execPath,
       [CLI, '--cwd', cwd, '--config', this.globalConfigPath, ...args],
-      { AF_FAKE_LOG: this.fakeLog, ...env },
+      { ...this.fakeEnv, ...env },
     );
   }
 
@@ -152,9 +233,25 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   const fakeLog = join(root, 'runner-calls.jsonl');
   const globalConfigPath = join(root, 'global-config.yaml');
   const projectDirs: Record<string, string> = {};
+  let holdDir: string | undefined;
 
   try {
     await writeFile(globalConfigPath, globalConfig(options), 'utf8');
+
+    if (options.hold === true) {
+      holdDir = join(root, 'hold');
+      await mkdir(holdDir, { recursive: true });
+    }
+
+    // An isolated run gets an agent that genuinely edits its workspace. Without
+    // one the attempt's tree equals its base and the integration tree proves
+    // nothing about composition; with one, `a.txt` and `b.txt` on the same branch
+    // is the whole claim of this milestone.
+    const fakeEnv: Record<string, string> = {
+      AF_FAKE_LOG: fakeLog,
+      ...(options.worktrees === true ? { AF_FAKE_WRITE: '1' } : {}),
+      ...(holdDir === undefined ? {} : { AF_FAKE_HOLD: holdDir }),
+    };
 
     for (const name of names) {
       const dir = join(root, name);
@@ -166,10 +263,12 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       );
       await writeFile(
         join(dir, '.agent-flow/config.yaml'),
-        projectConfig(name, options.testCommand ?? 'node --version'),
+        projectConfig(name, options.testCommand ?? 'node --version', options.worktrees === true),
         'utf8',
       );
       projectDirs[name] = dir;
+
+      if (options.worktrees === true) await initRepository(dir);
     }
 
     // Planned before the server starts, by the CLI, so the run the browser opens
@@ -187,7 +286,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
             'feature',
             `Add weekly recurrence to ${name}`,
           ],
-          { AF_FAKE_LOG: fakeLog },
+          fakeEnv,
         );
 
         if (planned.code !== 0) {
@@ -199,9 +298,18 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     }
 
     const served = options.workspace === true ? root : (projectDirs[first] as string);
-    const { child, url } = await startServer(globalConfigPath, served, root, fakeLog);
+    const { child, url } = await startServer(globalConfigPath, served, root, fakeEnv);
 
-    return new World(root, globalConfigPath, projectDirs, fakeLog, url, child);
+    return new World(
+      root,
+      globalConfigPath,
+      projectDirs,
+      fakeLog,
+      url,
+      child,
+      fakeEnv,
+      ...(holdDir === undefined ? [] : ([holdDir] as const)),
+    );
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
@@ -210,11 +318,46 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A repository the §6.3 preconditions accept.
+ *
+ * Four of them are load-bearing here and each one is a real failure mode rather
+ * than ceremony: there has to be a commit (`repository_has_no_commits`); the
+ * working tree has to be clean, so everything written above is committed
+ * (`working_tree_dirty`); Agent Flow's own run state has to be ignored, or the
+ * run refuses itself over files it just wrote (`agent_flow_state_not_ignored`);
+ * and the identity comes from a local `user.email`, so the machine's own Git
+ * configuration cannot make the test pass or fail.
+ */
+async function initRepository(dir: string): Promise<void> {
+  await writeFile(
+    join(dir, '.gitignore'),
+    '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n',
+    'utf8',
+  );
+
+  const steps: readonly (readonly string[])[] = [
+    ['init', '--initial-branch=main'],
+    ['config', 'user.email', 'e2e@agent-flow.test'],
+    ['config', 'user.name', 'Agent Flow E2E'],
+    ['config', 'commit.gpgsign', 'false'],
+    ['add', '--all'],
+    ['commit', '--message', 'initial commit'],
+  ];
+
+  for (const args of steps) {
+    const result = await run('git', ['-C', dir, ...args]);
+    if (result.code !== 0) {
+      throw new Error(`git ${args.join(' ')} failed in ${dir}: ${result.stderr || result.stdout}`);
+    }
+  }
+}
+
 async function startServer(
   globalConfigPath: string,
   served: string,
   cwd: string,
-  fakeLog: string,
+  fakeEnv: Readonly<Record<string, string>>,
 ): Promise<{ child: ChildProcess; url: string }> {
   const port = await freePort();
 
@@ -223,7 +366,7 @@ async function startServer(
     [CLI, '--config', globalConfigPath, 'ui', served, '--port', String(port), '--no-open'],
     {
       cwd,
-      env: { ...process.env, AF_FAKE_LOG: fakeLog },
+      env: { ...process.env, ...fakeEnv },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Its own process group, so teardown can take the runner children with it.
       detached: process.platform !== 'win32',
@@ -298,13 +441,13 @@ ui:
  * validation command under the test's control: `node --version` exits zero in
  * milliseconds, offline, on every platform.
  */
-function projectConfig(name: string, testCommand: string): string {
+function projectConfig(name: string, testCommand: string, worktrees: boolean): string {
   return `project:
   name: ${name}
   type: node
 commands:
   test: ${testCommand}
-`;
+${worktrees ? 'git:\n  useWorktrees: true\n' : ''}`;
 }
 
 async function waitForHealth(url: string, child: ChildProcess): Promise<boolean> {

@@ -32,6 +32,10 @@ const RUN: RunDetailView = {
   progress: 0,
   startedAt: '2026-08-10T19:34:00.000Z',
   durationMs: 2_482_000,
+  // A sequential run whose configuration agrees with it. The default, and the
+  // shape the actions are about — nothing here is an isolation test.
+  isolation: { mode: 'none', parallelism: { requested: 1, effective: 1, clamped: false }, tasksIntegrated: 0 },
+  integrationConflicts: [],
 };
 
 const PASSING_GATE: ApprovalGateView = {

@@ -127,6 +127,8 @@ export function TaskInspector(props: {
             </p>
           )}
 
+          <TaskIntegration task={task} />
+
           <TaskOutcome task={task} onOpenTests={() => { setTab('tests'); }} />
         </div>
       }
@@ -268,6 +270,72 @@ function LogsTab(props: { task: TaskDetailView }): JSX.Element {
           })
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Where this task's validated tree landed, or why it has not landed yet (§21.2).
+ *
+ * Two facts and one of them has no name in `TaskState`. An attempt that is
+ * validated but unmerged is *not* completed, because in worktree mode `completed`
+ * means integrated (I-3) — and this panel is where somebody watching a parallel
+ * run finds out that the work is done and the merge is what is outstanding.
+ *
+ * When the merge has happened, the provenance is the answer to "is this really my
+ * code": the marker commit, the merge commit and the tree that was validated. All
+ * three are object ids and the branch is a ref name — which §26.1 rule 4 permits
+ * in a response, and which the server never accepts back. **No filesystem path
+ * appears, because the read model has none to give** (§7.2, §21.3).
+ *
+ * Absent entirely in sequential mode, where the server omits both.
+ */
+function TaskIntegration(props: { task: TaskDetailView }): JSX.Element | null {
+  const { task } = props;
+
+  if (task.awaitingIntegration === true) {
+    return (
+      <Notice
+        tone="info"
+        title={`${task.id} is validated and waiting to be merged.`}
+        consequence={
+          'Its attempt passed validation and its marker is not on the integration branch yet, ' +
+          'so it is not completed: in worktree mode completed means integrated.'
+        }
+      />
+    );
+  }
+
+  if (task.integration === undefined) return null;
+
+  return (
+    <div className="flex flex-col gap-1 rounded-sm border border-border bg-surface-2 px-2 py-1.5">
+      <span className="text-micro uppercase tracking-caps text-faint">Integration</span>
+      <dl className="grid grid-cols-3 gap-x-3 gap-y-1.5">
+        <MetaCell label="Attempt" value={String(task.integration.attempt)} />
+        <MetaCell
+          label="Merge"
+          value={task.integration.mergeCommit.slice(0, 8)}
+          title={task.integration.mergeCommit}
+        />
+        <MetaCell
+          label="Marker"
+          value={task.integration.marker.slice(0, 8)}
+          title={task.integration.marker}
+        />
+        <MetaCell
+          label="Validated tree"
+          value={task.integration.validatedTree.slice(0, 8)}
+          title={task.integration.validatedTree}
+        />
+        <MetaCell label="Merged" value={formatTime(task.integration.integratedAt)} />
+      </dl>
+      <span
+        className="truncate font-mono text-micro text-muted"
+        title={task.integration.branch}
+      >
+        {task.integration.branch}
+      </span>
     </div>
   );
 }

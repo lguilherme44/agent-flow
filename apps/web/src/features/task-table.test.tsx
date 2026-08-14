@@ -162,3 +162,95 @@ describe('TaskTable', () => {
     expect(screen.getByRole('group', { name: 'Filter by status' })).toBeInTheDocument();
   });
 });
+
+/**
+ * M2-10 — the two derived facts of §21.2 that the status chip cannot carry.
+ *
+ * `running` is the whole story in sequential mode and is not in worktree mode: a
+ * task can be running with a live workspace, or finished-and-validated with
+ * nothing merged. Only the second of those is a lie waiting to happen, because
+ * `completed` means integrated (I-3).
+ */
+describe('isolated task states in the table', () => {
+  it('says nothing extra in sequential mode, where the server sends neither fact', () => {
+    render(<Table tasks={TASKS} />);
+
+    expect(screen.queryByText('awaiting merge')).toBeNull();
+    expect(screen.queryByText('in worktree')).toBeNull();
+  });
+
+  it('marks a running task that owns a live workspace', () => {
+    render(<Table tasks={[task({ id: 'TASK-002', state: 'running', workspaceActive: true })]} />);
+
+    expect(screen.getByText('RUNNING')).toBeInTheDocument();
+    expect(screen.getByText('in worktree')).toBeInTheDocument();
+  });
+
+  it('marks a validated attempt whose marker is not on the branch yet', () => {
+    render(
+      <Table tasks={[task({ id: 'TASK-002', state: 'running', awaitingIntegration: true })]} />,
+    );
+
+    expect(screen.getByText('awaiting merge')).toBeInTheDocument();
+  });
+
+  it('prefers awaiting-merge over the workspace note when both are true', () => {
+    // Both can hold at once — the task is still `running` while its validated
+    // attempt waits for the merge — and the later fact is the one that changes
+    // what a person does next.
+    render(
+      <Table
+        tasks={[
+          task({
+            id: 'TASK-002',
+            state: 'running',
+            workspaceActive: true,
+            awaitingIntegration: true,
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('awaiting merge')).toBeInTheDocument();
+    expect(screen.queryByText('in worktree')).toBeNull();
+  });
+
+  it('drops both once the task is integrated', () => {
+    render(
+      <Table
+        tasks={[
+          task({
+            id: 'TASK-002',
+            state: 'completed',
+            integration: {
+              attempt: 1,
+              branch: 'agent-flow/AF-2026-001-9f2c1a/integration',
+              marker: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+              mergeCommit: 'ffff6666aaaa7777bbbb8888cccc9999dddd0000',
+              validatedTree: '1111aaaa2222bbbb3333cccc4444dddd5555eeee',
+              integratedAt: '2026-08-10T20:11:00.000Z',
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+    expect(screen.queryByText('awaiting merge')).toBeNull();
+    expect(screen.queryByText('in worktree')).toBeNull();
+  });
+
+  it('renders no filesystem path for an isolated task', () => {
+    // §21.3: the table receives ref names and object ids, and the workspace is a
+    // boolean rather than a location. There is nothing here to leak.
+    render(
+      <Table
+        tasks={[task({ id: 'TASK-002', state: 'running', workspaceActive: true, attempts: 2 })]}
+      />,
+    );
+
+    const text = document.body.textContent ?? '';
+    expect(text).not.toMatch(/\/(Users|home|tmp|var)\//);
+    expect(text).not.toMatch(/\.agent-flow\/worktrees/);
+  });
+});

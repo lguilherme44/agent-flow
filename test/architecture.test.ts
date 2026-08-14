@@ -1510,6 +1510,55 @@ describe('the write API is an adapter, not a second workflow (UI-27, §60)', () 
     expect(schemas).not.toMatch(/z\.string\(\)\s*[,)}]/);
   });
 
+  it('exposes no worktree path in any response contract (§21.3, §26.1 rule 4)', () => {
+    // The other half of an **asymmetric** rule, and the asymmetry is the point.
+    // Ref names and object ids MAY appear in a response: they are provenance a
+    // person needs — §19.3 prints the integration branch and tells them to merge
+    // it — and the server never accepts one back. A *worktree* path is different
+    // in kind: the attempt artifact deliberately stores a workspace-relative path
+    // (§7.2) precisely so that no layer above it has an absolute one to leak, and
+    // M2-10's stated trap is the temptation to resolve it "just for debugging".
+    //
+    // Written as an allowlist over field *names* rather than a search for the
+    // word "worktree", because the field that would leak this is far more likely
+    // to be called `workspacePath` than to name the mechanism. A new path-shaped
+    // field therefore fails here and has to be argued for, which is the only kind
+    // of rule that survives a milestone.
+    const contracts = read(join(ROOT, 'src/contracts/api.schema.ts')).text;
+    const responses = contracts.slice(contracts.indexOf('// Responses'));
+
+    const ALLOWED = new Set([
+      // The project directory the operator pointed the server at, read-only. Not
+      // a worktree, and not something an endpoint accepts back.
+      'path',
+      // Repository-relative, as `git diff --name-only` reports them (§15, §21.2).
+      'paths',
+      'files',
+      'filesChanged',
+      // Which configuration files were read, on the page about configuration.
+      'globalPath',
+      'projectPath',
+    ]);
+
+    const PATH_SHAPED = /^(.*(?:path|dir|cwd|location|root)s?|files?(?:Changed)?)$/i;
+
+    const declared = [...responses.matchAll(/readonly\s+([A-Za-z][A-Za-z0-9]*)/g)].map(
+      (match) => match[1] as string,
+    );
+
+    const offenders = [
+      ...new Set(declared.filter((name) => PATH_SHAPED.test(name) && !ALLOWED.has(name))),
+    ];
+
+    // A rule that cannot see what it forbids passes forever.
+    expect(PATH_SHAPED.test('workspacePath')).toBe(true);
+    expect(PATH_SHAPED.test('worktreeDir')).toBe(true);
+    expect(PATH_SHAPED.test('integrationBranch')).toBe(false);
+    expect(PATH_SHAPED.test('marker')).toBe(false);
+
+    expect(offenders).toEqual([]);
+  });
+
   it('names no runner, model or provider in the server', () => {
     // The core knows no provider (§3, §58) and neither does the layer above it. A
     // server that branched on "codex" would have to be edited to add a runner.
