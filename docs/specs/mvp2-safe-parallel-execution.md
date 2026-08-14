@@ -2914,10 +2914,55 @@ Codes marked **creation** are also evaluated by `createRun` for a run being born
 | `namespace_missing` | `GitWorkspaces`, §5.3 case D | no |
 | `integration_head_diverged` | `GitWorkspaces`, §5.3 case D | no |
 | `task_workspace_preparation_failed` | `TaskWorkspaces` | no |
+| `attempt_evidence_missing` | Integrator | no |
+| `attempt_evidence_unsatisfied` | Integrator | no |
+| `attempt_marker_missing` | Integrator | no |
 | `attempt_marker_mismatch` | Integrator, recovery | no |
 | `attempt_tree_missing` | recovery | no — requeues |
 | `integration_conflict` | Integrator | no |
+| `integration_history_unrecognised` | Integrator | no |
+| `integration_head_missing` | Integrator | no |
 | `integration_worktree_unavailable` | Integrator, recovery | no |
+| `integration_unreadable` | Integrator | no |
+
+**This table is the canonical vocabulary, and it is pinned by a test rather than by
+good intentions.** `test/app/integration-vocabulary.test.ts` parses this appendix and
+asserts it agrees, in both directions, with `INTEGRATION_REFUSAL_CODES` in
+`src/app/integrator.ts`: a code the Integrator can emit and this table does not list
+fails the suite, and so does a row here attributed to the Integrator that the module
+cannot raise. A vocabulary that drifts is worse than one that is incomplete, because a
+reader who finds nine of ten codes documented reasonably concludes the tenth does not
+exist.
+
+`integration_unreadable` was the code that made the pin necessary: it reaches a person
+in a refusal, it halts the run, and it was absent here — which by this appendix's own
+opening sentence made the appendix wrong rather than merely terse. It is raised when Git
+could not *answer* a question the sequence depends on (the branch head, a commit object)
+as distinct from answering it with something unacceptable. The distinction matters
+because the fixes differ: every other code here describes a repository state, and this
+one describes a repository that could not be read at all.
+
+**The four evidence and history codes are deliberately not folded into
+`attempt_marker_mismatch`**, and the distinction is what a person needs rather than a
+taxonomy for its own sake. `attempt_marker_mismatch` means *the marker exists and does
+not bind to the evidence* — a forgery, or corruption, and I-6 forbids repairing it.
+The others each name a different fact about the world:
+
+| Code | What is actually wrong |
+|---|---|
+| `attempt_evidence_missing` | The attempt left no `attempt-<n>.json` that parses. There is nothing to bind a marker to, so no marker was consulted. |
+| `attempt_evidence_unsatisfied` | The artifact parses and records `unsatisfied` or `not_reached`. Only a satisfied attempt is integrated (§14.3 step 2), and by the `.refine` of §10.2 it carries no receipt. |
+| `attempt_marker_missing` | The evidence is sound and the attempt branch does not resolve to a commit. The marker was never published, or the ref was deleted. |
+| `integration_history_unrecognised` | The marker is already an ancestor of the integration branch and **no merge commit on that branch introduced it** — so §14.3 step 5's reconciliation has no merge to name (§14.7). |
+
+Reporting all four as `attempt_marker_mismatch` would tell somebody their marker was
+forged when the truth is that a file is missing, a validation did not pass, a ref was
+deleted, or a branch was rebuilt. Those have four different fixes.
+
+`integration_head_missing` is the same rule applied to §19: a run asked to be reviewed
+before its integration branch was ever initialised has no commit for verification, the
+reviewer and the Definition of Done to describe (§19.2), and falling back to the user's
+working tree would review something else entirely.
 
 ## Appendix B — New events
 

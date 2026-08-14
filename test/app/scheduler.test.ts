@@ -1025,6 +1025,267 @@ describe('workspace preparation, per dispatched attempt (M2-04 §8)', () => {
   });
 });
 
+describe('a validated attempt is not a completed task (M2-06 §14.4, I-3)', () => {
+  // The invariant the whole milestone turns on. The executor still returns a
+  // `TaskResult` whose status is `completed` — that is `judgeValidation`'s verdict
+  // on one local execution (I-4) — and in worktree mode the scheduler must not
+  // treat it as an outcome. A task is completed when its marker is merged, and
+  // releasing a dependent any earlier builds it against a branch that does not
+  // contain the work it depends on.
+
+  /** An Integrator stand-in that records what it was asked and answers scripted. */
+  function integrator(
+    answers: Record<string, 'integrated' | 'refused'> = {},
+    preparation: 'ready' | 'sequential' | 'refused' = 'ready',
+  ) {
+    const waves: { task: string; attempt: number }[][] = [];
+    const workspace = { path: '/worktrees/integration', branch: 'agent-flow/k/integration', head: 'b'.repeat(40) };
+    let bases = 0;
+
+    const service = {
+      prepare: async () =>
+        preparation === 'ready'
+          ? { kind: 'ready' as const, workspace }
+          : preparation === 'sequential'
+            ? { kind: 'sequential' as const }
+            : {
+                kind: 'refused' as const,
+                refusal: { code: 'git_run_key_collision' as const, detail: 'somebody else’s refs' },
+              },
+
+      waveBase: async () => {
+        bases += 1;
+        return 'b'.repeat(40);
+      },
+
+      integrate: async (request: {
+        attempts: readonly { task: string; attempt: number; result: TaskResult }[];
+      }) => {
+        waves.push(request.attempts.map(({ task, attempt }) => ({ task, attempt })));
+
+        const outcomes = request.attempts.map((entry) =>
+          (answers[entry.task] ?? 'integrated') === 'integrated'
+            ? {
+                kind: 'integrated' as const,
+                task: entry.task,
+                state: 'completed' as const,
+                result: entry.result,
+              }
+            : {
+                kind: 'refused' as const,
+                task: entry.task,
+                state: 'review_required' as const,
+                refusal: {
+                  code: 'integration_conflict' as const,
+                  detail: `${entry.task} conflicts`,
+                },
+              },
+        );
+
+        const refused = outcomes.find((outcome) => outcome.kind === 'refused');
+        return {
+          outcomes,
+          ...(refused === undefined
+            ? {}
+            : { haltedBy: `${refused.task} could not be integrated: integration_conflict` }),
+        };
+      },
+    };
+
+    return { service, waves, wavesOfBases: () => bases };
+  }
+
+  /** A workspace service that hands back an isolated workspace and records its base. */
+  function isolatedWorkspaces() {
+    const bases: string[] = [];
+    const service = {
+      prepare: async (request: { taskId: string; attempt: number; base?: string }) => {
+        bases.push(request.base ?? '(none)');
+        return {
+          ok: true as const,
+          workspace: {
+            path: `/worktrees/${request.taskId}`,
+            attempt: request.attempt,
+            isolation: {
+              base: request.base ?? '',
+              branch: `agent-flow/k/${request.taskId}/attempt-${String(request.attempt)}`,
+              relativePath: `repo/k/${request.taskId}/attempt-${String(request.attempt)}`,
+            },
+          },
+        };
+      },
+    };
+    return { service, bases };
+  }
+
+  it('completes a task only after the Integrator says the merge happened', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const integration = integrator();
+    const workspaces = isolatedWorkspaces();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    // The attempt reached the Integrator, and the state came back from it.
+    expect(integration.waves).toEqual([[{ task: 'TASK-001', attempt: 1 }]]);
+    expect(outcome.states['TASK-001']).toBe('completed');
+    expect((await store.loadRun(run.runId)).tasks[0]?.state).toBe('completed');
+  });
+
+  it('leaves an unintegrated task out of completed, and halts', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const integration = integrator({ 'TASK-001': 'refused' });
+    const workspaces = isolatedWorkspaces();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(outcome.states['TASK-001']).toBe('review_required');
+    expect(outcome.haltedBy).toContain('integration_conflict');
+    expect((await store.loadRun(run.runId)).tasks[0]?.state).toBe('review_required');
+  });
+
+  it('releases no dependent before its dependency was merged', async () => {
+    // The failure this exists to prevent is silent: a dependent's worktree cut
+    // from a branch that does not hold its dependency's work builds against code
+    // that is not there, and nothing notices for three more tasks.
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+    const workspaces = isolatedWorkspaces();
+
+    const dispatchedBeforeMerge: string[][] = [];
+    const integration = integrator();
+    const watching = {
+      ...integration.service,
+      integrate: async (request: Parameters<typeof integration.service.integrate>[0]) => {
+        dispatchedBeforeMerge.push([...executed]);
+        return integration.service.integrate(request);
+      },
+    };
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: watching as never,
+    }).run(plan, run.runId, 'SDD');
+
+    // Two waves, and at the moment the first integration began only the first
+    // task had been dispatched at all.
+    expect(dispatchedBeforeMerge).toEqual([['TASK-001'], ['TASK-001', 'TASK-002']]);
+    expect(executed).toEqual(['TASK-001', 'TASK-002']);
+  });
+
+  it('cuts each wave from the base the Integrator reports, once per wave', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const integration = integrator();
+    const workspaces = isolatedWorkspaces();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(workspaces.bases).toEqual(['b'.repeat(40), 'b'.repeat(40)]);
+    // Read once per wave, not once per task: every task in a wave is cut from
+    // one commit (§9.1 step 1).
+    expect(integration.wavesOfBases()).toBe(2);
+  });
+
+  it('dispatches nothing when the namespace cannot be prepared', async () => {
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+    const integration = integrator({}, 'refused');
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      integrator: integration.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(executed).toEqual([]);
+    expect(outcome.haltedBy).toContain('git_run_key_collision');
+    expect(outcome.complete).toBe(false);
+  });
+
+  it('behaves exactly as before for a run the Integrator calls sequential', async () => {
+    // §25.1. The Integrator is wired unconditionally and answers `sequential` for
+    // a run whose `isolationMode` is not `worktree`, so the mode is a property of
+    // the run rather than of the wiring (I-13).
+    const { store, run } = await harness();
+    const { executor, executed } = fakeExecutor();
+    const integration = integrator({}, 'sequential');
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      integrator: integration.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(executed).toEqual(['TASK-001', 'TASK-002']);
+    expect(outcome.states['TASK-001']).toBe('completed');
+    expect(outcome.planComplete).toBe(true);
+    // Nothing was offered for integration, because there is nothing to integrate.
+    expect(integration.waves).toEqual([]);
+  });
+
+  it('integrates a satisfied sibling even when a peer failed (§9.2)', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor({ 'TASK-001': 'failed' });
+    const integration = integrator();
+    const workspaces = isolatedWorkspaces();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002')],
+    });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+      maxConcurrency: 2,
+    }).run(plan, run.runId, 'SDD');
+
+    // B's work was already paid for and already validated. Discarding it because
+    // A failed would make the outcome depend on which task finished first.
+    expect(integration.waves).toEqual([[{ task: 'TASK-002', attempt: 1 }]]);
+    expect(outcome.states['TASK-002']).toBe('completed');
+    expect(outcome.states['TASK-001']).toBe('failed');
+    expect(outcome.haltedBy).toContain('TASK-001');
+  });
+});
+
 describe('what a refused workspace writes to disk (§7.2, §21.3)', () => {
   // The two halves of this guarantee are tested separately — preparation produces
   // a path-free refusal, and the scheduler copies its fields into an event — and

@@ -200,6 +200,27 @@ export type MergeOutcome =
 
 export type GitObjectType = 'commit' | 'tree' | 'blob' | 'tag';
 
+/**
+ * A commit object as Git stores it, not as `git log` formats it (§14.7).
+ *
+ * **The parent list is the point.** MVP 2's structural discriminator between a
+ * marker and an integration merge is the *number of parents* — one against two —
+ * and every other signal (a subject line, a trailer) is text a coding agent can
+ * write. A caller that decided on the subject would be text-matching on a
+ * message, which this project has already been bitten by.
+ *
+ * The message is carried too because the trailers travel with it, and reading
+ * both from one `cat-file` keeps them from being read at two different instants.
+ * They remain diagnostic: they confirm the artifact, they never stand in for it.
+ */
+export interface CommitObject {
+  readonly tree: string;
+  /** In order. Empty for a root commit, one for a marker, two for a merge. */
+  readonly parents: readonly string[];
+  /** Everything after the header block, verbatim. */
+  readonly message: string;
+}
+
 // ---------------------------------------------------------------------------
 // Path containment (§20, S-3)
 // ---------------------------------------------------------------------------
@@ -1016,6 +1037,34 @@ export class GitWorkspaces {
     return gitOk(type);
   }
 
+  /**
+   * `git cat-file commit <oid>` — the raw commit, parsed into its header facts.
+   *
+   * Used by the Integrator to answer the two questions §14.3 asks of a marker
+   * that no ref name can answer: how many parents does it have, and what does its
+   * message say. Both come from one read, so the parent count and the trailers
+   * describe the same object at the same instant.
+   */
+  async readCommit(
+    options: RepoContext & { readonly oid: string },
+  ): Promise<GitResult<CommitObject>> {
+    const oid = validOid(options.oid, 'the commit to read');
+    if (!oid.ok) return oid;
+
+    const outcome = await this.run({
+      subcommand: 'cat-file',
+      cwd: options.cwd,
+      timeout: 'quick',
+      args: ['commit', oid.value],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectParsableSuccess(outcome.value, 'git cat-file commit');
+    if (failed !== null) return failed;
+
+    return parseCommitObject(outcome.value.stdout);
+  }
+
   /** Whether `oid` exists here **and** is of the expected type. */
   async objectExistsAs(
     options: RepoContext & { readonly oid: string; readonly type: GitObjectType },
@@ -1113,6 +1162,84 @@ export class GitWorkspaces {
 
     const failed = expectSuccess(outcome.value, 'git update-ref');
     return failed ?? gitOk(undefined);
+  }
+
+  /**
+   * Creates a branch at a commit, and refuses if it already exists (§14.1).
+   *
+   * `update-ref` with {@link ABSENT_OID} as the expected old value rather than
+   * `git branch`, for the same two reasons §12.1 gives for the marker: it is a
+   * single reference transaction with no working-tree implications, and the
+   * compare-and-swap makes "create it only if nobody else did" one syscall rather
+   * than an `exists()` followed by a write. §5.3's case C exists precisely because
+   * a namespace can already hold refs this run did not create, and a blind
+   * overwrite there would move somebody else's branch.
+   */
+  async createBranch(
+    options: RepoContext & { readonly branch: string; readonly at: string },
+  ): Promise<GitResult<void>> {
+    const branch = validRef(options.branch);
+    if (!branch.ok) return branch;
+
+    return this.updateRef({
+      cwd: options.cwd,
+      ref: `refs/heads/${branch.value}`,
+      newOid: options.at,
+      expectedOldOid: ABSENT_OID,
+    });
+  }
+
+  /**
+   * The merge on `branch` that introduced `commit`, or `null` when there is none.
+   *
+   * `git rev-list --parents --ancestry-path <branch> --not <commit>` lists the
+   * commits of the branch that are descendants of `commit`, each with its
+   * parents; the one whose **second** parent is `commit` is the merge that put it
+   * there. Probed on 2.52.0 against a branch holding two integrations.
+   *
+   * Bounded by the number of commits merged *after* the one being asked about —
+   * one per integrated task — rather than by the size of the branch, which is why
+   * this is not the whole-history walk the obvious `rev-list --merges` would be.
+   *
+   * It exists for §14.3 step 5: a marker that is already an ancestor was merged
+   * by a process that may not have survived to record it, and reconciling that
+   * needs the merge commit's id. Answering `null` is not a failure — it means the
+   * ancestry came from somewhere other than a merge, which is a state the caller
+   * must refuse rather than repair.
+   */
+  async mergeIntroducing(
+    options: RepoContext & { readonly commit: string; readonly branch: string },
+  ): Promise<GitResult<string | null>> {
+    const commit = validRevision(options.commit);
+    if (!commit.ok) return commit;
+    const branch = validRevision(options.branch);
+    if (!branch.ok) return branch;
+
+    const outcome = await this.run({
+      subcommand: 'rev-list',
+      cwd: options.cwd,
+      timeout: 'read',
+      args: ['--parents', '--ancestry-path', branch.value, '--not', commit.value],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectParsableSuccess(outcome.value, 'git rev-list --ancestry-path');
+    if (failed !== null) return failed;
+
+    for (const line of outcome.value.stdout.split('\n')) {
+      const fields = line.trim().split(' ').filter((field) => field.length > 0);
+      // `<commit> <parent> <parent>`: **exactly two parents, and the second is
+      // the one asked about** (§14.7). Both halves of that are load-bearing.
+      // First-parent equality would match a linear commit built on top of it,
+      // and "two or more" would match an octopus merge that happens to list it
+      // second — neither is the shape `merge --no-ff <marker>` produces, and
+      // "one task, one merge commit" is the property being relied on.
+      if (fields.length === 3 && fields[2] === commit.value) {
+        return validOid(fields[0] ?? '', 'the merge commit introducing this commit');
+      }
+    }
+
+    return gitOk(null);
   }
 
   /**
@@ -1481,6 +1608,69 @@ export function parseWorktreeList(stdout: string): GitResult<readonly WorktreeEn
 
   flush();
   return gitOk(entries);
+}
+
+/**
+ * `git cat-file commit <oid>` — headers, a blank line, then the message.
+ *
+ * ```text
+ * tree 9be2…
+ * parent 4a1c…
+ * author Agent Flow <agent-flow@local> 1770000000 +0000
+ * committer Agent Flow <agent-flow@local> 1770000000 +0000
+ *
+ * agent-flow: TASK-003 attempt 2
+ * …
+ * ```
+ *
+ * Only `tree` and `parent` are modelled. The identity lines are deliberately not:
+ * they are already fixed by construction (§12.2) and parsing them here would
+ * invite a caller to decide something on a name.
+ *
+ * **The blank line ends the headers, and everything after it is message —
+ * including a line that begins with `parent`.** A commit message is text an agent
+ * influences, so a parser that kept reading `parent` lines past the header block
+ * would let a message add parents to a commit that has one. That is exactly the
+ * forgery §14.7 makes the parent count the discriminator against.
+ */
+export function parseCommitObject(stdout: string): GitResult<CommitObject> {
+  const lines = stdout.split('\n');
+  const parents: string[] = [];
+  let tree: string | undefined;
+  let index = 0;
+
+  for (; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (line.length === 0) {
+      index += 1;
+      break;
+    }
+
+    const separator = line.indexOf(' ');
+    if (separator === -1) continue;
+    const key = line.slice(0, separator);
+    const value = line.slice(separator + 1).trim();
+
+    if (key === 'tree') tree = value;
+    else if (key === 'parent') parents.push(value);
+  }
+
+  if (tree === undefined) {
+    return gitFailure({
+      code: 'git_invalid_output',
+      message: 'git cat-file commit produced no tree line, so the object is not a commit',
+    });
+  }
+
+  const checkedTree = validOid(tree, 'the tree of the commit');
+  if (!checkedTree.ok) return checkedTree;
+
+  for (const parent of parents) {
+    const checked = validOid(parent, 'a parent of the commit');
+    if (!checked.ok) return checked;
+  }
+
+  return gitOk({ tree: checkedTree.value, parents, message: lines.slice(index).join('\n') });
 }
 
 /**

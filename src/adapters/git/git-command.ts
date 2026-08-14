@@ -61,6 +61,11 @@ export const GIT_SUBCOMMANDS = [
   'cat-file',
   'for-each-ref',
   'add',
+  // Added for M2-06 (§14.3 step 5). The Integrator needs to name the merge that
+  // already put a marker on the integration branch, and `rev-list --parents
+  // --ancestry-path` is the only way to ask that question without walking the
+  // whole branch in TypeScript.
+  'rev-list',
   // Added for the M2-03 execution preconditions (§6.3). `submodule` answers
   // check 4 and `check-ignore` answers check 8 — the one that stops the run
   // refusing itself over its own state files.

@@ -18,6 +18,7 @@ import { resolveTaskConcurrency, type ConcurrencyDecision } from '../core/concur
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
 import { TaskWorkspaces } from './task-workspaces.js';
+import { Integrator } from './integrator.js';
 import {
   checkWorktreePreconditions,
   observePlanningBaseDrift,
@@ -75,6 +76,13 @@ export interface ExecutionContext {
    * calls a worktree lifecycle method on it yet.
    */
   readonly workspaces: GitWorkspaces;
+  /**
+   * §14 and §19. Published rather than kept inside the scheduler because `review`
+   * needs the same object: the tree it verifies must be the tree the merges
+   * happened in, and two constructions of it would be two chances to disagree
+   * about which commit that is.
+   */
+  readonly integrator: Integrator;
   /** The machine, for the home directory the worktree root is projected under. */
   readonly host: Host;
   /** The adapter type behind a runner id — what independence is judged on. */
@@ -173,10 +181,24 @@ export async function buildExecutionContext(
     clock,
   });
 
+  // §14: the only writer of `completed` in worktree mode. Wired unconditionally
+  // and asked per run — it answers `sequential` for a run whose `isolationMode`
+  // is not `worktree`, so the mode is decided by the run rather than by the
+  // wiring (I-13), and a sequential run never reaches an integration branch.
+  const integrator = new Integrator({
+    workspaces,
+    fs,
+    host: options.host,
+    projectDir: options.projectDir,
+    store,
+    clock,
+  });
+
   const scheduler = new Scheduler({
     store,
     executor,
     workspaces: taskWorkspaces,
+    integrator,
     maxConcurrency: concurrency.effective,
     maxAttempts: config.global.retry.maxAttempts,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),
@@ -197,6 +219,7 @@ export async function buildExecutionContext(
     processRunner,
     git,
     workspaces,
+    integrator,
     host: options.host,
     providerOf: (id) => registry.providerOf(id),
     projectDir: options.projectDir,

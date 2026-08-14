@@ -1,8 +1,19 @@
 import type { Plan, TaskResult, TaskState } from '../contracts/index.js';
 import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
-import { blockedByFailure, buildDag, readyTasks, topologicalOrder } from '../core/dag.js';
+import {
+  blockedByFailure,
+  buildDag,
+  readyTasks,
+  topologicalOrder,
+  type Dag,
+} from '../core/dag.js';
 import type { StateStore } from './state-store.js';
 import type { TaskExecutor } from './task-executor.js';
+import type {
+  IntegrationWorkspace,
+  WaveAttempt,
+  WaveIntegrator,
+} from './integrator.js';
 
 export interface SchedulerOptions {
   readonly store: StateStore;
@@ -31,6 +42,23 @@ export interface SchedulerOptions {
    * before the agent is invoked, and a refusal fails the task without one.
    */
   readonly workspaces?: TaskWorkspaces;
+  /**
+   * Turns validated attempts into completed tasks (M2-06, §14).
+   *
+   * Optional for the same reason `workspaces` is: a sequential run has no
+   * integration branch, nothing to merge and no second tree — and every caller
+   * predating this milestone keeps working with none wired. When one *is* wired
+   * it still answers `sequential` for a run that is not isolated, so the mode is
+   * decided by the run's own `isolationMode` rather than by the wiring (I-13).
+   *
+   * **While it is present, this scheduler never decides that a task is
+   * completed** (§14.4). It dispatches attempts, awaits the barrier, and hands the
+   * satisfied ones over; the state each task ends in comes back from the
+   * Integrator. That is the whole of I-3 as far as the scheduler is concerned —
+   * releasing a dependent against a branch that does not contain its dependency's
+   * work is silent, and only visible three tasks later.
+   */
+  readonly integrator?: WaveIntegrator;
   /** Bounds recovery of interrupted tasks. Comes from `retry.maxAttempts`. */
   readonly maxAttempts?: number;
   readonly onTaskStart?: (taskId: string) => void;
@@ -94,7 +122,22 @@ export interface SchedulerOutcome {
  * the `task_workspace_preparation_failed` event are the record.
  */
 type DispatchOutcome =
-  | { readonly kind: 'executed'; readonly result: TaskResult }
+  | {
+      readonly kind: 'executed';
+      readonly result: TaskResult;
+      /**
+       * Which attempt ran — the one the dispatch above spent.
+       *
+       * Carried rather than looked up again at integration time, because the
+       * counter is a live field: reading it back would answer "how many attempts
+       * has this task had by now", and what the Integrator needs is "which
+       * attempt produced this evidence".
+       *
+       * Absent only where no workspace service is wired at all, which is every
+       * caller predating M2-04 and no production path.
+       */
+      readonly attempt?: number;
+    }
   | {
       readonly kind: 'workspace_preparation_failed';
       readonly task: string;
@@ -152,6 +195,16 @@ export class Scheduler {
     const concurrency = Math.max(1, this.options.maxConcurrency ?? 1);
     let haltedBy: string | undefined;
 
+    // §5.3 and §14.1, once, before anything is dispatched: the integration branch
+    // is cut from `planningBase` and checked out, or the run's own namespace is
+    // resumed. A refusal here stops the run before a single agent is invoked —
+    // work built on a namespace this run does not own is work nobody can trust.
+    const integration = await this.prepareIntegration(runId);
+    if (integration?.kind === 'refused') {
+      return this.stopped(states, recovered, dag, integration.reason);
+    }
+    const workspace = integration?.workspace;
+
     while (haltedBy === undefined) {
       const ready = readyTasks(dag, states)
         .filter((id) => states[id] !== 'completed')
@@ -159,6 +212,20 @@ export class Scheduler {
         // this only decides which of the eligible tasks we are willing to run.
         .filter((id) => options.only?.has(id) ?? true);
       if (ready.length === 0) break;
+
+      // §9.1 step 1: **the wave base is read once, and every task in the wave is
+      // cut from it.** Reading it per task would let a task start from a head an
+      // unintegrated sibling was about to move, which is precisely the
+      // nondeterminism the barrier exists to remove.
+      const waveBase = await this.waveBase(workspace);
+      if (workspace !== undefined && waveBase === undefined) {
+        return this.stopped(
+          states,
+          recovered,
+          dag,
+          'the integration branch could not be read, so no wave base exists to cut this wave from',
+        );
+      }
 
       const batch = ready.slice(0, concurrency);
       for (const id of batch) states[id] = 'running';
@@ -183,7 +250,7 @@ export class Scheduler {
           // preparation therefore costs an attempt and produces no agent call,
           // which is what §8.3 specifies — the counter already moved, and
           // pretending otherwise would make a retry policy count wrong.
-          const prepared = await this.prepareWorkspace(runId, id);
+          const prepared = await this.prepareWorkspace(runId, id, waveBase);
           if (prepared.kind === 'workspace_preparation_failed') return prepared;
 
           const result = await this.options.executor.execute(
@@ -195,15 +262,41 @@ export class Scheduler {
           // Only an execution reaches this callback, because its argument is a
           // `TaskResult` and there is no honest one to pass for a refusal.
           this.options.onTaskFinish?.(result);
-          return { kind: 'executed', result };
+          return { kind: 'executed', result, attempt: prepared.attempt };
         }),
       );
+
+      /** Satisfied attempts, awaiting the merge that makes them outcomes. */
+      const awaitingIntegration: WaveAttempt[] = [];
 
       // Iterated in `batch` order, which `readyTasks` sorts — so which task sets
       // the halt reason is a property of the plan and the state, never of which
       // worker happened to finish first.
       for (const outcome of dispatched) {
         if (outcome.kind === 'executed') {
+          // §14.4. In worktree mode a satisfied attempt is *evidence*, not an
+          // outcome: nothing here writes the state, because the state this task
+          // ends in depends on a merge that has not happened yet. Writing it now
+          // would release dependents against a branch their dependency's work is
+          // not on.
+          if (workspace !== undefined && outcome.result.status === 'completed') {
+            if (outcome.attempt === undefined) {
+              // Unreachable in production, where the workspace service and the
+              // Integrator are wired together. Loud rather than silent, because
+              // the silent alternative is falling through to the line below and
+              // completing a task nothing merged.
+              throw new Error(
+                `${outcome.result.task} executed in worktree mode without a prepared attempt`,
+              );
+            }
+            awaitingIntegration.push({
+              task: outcome.result.task,
+              attempt: outcome.attempt,
+              result: outcome.result,
+            });
+            continue;
+          }
+
           states[outcome.result.task] = outcome.result.status;
           results.push(outcome.result);
 
@@ -222,6 +315,33 @@ export class Scheduler {
           haltedBy =
             `${outcome.task} never started: workspace preparation failed ` +
             `at the ${outcome.phase} check — ${outcome.detail}`;
+        }
+      }
+
+      // §9.2: **the wave completes before the run halts.** A sibling that failed
+      // does not discard work that was already paid for and already validated —
+      // and making the outcome depend on which task finished first is exactly the
+      // nondeterminism this milestone exists to avoid.
+      if (workspace !== undefined && awaitingIntegration.length > 0) {
+        const integrator = this.options.integrator;
+        if (integrator === undefined) throw new Error('an integration workspace with no integrator');
+
+        const integrated = await integrator.integrate({
+          runId,
+          workspace,
+          dag,
+          attempts: awaitingIntegration,
+        });
+
+        for (const outcome of integrated.outcomes) {
+          // Copied, never named: the Integrator decides what state a merge leaves
+          // a task in, and the literal lives in the module that owns the write.
+          states[outcome.task] = outcome.state;
+          if (outcome.kind === 'integrated') results.push(outcome.result);
+        }
+
+        if (integrated.haltedBy !== undefined && haltedBy === undefined) {
+          haltedBy = integrated.haltedBy;
         }
       }
 
@@ -244,6 +364,66 @@ export class Scheduler {
       blocked,
       recovered,
       ...(haltedBy === undefined ? {} : { haltedBy }),
+    };
+  }
+
+  /**
+   * §5.3 and §14.1, before the first wave: the run's integration branch and its
+   * checkout, or the refusal that stops the run.
+   *
+   * `undefined` covers the two cases that must behave exactly as they always
+   * have: no Integrator wired at all, and a run whose `isolationMode` is not
+   * `worktree`. Neither creates a ref, neither reaches Git through this path, and
+   * neither changes a single line of the loop below (§25.1).
+   */
+  private async prepareIntegration(
+    runId: string,
+  ): Promise<
+    | { readonly kind: 'ready'; readonly workspace: IntegrationWorkspace }
+    | { readonly kind: 'refused'; readonly reason: string }
+    | undefined
+  > {
+    const integrator = this.options.integrator;
+    if (integrator === undefined) return undefined;
+
+    const prepared = await integrator.prepare(runId);
+    if (prepared.kind === 'sequential') return undefined;
+    if (prepared.kind === 'refused') {
+      return { kind: 'refused', reason: `${prepared.refusal.code}: ${prepared.refusal.detail}` };
+    }
+
+    return { kind: 'ready', workspace: prepared.workspace };
+  }
+
+  /** The commit this wave's workspaces are cut from, or none in sequential mode. */
+  private async waveBase(
+    workspace: IntegrationWorkspace | undefined,
+  ): Promise<string | undefined> {
+    if (workspace === undefined) return undefined;
+    return this.options.integrator?.waveBase(workspace);
+  }
+
+  /**
+   * A run that stopped before it could dispatch anything.
+   *
+   * Distinct from a run that halted mid-flight, and reported as such: `results`
+   * is empty because nothing executed, and the reason names the repository state
+   * a person has to act on rather than "not all tasks completed".
+   */
+  private stopped(
+    states: Record<string, TaskState>,
+    recovered: string[],
+    dag: Dag,
+    reason: string,
+  ): SchedulerOutcome {
+    return {
+      states,
+      results: [],
+      complete: false,
+      planComplete: Object.values(states).every((state) => state === 'completed'),
+      blocked: blockedByFailure(dag, states),
+      recovered,
+      haltedBy: reason,
     };
   }
 
@@ -337,8 +517,13 @@ export class Scheduler {
   private async prepareWorkspace(
     runId: string,
     taskId: string,
+    waveBase: string | undefined,
   ): Promise<
-    | { readonly kind: 'prepared'; readonly workspace?: TaskWorkspace }
+    | {
+        readonly kind: 'prepared';
+        readonly workspace?: TaskWorkspace;
+        readonly attempt?: number;
+      }
     | Extract<DispatchOutcome, { kind: 'workspace_preparation_failed' }>
   > {
     const workspaces = this.options.workspaces;
@@ -349,20 +534,24 @@ export class Scheduler {
     const state = await this.options.store.loadRun(runId);
     const attempt = state.tasks.find((task) => task.id === taskId)?.attempts ?? 1;
 
-    // §9.1 step 1: one wave base, and every task in the wave is cut from it.
-    // Until the Integrator advances the integration branch (M2-06) that commit is
-    // always `planningBase`, which is the base §9.1 says the first wave uses.
+    // §9.1 step 1: one wave base, read once above and given to every task in the
+    // wave. Before M2-06 that commit was always `planningBase`, because nothing
+    // moved the integration branch; now the Integrator advances it after each
+    // merge, so a second wave is cut from a branch that already contains the
+    // first wave's work — which is what makes a dependent's worktree hold its
+    // dependency's code.
     //
-    // Passed as-is when it is absent, rather than coerced to an empty string:
-    // preparation re-validates the base against `CommitOidSchema` before it
-    // composes an argv, so a worktree-mode run that somehow reached here without
-    // a `planningBase` refuses with a sentence saying so instead of handing Git
-    // an empty commit-ish and reporting whatever Git says about it.
+    // `planningBase` remains the fallback for a run with no Integrator wired,
+    // which is every caller predating this milestone. Passed as-is when it is
+    // absent rather than coerced to an empty string: preparation re-validates the
+    // base against `CommitOidSchema` before composing an argv, so a worktree-mode
+    // run that somehow reached here without one refuses with a sentence saying so
+    // instead of handing Git an empty commit-ish.
     const outcome = await workspaces.prepare({
       state,
       taskId,
       attempt,
-      base: state.planningBase,
+      base: waveBase ?? state.planningBase,
     });
 
     if (outcome.ok) {
@@ -374,7 +563,7 @@ export class Scheduler {
           base: outcome.workspace.isolation.base,
         });
       }
-      return { kind: 'prepared', workspace: outcome.workspace };
+      return { kind: 'prepared', workspace: outcome.workspace, attempt };
     }
 
     // Exactly the four keys Appendix B specifies, and the shape is closed: no

@@ -76,7 +76,25 @@ export type LockOwner = (typeof LOCK_OWNERS)[number];
  * person can act on; "already being executed" would send them looking for a scheduler
  * that does not exist.
  */
-export const LOCK_OPERATIONS = ['run', 'revise', 'retry', 'approve', 'reject'] as const;
+export const LOCK_OPERATIONS = [
+  'run',
+  'revise',
+  'retry',
+  'approve',
+  'reject',
+  /**
+   * Added by MVP 2 (§18.2), and only meaningful for an isolated run.
+   *
+   * `review` used to be outside the lease, correctly: it read the user's working
+   * tree, so it could not collide with anything. §19.1 moves `runVerification`
+   * and the reviewer's `GitClient` into the *integration worktree* — the same
+   * checkout the Integrator merges into — and a review running while the
+   * scheduler holds the lease would run lint, typecheck, test and build over a
+   * tree a merge is rewriting underneath it, then report a result for a tree that
+   * never existed at any single instant.
+   */
+  'review',
+] as const;
 export type LockOperation = (typeof LOCK_OPERATIONS)[number];
 
 /**

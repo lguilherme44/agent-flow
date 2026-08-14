@@ -476,12 +476,31 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // `doctor`'s §8.4 probe creates a *throwaway* checkout that holds nothing
     // and removes it in a `finally`; it is the one place a removal is correct,
     // and it must go through Git rather than `rm -rf` (§20.2).
-    const PREPARES = ['src/app/task-workspaces.ts', 'src/cli/doctor.ts'];
-    const RECLAIMS = ['src/cli/doctor.ts'];
-    // M2-05: the four operations of the §11.2 sequence, in the one module that
-    // owns it. Splitting them would give two answers to "which tree was
-    // validated", and only one of them would be the one bound to a receipt.
+    // M2-06 adds the second preparer: the Integrator checks the integration
+    // branch out, and re-creates that checkout when it is gone. The distinction
+    // from an attempt worktree is the one §14.1 draws — a branch is the work and
+    // a worktree is a checkout of it — which is why only this one is recreatable.
+    const PREPARES = [
+      'src/app/task-workspaces.ts',
+      'src/app/integrator.ts',
+      'src/cli/doctor.ts',
+    ];
+    // `unlock` and `prune` join `doctor`'s list for the Integrator, and only for
+    // the recreation path: a locked registration whose directory is gone is not
+    // pruned by Git, so `worktree add` refuses with "missing but locked worktree"
+    // until it is cleared. Neither call can discard anything — both act on a
+    // worktree that no longer exists on disk. `removeWorktree` stays the probe's
+    // alone: an attempt worktree is the only remaining copy of what an agent
+    // produced (§7.4), and the next milestone that wants to delete one has to
+    // come and edit this list.
+    const RECLAIMS = ['src/cli/doctor.ts', 'src/app/integrator.ts'];
+    const REMOVES = ['src/cli/doctor.ts'];
+    // M2-05: the operations of the §11.2 sequence, in the one module that owns
+    // it. Splitting them would give two answers to "which tree was validated",
+    // and only one of them would be the one bound to a receipt.
     const RECORDS_EVIDENCE = ['src/app/attempt-receipt.ts'];
+    // M2-06: the merge, in the one module that owns integration.
+    const INTEGRATES = ['src/app/integrator.ts'];
 
     const offenders: string[] = [];
     for (const file of sourceFiles('src')) {
@@ -492,7 +511,10 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
       if (!PREPARES.includes(path) && /\.addWorktree\s*\(/.test(code)) {
         offenders.push(`${path}: addWorktree`);
       }
-      for (const method of ['removeWorktree', 'unlockWorktree', 'pruneWorktrees']) {
+      if (!REMOVES.includes(path) && /\.removeWorktree\s*\(/.test(code)) {
+        offenders.push(`${path}: removeWorktree`);
+      }
+      for (const method of ['unlockWorktree', 'pruneWorktrees']) {
         if (!RECLAIMS.includes(path) && new RegExp(`\\.${method}\\s*\\(`).test(code)) {
           offenders.push(`${path}: ${method}`);
         }
@@ -502,14 +524,15 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
           offenders.push(`${path}: ${method}`);
         }
       }
-      // Integration's, and still nobody's (M2-06, M2-07).
-      if (/\.abortMerge\s*\(|\.merge\s*\(/.test(code)) offenders.push(`${path}: merge`);
+      if (!INTEGRATES.includes(path) && /\.abortMerge\s*\(|\.merge\s*\(/.test(code)) {
+        offenders.push(`${path}: merge`);
+      }
     }
 
     expect(offenders).toEqual([]);
   });
 
-  it('writes a task result from the executor only (M2-04)', () => {
+  it('writes a task result from the executor and the Integrator only (M2-04, M2-06)', () => {
     // `TaskResult` is the record of *what ran*: a runner id, a model, a reasoning
     // level, the validation it went through. Only the module that actually ran
     // something can fill those in honestly, so only that module may write one.
@@ -520,11 +543,17 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // artifact recovery, the read models and the CLI all read as evidence — so a
     // refusal returns its own shape instead (`DispatchOutcome`), and this test
     // keeps the shortcut closed.
-    const WRITER = 'src/app/task-executor.ts';
+    //
+    // M2-06 adds the second writer, and the split is §10.1's: the executor writes
+    // `result.json` for a *sequential* run, where the task's outcome is decided
+    // where it ran. In worktree mode it writes none at all — the outcome is
+    // decided at integration, and the Integrator writes the file once the merge
+    // has happened. Two writers, two modes, and neither can write the other's.
+    const WRITERS = ['src/app/task-executor.ts', 'src/app/integrator.ts'];
 
     const offenders = sourceFiles('src')
       .map((file) => read(file))
-      .filter(({ path }) => path !== WRITER && path !== 'src/app/paths.ts')
+      .filter(({ path }) => !WRITERS.includes(path) && path !== 'src/app/paths.ts')
       // `state-store.ts` reads one back; reading is not writing.
       .filter(({ path }) => path !== 'src/app/state-store.ts')
       .filter(({ text }) => /taskResult\s*\(/.test(codeOnly(text)))
@@ -532,14 +561,125 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
 
     expect(offenders).toEqual([]);
 
-    // Positive control: the writer still writes, so the rule is guarding a real
-    // call rather than a name nothing uses any more.
-    expect(codeOnly(read(join(ROOT, WRITER)).text)).toMatch(/taskResult\s*\(/);
+    // Positive control: both writers still write, so the rule is guarding real
+    // calls rather than names nothing uses any more.
+    for (const writer of WRITERS) {
+      expect(codeOnly(read(join(ROOT, writer)).text), writer).toMatch(/taskResult\s*\(/);
+    }
 
     // And the scheduler does not build one. `TaskResultSchema` is how the fiction
     // would be assembled — parsed, so it would even look careful.
     const scheduler = codeOnly(read(join(ROOT, 'src/app/scheduler.ts')).text);
     expect(scheduler).not.toContain('TaskResultSchema');
+  });
+
+  it('completes a task from the Integrator only, in worktree mode (M2-06, I-3)', () => {
+    // §26.1 rule 6, and the invariant the whole milestone turns on:
+    //
+    //   in worktree mode, attempt validated ≠ task completed.
+    //
+    // A task is completed when its marker has been merged, and one careless
+    // `status: 'completed'` elsewhere makes that false *silently* — the DAG would
+    // release dependents against an integration branch that does not contain
+    // their dependency's work, and nothing would notice for three more tasks.
+    //
+    // The rule is on the literal rather than on behaviour, because "who may write
+    // this value" is observable and "did you check the mode first" is not. The
+    // scheduler passes it: it copies a `TaskState` the Integrator returned, and
+    // never names one.
+    const ASSIGNS = [
+      'src/app/integrator.ts',
+      // Judges an attempt and persists nothing. `judgeValidation` is where the
+      // RED/GREEN expectation is evaluated, exactly once (I-4); the value it
+      // returns describes one local execution, and something else decides what
+      // the run does with it.
+      'src/core/validation-outcome.ts',
+    ];
+
+    // Read with literals kept and comments stripped — the opposite of `codeOnly`,
+    // which blanks exactly the thing this rule is looking for. `state` and not
+    // `status`: the invariant is about `TaskProgress.state`, the field the DAG
+    // reads to release a dependent. `TelemetryEntry.status` and the stage timeline
+    // share the word and decide nothing about a task.
+    const completes = (source: string): boolean =>
+      /\bstate\s*:\s*'completed'/.test(source) || /(?<![=!<>])=\s*'completed'/.test(source);
+
+    // A rule that cannot see the thing it forbids passes forever.
+    expect(completes("states[id] = 'completed';")).toBe(true);
+    expect(completes("return { ...task, state: 'completed' };")).toBe(true);
+    expect(completes("if (states[id] !== 'completed') return;")).toBe(false);
+    expect(completes('states[id] = outcome.state;')).toBe(false);
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !ASSIGNS.includes(path))
+      .filter(({ text }) => completes(withoutComments(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+
+    // The positive control, and the write itself: `completed` and
+    // `integrationHead` move in one `StateStore` update (§14.3 step 7). Splitting
+    // them would create a second version of §17.3 window 7 for every merge.
+    const integrator = withoutComments(read(join(ROOT, 'src/app/integrator.ts')).text);
+    expect(integrator).toMatch(/\bstate:\s*'completed'/);
+    expect(integrator).toMatch(
+      /updateRun\([\s\S]{0,400}integrationHead:[\s\S]{0,400}state:\s*'completed'/,
+    );
+  });
+
+  it('takes the integration order from core/dag.ts (M2-06, I-2, I-9)', () => {
+    // §26.1 rule 11. Integration order is the plan's stable topological order,
+    // restricted to the wave — never completion time, never Promise resolution
+    // order, never a second sort the Integrator kept for itself. Two runs of the
+    // same plan with the same agent outputs must produce the same branch shape,
+    // and a merge order that depended on how fast each CLI responded that
+    // afternoon would lose exactly that.
+    const { text } = read(join(ROOT, 'src/app/integrator.ts'));
+    const code = codeOnly(text);
+
+    expect(importSpecifiers(text).some((specifier) => specifier.includes('core/dag'))).toBe(true);
+    expect(code).toMatch(/topologicalOrder\s*\(/);
+    // No ordering of its own. `.sort(` is the shape a second implementation takes.
+    expect(code, 'the Integrator sorts something itself').not.toMatch(/\.sort\s*\(/);
+  });
+
+  it('orders integration with a promise, never a second lock (M2-06, §18.2)', () => {
+    // Integration is serial within one process, and the process already holds the
+    // run execution lease. A file lock to order two callbacks in one event loop
+    // would be a syscall standing in for a promise — and a second locking
+    // mechanism to keep in step with AF-L01, which is how two locks become no
+    // lock at all. The `createExclusive` rule below covers the primitive; this
+    // covers the shapes that would reintroduce it by another name.
+    const code = codeOnly(read(join(ROOT, 'src/app/integrator.ts')).text);
+
+    for (const mechanism of ['createExclusive', 'lockfile', 'RunExecutionLock', '.lock']) {
+      expect(code, `the Integrator builds its own ${mechanism}`).not.toContain(mechanism);
+    }
+  });
+
+  it('runs no validation command during integration (M2-06, §13.2)', () => {
+    // The rejected design, pinned: collect every validation id from the wave, run
+    // them all against the integration tree, require all to pass. It contradicts
+    // `validationExpectation: 'fail'` — a task that is *supposed* to have a
+    // failing id at the moment it completes — and re-judges an expectation
+    // `judgeValidation` already evaluated exactly once, in the task's own
+    // worktree, against that task's own base (I-4).
+    //
+    // Integration verifies mechanical Git integrity and nothing else. Whether the
+    // finished tree is green is decided by the final `runVerification`, over the
+    // whole integration tree, and that was already the only authority.
+    const code = codeOnly(read(join(ROOT, 'src/app/integrator.ts')).text);
+
+    for (const forbidden of [
+      'runVerification',
+      'runCommands',
+      'judgeValidation',
+      'buildValidationRegistry',
+      'processRunner',
+    ]) {
+      expect(code, `the Integrator runs ${forbidden}`).not.toContain(forbidden);
+    }
   });
 
   it('forces a worktree removal from the throwaway probe and nowhere else (§7.4)', () => {
@@ -857,6 +997,10 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       'src/app/run-actions.ts',
       'src/app/execution-context.ts',
       'src/app/task-workspaces.ts',
+      // M2-06: `prepare` and `openForReview` both answer `sequential` for a run
+      // whose recorded mode is not `worktree`, so the mode is decided by the run
+      // rather than by whether an Integrator happens to be wired.
+      'src/app/integrator.ts',
     ]);
 
     const offenders = sourceFiles('src')
@@ -1316,12 +1460,68 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
     // Every one goes through the helper rather than doing its own acquire/release, so
     // none of them can forget the `finally` — and there is one lease, not two mutexes
     // that would each exclude a set of peers the other was not in.
+    //
+    // `review` joined them in M2-06 (§18.2). It used to be outside the lease and
+    // that used to be correct: it only read the user's working tree. §19.1 moves
+    // its verification commands and its `GitClient` into the integration worktree
+    // — the checkout the Integrator merges into — so a review running under a
+    // scheduler would report a result for a tree that never existed at any single
+    // instant.
     const actions = read(join(ROOT, 'src/app/run-actions.ts')).text;
     const locked = [...actions.matchAll(/withExecutionLock\(deps, store, runId, '(\w+)'/g)].map(
       (match) => match[1],
     );
 
-    expect(locked.sort()).toEqual(['approve', 'reject', 'retry', 'revise', 'run']);
+    expect(locked.sort()).toEqual(['approve', 'reject', 'retry', 'review', 'revise', 'run']);
+  });
+
+  it('takes that lease only where review touches the integration tree (§18.2)', () => {
+    // The lease is taken for what the command touches, not for what it is called.
+    // A sequential review still only reads the project directory, and refusing it
+    // because a run is busy would be a refusal with nothing behind it — so the
+    // decision is keyed on the run's recorded mode, which is the same field every
+    // other consumer reads (I-13).
+    const actions = codeOnly(read(join(ROOT, 'src/app/run-actions.ts')).text);
+    const review = actions.slice(
+      actions.indexOf('export async function review'),
+      actions.indexOf('async function judgeRun'),
+    );
+
+    expect(review, 'the review use case was not found').toContain('withExecutionLock');
+    expect(review).toMatch(/isolationMode\s*===\s*''/);
+  });
+
+  it('owns the review workflow in the application layer, not in the CLI (M2-06)', () => {
+    // §26.1 rule 12. `review` writes `verification.json`, `final-review.json` and
+    // the run's stage and status — it *moves* a run — and under MVP 2 it also
+    // decides which tree everything downstream reads. A command handler that did
+    // any of that would be a second implementation the browser could never reach,
+    // and the first time the two disagreed the disagreement would be silent.
+    //
+    // The test is an import rule, because "did you remember to take the lock" is
+    // not observable and "who may call this" is.
+    const OWNER = 'src/app/run-actions.ts';
+
+    for (const capability of ['runVerification', 'GitClient']) {
+      const users = sourceFiles('src')
+        .map(read)
+        .filter(({ path }) => path !== OWNER)
+        .filter(({ path }) => !path.startsWith('src/adapters/git/'))
+        .filter(({ path }) => path !== 'src/app/verification-commands.ts')
+        // `execution-context.ts` assembles the one `GitCommand` every consumer
+        // shares; it builds no client and runs no verification of its own.
+        .filter(({ text }) => new RegExp(`\\b${capability}\\s*\\(`).test(codeOnly(text)))
+        .map(({ path }) => path);
+
+      expect(users, `${capability} is reached outside ${OWNER}`).toEqual([]);
+    }
+
+    // And the CLI is an adapter over it: it calls the use case and renders.
+    const cli = read(join(ROOT, 'src/cli/review.ts'));
+    expect(importSpecifiers(cli.text).some((s) => s.includes('app/run-actions'))).toBe(true);
+    for (const workflow of ['stageRunner', 'store.updateRun', 'writeArtifact', 'checkDefinitionOfDone(']) {
+      expect(codeOnly(cli.text), `the CLI still runs ${workflow}`).not.toContain(workflow);
+    }
   });
 
   it('leaves the read-only gate description unlocked (AF-L01.2)', () => {

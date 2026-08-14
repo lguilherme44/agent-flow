@@ -1,210 +1,68 @@
 import { ReviewResultSchema, type ReviewResult } from '../contracts/index.js';
-import { buildExecutionContext, loadPlan } from '../app/execution-context.js';
-import { nodeAdapters } from './adapters.js';
-import { GitClient, renderChanges } from '../adapters/git/git-client.js';
-import {
-  FINAL_REVIEW_STAGE,
-  ReviewResponseSchema,
-  VERIFICATION_STAGE,
-  authorsOf,
-  buildReview,
-} from '../app/stages/final-review.js';
-import { runCorrectiveRound, type CorrectiveRound } from '../app/corrective-round.js';
-import { buildValidationRegistry } from '../core/validation-registry.js';
-import { assessIndependence, explainIndependence } from '../core/independence.js';
-import { runVerification, summariseVerification, failureDetail } from '../app/verification-commands.js';
-import { checkDefinitionOfDone } from '../core/definition-of-done.js';
+import { review, type ReviewOutcome } from '../app/run-actions.js';
+import type { CorrectiveRound } from '../app/corrective-round.js';
+import type { checkDefinitionOfDone } from '../core/definition-of-done.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
+import { actionDeps, currentRunId, exitCodeFor, printWarnings, render } from './approve.js';
 import type { GlobalOptions } from './index.js';
 
 /**
  * `agent-flow review` — verification, final review, and the Definition of Done.
  *
- * The commands run first and for free. Only then is a model asked anything,
- * and only about what a command cannot see. A broken build is discovered by
- * `npm test` exiting non-zero, not by paying for an opinion.
+ * A thin adapter since M2-06, and for two reasons rather than tidiness.
+ *
+ * The workflow *moves the run*: it writes `verification.json` and
+ * `final-review.json`, and it sets the run's stage and status. Under MVP 2 it
+ * also runs `lint · typecheck · test · build` inside the **integration worktree**
+ * — the same checkout the Integrator merges into — which is why it now takes the
+ * run execution lease in worktree mode and answers `run_busy` to a second caller
+ * (§18.2, §19.1). None of that can live in a command handler that only the
+ * terminal can reach.
+ *
+ * So the decisions are in `app/run-actions.ts`, which the local server calls too,
+ * and what is left here is what a CLI is for: turning an outcome into words and
+ * an exit code.
  */
 export async function runReviewCommand(
   options: { fix?: boolean },
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
   try {
-    const context = await buildExecutionContext({
-      ...nodeAdapters(),
-      projectDir: globals.cwd,
-      globalConfigPath: globals.globalConfigPath,
-    });
-
-    const state = await context.store.loadCurrentRun();
-    if (state === null) {
+    const deps = actionDeps(globals);
+    const runId = await currentRunId(deps);
+    if (runId === null) {
       process.stderr.write('No active run.\n');
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const [plan, sdd] = await Promise.all([
-      loadPlan(context.store, state.runId),
-      context.store.readArtifact(state.runId, 'sdd'),
-    ]);
-
-    if (plan === null || sdd === null) {
-      process.stderr.write('This run has no plan or SDD to review against.\n');
-      return ExitCode.GATE_NOT_SATISFIED;
-    }
-
-    const git = new GitClient(context.git, globals.cwd);
-    const changes = await git.changedFiles();
-    const changedFiles = renderChanges(changes);
-
-    // ---- Commands first: deterministic, free, and often decisive.
-    process.stdout.write('Running validation commands\n');
-    const verification = await runVerification({
-      processRunner: context.processRunner,
-      project: context.config.project,
-      cwd: globals.cwd,
-      onStep: (step, result) => {
-        process.stdout.write(`  ${result.exitCode === 0 ? '✓' : '✗'} ${step}\n`);
+    const outcome = await review(deps, runId, {
+      ...(options.fix === undefined ? {} : { fix: options.fix }),
+      onStage: (stage) => {
+        process.stdout.write(`${STAGE_HEADINGS[stage]}\n`);
+      },
+      onVerificationStep: (step, passed) => {
+        process.stdout.write(`  ${passed ? '✓' : '✗'} ${step}\n`);
       },
     });
 
-    const commandResults = [
-      summariseVerification(verification),
-      failureDetail(verification),
-    ]
-      .filter((part) => part.length > 0)
-      .join('\n\n');
+    printWarnings(outcome);
 
-    // ---- Verification agent: what a command cannot see.
-    process.stdout.write('\nInspecting the implementation\n');
-    const verificationResponse = ReviewResponseSchema.parse(
-      (
-        await context.stageRunner.run(VERIFICATION_STAGE, state.runId, {
-          sdd,
-          changedFiles,
-          commandResults,
-          agentsMd: await readAgentsMd(context, globals.cwd),
-        })
-      ).data,
-    );
-
-    await context.store.writeArtifact(
-      state.runId,
-      'verification',
-      `${JSON.stringify(verificationResponse, null, 2)}\n`,
-    );
-
-    // ---- Final review: the implementation against the approved SDD.
-    const authors = authorsOf(await context.store.readEvents(state.runId));
-
-    process.stdout.write('Reviewing against the approved SDD\n');
-    const finalResult = await context.stageRunner.run(FINAL_REVIEW_STAGE, state.runId, {
-      sdd,
-      plan: JSON.stringify(plan, null, 2),
-      diffStat: await git.diffStat(),
-      changedFiles,
-      commandResults,
-    });
-    const finalResponse = ReviewResponseSchema.parse(finalResult.data);
-
-    // Judged after both sides have run, and by provider rather than by runner
-    // id: two configuration entries can point at the same CLI, and a review
-    // across them is independent of nothing.
-    const independence = assessIndependence(
-      authors,
-      finalResult.execution.runner,
-      context.registry.providerOf,
-    );
-
-    if (independence === 'same-provider-fresh-context') {
-      await context.store.recordDegradation(state.runId, {
-        kind: 'single_provider',
-        reason: explainIndependence(authors, finalResult.execution.runner, context.registry.providerOf),
-        impact:
-          'the final review is same-provider: the model that wrote the code is also judging it',
-      });
+    if (!outcome.ok) {
+      process.stderr.write(`${render(outcome.error)}\n`);
+      return exitCodeFor(outcome.error);
     }
 
-    const finalReview = buildReview(
-      finalResponse,
-      {
-        runner: finalResult.execution.runner,
-        ...(finalResult.execution.model === undefined ? {} : { model: finalResult.execution.model }),
-        reasoning: finalResult.execution.reasoning,
-      },
-      independence,
-    );
+    process.stdout.write(`\n${renderOutcome(outcome.value)}\n`);
 
-    await context.store.writeArtifact(
-      state.runId,
-      'finalReview',
-      `${JSON.stringify(finalReview, null, 2)}\n`,
-    );
+    if (outcome.value.done.done) return ExitCode.OK;
 
-    // ---- What this run gave up along the way.
-    //
-    // Reported here and not only in `status`, because this is the screen that
-    // says FEATURE COMPLETE. A run that fell back to another provider, ran
-    // below its configured effort, reviewed itself, or had its gate overruled
-    // by --force reached that verdict on weaker terms, and the person reading
-    // the verdict is the one who needs to know it.
-    const finalState = await context.store.loadRun(state.runId);
-    if (finalState.degradations.length > 0) {
-      process.stdout.write('\nThis run was degraded:\n');
-      for (const degradation of finalState.degradations) {
-        process.stdout.write(`  · ${degradation.reason}\n    ${degradation.impact}\n`);
-      }
-    }
-
-    // ---- Definition of Done, evaluated as code (§42).
-    const doneCheck = checkDefinitionOfDone({
-      approved: state.approved,
-      taskStates: state.tasks.map((task) => task.state),
-      verificationPassed: verification.passed,
-      finalReviewVerdict: finalReview.verdict,
-    });
-
-    process.stdout.write(`\n${renderReview(verificationResponse, finalReview, doneCheck)}\n`);
-
-    await context.store.updateRun(state.runId, (current) => ({
-      ...current,
-      stage: 'final-review',
-      status: doneCheck.done ? 'completed' : current.status,
-    }));
-
-    if (doneCheck.done) return ExitCode.OK;
-
-    if (options.fix === true) {
-      const architectureImpact = await context.store.readArtifact(
-        state.runId,
-        'architectureImpact',
+    if (outcome.value.corrective !== undefined) {
+      process.stdout.write(`\n${renderCorrectiveRound(outcome.value.corrective)}\n`);
+    } else if (options.fix === true) {
+      process.stderr.write(
+        '\nThis run has no architecture impact artifact, which the plan review needs.\n',
       );
-
-      if (architectureImpact === null) {
-        process.stderr.write(
-          '\nThis run has no architecture impact artifact, which the plan review needs.\n',
-        );
-        return ExitCode.GATE_NOT_SATISFIED;
-      }
-
-      process.stdout.write('\nReviewing the corrected plan\n');
-
-      const round = await runCorrectiveRound({
-        store: context.store,
-        stageRunner: context.stageRunner,
-        providerOf: context.registry.providerOf,
-        runId: state.runId,
-        plan,
-        finalReview,
-        origin: 'final-review',
-        sdd,
-        architectureImpact,
-        // The ids a corrective task may cite come from the project's own
-        // configuration, never from the finding text: a fix validated by an id
-        // that does not resolve fails for the wrong reason.
-        validation: buildValidationRegistry(context.config.project),
-      });
-
-      process.stdout.write(`\n${renderCorrectiveRound(round)}\n`);
     }
 
     return ExitCode.GATE_NOT_SATISFIED;
@@ -213,6 +71,52 @@ export async function runReviewCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+const STAGE_HEADINGS = {
+  verification: 'Running validation commands',
+  inspection: '\nInspecting the implementation',
+  'final-review': 'Reviewing against the approved SDD',
+} as const;
+
+/**
+ * Everything the review found, in the order a person reads it.
+ *
+ * The degradations come before the verdict on purpose. This is the screen that
+ * says FEATURE COMPLETE, and a run that fell back to another provider, ran below
+ * its configured effort or reviewed itself reached that verdict on weaker terms
+ * — the person reading the verdict is the one who needs to know it (R-16).
+ */
+function renderOutcome(outcome: ReviewOutcome): string {
+  const lines: string[] = [];
+
+  if (outcome.degradations.length > 0) {
+    lines.push('This run was degraded:');
+    for (const degradation of outcome.degradations) {
+      lines.push(`  · ${degradation.reason}`, `    ${degradation.impact}`);
+    }
+    lines.push('');
+  }
+
+  lines.push(renderReview(outcome.verificationReview, outcome.finalReview, outcome.done));
+
+  // §19.3: the product of an isolated run is a branch, and the last thing the
+  // command prints has to say where the code is. The user's working tree was not
+  // modified, and the only way they find out is if the tool says so.
+  if (outcome.integration !== undefined) {
+    lines.push(
+      '',
+      `  branch     ${outcome.integration.branch}`,
+      `  verified   ${outcome.integration.head}`,
+      '',
+      'Your working tree was not modified.',
+      '',
+      `  Review it:   git log --oneline ${outcome.integration.branch}`,
+      `  Take it:     git merge ${outcome.integration.branch}`,
+    );
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -264,16 +168,6 @@ function renderCorrectiveRound(round: CorrectiveRound): string {
   );
 
   return lines.join('\n');
-}
-
-async function readAgentsMd(
-  context: Awaited<ReturnType<typeof buildExecutionContext>>,
-  projectDir: string,
-): Promise<string> {
-  const path = `${projectDir}/AGENTS.md`;
-  return (await context.fs.exists(path))
-    ? context.fs.readFile(path)
-    : 'No AGENTS.md in this repository.';
 }
 
 function renderReview(

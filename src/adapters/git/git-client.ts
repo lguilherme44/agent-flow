@@ -58,6 +58,60 @@ export class GitClient {
       .join('\n');
   }
 
+  /**
+   * `git diff --stat <base> <head>` — the feature's diff, not the tree's state.
+   *
+   * The worktree-mode half of {@link diffStat} (§19.2). Two revisions rather than
+   * one, and that is the property: `diff --stat <base>` alone would compare the
+   * base against whatever the checkout happens to hold *now*, so a stray file in
+   * the integration worktree would enter the reviewer's picture of a commit. Named
+   * explicitly, both sides describe exactly `planningBase..integrationHead`.
+   */
+  async diffStatBetween(base: string, head: string): Promise<string> {
+    const range = revisionRange(base, head);
+    if (range === null) return 'No changes against the base of this run.';
+
+    const result = await this.run('diff', ['--stat', ...range, '--']);
+    const stat = result.exitCode === 0 ? result.stdout.trim() : '';
+    return stat.length > 0 ? stat : 'No changes against the base of this run.';
+  }
+
+  /**
+   * Changed paths between two commits, with their status letters (§19.2).
+   *
+   * `-z`, because the newline-separated form cannot represent a rename
+   * unambiguously and a path containing a newline would be read as two entries.
+   * A rename or copy carries two paths and the *destination* is reported: that is
+   * the file a reviewer opens.
+   *
+   * Untracked files are deliberately absent, unlike {@link changedFiles}. This
+   * compares two commits, and a commit has no untracked files — anything sitting
+   * in the integration worktree is not part of what was integrated, so listing it
+   * would describe something the reviewer is not judging.
+   */
+  async changedFilesBetween(base: string, head: string): Promise<GitChange[]> {
+    const range = revisionRange(base, head);
+    if (range === null) return [];
+
+    const result = await this.run('diff', ['--name-status', '-z', ...range, '--']);
+    if (result.exitCode !== 0) return [];
+
+    const fields = result.stdout.split('\0').filter((field) => field.length > 0);
+    const changes: GitChange[] = [];
+
+    for (let index = 0; index < fields.length; index += 1) {
+      const status = fields[index] ?? '';
+      // `R100`, `C75`: a similarity score, and two paths follow rather than one.
+      const renamed = status.startsWith('R') || status.startsWith('C');
+      const path = fields[index + (renamed ? 2 : 1)];
+      index += renamed ? 2 : 1;
+      if (path === undefined) break;
+      changes.push({ status, path });
+    }
+
+    return changes;
+  }
+
   /** Changed paths with their status letters, plus untracked files. */
   async changedFiles(): Promise<GitChange[]> {
     const result = await this.run('status', ['--porcelain=v1']);
@@ -108,6 +162,21 @@ export class GitClient {
       argv: [],
     };
   }
+}
+
+/**
+ * The two commits, or `null` when either is not an object id.
+ *
+ * `GitCommand` refuses configuration smuggled into `args` and never touches a
+ * shell, so this is not an injection defence — it is a correctness one. Both
+ * revisions reach here from `state.json`, where `CommitOidSchema` already
+ * validates them; a value that is not forty hex characters means the caller is
+ * holding something other than a commit, and asking Git about it would turn that
+ * into a diff of the wrong thing rather than into nothing.
+ */
+function revisionRange(base: string, head: string): [string, string] | null {
+  const oid = /^[0-9a-f]{40}$/;
+  return oid.test(base) && oid.test(head) ? [base, head] : null;
 }
 
 /** Compact rendering of a change list for a prompt. */

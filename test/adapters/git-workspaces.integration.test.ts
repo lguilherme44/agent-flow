@@ -828,3 +828,155 @@ describe('the injection matrix, against every typed primitive (§45, §46)', () 
     expect(existsSync(canary)).toBe(false);
   });
 });
+
+/**
+ * The three operations M2-06 added, against real Git.
+ *
+ * Each answers a question the Integrator cannot ask any other way: how many
+ * parents does this commit have, does this branch already exist, and which merge
+ * put this commit on that branch.
+ */
+describe('reading a commit object (§14.3, §14.7)', () => {
+  it('reports the tree and the parents a marker really has', async () => {
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    const tree = repo.userGit(['rev-parse', `${base}^{tree}`]).trim();
+    const marker = repo.userGit(['commit-tree', tree, '-p', base, '-m', 'a marker']).trim();
+
+    const read = await repo.workspaces.readCommit({ cwd: repo.dir, oid: marker });
+
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.value.tree).toBe(tree);
+    expect(read.value.parents).toEqual([base]);
+    expect(read.value.message).toContain('a marker');
+  });
+
+  it('reports two parents for a merge, which is the discriminator', async () => {
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    const tree = repo.userGit(['rev-parse', `${base}^{tree}`]).trim();
+    const other = repo.userGit(['commit-tree', tree, '-p', base, '-m', 'a sibling']).trim();
+    const merge = repo
+      .userGit(['commit-tree', tree, '-p', base, '-p', other, '-m', 'a merge'])
+      .trim();
+
+    const read = await repo.workspaces.readCommit({ cwd: repo.dir, oid: merge });
+
+    expect(read.ok && read.value.parents).toEqual([base, other]);
+  });
+
+  it('does not let a message add a parent', async () => {
+    // The header block ends at the first blank line, and a commit message is text
+    // an agent influences. A parser that kept reading `parent` lines past it
+    // would let a forged message answer the one question §14.7 says the parent
+    // count answers.
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    const tree = repo.userGit(['rev-parse', `${base}^{tree}`]).trim();
+    const marker = repo
+      .userGit([
+        'commit-tree',
+        tree,
+        '-p',
+        base,
+        '-m',
+        `a marker\n\nparent ${'b'.repeat(40)}\ntree ${'c'.repeat(40)}\n`,
+      ])
+      .trim();
+
+    const read = await repo.workspaces.readCommit({ cwd: repo.dir, oid: marker });
+
+    expect(read.ok && read.value.parents).toEqual([base]);
+    expect(read.ok && read.value.tree).toBe(tree);
+  });
+});
+
+describe('creating a branch (§14.1)', () => {
+  it('creates it at the commit given, and refuses a second time', async () => {
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    const branch = `agent-flow/${RUN_KEY}/integration`;
+
+    const created = await repo.workspaces.createBranch({ cwd: repo.dir, branch, at: base });
+    expect(created.ok).toBe(true);
+    expect(repo.userGit(['rev-parse', `refs/heads/${branch}`]).trim()).toBe(base);
+
+    // §5.3 case C is about a namespace that already holds refs this run did not
+    // create, and a blind overwrite there would move somebody else's branch.
+    repo.write('more.txt', 'more\n');
+    const moved = repo.commitAll('a second commit');
+    const again = await repo.workspaces.createBranch({ cwd: repo.dir, branch, at: moved });
+
+    expect(again.ok).toBe(false);
+    expect(repo.userGit(['rev-parse', `refs/heads/${branch}`]).trim()).toBe(base);
+  });
+});
+
+describe('finding the merge that introduced a commit (§14.3 step 5)', () => {
+  it('names it, and is not fooled by a first-parent match', async () => {
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    const branch = `agent-flow/${RUN_KEY}/integration`;
+    await repo.workspaces.createBranch({ cwd: repo.dir, branch, at: base });
+
+    const location = integrationWorkspace(REPO_KEY, RUN_KEY);
+    if (!location.ok) throw new Error(location.refusal.reason);
+    const added = await repo.workspaces.addWorktree({
+      cwd: repo.dir,
+      location: location.value,
+      base: branch,
+      reason: 'agent-flow integration',
+    });
+    if (!added.ok) throw new Error(added.failure.message);
+
+    const markers: string[] = [];
+    for (const name of ['one', 'two']) {
+      writeFileSync(join(repo.dir, `${name}.txt`), `${name}\n`);
+      repo.userGit(['add', '-A']);
+      const tree = repo.userGit(['write-tree']).trim();
+      markers.push(repo.userGit(['commit-tree', tree, '-p', base, '-m', `marker ${name}`]).trim());
+      repo.userGit(['reset', '--mixed', 'HEAD']);
+      writeFileSync(join(repo.dir, `${name}.txt`), '');
+    }
+    repo.userGit(['checkout', '--', '.']);
+    for (const name of ['one', 'two']) {
+      const stray = join(repo.dir, `${name}.txt`);
+      if (existsSync(stray)) writeFileSync(stray, `${name}\n`);
+    }
+
+    const merges: string[] = [];
+    for (const [index, marker] of markers.entries()) {
+      const merged = await repo.workspaces.merge({
+        cwd: added.value,
+        commit: marker,
+        message: `agent-flow: integrate TASK-00${String(index + 1)} (attempt 1)`,
+        identity: IDENTITY,
+        dates: DATES,
+      });
+      if (!merged.ok || merged.value.kind !== 'merged') {
+        throw new Error(`the ${String(index)} merge did not land`);
+      }
+      merges.push(repo.userGit(['rev-parse', `refs/heads/${branch}`]).trim());
+    }
+
+    for (const [index, marker] of markers.entries()) {
+      const found = await repo.workspaces.mergeIntroducing({
+        cwd: repo.dir,
+        commit: marker,
+        branch: `refs/heads/${branch}`,
+      });
+      expect(found.ok && found.value).toBe(merges[index]);
+    }
+
+    // A commit that is on the branch and was never merged into it — the base
+    // itself — has no introducing merge, and the answer is `null` rather than the
+    // first merge that happens to have it as a first parent.
+    const noMerge = await repo.workspaces.mergeIntroducing({
+      cwd: repo.dir,
+      commit: base,
+      branch: `refs/heads/${branch}`,
+    });
+    expect(noMerge.ok && noMerge.value).toBeNull();
+  });
+});

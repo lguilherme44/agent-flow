@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   AnyTaskIdSchema,
+  CommitOidSchema,
   IsoTimestampSchema,
   ReasoningLevelSchema,
   RunIdSchema,
@@ -54,6 +55,37 @@ export const TaskResultSchema = z.object({
 
   notes: z.array(z.string()).default([]),
   errorCode: RunnerErrorCodeSchema.optional(),
+
+  /**
+   * Where this task's validated tree landed on the integration branch (MVP 2 §10.3).
+   *
+   * **Absent in sequential mode; present on every `completed` task in worktree
+   * mode — and its presence is the on-disk statement of I-3.** A task is not done
+   * because an agent said so and not because its validation passed: it is done
+   * when its marker was merged, and this block is the evidence of that merge.
+   *
+   * Written by `app/integrator.ts` and by nothing else. In worktree mode
+   * `result.json` does not exist at all until the merge has happened, because a
+   * file on disk saying `"status": "completed"` for work that is not on the
+   * integration branch is a lie recovery would believe (§10.1).
+   */
+  integration: z
+    .object({
+      /** Which attempt produced the marker. Attempts are immutable (§11.3). */
+      attempt: z.number().int().min(1),
+      /** The integration branch, `agent-flow/<gitRunKey>/integration`. */
+      branch: z.string().min(1),
+      /** The attempt's marker — one parent, the attempt's base (§12.1). */
+      marker: CommitOidSchema,
+      /** The merge that put it on the branch. Two parents, always (§14.5). */
+      mergeCommit: CommitOidSchema,
+      /** The wave base the attempt was cut from. */
+      base: CommitOidSchema,
+      /** `receipt.validatedTree` — the tree the validation commands ran against. */
+      validatedTree: CommitOidSchema,
+      integratedAt: IsoTimestampSchema,
+    })
+    .optional(),
 });
 export type TaskResult = z.infer<typeof TaskResultSchema>;
 

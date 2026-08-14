@@ -37,6 +37,25 @@ import {
   type PlanningBaseMoment,
   type WorktreeRefusalCode,
 } from './run-git-identity.js';
+import type { IntegrationRefusalCode } from './integrator.js';
+import { GitClient, renderChanges } from '../adapters/git/git-client.js';
+import {
+  failureDetail,
+  runVerification,
+  summariseVerification,
+  type VerificationOutcome,
+} from './verification-commands.js';
+import {
+  FINAL_REVIEW_STAGE,
+  ReviewResponseSchema,
+  VERIFICATION_STAGE,
+  authorsOf,
+  buildReview,
+} from './stages/final-review.js';
+import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js';
+import { assessIndependence, explainIndependence } from '../core/independence.js';
+import { buildValidationRegistry } from '../core/validation-registry.js';
+import { checkDefinitionOfDone, type DoneCheck } from '../core/definition-of-done.js';
 
 /**
  * Every state transition a person can ask for, as use cases (UI-27).
@@ -89,7 +108,12 @@ export type ActionErrorCode =
   // one command, and none of them is forcible: there is no `--force` for a moved
   // planning base or a dirty tree, and adding one would be adding a flag whose
   // only function is to produce an unexplainable tree.
-  | WorktreeRefusalCode;
+  | WorktreeRefusalCode
+  // MVP 2 §14, §15. A run whose integration branch cannot be read or merged into
+  // stops, and it stops with the code that names what is wrong rather than with a
+  // generic "gate not satisfied" — which is the difference between a person
+  // knowing their branch was rewound and a person re-running the command.
+  | IntegrationRefusalCode;
 
 export interface ActionError {
   readonly code: ActionErrorCode;
@@ -303,6 +327,8 @@ function gerund(operation: LockOperation): string {
       return 'approved';
     case 'reject':
       return 'rejected';
+    case 'review':
+      return 'reviewed';
   }
 }
 
@@ -973,8 +999,327 @@ async function replan(
 }
 
 // ---------------------------------------------------------------------------
-// shared
+// review
 // ---------------------------------------------------------------------------
+
+export interface ReviewOptions {
+  /** Turn the findings into corrective tasks, and review the corrected plan. */
+  readonly fix?: boolean;
+  /** Progress, for an adapter that streams. Decides nothing. */
+  readonly onVerificationStep?: (step: string, passed: boolean) => void;
+  readonly onStage?: (stage: 'verification' | 'inspection' | 'final-review') => void;
+}
+
+export interface ReviewOutcome {
+  readonly runId: string;
+  readonly verification: VerificationOutcome;
+  readonly verificationReview: { verdict: 'PASS' | 'FAIL'; findings: ReviewResult['findings'] };
+  readonly finalReview: ReviewResult;
+  readonly done: DoneCheck;
+  readonly degradations: RunState['degradations'];
+  /** Present only when `fix` was asked for and there was something to correct. */
+  readonly corrective?: CorrectiveRound;
+  /**
+   * The one commit verification, the reviewer and the Definition of Done all
+   * describe (§19.2). Absent in sequential mode, where the tree is the project
+   * directory and there is no commit to name.
+   */
+  readonly integration?: { readonly branch: string; readonly head: string };
+}
+
+/**
+ * `agent-flow review` as a use case — verification, the two agents, and the
+ * Definition of Done (§19).
+ *
+ * It lives here rather than in the CLI for the reason every other write action
+ * does: the terminal and the browser must be two adapters over one workflow, and
+ * this one now *moves* a run — it writes `verification.json`, `final-review.json`
+ * and the run's stage and status. It also decides, in worktree mode, which tree
+ * everything downstream reads.
+ *
+ * **The lease is taken for what the command touches, not for what it is called**
+ * (§18.2). In worktree mode this reads and runs commands inside the integration
+ * worktree — the same checkout the Integrator merges into — so it takes the run
+ * execution lock like every other write action, and a concurrent `review` gets
+ * `run_busy`. In sequential mode it still only reads the project directory, so it
+ * keeps running without the lease exactly as it always has.
+ */
+export async function review(
+  deps: RunActionDeps,
+  runId: string,
+  options: ReviewOptions = {},
+): Promise<ActionOutcome<ReviewOutcome>> {
+  const store = storeFor(deps);
+  const state = await loadRun(store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  return state.isolationMode === 'worktree'
+    ? withExecutionLock(deps, store, runId, 'review', () => judgeRun(deps, runId, options))
+    : judgeRun(deps, runId, options);
+}
+
+async function judgeRun(
+  deps: RunActionDeps,
+  runId: string,
+  options: ReviewOptions,
+): Promise<ActionOutcome<ReviewOutcome>> {
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const [plan, sdd] = await Promise.all([
+    loadPlanArtifact(context.store, runId),
+    context.store.readArtifact(runId, 'sdd'),
+  ]);
+
+  if (plan === null || sdd === null) {
+    return failed({
+      code: plan === null ? 'no_plan' : 'no_sdd',
+      message: `${runId} has no plan or SDD to review against.`,
+      action: 'Finish planning before reviewing the implementation.',
+    });
+  }
+
+  // §19.2: **one tree, read once.** `state.integrationHead` is the commit the
+  // Integrator advanced on every merge, and it is what verification, the
+  // reviewer's diff and the Definition of Done all describe. A run reviewed
+  // against a commit its own state does not name is a run whose green verdict
+  // means nothing.
+  const tree = await openReviewTree(context, state);
+  if (!tree.ok) return failed(tree.error);
+
+  const git = new GitClient(context.git, tree.value.cwd);
+  const changes =
+    tree.value.integration === undefined
+      ? await git.changedFiles()
+      : await git.changedFilesBetween(tree.value.base, tree.value.integration.head);
+  const changedFiles = renderChanges(changes);
+
+  // ---- Commands first: deterministic, free, and often decisive.
+  options.onStage?.('verification');
+  const verification = await runVerification({
+    processRunner: context.processRunner,
+    project: context.config.project,
+    cwd: tree.value.cwd,
+    onStep: (step, result) => options.onVerificationStep?.(step, result.exitCode === 0),
+  });
+
+  const commandResults = [summariseVerification(verification), failureDetail(verification)]
+    .filter((part) => part.length > 0)
+    .join('\n\n');
+
+  // ---- Verification agent: what a command cannot see.
+  options.onStage?.('inspection');
+  const verificationResponse = ReviewResponseSchema.parse(
+    (
+      await context.stageRunner.run(
+        VERIFICATION_STAGE,
+        runId,
+        {
+          sdd,
+          changedFiles,
+          commandResults,
+          agentsMd: await readAgentsMd(context, tree.value.cwd),
+        },
+        // §19.2: the agent reads the same tree the commands ran in. Left to
+        // default it would read the project directory — the user's working tree,
+        // which in worktree mode holds none of the run's work.
+        { workingDirectory: tree.value.cwd },
+      )
+    ).data,
+  );
+
+  await context.store.writeArtifact(
+    runId,
+    'verification',
+    `${JSON.stringify(verificationResponse, null, 2)}\n`,
+  );
+
+  // ---- Final review: the implementation against the approved SDD.
+  const authors = authorsOf(await context.store.readEvents(runId));
+
+  options.onStage?.('final-review');
+  const finalResult = await context.stageRunner.run(
+    FINAL_REVIEW_STAGE,
+    runId,
+    {
+      sdd,
+      plan: JSON.stringify(plan, null, 2),
+      diffStat:
+        tree.value.integration === undefined
+          ? await git.diffStat()
+          : await git.diffStatBetween(tree.value.base, tree.value.integration.head),
+      changedFiles,
+      commandResults,
+    },
+    { workingDirectory: tree.value.cwd },
+  );
+  const finalResponse = ReviewResponseSchema.parse(finalResult.data);
+
+  // Judged after both sides have run, and by provider rather than by runner id:
+  // two configuration entries can point at the same CLI, and a review across them
+  // is independent of nothing.
+  const independence = assessIndependence(
+    authors,
+    finalResult.execution.runner,
+    context.providerOf,
+  );
+
+  if (independence === 'same-provider-fresh-context') {
+    await context.store.recordDegradation(runId, {
+      kind: 'single_provider',
+      reason: explainIndependence(authors, finalResult.execution.runner, context.providerOf),
+      impact:
+        'the final review is same-provider: the model that wrote the code is also judging it',
+    });
+  }
+
+  const finalReview = buildReview(
+    finalResponse,
+    {
+      runner: finalResult.execution.runner,
+      ...(finalResult.execution.model === undefined ? {} : { model: finalResult.execution.model }),
+      reasoning: finalResult.execution.reasoning,
+    },
+    independence,
+  );
+
+  await context.store.writeArtifact(
+    runId,
+    'finalReview',
+    `${JSON.stringify(finalReview, null, 2)}\n`,
+  );
+
+  // ---- Definition of Done, evaluated as code (§42), over the same tree.
+  const doneCheck = checkDefinitionOfDone({
+    approved: state.approved,
+    taskStates: state.tasks.map((task) => task.state),
+    verificationPassed: verification.passed,
+    finalReviewVerdict: finalReview.verdict,
+  });
+
+  await context.store.updateRun(runId, (current) => ({
+    ...current,
+    stage: 'final-review',
+    status: doneCheck.done ? 'completed' : current.status,
+  }));
+
+  const finalState = await context.store.loadRun(runId);
+
+  const corrective =
+    doneCheck.done || options.fix !== true
+      ? undefined
+      : await correctPlan(context, runId, plan, sdd, finalReview);
+
+  return done({
+    runId,
+    verification,
+    verificationReview: {
+      verdict: verificationResponse.verdict,
+      findings: verificationResponse.findings,
+    },
+    finalReview,
+    done: doneCheck,
+    degradations: finalState.degradations,
+    ...(corrective === undefined ? {} : { corrective }),
+    ...(tree.value.integration === undefined ? {} : { integration: tree.value.integration }),
+  });
+}
+
+/**
+ * Which tree this review describes, and the commit it is pinned to (§19.1).
+ *
+ * Two answers, and the run decides which — never the configuration (I-13).
+ *
+ * In **worktree mode** it is the integration worktree, opened through the
+ * Integrator so the branch is confirmed to still be at the commit the run
+ * recorded. Never `globals.cwd`: the user's working tree is not where the work
+ * is, and it is a property of this milestone that Agent Flow did not touch it
+ * (§19.3).
+ *
+ * In **sequential mode** it is the project directory, exactly as it has always
+ * been, and no Git integration path is reached at all (§25.1).
+ */
+async function openReviewTree(
+  context: ExecutionContext,
+  state: RunState,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly cwd: string;
+        /** `planningBase`, when there is a range to diff. */
+        readonly base: string;
+        readonly integration?: { readonly branch: string; readonly head: string };
+      };
+    }
+  | { readonly ok: false; readonly error: ActionError }
+> {
+  const opened = await context.integrator.openForReview(state.runId);
+
+  if (opened.kind === 'sequential') {
+    return { ok: true, value: { cwd: context.projectDir, base: state.planningBase ?? '' } };
+  }
+
+  if (opened.kind === 'refused') {
+    return {
+      ok: false,
+      error: {
+        code: opened.refusal.code,
+        message:
+          `${state.runId} is an isolated run and its integration tree cannot be read: ` +
+          `${opened.refusal.detail}.`,
+        action:
+          'The integration branch is the product of the run. Restore it, or start a new run.',
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      cwd: opened.workspace.path,
+      base: state.planningBase ?? '',
+      integration: { branch: opened.workspace.branch, head: opened.workspace.head },
+    },
+  };
+}
+
+/** `AGENTS.md` of the tree under review, not of whatever the user has open. */
+async function readAgentsMd(context: ExecutionContext, cwd: string): Promise<string> {
+  const path = `${cwd}/AGENTS.md`;
+  return (await context.fs.exists(path))
+    ? context.fs.readFile(path)
+    : 'No AGENTS.md in this repository.';
+}
+
+/** `--fix`: the findings become tasks, and the corrected plan is reviewed. */
+async function correctPlan(
+  context: ExecutionContext,
+  runId: string,
+  plan: Plan,
+  sdd: string,
+  finalReview: ReviewResult,
+): Promise<CorrectiveRound | undefined> {
+  const architectureImpact = await context.store.readArtifact(runId, 'architectureImpact');
+  if (architectureImpact === null) return undefined;
+
+  return runCorrectiveRound({
+    store: context.store,
+    stageRunner: context.stageRunner,
+    providerOf: context.providerOf,
+    runId,
+    plan,
+    finalReview,
+    origin: 'final-review',
+    sdd,
+    architectureImpact,
+    // The ids a corrective task may cite come from the project's own
+    // configuration, never from the finding text: a fix validated by an id that
+    // does not resolve fails for the wrong reason.
+    validation: buildValidationRegistry(context.config.project),
+  });
+}
 
 function noSuchRun(runId: string): ActionError {
   return {
