@@ -219,11 +219,78 @@ export interface RunSummaryView {
   readonly durationMs: number;
 }
 
+/**
+ * How a run isolates its tasks, as a person needs to read it (§21.2).
+ *
+ * Three values where `state.isolationMode` has two: `legacy` is the **absent**
+ * case — a run created before MVP 2, which predates the question rather than
+ * having answered `none` (§25.2). It is *projected* here and is never a stored
+ * value, because there is no honest field to store it in.
+ */
+export type IsolationView = 'none' | 'worktree' | 'legacy';
+
+/**
+ * What the run asked of parallelism and what it got (§21.2, M2-00.3).
+ *
+ * Two numbers rather than one, because "4" and "1" are different facts and a
+ * reader who saw only the configured one would plan around it. This is the answer
+ * to "why is this still running one task at a time".
+ */
+export interface ParallelismView {
+  readonly requested: number;
+  readonly effective: number;
+  readonly clamped: boolean;
+  readonly reason?: string;
+}
+
+/**
+ * What an isolated run is doing, for somebody who has to debug it (§21.2).
+ *
+ * **Ref names and object ids appear here; filesystem paths never do** (§21.3,
+ * §26.1 rule 4). The asymmetry is deliberate rather than an oversight: a branch
+ * name is provenance a person needs — §19.3 prints it and tells them to merge it —
+ * and the server never accepts one back. A worktree path is a machine fact the
+ * attempt artifact deliberately does not even store (§7.2).
+ */
+export interface IsolationDetailView {
+  readonly mode: IsolationView;
+  readonly parallelism: ParallelismView;
+  /** `agent-flow/<gitRunKey>/integration`, derived. Absent unless isolated. */
+  readonly integrationBranch?: string;
+  /** The commit verification, review and the DoD all describe (§19.2). */
+  readonly integrationHead?: string;
+  /** The commit the plan was written against (§6.1). */
+  readonly planningBase?: string;
+  /** How many tasks have their work on the integration branch (I-3). */
+  readonly tasksIntegrated: number;
+  /**
+   * Why the run's mode and the current configuration disagree, in words (§21.4).
+   *
+   * Absent when they agree. Without it the tool looks broken to the one user who
+   * did exactly what the documentation told them to and then wondered why it had
+   * no effect.
+   */
+  readonly note?: string;
+}
+
 export interface RunDetailView extends RunSummaryView {
   readonly approvedAt?: string;
   readonly approvedPlanHash?: string;
   readonly degradationDetail: Degradation[];
   readonly startedAt: string;
+  /** §21.2. Present for every run; `mode` carries the legacy projection. */
+  readonly isolation: IsolationDetailView;
+  /** §15: what an integration conflict recorded, from the event it wrote. */
+  readonly integrationConflicts: IntegrationConflictView[];
+}
+
+export interface IntegrationConflictView {
+  readonly task: string;
+  readonly attempt: number;
+  /** Repository-relative, as `git diff --name-only` reports them. */
+  readonly paths: string[];
+  /** The sibling whose merge moved the head — usually the answer to "why". */
+  readonly previouslyIntegrated?: string;
 }
 
 export interface StageViewResponse {
@@ -255,6 +322,31 @@ export interface TaskSummaryView {
   readonly reasoning?: ReasoningLevel;
   readonly durationMs?: number;
   readonly validationPassed?: boolean;
+  /**
+   * An isolated workspace is live for this task right now (§21.2).
+   *
+   * Derived — `running` in a worktree run — rather than stored, because a boolean
+   * on disk saying "a workspace exists" is a second copy of a fact the task's own
+   * state already carries, and the two could disagree after a crash.
+   */
+  readonly workspaceActive?: boolean;
+  /**
+   * The attempt is validated and its marker is not on the integration branch yet.
+   *
+   * The state that has no name in `TaskState` and that a person watching a parallel
+   * run most needs to see: the work is done, the merge has not happened, and
+   * `completed` would be a lie until it does (I-3).
+   */
+  readonly awaitingIntegration?: boolean;
+  /** Where this task's validated tree landed (§10.3). Ref names and oids only. */
+  readonly integration?: {
+    readonly attempt: number;
+    readonly branch: string;
+    readonly marker: string;
+    readonly mergeCommit: string;
+    readonly validatedTree: string;
+    readonly integratedAt: string;
+  };
 }
 
 export interface TaskDetailView extends TaskSummaryView {

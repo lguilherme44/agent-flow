@@ -352,6 +352,12 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
       'src/app/execution-context.ts',
       // Reports the configured value, and says it is not the effective one.
       'src/server/config-reader.ts',
+      // M2-10: §21.2 requires the read model to expose `requested` beside
+      // `effective`, because "4" and "1" are different facts and a reader who saw
+      // only one of them would plan around it. It resolves through the same
+      // function the scheduler uses rather than reporting the raw number as though
+      // it were the instruction.
+      'src/server/run-reader.ts',
     ]);
 
     const offenders = sourceFiles('src')
@@ -563,8 +569,10 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     const offenders = sourceFiles('src')
       .map((file) => read(file))
       .filter(({ path }) => !WRITERS.includes(path) && path !== 'src/app/paths.ts')
-      // `state-store.ts` reads one back; reading is not writing.
-      .filter(({ path }) => path !== 'src/app/state-store.ts')
+      // `state-store.ts` reads one back; reading is not writing. M2-10's read model
+      // does the same, for the one question only that file answers: whether an
+      // attempt is validated and *not yet merged* (§21.2). It writes nothing.
+      .filter(({ path }) => !['src/app/state-store.ts', 'src/server/run-reader.ts'].includes(path))
       .filter(({ text }) => /taskResult\s*\(/.test(codeOnly(text)))
       .map(({ path }) => path);
 
@@ -1010,6 +1018,10 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
 
     const allowed = new Set([
       'src/contracts/common.schema.ts',
+      // M2-10: the read model's `IsolationView` names the three values a *reader*
+      // sees, where the stored field has two — `legacy` is the absent case,
+      // projected (§21.2, §25.2). A type declaration decides nothing.
+      'src/contracts/api.schema.ts',
       RESOLVER,
       POLICY,
       ASSIGNS,
@@ -1024,6 +1036,14 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       // whose recorded mode is not `worktree`, so the mode is decided by the run
       // rather than by whether an Integrator happens to be wired.
       'src/app/integrator.ts',
+      // M2-10: `status` asks whether a run is isolated so it can print §21.4's
+      // ISOLATION block, and prints nothing at all when it is not — a sequential run
+      // is not shown machinery its user never turned on.
+      'src/cli/status.ts',
+      // M2-10: the read model asks whether a run is isolated so it can *render* the
+      // facts §21.2 lists — a live workspace, an attempt awaiting integration. It
+      // never decides the mode, and it never asks the configuration for it.
+      'src/server/run-reader.ts',
       // M2-09: reclamation asks the run whether it *has* a namespace at all. A
       // sequential or legacy run has none, so there is nothing Git to reclaim and
       // its state is removable — which is how `clean` keeps behaving exactly as it

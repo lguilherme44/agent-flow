@@ -9,6 +9,7 @@ import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { loadConfig } from '../config/loader.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
+import { integrationRef } from '../core/worktree-policy.js';
 import type { GlobalOptions } from './index.js';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -80,6 +81,19 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     // costs the isolation line and nothing else.
     const isolation = await describeIsolationFor(state, fs, globals);
 
+    // §15's record, read from the audit trail to *render* it. `events.jsonl` is
+    // never a decision input (I-1); showing what it logged is exactly what it is
+    // for, and the paths it holds are repository-relative.
+    const conflicts = (await store.readEvents(state.runId))
+      .filter((event) => event.type === 'integration_conflict')
+      .map((event) => ({
+        task: String(event.detail['task'] ?? ''),
+        attempt: Number(event.detail['attempt'] ?? 0),
+        paths: Array.isArray(event.detail['paths'])
+          ? event.detail['paths'].filter((path): path is string => typeof path === 'string')
+          : [],
+      }));
+
     process.stdout.write(
       `${render(
         state,
@@ -87,6 +101,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         review?.success ? review.data : null,
         completedStages,
         isolation,
+        conflicts,
       )}\n`,
     );
     return ExitCode.OK;
@@ -145,12 +160,70 @@ async function describeIsolationFor(
   }
 }
 
+/**
+ * What an isolated run is doing (§21.4).
+ *
+ * Four facts, and each answers a question sequential mode never raised: which
+ * branch the product is on, how many tasks are actually *integrated* rather than
+ * merely finished (I-3), which attempt each task is on, and — for a halted run —
+ * which files an integration conflict named.
+ *
+ * **The branch name is derived from `gitRunKey`, never stored** (§5.3), and no
+ * absolute path appears: a worktree path is a machine fact the artifact
+ * deliberately does not record (§7.2, §21.3).
+ */
+export function renderIsolatedProgress(
+  state: RunState,
+  conflicts: readonly { task: string; attempt: number; paths: readonly string[] }[],
+): string[] {
+  if (state.isolationMode !== 'worktree') return [];
+
+  const branch = state.gitRunKey === undefined ? undefined : integrationRef(state.gitRunKey);
+  const integrated = state.tasks.filter((task) => task.state === 'completed').length;
+
+  const lines: string[] = ['ISOLATION', ''];
+
+  if (branch?.ok === true) lines.push(`  branch          ${branch.value}`);
+  if (state.integrationHead !== undefined) {
+    lines.push(`  integrated at   ${state.integrationHead.slice(0, 8)}`);
+  }
+  lines.push(`  integrated      ${String(integrated)} of ${String(state.tasks.length)} task(s)`);
+
+  // Per-task attempt numbers, and only where they are interesting: a task on its
+  // first attempt is the normal case, and a column of "1" teaches nobody anything.
+  const retried = state.tasks.filter((task) => task.attempts > 1);
+  if (retried.length > 0) {
+    lines.push('  attempts');
+    for (const task of retried) {
+      lines.push(`    ${task.id.padEnd(12)}${String(task.attempts)}`);
+    }
+  }
+
+  if (conflicts.length > 0) {
+    lines.push('  integration conflicts');
+    for (const conflict of conflicts) {
+      lines.push(
+        `    ${conflict.task} attempt ${String(conflict.attempt)} — ` +
+          `${conflict.paths.slice(0, 5).join(', ')}`,
+      );
+    }
+    lines.push(
+      '    two tasks changed the same lines. Revise the plan so they are genuinely',
+      '    independent, or make one depend on the other, then: agent-flow retry <task>',
+    );
+  }
+
+  lines.push('');
+  return lines;
+}
+
 function render(
   state: RunState,
   taskCount: number,
   review: ReturnType<typeof ReviewResultSchema.parse> | null,
   completedStages: readonly string[],
   isolation: IsolationReport | null,
+  conflicts: readonly { task: string; attempt: number; paths: readonly string[] }[],
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -177,6 +250,12 @@ function render(
   }
 
   if (taskCount > 0) lines.push(`${String(taskCount)} tasks`, '');
+
+  // §21.4: what an isolated run is actually doing. Shown only in worktree mode,
+  // because in sequential mode there is no branch, no attempt numbering worth
+  // reading, and nothing waiting to be integrated — printing empty headings there
+  // would be the tool describing machinery a user never turned on.
+  lines.push(...renderIsolatedProgress(state, conflicts));
 
   if (review !== null) {
     lines.push(`Plan review: ${review.verdict}`);

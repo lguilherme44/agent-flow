@@ -123,7 +123,14 @@ export interface RunningServer {
 export async function buildServer(options: ServerOptions): Promise<RunningServer> {
   const app = Fastify({ logger: false });
   const bus = createEventBus();
-  const reader = new RunReader({ fs: options.fs, clock: options.clock });
+  const reader = new RunReader({
+    fs: options.fs,
+    clock: options.clock,
+    // §21.2 needs `parallelism.maxTasks` to report what a run asked for beside what
+    // it got. The run's *mode* is never read from here — that is captured at
+    // creation and immutable (I-13).
+    globalConfigPath: options.globalConfigPath,
+  });
   const prompts = new PromptReader({ fs: options.fs, promptsDir: options.promptsDir });
   const analytics = new AnalyticsReader({ fs: options.fs, clock: options.clock });
   const jobs = new ActionJobs({

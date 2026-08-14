@@ -15,7 +15,12 @@ import {
   type TaskState,
   type TaskSummaryView,
 } from '../contracts/index.js';
+import type { IsolationDetailView, IntegrationConflictView } from '../contracts/index.js';
 import { StateStore } from '../app/state-store.js';
+import { loadConfig } from '../config/loader.js';
+import { resolveTaskConcurrency } from '../core/concurrency.js';
+import { integrationRef } from '../core/worktree-policy.js';
+import { describeIsolation } from '../app/run-git-identity.js';
 import { runPaths, type ArtifactName } from '../app/paths.js';
 import { describeRunGraph, effectiveTaskStates, type GraphTask } from '../app/run-graph.js';
 import { buildStageTimeline } from '../core/stage-timeline.js';
@@ -68,10 +73,77 @@ const ARTIFACT_ORDER: ArtifactName[] = [
 export interface RunReaderOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
+  /**
+   * Where the global configuration lives, for the one number §21.2 needs from it:
+   * `parallelism.maxTasks`.
+   *
+   * Optional so every caller predating M2-10 keeps working. Without it the run's
+   * mode and its integration branch are still reported — those come from the run —
+   * and the requested concurrency is read as 1, which is the honest answer when the
+   * configuration cannot be located rather than a guess about what it says.
+   */
+  readonly globalConfigPath?: string;
 }
 
 export class RunReader {
   constructor(private readonly options: RunReaderOptions) {}
+
+  /**
+   * The project's effective configuration, or `undefined` when it cannot be read.
+   *
+   * A read model that cannot resolve a fact **omits it rather than inventing one**
+   * (§21.2 failure semantics), so a project whose configuration will not load still
+   * renders its runs — it just does not claim to know what parallelism was asked for.
+   */
+  private async configOf(project: RegisteredProject) {
+    const globalConfigPath = this.options.globalConfigPath;
+    if (globalConfigPath === undefined) return undefined;
+
+    try {
+      return await loadConfig({
+        fs: this.options.fs,
+        globalConfigPath,
+        projectDir: project.path,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether this attempt is validated and still unmerged (§21.2).
+   *
+   * Read from the attempt artifact rather than guessed from the task's state,
+   * because that is the only place the answer exists: `validationJudgement ===
+   * 'satisfied'` with no `result.json` yet means the marker is built and the merge
+   * has not happened. **This is a projection and never a decision** — the Integrator
+   * asks Git, and this only renders what the artifact already claims (I-5).
+   */
+  private async awaitingIntegration(
+    project: RegisteredProject,
+    runId: string,
+    taskId: string,
+    attempt: number,
+  ): Promise<boolean> {
+    if (attempt < 1) return false;
+
+    const paths = runPaths(project.path, runId);
+    if (await this.options.fs.exists(paths.taskResult(taskId))) return false;
+
+    const path = paths.taskAttempt(taskId, attempt);
+    if (!(await this.options.fs.exists(path))) return false;
+
+    try {
+      const raw = JSON.parse(await this.options.fs.readFile(path)) as {
+        validationJudgement?: unknown;
+      };
+      return raw.validationJudgement === 'satisfied';
+    } catch {
+      // An artifact that will not parse is not evidence of anything (§17.1), so the
+      // fact is omitted rather than invented.
+      return false;
+    }
+  }
 
   private storeFor(project: RegisteredProject): StateStore {
     return new StateStore({
@@ -115,7 +187,118 @@ export class RunReader {
         : { approvedPlanHash: state.approvedPlanHash }),
       degradationDetail: state.degradations,
       startedAt: state.createdAt,
+      isolation: await this.isolationOf(project, state),
+      integrationConflicts: await this.conflictsOf(project, state.runId),
     };
+  }
+
+  /**
+   * What an isolated run is doing, for somebody who has to debug it (§21.2, M2-10).
+   *
+   * **Every value is resolved from run state or derived from it — nothing here
+   * takes an identifier from a caller** (I-8). The branch name in particular is a
+   * pure function of `gitRunKey` (§5.3): persisting it as well would be a second
+   * copy of one fact that a bug could make disagree with the first.
+   *
+   * The configuration is read for `parallelism.maxTasks` and for nothing else. It
+   * is emphatically **not** asked whether this run is isolated: that was captured
+   * at creation and is immutable (I-13), and asking again is the defect §6.2 exists
+   * to describe.
+   */
+  private async isolationOf(
+    project: RegisteredProject,
+    state: RunState,
+  ): Promise<IsolationDetailView> {
+    const config = await this.configOf(project);
+    const requested = config?.global.parallelism.maxTasks ?? 1;
+    // **The resolver, called exactly as the scheduler calls it — with one argument.**
+    //
+    // The temptation here is to pass the run's own mode, so an isolated run would
+    // report the isolated ceiling. That would make this view *aspirational*: the
+    // scheduler resolves with one argument until M2-11, so a worktree run executes
+    // one task at a time, and a page saying `effective: 4` would be describing a
+    // run that does not exist. A read model that cannot resolve a fact omits it;
+    // one that improves on the fact is worse than one that omits it.
+    //
+    // It is also the guard R-9 exists for: passing a second argument anywhere in
+    // `src` is parallelism arriving without the machinery that makes it safe, and
+    // an architecture test fails if it appears. M2-11 changes both callers together.
+    const decision = resolveTaskConcurrency(requested);
+
+    const branch =
+      state.gitRunKey === undefined ? undefined : integrationRef(state.gitRunKey);
+
+    return {
+      // `legacy` is the absent case, projected. A run that predates the question
+      // did not answer `none` to it (§25.2).
+      mode: state.isolationMode ?? 'legacy',
+      parallelism: {
+        requested: decision.requested,
+        effective: decision.effective,
+        clamped: decision.clamped,
+        ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+      },
+      ...(branch?.ok === true ? { integrationBranch: branch.value } : {}),
+      ...(state.integrationHead === undefined ? {} : { integrationHead: state.integrationHead }),
+      ...(state.planningBase === undefined ? {} : { planningBase: state.planningBase }),
+      // I-3 as a number: in worktree mode `completed` means integrated, so this is
+      // how many tasks have their work on the branch rather than how many agents
+      // finished.
+      tasksIntegrated: state.tasks.filter((task) => task.state === 'completed').length,
+      ...(config === undefined
+        ? {}
+        : (() => {
+            const report = describeIsolation(state, config);
+            return report.note === undefined ? {} : { note: report.note };
+          })()),
+    };
+  }
+
+  /**
+   * The conflicts §15 recorded, read from the audit trail.
+   *
+   * **This is a projection, not a decision.** `events.jsonl` is the audit trail and
+   * never a second source of truth (I-1) — reading it to *render* what happened is
+   * exactly what it is for, and no scheduling or integration answer is taken from
+   * it. The paths are repository-relative, which is why they may be shown at all.
+   */
+  private async conflictsOf(
+    project: RegisteredProject,
+    runId: string,
+  ): Promise<IntegrationConflictView[]> {
+    const store = this.storeFor(project);
+
+    let events;
+    try {
+      events = await store.readEvents(runId);
+    } catch {
+      // A trail that will not parse omits the facts rather than inventing them, and
+      // never takes the run's page down with it (§21.2 failure semantics).
+      return [];
+    }
+
+    const conflicts: IntegrationConflictView[] = [];
+    for (const event of events) {
+      if (event.type !== 'integration_conflict') continue;
+      const detail = event.detail;
+      const task = typeof detail['task'] === 'string' ? detail['task'] : undefined;
+      const attempt = typeof detail['attempt'] === 'number' ? detail['attempt'] : undefined;
+      if (task === undefined || attempt === undefined) continue;
+
+      const paths = Array.isArray(detail['paths'])
+        ? detail['paths'].filter((path): path is string => typeof path === 'string')
+        : [];
+      const previously = detail['previouslyIntegrated'];
+
+      conflicts.push({
+        task,
+        attempt,
+        paths,
+        ...(typeof previously === 'string' ? { previouslyIntegrated: previously } : {}),
+      });
+    }
+
+    return conflicts;
   }
 
   /**
@@ -200,6 +383,8 @@ export class RunReader {
     // DAG view uses, so the table and the graph cannot describe one task two ways.
     const effective = effectiveTaskStates(graphTasks(ids, planned), storedStates(state));
 
+    const isolated = state.isolationMode === 'worktree';
+
     for (const id of ids) {
       const task = planned.get(id);
       const progress = state.tasks.find((entry) => entry.id === id);
@@ -233,6 +418,30 @@ export class RunReader {
                 Date.parse(result.finishedAt) - Date.parse(result.startedAt),
               ),
               validationPassed: result.validation.passed,
+            }),
+        // §21.2, derived rather than stored. A live workspace is `running` in an
+        // isolated run; a boolean on disk saying one exists would be a second copy
+        // of a fact the task's state already carries, and the two could disagree
+        // after a crash.
+        ...(isolated && progress?.state === 'running' ? { workspaceActive: true } : {}),
+        // The state `TaskState` has no name for, and the one a person watching a
+        // parallel run most needs: the attempt is validated and its marker is not
+        // on the branch yet, so `completed` would be a lie until it is (I-3).
+        ...(isolated && (await this.awaitingIntegration(project, runId, id, progress?.attempts ?? 0))
+          ? { awaitingIntegration: true }
+          : {}),
+        // Ref names and object ids, never a path (§21.3, §26.1 rule 4).
+        ...(result?.integration === undefined
+          ? {}
+          : {
+              integration: {
+                attempt: result.integration.attempt,
+                branch: result.integration.branch,
+                marker: result.integration.marker,
+                mergeCommit: result.integration.mergeCommit,
+                validatedTree: result.integration.validatedTree,
+                integratedAt: result.integration.integratedAt,
+              },
             }),
       });
     }
