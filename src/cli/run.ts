@@ -198,7 +198,11 @@ async function printExecutionPlan(
   // Printed before any quota is spent, which is the point of a dry run. The two
   // numbers are separate lines rather than one, because "4" and "1" are different
   // facts and a reader who saw only the configured one would plan around it.
-  const { requested, effective, clamped, reason } = context.concurrency;
+  // Resolved from the run's own mode, so this is the number the scheduler would
+  // actually use if the dry run were a real one (M2-11, I-13). Asking the
+  // configuration instead would print what the machine is set to rather than what
+  // this run does, which is the confusion §6.4 is about.
+  const { requested, effective, clamped, reason } = context.concurrencyFor(state.isolationMode);
   process.stdout.write(`\nParallelism requested: ${String(requested)}\n`);
   process.stdout.write(`Parallelism effective: ${String(effective)}\n`);
   if (clamped && reason !== undefined) process.stdout.write(`  ${reason}\n`);

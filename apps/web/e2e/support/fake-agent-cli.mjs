@@ -136,6 +136,20 @@ const BASE_PLAN = {
 };
 
 /**
+ * Two tasks with no edge between them, for the scenarios about *width*.
+ *
+ * `BASE_PLAN` is a chain, which is right for everything about ordering and useless
+ * for everything about concurrency: two tasks in a chain cannot share a wave, so a
+ * run of them at `maxTasks: 2` is indistinguishable from a sequential one. Same
+ * ids and same titles, so a scenario can use either plan without rewriting its
+ * selectors — the only difference is the edge.
+ */
+const INDEPENDENT_PLAN = {
+  feature: 'weekly-recurrence',
+  tasks: BASE_PLAN.tasks.map((task) => ({ ...task, dependencies: [] })),
+};
+
+/**
  * The plan a revision produces: a third task, and a new edge.
  *
  * Different in the graph rather than only in prose, so the DAG view has
@@ -237,9 +251,16 @@ if (role === 'IMPLEMENTATION_AGENT') {
   // Off by default, so every scenario written before this keeps its exact
   // behaviour and its exact `FILES CHANGED` line.
   if (process.env['AF_FAKE_WRITE'] !== undefined) {
-    touched = `src/${task.toLowerCase()}.txt`;
+    // `shared` makes every task write the same path with its own contents, which
+    // is what a plan whose independence analysis was wrong actually looks like:
+    // two markers created from a base that has neither, so the second merge is an
+    // add/add conflict rather than something Git can resolve.
+    touched =
+      process.env['AF_FAKE_WRITE'] === 'shared'
+        ? 'src/shared.txt'
+        : `src/${task.toLowerCase()}.txt`;
     mkdirSync(dirname(touched), { recursive: true });
-    writeFileSync(touched, `${task} was here\n`);
+    writeFileSync(touched, `${task} wrote this line\n`);
   }
 
   // Parked on evidence, released on evidence. The marker file says "an agent is
@@ -308,7 +329,8 @@ function answerFor(agentRole, promptText) {
       // Content-driven, not order-driven: `revise` renders the instruction into
       // the same prompt, so the revised plan is chosen by what was asked for.
       const revised = /Revision requested by the reviewer/.test(promptText);
-      const plan = revised ? REVISED_PLAN : BASE_PLAN;
+      const independent = process.env['AF_FAKE_PLAN'] === 'independent';
+      const plan = revised ? REVISED_PLAN : independent ? INDEPENDENT_PLAN : BASE_PLAN;
       return { body: JSON.stringify(plan, null, 2), json: plan };
     }
 

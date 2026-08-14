@@ -1,4 +1,4 @@
-import type { Plan, TaskResult, TaskState } from '../contracts/index.js';
+import type { Plan, RunState, TaskResult, TaskState } from '../contracts/index.js';
 import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
 import {
   blockedByFailure,
@@ -20,20 +20,32 @@ export interface SchedulerOptions {
   readonly store: StateStore;
   readonly executor: TaskExecutor;
   /**
-   * How many tasks this scheduler may have in flight. One in MVP 1 (AD-05).
+   * How many tasks this scheduler may have in flight, as a fixed number.
    *
-   * The loop below is already written for N, and deliberately still is. What it
-   * is *not* is the place the limit is decided: nothing in production reads
-   * `parallelism.maxTasks` and hands it here, because a configured number is an
-   * intention and this is an instruction. `core/concurrency.ts` resolves one into
-   * the other, and until tasks have isolated workspaces it resolves to one
-   * however the configuration is written — see `app/execution-context.ts`.
-   *
-   * Left as an option rather than removed because the scheduler's own contract is
-   * worth testing at N, and because the resolver is the only thing that should
-   * ever have to change.
+   * The scheduler's own contract at N, for the tests that are about the loop
+   * rather than about the policy. **No production path sets this**: which limit a
+   * run gets depends on the mode that run was born in, and a number fixed when
+   * this object was constructed cannot know it — see {@link concurrencyFor}.
    */
   readonly maxConcurrency?: number;
+  /**
+   * How many tasks this run may have in flight, from the run's own state (M2-11).
+   *
+   * The production path, and the reason it is a function of `RunState` rather than
+   * a number: a configured `maxTasks: 4` is an intention, and what it resolves to
+   * depends on whether *this run* isolates its tasks. `state.isolationMode` was
+   * captured at `createRun` and is immutable (I-13), so the same run resolves to
+   * the same number on every entry however the configuration has been edited since.
+   *
+   * The policy itself stays in `core/concurrency.ts`; this is only where the run is
+   * handed to it. A scheduler that read the configuration would be deciding a
+   * question §6.1 already answered, and a scheduler that probed the repository
+   * would be answering it from the layer that must not.
+   *
+   * Takes precedence over {@link maxConcurrency}. Absent, the fixed number applies
+   * — which is every caller predating M2-11 and no production path.
+   */
+  readonly concurrencyFor?: (state: RunState) => number;
   /**
    * Prepares one workspace per dispatched attempt (M2-04, §8).
    *
@@ -196,7 +208,11 @@ export class Scheduler {
     for (const id of topologicalOrder(dag)) states[id] = initialStates[id] ?? 'queued';
 
     const results: TaskResult[] = [];
-    const concurrency = Math.max(1, this.options.maxConcurrency ?? 1);
+    // Resolved once, from the run, before anything is dispatched. Once per wave
+    // would let a configuration edit mid-run change the width of the next wave,
+    // which is the property I-13 exists to deny — and it would make "how many
+    // tasks did this run execute at once" a question with more than one answer.
+    const concurrency = await this.concurrencyOf(runId);
     let haltedBy: string | undefined;
 
     // §5.3 and §14.1, once, before anything is dispatched: the integration branch
@@ -402,6 +418,21 @@ export class Scheduler {
       recovered,
       ...(haltedBy === undefined ? {} : { haltedBy }),
     };
+  }
+
+  /**
+   * How wide this run's waves may be (M2-11, §4.4).
+   *
+   * The run is loaded and handed to the resolver the application wired in; nothing
+   * here interprets the mode, and nothing here reads the configuration. Never less
+   * than one, so a resolver bug becomes a sequential run rather than a scheduler
+   * with nothing to dispatch — which would hang instead of failing.
+   */
+  private async concurrencyOf(runId: string): Promise<number> {
+    const resolve = this.options.concurrencyFor;
+    if (resolve === undefined) return Math.max(1, this.options.maxConcurrency ?? 1);
+
+    return Math.max(1, resolve(await this.options.store.loadRun(runId)));
   }
 
   /**

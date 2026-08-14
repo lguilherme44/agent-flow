@@ -367,6 +367,35 @@ describe('the isolation strip', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not repeat the clamp once the run has it on the record', () => {
+    // Found by the parallel E2E, which could not address the sentence because it
+    // was on screen twice: the header already renders the run's degradations, and
+    // `parallelism_clamped` is one of them. Two copies of one sentence teaches a
+    // reader to skip both.
+    const reason = 'parallelism.maxTasks is 4, and task workspace isolation does not exist';
+
+    panel({
+      isolation: {
+        ...SEQUENTIAL,
+        parallelism: { requested: 4, effective: 1, clamped: true, reason },
+      },
+      degradations: 1,
+      degradationDetail: [
+        {
+          kind: 'parallelism_clamped',
+          reason,
+          impact: 'implementation ran 1 task at a time rather than 4',
+          detectedAt: '2026-08-10T19:40:00.000Z',
+        },
+      ],
+    });
+
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    // The numbers stay, because they are the compact fact and the degradation list
+    // does not carry them in the strip's form.
+    expect(within(concurrencyFact()).getByText('1 of 4')).toBeInTheDocument();
+  });
+
   it('says which of two disagreeing settings applies to this run', () => {
     // §21.4. Without this sentence the tool looks broken to the one user who did
     // exactly what the documentation said and then wondered why it had no effect.

@@ -174,10 +174,11 @@ function sectionsOf(
           String(global.parallelism.maxTasks),
           // The note has to say what the *runtime* does, not what the setting
           // would like to. It used to read as though switching worktrees on were
-          // the missing step, and worktrees do not exist in the execution path —
+          // the missing step, and worktrees did not exist in the execution path —
           // so a reader who followed it would have configured four parallel tasks
-          // and got one, with nothing on this page admitting it.
-          concurrencyNote(global.parallelism.maxTasks),
+          // and got one, with nothing on this page admitting it. Since M2-11 they
+          // do exist, and the note says which kind of run gets which number.
+          concurrencyNote(global.parallelism.maxTasks, global.git.useWorktrees),
         ),
         setting('retry.maxAttempts', 'Attempts per task', String(global.retry.maxAttempts)),
         setting('git.useWorktrees', 'Git worktrees', global.git.useWorktrees ? 'on' : 'off'),
@@ -239,13 +240,30 @@ function count(values: readonly string[] | undefined): string {
  * must not do is let the reader infer the runtime from it. Resolved through the
  * same function the scheduler is wired from, so the sentence cannot fall behind
  * the behaviour it describes.
+ *
+ * **This page has no run, and that is why it reads `git.useWorktrees` at all.** It
+ * is answering "what would this configuration do to a run created now", which is
+ * the one question the flag legitimately decides (§6.1). Every *execution* and
+ * every *run* page reads `state.isolationMode` instead, because a run created
+ * before this setting was touched is not governed by it (I-13, §6.4).
  */
-function concurrencyNote(maxTasks: number): string | undefined {
-  const decision = resolveTaskConcurrency(maxTasks);
-  if (!decision.clamped) return undefined;
+function concurrencyNote(maxTasks: number, useWorktrees: boolean): string | undefined {
+  // Both answers, because the difference between them is the whole point of the
+  // setting above and this is the only place a reader sees the two side by side.
+  const isolated = resolveTaskConcurrency(maxTasks, 'worktree');
+  const shared = resolveTaskConcurrency(maxTasks, 'none');
+
+  if (!isolated.clamped && !shared.clamped) return undefined;
+
+  if (!useWorktrees) {
+    return (
+      `configured, not effective: without isolated workspaces a run executes ` +
+      `${String(shared.effective)} task at a time — turn on git.useWorktrees, then start a new run`
+    );
+  }
 
   return (
-    `configured, not effective: runs execute ${String(decision.effective)} task at a time ` +
-    'until tasks get isolated workspaces'
+    `new runs execute up to ${String(isolated.effective)} at a time in isolated workspaces; ` +
+    `a run created before worktrees were on still executes ${String(shared.effective)}`
   );
 }

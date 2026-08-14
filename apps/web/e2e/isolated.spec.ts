@@ -94,11 +94,14 @@ test.describe('an isolated run, from the browser', () => {
     // Per-task provenance, in the inspector: which attempt, which marker, which
     // merge, and the tree that was validated. Object ids and a ref name — the
     // things §26.1 rule 4 permits in a response.
+    // `exact`, because the integration branch name contains the word too — and a
+    // substring match here resolved to three elements, which is a selector that
+    // would have gone on passing for the wrong element.
     await page.getByRole('row').filter({ hasText: 'Add recurrence types' }).click();
-    await expect(page.getByText('Integration')).toBeVisible();
+    await expect(page.getByText('Integration', { exact: true })).toBeVisible();
     await expect(page.getByText('Attempt', { exact: true })).toBeVisible();
-    await expect(page.getByText('Marker')).toBeVisible();
-    await expect(page.getByText('Validated tree')).toBeVisible();
+    await expect(page.getByText('Marker', { exact: true })).toBeVisible();
+    await expect(page.getByText('Validated tree', { exact: true })).toBeVisible();
 
     // I-10, fingerprinted after. Four values, all identical: the user's checkout
     // never moved, was never dirtied and was never staged into.

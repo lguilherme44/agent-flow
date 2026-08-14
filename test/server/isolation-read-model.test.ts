@@ -110,10 +110,14 @@ describe('the isolation view (§21.2)', () => {
   });
 
   it('reports what parallelism the run got, not what it asked for', async () => {
-    // **The trap this test exists for.** `maxTasks: 4` is intent; the scheduler
-    // resolves it, and until M2-11 that resolution is 1 whatever mode a run records.
-    // A view reporting `effective: 4` for an isolated run would be describing a run
-    // that does not exist — aspirational rather than observed.
+    // **The trap this test exists for.** `maxTasks: 4` is intent; what a run gets
+    // depends on whether that run isolates its tasks.
+    //
+    // Until M2-11 this expected `effective: 1` even here, because the scheduler
+    // resolved with no mode and a page reading 4 beside a run doing one at a time
+    // would have been aspirational rather than observed. M2-11 moved both callers
+    // in one commit, so the expectation moves with them — and an architecture test
+    // now fails if only one of the two is taught about isolation.
     const { store, reader } = await world();
     const run = await store.createRun('f', (runId) => ({
       isolationMode: 'worktree' as const,
@@ -124,9 +128,41 @@ describe('the isolation view (§21.2)', () => {
     const detail = await reader.runDetail(PROJECT, run.runId);
 
     expect(detail?.isolation.parallelism.requested).toBe(4);
+    expect(detail?.isolation.parallelism.effective).toBe(4);
+    // Nothing was reduced, so there is nothing to explain. A reason on every
+    // decision would be a warning that always fires.
+    expect(detail?.isolation.parallelism.clamped).toBe(false);
+    expect(detail?.isolation.parallelism.reason).toBeUndefined();
+  });
+
+  it('still reports one for a sequential run asking for four (I-11, I-13)', async () => {
+    // The other half, and the half that must never move. A run created sequential
+    // shares the user's working tree, so the ceiling is one however the
+    // configuration reads at the moment somebody opens the page — and the clamp is
+    // said in words, because "why is this still running one task at a time" is the
+    // question this row exists to answer.
+    const { store, reader } = await world();
+    const run = await store.createRun('f', () => ({ isolationMode: 'none' as const }));
+
+    const detail = await reader.runDetail(PROJECT, run.runId);
+
+    expect(detail?.isolation.parallelism.requested).toBe(4);
     expect(detail?.isolation.parallelism.effective).toBe(1);
     expect(detail?.isolation.parallelism.clamped).toBe(true);
-    expect(detail?.isolation.parallelism.reason).toBeDefined();
+    expect(detail?.isolation.parallelism.reason).toMatch(/isolat/i);
+  });
+
+  it('reports one for a legacy run, which never answered the question (§25.2)', async () => {
+    // A run that predates MVP 2 has no `isolationMode`, and the absent case is not
+    // a licence to grant it the isolated ceiling. §25.2 says a legacy run is
+    // sequential by shape; the projection reads `legacy` and the number reads one.
+    const { store, reader } = await world();
+    const run = await store.createRun('f');
+
+    const detail = await reader.runDetail(PROJECT, run.runId);
+
+    expect(detail?.isolation.mode).toBe('legacy');
+    expect(detail?.isolation.parallelism.effective).toBe(1);
   });
 
   it('derives the integration branch from the run key rather than storing it', async () => {

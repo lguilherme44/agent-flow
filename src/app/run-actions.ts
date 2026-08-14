@@ -931,15 +931,21 @@ async function execute(
   // gate, `review`, `status` — and a degradation written by a read would appear on
   // runs that never executed anything.
   //
+  // **Resolved from this run's own mode** (M2-11, I-13), which is the same call the
+  // scheduler is about to make and the same one the read model publishes. An
+  // isolated run asking for four now gets four and records nothing, because nothing
+  // was reduced; a sequential run asking for four still gets one, and still says so.
+  //
   // `recordDegradation` deduplicates by kind and reason, so resuming a run does not
   // stack up copies of the same sentence.
-  if (context.concurrency.clamped) {
+  const concurrency = context.concurrencyFor(state.isolationMode);
+  if (concurrency.clamped) {
     await context.store.recordDegradation(runId, {
       kind: 'parallelism_clamped',
-      reason: context.concurrency.reason ?? 'the configured task limit could not be honoured',
+      reason: concurrency.reason ?? 'the configured task limit could not be honoured',
       impact:
-        `implementation ran ${String(context.concurrency.effective)} task at a time ` +
-        `rather than ${String(context.concurrency.requested)}`,
+        `implementation ran ${String(concurrency.effective)} task at a time ` +
+        `rather than ${String(concurrency.requested)}`,
     });
   }
 

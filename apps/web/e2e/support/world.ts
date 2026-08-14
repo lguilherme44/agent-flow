@@ -76,6 +76,38 @@ export interface WorldOptions {
    * driven by evidence on disk rather than by a sleep.
    */
   readonly hold?: boolean;
+  /**
+   * `parallelism.maxTasks`. Defaults to the shipped 1.
+   *
+   * What the run *asks* for. What it gets depends on the mode it was born in
+   * (§4.4), which is the pair this option exists to exercise.
+   */
+  readonly maxTasks?: number;
+  /**
+   * Plan two independent tasks instead of the dependent pair.
+   *
+   * The default plan has TASK-002 depending on TASK-001, which is right for every
+   * scenario about ordering and wrong for every scenario about width: two tasks in
+   * a chain can never share a wave, so a parallel run of them is indistinguishable
+   * from a sequential one.
+   */
+  readonly independentTasks?: boolean;
+  /**
+   * Check the repository out on this branch before anything is planned.
+   *
+   * I-10 is a claim about *the user's* checkout, and a repository sitting on the
+   * default branch is the one arrangement where "we did not move HEAD" is hardest
+   * to distinguish from "there was nowhere else to be".
+   */
+  readonly branch?: string;
+  /**
+   * Have every task write the same file, so the second merge conflicts.
+   *
+   * §15 on screen. Reachable only at a width above one — a conflict is two markers
+   * from one wave — which is why the M2-10 read model could describe it before
+   * M2-11 could produce one.
+   */
+  readonly collidingTasks?: boolean;
 }
 
 export interface CliResult {
@@ -154,6 +186,11 @@ export class World {
     } catch {
       return [];
     }
+  }
+
+  /** Writes a file into a project, as the user would. */
+  async writeFile(project: string, relativePath: string, contents: string): Promise<void> {
+    await writeFile(join(this.dirOf(project), relativePath), contents, 'utf8');
   }
 
   /** Lets every parked agent, and every agent that arrives later, through. */
@@ -249,8 +286,11 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     // is the whole claim of this milestone.
     const fakeEnv: Record<string, string> = {
       AF_FAKE_LOG: fakeLog,
-      ...(options.worktrees === true ? { AF_FAKE_WRITE: '1' } : {}),
+      ...(options.worktrees === true
+        ? { AF_FAKE_WRITE: options.collidingTasks === true ? 'shared' : '1' }
+        : {}),
       ...(holdDir === undefined ? {} : { AF_FAKE_HOLD: holdDir }),
+      ...(options.independentTasks === true ? { AF_FAKE_PLAN: 'independent' } : {}),
     };
 
     for (const name of names) {
@@ -263,12 +303,17 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       );
       await writeFile(
         join(dir, '.agent-flow/config.yaml'),
-        projectConfig(name, options.testCommand ?? 'node --version', options.worktrees === true),
+        projectConfig(
+          name,
+          options.testCommand ?? 'node --version',
+          options.worktrees === true,
+          options.maxTasks,
+        ),
         'utf8',
       );
       projectDirs[name] = dir;
 
-      if (options.worktrees === true) await initRepository(dir);
+      if (options.worktrees === true) await initRepository(dir, options.branch);
     }
 
     // Planned before the server starts, by the CLI, so the run the browser opens
@@ -329,7 +374,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
  * and the identity comes from a local `user.email`, so the machine's own Git
  * configuration cannot make the test pass or fail.
  */
-async function initRepository(dir: string): Promise<void> {
+async function initRepository(dir: string, branch: string | undefined): Promise<void> {
   await writeFile(
     join(dir, '.gitignore'),
     '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n',
@@ -343,6 +388,9 @@ async function initRepository(dir: string): Promise<void> {
     ['config', 'commit.gpgsign', 'false'],
     ['add', '--all'],
     ['commit', '--message', 'initial commit'],
+    // After the commit, so the branch has a tip. `checkout -b` on an unborn HEAD
+    // would leave the repository with no commits, which §6.3 check 3 refuses.
+    ...(branch === undefined ? [] : [['checkout', '-b', branch]]),
   ];
 
   for (const args of steps) {
@@ -441,13 +489,23 @@ ui:
  * validation command under the test's control: `node --version` exits zero in
  * milliseconds, offline, on every platform.
  */
-function projectConfig(name: string, testCommand: string, worktrees: boolean): string {
+function projectConfig(
+  name: string,
+  testCommand: string,
+  worktrees: boolean,
+  maxTasks: number | undefined,
+): string {
+  // `git` and `parallelism` are both project-overridable keys, so the repository
+  // states what makes it different and the global file stays the shipped default —
+  // which is also what keeps two projects in one workspace independent.
   return `project:
   name: ${name}
   type: node
 commands:
   test: ${testCommand}
-${worktrees ? 'git:\n  useWorktrees: true\n' : ''}`;
+${worktrees ? 'git:\n  useWorktrees: true\n' : ''}${
+    maxTasks === undefined ? '' : `parallelism:\n  maxTasks: ${String(maxTasks)}\n`
+  }`;
 }
 
 async function waitForHealth(url: string, child: ChildProcess): Promise<boolean> {

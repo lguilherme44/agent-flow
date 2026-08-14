@@ -374,9 +374,71 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     const code = codeOnly(text);
 
     expect(code).toMatch(/resolveTaskConcurrency\s*\(/);
-    expect(code).toMatch(/maxConcurrency:\s*concurrency\.effective/);
+    // M2-11: a *function of the run*, not a number fixed when this context was
+    // built. The old assertion was `maxConcurrency: concurrency.effective`, which
+    // was correct while the answer could not depend on the run — and became the
+    // thing standing between an isolated run and the parallelism it was configured
+    // for, because this context is assembled before any run is named.
+    expect(code).toMatch(/concurrencyFor:\s*\(state\)\s*=>/);
+    expect(code).not.toMatch(/maxConcurrency:/);
     // The shape of the bug, spelled out so it cannot come back by copy-paste.
     expect(code).not.toMatch(/maxConcurrency:\s*config\.global\.parallelism\.maxTasks/);
+  });
+
+  it('never lets the production scheduler take a fixed limit (M2-11)', () => {
+    // `maxConcurrency` survives for the tests that are about the loop rather than
+    // the policy. A production path that set it would be answering "how many tasks
+    // at once" from the moment the context was assembled, which is before the run
+    // is known — and that is precisely how a page saying `effective: 4` ends up
+    // beside a run executing one task at a time.
+    // `\??` so the option's own declaration counts: this rule is worthless if the
+    // only file it can see is the one that no longer sets it.
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /maxConcurrency\s*\??\s*:/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual(['src/app/scheduler.ts']);
+  });
+
+  it('teaches the scheduler and the read model about isolation together (M2-11)', () => {
+    // The failure this forbids has two symmetric halves and both are silent. A
+    // scheduler that knows the mode beside a read model that does not means the
+    // page reports one task at a time while four agents are running; the reverse
+    // means the page promises four while the run does one. Either way the number a
+    // person debugs by is wrong, and nothing fails.
+    //
+    // So the rule is a *pair*: every production caller of the resolver passes a
+    // mode, and the mode it passes comes from the run. Written over the call sites
+    // rather than over line numbers, because the point is which modules ask, not
+    // where in the file they ask it.
+    const CALLERS = ['src/app/execution-context.ts', 'src/server/run-reader.ts'];
+
+    for (const path of CALLERS) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      const call = /resolveTaskConcurrency\s*\(([^)]*)\)/.exec(code);
+
+      expect(call, `${path} no longer resolves concurrency`).not.toBeNull();
+      // Two arguments: the requested number and the mode.
+      expect((call?.[1] ?? '').split(',').length, `${path} defaults the mode`).toBe(2);
+      // And the mode is the run's, not the configuration's. `codeOnly` blanks
+      // string literals, so a hard-coded `'worktree'` cannot satisfy this.
+      expect(code, `${path} does not read the mode off the run`).toMatch(/isolationMode/);
+      expect(code, `${path} reads the mode off the configuration`).not.toMatch(
+        /useWorktrees/,
+      );
+    }
+
+    // Nobody else resolves it in an execution or a read path, which is what keeps
+    // the pair a pair rather than two of several.
+    const resolvers = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => path !== HOME)
+      .filter(({ text }) => /resolveTaskConcurrency\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path)
+      .sort();
+
+    expect(resolvers).toEqual([...CALLERS, 'src/server/config-reader.ts'].sort());
   });
 
   it('keeps both ceilings in the resolver, so raising either is one edit', () => {
@@ -968,19 +1030,24 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
     expect(offenders).toEqual([]);
   });
 
-  it('hands no production caller the isolated ceiling (I-11, M2-11)', () => {
-    // Having the capability is not using it. `resolveTaskConcurrency` grew a
-    // second parameter in M2-01 and every production call still passes one
-    // argument, so the effective concurrency of a real run is one — whatever the
-    // configuration says and whatever mode a run records.
+  it('grants the isolated ceiling from the run, and from nowhere else (I-11, M2-11)', () => {
+    // Until M2-11 this rule read the other way round: *no* production caller may
+    // pass the mode, because the capability existed since M2-01 and the machinery
+    // that makes it safe did not. M2-11 is the milestone that came and edited it,
+    // and the replacement is not weaker — it names the exact source the mode may
+    // come from.
     //
-    // M2-11 is the milestone that changes this, and this is the test it has to
-    // come and edit. Until then, a second argument appearing anywhere in `src` is
-    // parallelism arriving without the machinery that makes it safe.
+    // Three modules pass it, and the third is the one worth arguing about.
+    // `execution-context` and `run-reader` pass `state.isolationMode`: the run's
+    // own captured mode, which is what makes the number the same in the scheduler
+    // and on the page. `config-reader` passes a literal, because it is answering a
+    // *hypothetical* — "what would this configuration do to a run created now" —
+    // on a page that has no run to read a mode from, and it decides nothing about
+    // any existing one.
     const passesTheMode = (source: string): boolean =>
       /resolveTaskConcurrency\s*\([^)]*,/.test(codeOnly(source));
 
-    // A rule that cannot see the thing it forbids passes forever. The literal is
+    // A rule that cannot see the thing it governs passes forever. The literal is
     // blanked by `codeOnly`, so the detection is on the argument, not its value.
     expect(passesTheMode("resolveTaskConcurrency(config.parallelism.maxTasks, 'worktree')")).toBe(
       true,
@@ -988,14 +1055,28 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
     expect(passesTheMode('resolveTaskConcurrency(config.parallelism.maxTasks, mode)')).toBe(true);
     expect(passesTheMode('resolveTaskConcurrency(config.parallelism.maxTasks)')).toBe(false);
 
-    const offenders = sourceFiles('src')
+    const ALLOWED = new Set([
+      'src/app/execution-context.ts',
+      'src/server/run-reader.ts',
+      'src/server/config-reader.ts',
+    ]);
+
+    const callers = sourceFiles('src')
       .map(read)
       // The resolver's own signature is where the second parameter is declared.
       .filter(({ path }) => path !== RESOLVER)
       .filter(({ text }) => passesTheMode(text))
       .map(({ path }) => path);
 
-    expect(offenders).toEqual([]);
+    expect(callers.filter((path) => !ALLOWED.has(path))).toEqual([]);
+
+    // And the two that decide a real run's width take it from the run. A module
+    // that named the mode itself would be assigning what §6.1 captured, which is
+    // I-13 with the safety catch filed off.
+    for (const path of ['src/app/execution-context.ts', 'src/server/run-reader.ts']) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      expect(code, `${path} does not take the mode from the run`).toMatch(/isolationMode/);
+    }
   });
 
   it('decides a run\'s isolation in one module, and compares it everywhere else (M2-03)', () => {
@@ -1049,6 +1130,11 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       // its state is removable — which is how `clean` keeps behaving exactly as it
       // always has for every run that predates isolation (§25).
       'src/app/namespace-reclaim.ts',
+      // M2-11: the configuration page names the mode because it is answering a
+      // hypothetical — what a run created *now* would get — on the one page that
+      // has no run to read `isolationMode` from. It assigns nothing and changes no
+      // existing run, which is the distinction this rule is drawn on.
+      'src/server/config-reader.ts',
     ]);
 
     const offenders = sourceFiles('src')

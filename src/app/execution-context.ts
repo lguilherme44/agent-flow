@@ -14,7 +14,11 @@ import { TaskExecutor } from './task-executor.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
-import { resolveTaskConcurrency, type ConcurrencyDecision } from '../core/concurrency.js';
+import {
+  resolveTaskConcurrency,
+  type ConcurrencyDecision,
+  type IsolationMode,
+} from '../core/concurrency.js';
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
 import { TaskWorkspaces } from './task-workspaces.js';
@@ -53,12 +57,30 @@ export interface ExecutionContext {
   readonly executor: TaskExecutor;
   readonly scheduler: Scheduler;
   /**
-   * What the configured task limit became, and why (M2-00.3).
+   * What the configured task limit becomes for a run in a given mode (§4.4).
    *
-   * Published rather than kept inside the scheduler because two callers need the
-   * same answer: `start` records the reduction on the run, and `run --dry-run`
-   * prints it. Two computations of one number would eventually disagree, and the
-   * one on screen would be the wrong one.
+   * A function rather than a value, and that is the whole of M2-11. The answer
+   * depends on the mode the run was **born** in, and this context is assembled
+   * before any run is named — so a single number computed here could only ever be
+   * the sequential one, which is what made `maxTasks: 4` a setting with no effect
+   * on an isolated run.
+   *
+   * `isolation` is `state.isolationMode`, read from the run. Never
+   * `config.global.git.useWorktrees`, never a probe (I-13): a run created
+   * sequential stays sequential however the configuration reads at the moment it
+   * executes, and a run created isolated is not demoted by a later edit.
+   *
+   * The same function feeds the scheduler, the degradation `start` records and the
+   * number the read model publishes, which is why the page and the run cannot
+   * disagree about how many tasks are executing.
+   */
+  readonly concurrencyFor: (isolation: IsolationMode | undefined) => ConcurrencyDecision;
+  /**
+   * The sequential answer, for a caller that has no run in hand.
+   *
+   * Kept because `doctor` and the configuration page ask "what would this
+   * configuration do" rather than "what is this run doing". Every execution path
+   * asks {@link ExecutionContext.concurrencyFor} with the run's own mode.
    */
   readonly concurrency: ConcurrencyDecision;
   readonly processRunner: ProcessRunner;
@@ -168,7 +190,17 @@ export async function buildExecutionContext(
   // The configured number is an intention; the scheduler needs an instruction.
   // Handing `maxTasks` straight through is what made `maxTasks: 4` run four
   // agents against one working tree — see core/concurrency.ts.
-  const concurrency = resolveTaskConcurrency(config.global.parallelism.maxTasks);
+  //
+  // **M2-11: the mode is passed, and it comes from the run** (§4.4, I-13). The
+  // resolver has been able to answer for an isolated run since M2-01 and was
+  // deliberately never asked, because until M2-04…M2-08 there was no isolation to
+  // point at. There is now: each dispatched task owns a worktree and a branch, its
+  // validated tree is bound to a marker, and the Integrator is the only writer of
+  // `completed`. Those are what make this argument safe rather than optimistic.
+  const concurrencyFor = (isolation: IsolationMode | undefined): ConcurrencyDecision =>
+    resolveTaskConcurrency(config.global.parallelism.maxTasks, isolation ?? 'none');
+
+  const concurrency = concurrencyFor('none');
 
   // §8: one prepared workspace per dispatched attempt. Sequential and legacy
   // runs take the project directory from it without reaching Git.
@@ -214,7 +246,9 @@ export async function buildExecutionContext(
     workspaces: taskWorkspaces,
     integrator,
     recovery,
-    maxConcurrency: concurrency.effective,
+    // §4.4: the run decides, not this wiring. `state.isolationMode` is the
+    // discriminant, and it was captured before anything observed the repository.
+    concurrencyFor: (state) => concurrencyFor(state.isolationMode).effective,
     maxAttempts: config.global.retry.maxAttempts,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),
     ...(options.onTaskFinish === undefined ? {} : { onTaskFinish: options.onTaskFinish }),
@@ -230,6 +264,7 @@ export async function buildExecutionContext(
     stageRunner,
     executor,
     scheduler,
+    concurrencyFor,
     concurrency,
     processRunner,
     git,

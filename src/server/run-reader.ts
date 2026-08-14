@@ -211,19 +211,20 @@ export class RunReader {
   ): Promise<IsolationDetailView> {
     const config = await this.configOf(project);
     const requested = config?.global.parallelism.maxTasks ?? 1;
-    // **The resolver, called exactly as the scheduler calls it — with one argument.**
+    // **The resolver, called exactly as the scheduler calls it — with the run's own
+    // mode** (M2-11, §4.4).
     //
-    // The temptation here is to pass the run's own mode, so an isolated run would
-    // report the isolated ceiling. That would make this view *aspirational*: the
-    // scheduler resolves with one argument until M2-11, so a worktree run executes
-    // one task at a time, and a page saying `effective: 4` would be describing a
-    // run that does not exist. A read model that cannot resolve a fact omits it;
-    // one that improves on the fact is worse than one that omits it.
+    // Until M2-11 this deliberately passed one argument, because the scheduler did:
+    // a page reading `effective: 4` beside a run executing one task at a time
+    // would have been describing a run that does not exist. The two moved together,
+    // in one commit, for exactly that reason — and an architecture test now holds
+    // them together, so a future edit cannot teach one of them about isolation
+    // without the other.
     //
-    // It is also the guard R-9 exists for: passing a second argument anywhere in
-    // `src` is parallelism arriving without the machinery that makes it safe, and
-    // an architecture test fails if it appears. M2-11 changes both callers together.
-    const decision = resolveTaskConcurrency(requested);
+    // The mode is `state.isolationMode`, read from the run. Not the configuration
+    // (I-13): a run created sequential reports one however `git.useWorktrees` reads
+    // now, which is the question §6.4 exists to answer out loud.
+    const decision = resolveTaskConcurrency(requested, state.isolationMode ?? 'none');
 
     const branch =
       state.gitRunKey === undefined ? undefined : integrationRef(state.gitRunKey);

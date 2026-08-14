@@ -7,6 +7,7 @@ import { buildExecutionContext } from '../../src/app/execution-context.js';
 import { start, type RunActionDeps } from '../../src/app/run-actions.js';
 import { approveRun } from '../../src/app/approval.js';
 import { PlanSchema } from '../../src/contracts/index.js';
+import { MAX_ISOLATED_TASK_CONCURRENCY } from '../../src/core/concurrency.js';
 import type { ProcessResult, ProcessRunner, ProcessSpawnOptions } from '../../src/ports/index.js';
 
 /**
@@ -125,7 +126,7 @@ class ConcurrencyWatchingRunner implements ProcessRunner {
   }
 }
 
-async function approvedRun(projectConfig: string) {
+async function approvedRun(projectConfig: string, isolationMode?: 'none') {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const processRunner = new ConcurrencyWatchingRunner();
@@ -146,7 +147,13 @@ async function approvedRun(projectConfig: string) {
   );
 
   const store = new StateStore({ fs, clock, projectDir: PROJECT });
-  const run = await store.createRun('four independent tasks');
+  // Seeded through `createRun`, which is the only writer of the field (I-13). A
+  // test that patched it afterwards would be exercising a write path production
+  // does not have.
+  const run = await store.createRun(
+    'four independent tasks',
+    isolationMode === undefined ? undefined : () => ({ isolationMode }),
+  );
 
   const plan = PlanSchema.parse(PLAN);
   await store.writeArtifact(run.runId, 'plan', JSON.stringify(PLAN, null, 2));
@@ -176,7 +183,10 @@ const CONFIG = (overrides: string): string =>
 
 describe('a configured parallelism above one does not become concurrent execution', () => {
   it('runs one task at a time with maxTasks: 4 and no worktrees', async () => {
-    const world = await approvedRun(CONFIG('parallelism:\n  maxTasks: 4\ngit:\n  useWorktrees: false\n'));
+    const world = await approvedRun(
+      CONFIG('parallelism:\n  maxTasks: 4\ngit:\n  useWorktrees: false\n'),
+      'none',
+    );
 
     const outcome = await start(world.deps, world.runId);
 
@@ -184,27 +194,50 @@ describe('a configured parallelism above one does not become concurrent executio
     expect(world.processRunner.peakAgentInvocations).toBe(1);
   });
 
-  // This test is a guard against reading a dead flag as a live capability.
+  // **I-13, as behaviour rather than as a claim, and the reason this test is here
+  // after M2-11 rather than deleted by it.**
   //
-  // `git.useWorktrees` is part of the MVP 2 design and is deliberately kept in
-  // the schema, but nothing in the execution path creates a worktree — so
-  // switching it on changes the isolation of exactly nothing. Until task
-  // workspaces genuinely exist, turning it on must not raise concurrency.
+  // Before M2-11 this test read "still runs one task at a time with
+  // useWorktrees: true, because no worktree exists" — the flag was live in the
+  // schema and dead in the execution path, and the assertion guarded against
+  // reading one as the other. M2-11 made the flag live, which is exactly when the
+  // assertion becomes *more* important rather than obsolete: what must not happen
+  // is a run that was born sequential acquiring parallelism because somebody
+  // edited a configuration file afterwards.
   //
-  // **Change this test when isolation ships, and not before.** M2-01 landed the
-  // *policy* — `resolveTaskConcurrency` can now be told a run is isolated, and
-  // `MAX_ISOLATED_TASK_CONCURRENCY` is 8 — and deliberately changed nothing here:
-  // no caller passes the mode, and no worktree exists to pass it about. **M2-11 is
-  // the milestone that edits this expectation**, once workspaces, receipts and the
-  // integrator are real. The reason it may change is that there is isolation to
-  // point at, never that somebody wanted the number to go up.
-  it('still runs one task at a time with useWorktrees: true, because no worktree exists', async () => {
-    const world = await approvedRun(CONFIG('parallelism:\n  maxTasks: 4\ngit:\n  useWorktrees: true\n'));
+  // The run below is created `none` under `useWorktrees: true`. It has no
+  // worktrees, no integration branch and no markers, because §6.1 already decided
+  // that when it was created. If the execution path asked the configuration
+  // instead of the run, this would dispatch four agents into one working tree —
+  // which is the original defect, arriving by a new route.
+  it('leaves a sequential run sequential however the configuration reads now', async () => {
+    const world = await approvedRun(
+      CONFIG('parallelism:\n  maxTasks: 4\ngit:\n  useWorktrees: true\n'),
+      'none',
+    );
 
     const outcome = await start(world.deps, world.runId);
 
     expect(outcome.ok).toBe(true);
     expect(world.processRunner.peakAgentInvocations).toBe(1);
+
+    // And the run says so, rather than leaving the number unexplained.
+    const state = await world.store.loadRun(world.runId);
+    expect(state.degradations.map((entry) => entry.kind)).toContain('parallelism_clamped');
+  });
+
+  it('leaves a legacy run sequential too, having never answered the question (§25.2)', async () => {
+    // No `isolationMode` at all: a run from before MVP 2. The absent case is not a
+    // licence to grant the isolated ceiling, and nothing promotes it.
+    const world = await approvedRun(
+      CONFIG('parallelism:\n  maxTasks: 4\ngit:\n  useWorktrees: true\n'),
+    );
+
+    const outcome = await start(world.deps, world.runId);
+
+    expect(outcome.ok).toBe(true);
+    expect(world.processRunner.peakAgentInvocations).toBe(1);
+    expect((await world.store.loadRun(world.runId)).isolationMode).toBeUndefined();
   });
 
   it('leaves maxTasks: 1 doing exactly what it did before', async () => {
@@ -272,8 +305,60 @@ describe('the reduction is on the record', () => {
     });
 
     expect(context.config.global.parallelism.maxTasks).toBe(4);
+    // The sequential answer, for a caller with no run in hand.
     expect(context.concurrency.requested).toBe(4);
     expect(context.concurrency.effective).toBe(1);
     expect(context.concurrency.clamped).toBe(true);
+  });
+});
+
+/**
+ * M2-11 — the requested/effective matrix, over the mode the run was born in.
+ *
+ * Asserted on the execution context rather than on the resolver, because the
+ * resolver's own table is already in `test/core/concurrency.test.ts`. What this
+ * covers is the *wiring*: that the number an execution path would use comes from
+ * the run's mode and from the configured limit, and from nothing else.
+ */
+describe('requested against effective, by the run\'s own mode', () => {
+  const contextFor = async (maxTasks: number) => {
+    const world = await approvedRun(CONFIG(`parallelism:\n  maxTasks: ${String(maxTasks)}\n`));
+    return buildExecutionContext({
+      fs: world.fs,
+      clock: world.clock,
+      processRunner: world.processRunner,
+      host: new FakeHost(),
+      projectDir: PROJECT,
+      globalConfigPath: '/install/config.yaml',
+      promptsDir: '/install/prompts',
+    });
+  };
+
+  it.each([
+    [1, 'none' as const, 1, false],
+    [4, 'none' as const, 1, true],
+    [1, 'worktree' as const, 1, false],
+    [2, 'worktree' as const, 2, false],
+    [4, 'worktree' as const, 4, false],
+    // Above the isolated ceiling: clamped to it, and the clamp is explained.
+    [999, 'worktree' as const, MAX_ISOLATED_TASK_CONCURRENCY, true],
+  ])(
+    'requested %i in %s mode resolves to %i',
+    async (requested, mode, effective, clamped) => {
+      const context = await contextFor(requested);
+      const decision = context.concurrencyFor(mode);
+
+      expect(decision.requested).toBe(requested);
+      expect(decision.effective).toBe(effective);
+      expect(decision.clamped).toBe(clamped);
+    },
+  );
+
+  it('treats an absent mode as sequential, never as isolated', async () => {
+    // The legacy case reaching the resolver. Conservative in the one direction
+    // that matters: granting parallelism has to be something a run *says*.
+    const context = await contextFor(4);
+
+    expect(context.concurrencyFor(undefined).effective).toBe(1);
   });
 });

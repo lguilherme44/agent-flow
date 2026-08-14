@@ -9,6 +9,7 @@ import {
   User,
 } from 'lucide-react';
 import type {
+  Degradation,
   IsolationDetailView,
   IntegrationConflictView,
   RunDetailView,
@@ -54,7 +55,11 @@ export function RunPanel(props: {
           says *how* it is being executed. Hairline-separated on the same surface
           rather than a card of its own — §21.2 is facts about the run, not a
           second widget. */}
-      <IsolationStrip isolation={props.run.isolation} conflicts={props.run.integrationConflicts} />
+      <IsolationStrip
+        isolation={props.run.isolation}
+        conflicts={props.run.integrationConflicts}
+        degradations={props.run.degradationDetail}
+      />
       {props.stages === undefined ? null : (
         <div className="border-t border-border px-4 py-3">
           <StagePipeline stages={props.stages} />
@@ -110,12 +115,21 @@ export function hasIsolationToShow(
 function IsolationStrip(props: {
   isolation: IsolationDetailView | undefined;
   conflicts: readonly IntegrationConflictView[];
+  degradations: readonly Degradation[];
 }): JSX.Element | null {
   const { isolation } = props;
   if (isolation === undefined || !hasIsolationToShow(isolation, props.conflicts)) return null;
 
   const { parallelism } = isolation;
   const isolated = isolation.mode === 'worktree';
+
+  // Once the run has executed, the clamp is on its record as a degradation, and
+  // the header renders that list a few lines above. Printing the same sentence
+  // twice on one screen is how a reader learns to stop reading either copy — so
+  // the strip carries it only until the run makes it durable.
+  const clampRecorded = props.degradations.some(
+    (degradation) => degradation.kind === 'parallelism_clamped',
+  );
 
   return (
     <div className="flex flex-col gap-2 border-t border-border px-4 py-2.5">
@@ -190,7 +204,7 @@ function IsolationStrip(props: {
       {/* §21.4. The reduction and the disagreement are two different sentences
           and both are on the record: one says the number could not be honoured,
           the other says which of two settings applies to this run. */}
-      {parallelism.reason === undefined ? null : (
+      {parallelism.reason === undefined || clampRecorded ? null : (
         <p className="text-label text-muted">{parallelism.reason}</p>
       )}
       {isolation.note === undefined ? null : (
