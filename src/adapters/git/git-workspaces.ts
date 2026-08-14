@@ -1199,6 +1199,45 @@ export class GitWorkspaces {
   }
 
   /**
+   * `git update-ref -d -- <ref> [<expected old>]` (§20.1 step 3).
+   *
+   * `update-ref -d` rather than `git branch -D`, for the reasons §12.1 gives for
+   * every other ref write here: one reference transaction, no working-tree
+   * implications, and no chance of the porcelain deciding something on the caller's
+   * behalf.
+   *
+   * **`expectedOldOid` is how a deletion stays honest.** Cleanup reads a ref, works
+   * out whether it may go, and then deletes it — and between those two moments the
+   * ref is a value nobody is holding. Passing what was read makes Git refuse if it
+   * moved, which turns "we deleted something that had changed under us" into a
+   * failure the caller reports (§20.1) rather than into lost work.
+   */
+  async deleteRef(
+    options: RepoContext & { readonly ref: string; readonly expectedOldOid?: string },
+  ): Promise<GitResult<void>> {
+    const ref = validRef(options.ref);
+    if (!ref.ok) return ref;
+
+    const expected: string[] = [];
+    if (options.expectedOldOid !== undefined) {
+      const old = validOid(options.expectedOldOid, 'the expected current value of the ref');
+      if (!old.ok) return old;
+      expected.push(old.value);
+    }
+
+    const outcome = await this.run({
+      subcommand: 'update-ref',
+      cwd: options.cwd,
+      timeout: 'write',
+      args: ['-d', '--', ref.value, ...expected],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectSuccess(outcome.value, 'git update-ref -d');
+    return failed ?? gitOk(undefined);
+  }
+
+  /**
    * Creates a branch at a commit, and refuses if it already exists (§14.1).
    *
    * `update-ref` with {@link ABSENT_OID} as the expected old value rather than

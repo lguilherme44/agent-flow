@@ -178,10 +178,16 @@ export async function main(argv: string[]): Promise<number> {
 
   program
     .command('clean')
-    .description('Remove old run state')
+    .description('Remove old run state, and the Git namespace that goes with it')
     .option('--keep <n>', 'how many recent runs to keep (default 5)')
     .option('--cache', 'also drop the cached repository map')
     .option('--force', 'remove the active run too')
+    // §20.3. `--branches` is the only flag that deletes work, it is never implied
+    // by `--worktrees`, and it never becomes a default: branches are cheap and a
+    // checkout is not, but an unmerged branch is the feature itself.
+    .option('--worktrees', 'also reclaim retained worktrees of removed runs')
+    .option('--branches', 'also delete integration branches that are merged nowhere')
+    .option('--dry-run', 'report what would be reclaimed and change nothing')
     .action(async (options: Record<string, string | boolean>, command: Command) => {
       exitCode = await runCleanCommand(options as never, globalOptions(command));
     });

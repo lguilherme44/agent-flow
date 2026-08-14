@@ -493,8 +493,17 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // alone: an attempt worktree is the only remaining copy of what an agent
     // produced (§7.4), and the next milestone that wants to delete one has to
     // come and edit this list.
-    const RECLAIMS = ['src/cli/doctor.ts', 'src/app/integrator.ts'];
-    const REMOVES = ['src/cli/doctor.ts'];
+    // M2-09 is the milestone that reclaims, and this is the list it had to come and
+    // edit — which was the point of keeping it at one module until then. The rules
+    // that make it safe are not in this list, they are in the module: every path is
+    // *derived* from run state and then intersected with what Git registered under
+    // Agent Flow's own root, so a foreign worktree cannot be named at all (§20.2).
+    const RECLAIMS = [
+      'src/cli/doctor.ts',
+      'src/app/integrator.ts',
+      'src/app/namespace-reclaim.ts',
+    ];
+    const REMOVES = ['src/cli/doctor.ts', 'src/app/namespace-reclaim.ts'];
     // M2-05: the operations of the §11.2 sequence, in the one module that owns
     // it. Splitting them would give two answers to "which tree was validated",
     // and only one of them would be the one bound to a receipt.
@@ -692,7 +701,21 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // only remaining copy of what an agent produced (§7.4). So the caller list is
     // one module, and the next milestone that wants this has to come and edit
     // this test rather than inherit a footgun.
-    const FORCES = ['src/cli/doctor.ts'];
+    //
+    // **M2-09 came and edited it, and the reason is structural rather than
+    // convenient.** §11.2 stages the validated tree with `add -A` before the marker
+    // is built, so *every* attempt worktree has an index that differs from its base
+    // for the rest of its life — and Git refuses to remove any of them. Without
+    // `force`, §20.3's `--worktrees` flag would be a no-op on every worktree it
+    // names, and an integrated attempt's checkout could never be reclaimed at all.
+    //
+    // What keeps it safe is not the flag but the three things in front of it: the
+    // path is *derived* from trusted run state, Git *confirms* it is registered under
+    // Agent Flow's own root, and the content is either a duplicate of what the
+    // integration branch already holds or something the user asked for by name. The
+    // thing that would be *work* is the branch, and that is cleaned by a different
+    // rule behind a different flag (§20.4).
+    const FORCES = ['src/cli/doctor.ts', 'src/app/namespace-reclaim.ts'];
     // Scoped to a worktree removal on purpose. `force: true` is ordinary and
     // correct on a filesystem call — `node-file-system.ts` and `node-host.ts`
     // both pass it to `fs.rm` — and a rule that flagged those would be noise
@@ -1001,6 +1024,11 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       // whose recorded mode is not `worktree`, so the mode is decided by the run
       // rather than by whether an Integrator happens to be wired.
       'src/app/integrator.ts',
+      // M2-09: reclamation asks the run whether it *has* a namespace at all. A
+      // sequential or legacy run has none, so there is nothing Git to reclaim and
+      // its state is removable — which is how `clean` keeps behaving exactly as it
+      // always has for every run that predates isolation (§25).
+      'src/app/namespace-reclaim.ts',
     ]);
 
     const offenders = sourceFiles('src')
@@ -1606,13 +1634,22 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
 
     expect(lockUsers.sort()).toEqual([
       'src/app/run-actions.ts',
+      // M2-09: `clean` reads the lock to refuse a run somebody is executing (§20.2).
+      // Reading rather than acquiring is the whole distinction — taking the lease to
+      // decide whether a run may be deleted would make housekeeping compete with the
+      // scheduler, and the honest answer there is "somebody is working on this one".
+      'src/cli/clean.ts',
       // The server reads the lock for a pre-flight conflict answer; it never takes it.
       'src/server/server.ts',
     ]);
 
-    const server = codeOnly(read(join(ROOT, 'src/server/server.ts')).text);
-    expect(server).toContain('.describe(');
-    expect(server, 'the server acquires the lock itself').not.toContain('.acquire(');
+    // Neither reader acquires. `withExecutionLock` remains the only acquisition, so
+    // the CLI and the HTTP API cannot hold different locks or forget to hold one.
+    for (const reader of ['src/server/server.ts', 'src/cli/clean.ts']) {
+      const code = codeOnly(read(join(ROOT, reader)).text);
+      expect(code, reader).toContain('.describe(');
+      expect(code, `${reader} acquires the lock itself`).not.toContain('.acquire(');
+    }
   });
 
   it('holds the lock across every action that moves a run', () => {
