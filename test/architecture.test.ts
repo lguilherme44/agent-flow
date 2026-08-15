@@ -2340,8 +2340,10 @@ describe('Repository content source seam (M3-05)', () => {
 
   it('never derives post-open authority from path-based stat', () => {
     const { text } = read(join(ROOT, 'src/adapters/fs/node-repository-content-source.ts'));
+    const code = codeOnly(text);
 
-    expect(codeOnly(text)).not.toMatch(/\bfs\.stat\s*\(/);
+    expect(code).not.toMatch(/\bfs\.stat\s*\(/);
+    expect(code.match(/\bhandle\.stat\s*\(\s*\{\s*bigint\s*:\s*true\s*\}\s*\)/g)).toHaveLength(2);
   });
 
   it('proves every candidate component against raw directory-entry bytes', () => {

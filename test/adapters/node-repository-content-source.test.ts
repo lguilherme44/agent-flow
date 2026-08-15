@@ -164,6 +164,133 @@ describe('NodeRepositoryContentSource', () => {
     expect((flags as number) & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK);
   });
 
+  it('rejects EOF before the authorized size instead of returning truncated content', async () => {
+    const projectDir = await tempDir('af-content-truncate-read-');
+    const path = join(projectDir, 'candidate.txt');
+    await writeFile(path, 'original', 'utf8');
+    const identity = await nodeFs.lstat(path, { bigint: true });
+    const initialStats = {
+      isFile: () => true,
+      size: 8n,
+      dev: identity.dev,
+      ino: identity.ino,
+      mtimeNs: 10n,
+      ctimeNs: 20n,
+    };
+    const truncatedStats = { ...initialStats, size: 4n, mtimeNs: 11n, ctimeNs: 21n };
+    const stat = vi.fn().mockResolvedValueOnce(initialStats).mockResolvedValueOnce(truncatedStats);
+    const read = vi.fn()
+      .mockImplementationOnce(async (buffer: Buffer, offset: number) => {
+        Buffer.from('torn').copy(buffer, offset);
+        return { bytesRead: 4, buffer };
+      })
+      .mockImplementationOnce(async (buffer: Buffer) => ({ bytesRead: 0, buffer }));
+    vi.spyOn(nodeFs, 'open').mockResolvedValue({ stat, read, close: async () => undefined } as never);
+
+    const result = await new NodeRepositoryContentSource().readCandidate(
+      projectDir,
+      'candidate.txt',
+    );
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'path_changed' });
+    expect(JSON.stringify(result)).not.toContain('torn');
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a same-size in-place rewrite during read', async () => {
+    const projectDir = await tempDir('af-content-rewrite-read-');
+    const path = join(projectDir, 'candidate.txt');
+    await writeFile(path, 'original', 'utf8');
+    const identity = await nodeFs.lstat(path, { bigint: true });
+    const initialStats = {
+      isFile: () => true,
+      size: 8n,
+      dev: identity.dev,
+      ino: identity.ino,
+      mtimeNs: 30n,
+      ctimeNs: 40n,
+    };
+    const rewrittenStats = { ...initialStats, mtimeNs: 31n, ctimeNs: 41n };
+    const stat = vi.fn().mockResolvedValueOnce(initialStats).mockResolvedValueOnce(rewrittenStats);
+    const read = vi.fn().mockImplementationOnce(async (buffer: Buffer, offset: number) => {
+      Buffer.from('REWRITE!').copy(buffer, offset);
+      return { bytesRead: 8, buffer };
+    });
+    vi.spyOn(nodeFs, 'open').mockResolvedValue({ stat, read, close: async () => undefined } as never);
+
+    const result = await new NodeRepositoryContentSource().readCandidate(
+      projectDir,
+      'candidate.txt',
+    );
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'path_changed' });
+    expect(JSON.stringify(result)).not.toContain('REWRITE!');
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects growth after reading the authorized byte count', async () => {
+    const projectDir = await tempDir('af-content-grow-read-');
+    const path = join(projectDir, 'candidate.txt');
+    await writeFile(path, 'original', 'utf8');
+    const identity = await nodeFs.lstat(path, { bigint: true });
+    const initialStats = {
+      isFile: () => true,
+      size: 8n,
+      dev: identity.dev,
+      ino: identity.ino,
+      mtimeNs: 45n,
+      ctimeNs: 55n,
+    };
+    const grownStats = { ...initialStats, size: 12n };
+    const stat = vi.fn().mockResolvedValueOnce(initialStats).mockResolvedValueOnce(grownStats);
+    const read = vi.fn().mockImplementationOnce(async (buffer: Buffer, offset: number) => {
+      Buffer.from('original').copy(buffer, offset);
+      return { bytesRead: 8, buffer };
+    });
+    vi.spyOn(nodeFs, 'open').mockResolvedValue({ stat, read, close: async () => undefined } as never);
+
+    const result = await new NodeRepositoryContentSource().readCandidate(
+      projectDir,
+      'candidate.txt',
+    );
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'path_changed' });
+    expect(JSON.stringify(result)).not.toContain('original');
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues normal short reads until the authorized size is complete', async () => {
+    const projectDir = await tempDir('af-content-short-read-');
+    const path = join(projectDir, 'candidate.txt');
+    await writeFile(path, 'short-ok', 'utf8');
+    const identity = await nodeFs.lstat(path, { bigint: true });
+    const stableStats = {
+      isFile: () => true,
+      size: 8n,
+      dev: identity.dev,
+      ino: identity.ino,
+      mtimeNs: 50n,
+      ctimeNs: 60n,
+    };
+    const stat = vi.fn().mockResolvedValue(stableStats);
+    const read = vi.fn()
+      .mockImplementationOnce(async (buffer: Buffer, offset: number) => {
+        Buffer.from('sho').copy(buffer, offset);
+        return { bytesRead: 3, buffer };
+      })
+      .mockImplementationOnce(async (buffer: Buffer, offset: number) => {
+        Buffer.from('rt-ok').copy(buffer, offset);
+        return { bytesRead: 5, buffer };
+      });
+    vi.spyOn(nodeFs, 'open').mockResolvedValue({ stat, read, close: async () => undefined } as never);
+
+    await expect(
+      new NodeRepositoryContentSource().readCandidate(projectDir, 'candidate.txt'),
+    ).resolves.toEqual({ ok: true, path: 'candidate.txt', content: 'short-ok', bytes: 8 });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
   it('does not confuse a project root with a sibling that shares its prefix', async () => {
     const parent = await tempDir('af-content-containment-');
     const projectDir = join(parent, 'repo');

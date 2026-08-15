@@ -82,7 +82,21 @@ export class NodeRepositoryContentSource implements RepositoryContentSource {
       }
       if (handleStats.size > BigInt(this.maxFileBytes)) return failure(path, 'too_large');
 
-      const contentBytes = await readSnapshot(handle, Number(handleStats.size));
+      const snapshotRead = await readSnapshot(handle, Number(handleStats.size));
+      const finalHandleStats = await handle.stat({ bigint: true });
+      if (
+        !snapshotRead.complete ||
+        !finalHandleStats.isFile() ||
+        finalHandleStats.dev !== handleStats.dev ||
+        finalHandleStats.ino !== handleStats.ino ||
+        finalHandleStats.size !== handleStats.size ||
+        finalHandleStats.mtimeNs !== handleStats.mtimeNs ||
+        finalHandleStats.ctimeNs !== handleStats.ctimeNs
+      ) {
+        return failure(path, 'path_changed');
+      }
+
+      const contentBytes = snapshotRead.bytes;
       if (looksBinary(contentBytes)) return failure(path, 'binary');
 
       let content: string;
@@ -243,8 +257,8 @@ function isContained(root: string, target: string): boolean {
 async function readSnapshot(
   handle: Awaited<ReturnType<typeof fs.open>>,
   size: number,
-): Promise<Uint8Array> {
-  if (size === 0) return new Uint8Array();
+): Promise<{ readonly bytes: Uint8Array; readonly complete: boolean }> {
+  if (size === 0) return { bytes: new Uint8Array(), complete: true };
 
   const buffer = Buffer.allocUnsafe(size);
   let offset = 0;
@@ -253,7 +267,7 @@ async function readSnapshot(
     if (bytesRead === 0) break;
     offset += bytesRead;
   }
-  return buffer.subarray(0, offset);
+  return { bytes: buffer.subarray(0, offset), complete: offset === size };
 }
 
 function looksBinary(bytes: Uint8Array): boolean {
