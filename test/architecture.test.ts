@@ -2371,3 +2371,50 @@ describe('Repository content source seam (M3-05)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('Hierarchical context compression boundary (M3-05)', () => {
+  it('keeps the compressor provider-neutral and without execution authority', () => {
+    const { text } = read(join(ROOT, 'src/core/hierarchical-context-compressor.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(
+      specifiers.filter((specifier) =>
+        [
+          'adapters/',
+          'agent-runner',
+          'process-runner',
+          'git-',
+          'node:',
+          'http',
+        ].some((term) => specifier.includes(term)),
+      ),
+    ).toEqual([]);
+    expect(code).not.toMatch(/\b(?:AgentRunner|AgentRunInput|ProcessRunner|GitClient|Evidence)\b/);
+  });
+
+  it('keeps token estimation behind a provider-neutral port seam', () => {
+    const { text } = read(join(ROOT, 'src/ports/context-token-estimator.ts'));
+    expect(importSpecifiers(text)).toEqual([]);
+    expect(codeOnly(text)).not.toMatch(/\b(?:AgentRunner|UtilityModel|OpenAI|fetch|process)\b/);
+  });
+
+  it('does not wire compression into production workflows before M3-08', () => {
+    const offenders: string[] = [];
+    for (const dir of ['src/app', 'src/server', 'src/cli']) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (/\b(?:HierarchicalContextCompressor|HierarchicalCompressionResult)\b/.test(codeOnly(text))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    const adaptive = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    if (/\b(?:HierarchicalContextCompressor|HierarchicalCompressionResult)\b/.test(codeOnly(adaptive.text))) {
+      offenders.push(adaptive.path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
