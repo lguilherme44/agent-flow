@@ -69,7 +69,43 @@ export interface PlanningPipelineOptions {
 export type PlanningGate = (
   runId: string,
   moment: PlanningBaseMoment,
-) => Promise<string | null>;
+) => Promise<PlanningRefusalFacts | null>;
+
+/** What the gate found, in Appendix A's vocabulary. */
+export interface PlanningRefusalFacts {
+  readonly code: string;
+  readonly detail: string;
+  /** What to do about it. */
+  readonly action: string;
+}
+
+/**
+ * The planning pipeline stopped because the *repository* is not ready.
+ *
+ * A distinct error type, and the distinction is the point. This used to be
+ * raised as `StageFailure('planning', 'invalid_output')`, which reaches a person
+ * as "the runner produced output that never satisfied the contract" — a sentence
+ * about a model, printed when no model ran. Somebody reading it goes to look at
+ * the planner's output; the fix is `git commit`.
+ *
+ * `RunnerErrorCode` is the vocabulary of *runner* failures, and every code in it
+ * names a subsystem that was not involved here. Appendix A already has the right
+ * word — `working_tree_dirty`, `planning_base_moved` — so this carries that one,
+ * unchanged, along with the action that resolves it. It is the same shape
+ * `run-actions.ts` returns for the same gate at approval and at implementation
+ * start; before this, one of the three moments described itself differently from
+ * the other two.
+ */
+export class PlanningRefusal extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly action: string,
+  ) {
+    super(message);
+    this.name = 'PlanningRefusal';
+  }
+}
 
 export interface PipelineOptions {
   /** Re-runs discovery even when a valid cache exists. */
@@ -232,10 +268,14 @@ export class PlanningPipeline {
    * which is what keeps every existing sequential caller unchanged.
    */
   private async assertReady(runId: string, moment: PlanningBaseMoment): Promise<void> {
-    const reason = await this.options.planningBaseGate?.(runId, moment);
-    if (reason === null || reason === undefined) return;
+    const refusal = await this.options.planningBaseGate?.(runId, moment);
+    if (refusal === null || refusal === undefined) return;
 
-    throw new StageFailure('planning', 'invalid_output', reason);
+    throw new PlanningRefusal(
+      refusal.code,
+      `${runId} is an isolated run and this repository is not ready at ${moment}: ${refusal.detail}.`,
+      refusal.action,
+    );
   }
 
   /** Shared with the corrective loop, so both plans are judged the same way. */

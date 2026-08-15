@@ -1,6 +1,7 @@
 import { ConfigError } from '../../config/loader.js';
 import { PromptError } from '../../app/prompt-loader.js';
 import { StageFailure } from '../../app/stage-runner.js';
+import { PlanningRefusal } from '../../app/planning-pipeline.js';
 import { StateError } from '../../app/state-store.js';
 import { RoleResolutionError } from '../../core/role.js';
 import { RegistryError } from '../../adapters/runners/registry.js';
@@ -35,6 +36,17 @@ export function renderError(error: unknown): RenderedError {
 
   if (error instanceof PromptError) {
     return { message: error.message, exitCode: ExitCode.CONFIG_ERROR };
+  }
+
+  // Before `StageFailure`, and a different sentence: nothing ran. A repository
+  // gate refused, the code is Appendix A's, and the action is what resolves it.
+  // Nothing here suggests retrying, on this runner or another — §6.4's refusals
+  // are not overridden, they are met.
+  if (error instanceof PlanningRefusal) {
+    return {
+      message: `${error.message}\n\n${error.action}`,
+      exitCode: ExitCode.EXECUTION_ERROR,
+    };
   }
 
   if (error instanceof StageFailure) {

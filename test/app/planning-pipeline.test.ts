@@ -4,8 +4,12 @@ import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
-import { PlanningPipeline } from '../../src/app/planning-pipeline.js';
-import { StageRunner } from '../../src/app/stage-runner.js';
+import {
+  PlanningPipeline,
+  PlanningRefusal,
+  type PlanningGate,
+} from '../../src/app/planning-pipeline.js';
+import { StageFailure, StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../../src/contracts/index.js';
@@ -128,7 +132,9 @@ const goodPlan = {
   ],
 };
 
-async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
+async function harness(
+  options: { processRunner?: FakeProcessRunner; planningBaseGate?: PlanningGate } = {},
+) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const processRunner = options.processRunner ?? new FakeProcessRunner().always({ exitCode: 1 });
@@ -161,6 +167,9 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     capabilities: CAPABILITIES,
     providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
     projectDir: PROJECT,
+    ...(options.planningBaseGate === undefined
+      ? {}
+      : { planningBaseGate: options.planningBaseGate }),
   });
 
   return { fs, clock, store, run, runner, pipeline, processRunner };
@@ -543,5 +552,79 @@ describe('a cache with no fingerprint is not trusted', () => {
     const result = await pipeline.run(run.runId, 'a feature');
 
     expect(result.stagesRun).toContain('discovery');
+  });
+});
+
+describe('a repository gate refuses in the repository’s vocabulary (§6.2, Appendix A)', () => {
+  /** A pipeline whose gate refuses at a chosen moment, and lets every other pass. */
+  async function withGate(refuseAt: string) {
+    const asked: string[] = [];
+    const built = await harness({
+      planningBaseGate: async (_runId, moment) => {
+        asked.push(moment);
+        return moment === refuseAt
+          ? {
+              code: 'working_tree_dirty',
+              detail: 'the working tree has uncommitted changes: src/a.ts',
+              action: 'Commit or stash them, then run this again.',
+            }
+          : null;
+      },
+    });
+
+    return { ...built, asked };
+  }
+
+  it('raises the canonical refusal code, not a runner error code', async () => {
+    // The dogfood defect this test exists for. `assertReady` used to throw
+    // `StageFailure('planning', 'invalid_output')`, so a dirty working tree
+    // reached the user as "the runner produced output that never satisfied the
+    // contract" — a sentence about a model, printed when no model had run.
+    const { pipeline, run, runner } = await withGate('planning start');
+    scriptHappyPath(runner);
+
+    await expect(pipeline.run(run.runId, 'a feature')).rejects.toThrow(PlanningRefusal);
+
+    const raised = await pipeline.run(run.runId, 'a feature').catch((error: unknown) => error);
+    expect(raised).toBeInstanceOf(PlanningRefusal);
+    expect((raised as PlanningRefusal).code).toBe('working_tree_dirty');
+    // Appendix A's code is what a person looks up in `docs/troubleshooting.md`,
+    // so the message carries it rather than paraphrasing it away.
+    expect((raised as PlanningRefusal).message).toContain('uncommitted changes');
+    expect((raised as PlanningRefusal).action).toMatch(/Commit or stash/);
+  });
+
+  it('is not a StageFailure, so nothing offers to retry it elsewhere', async () => {
+    // The property that made the old shape actively harmful: `StageFailure`
+    // carries `fallbackEligible`, and the renderer explains stage failures in
+    // terms of runners and fallbacks. A refusal is met, never routed around
+    // (§6.4), so it must not be able to enter that path at all.
+    const { pipeline, run, runner } = await withGate('planning start');
+    scriptHappyPath(runner);
+
+    const raised = await pipeline.run(run.runId, 'a feature').catch((error: unknown) => error);
+    expect(raised).not.toBeInstanceOf(StageFailure);
+  });
+
+  it('spends no agent invocation when it refuses at the start', async () => {
+    // A refusal costs nothing (§6.4). The gate runs before discovery, so a
+    // repository that is not ready never reaches a runner.
+    const { pipeline, run, runner } = await withGate('planning start');
+    scriptHappyPath(runner);
+
+    await pipeline.run(run.runId, 'a feature').catch(() => undefined);
+
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it('lets a satisfied gate through, and asks it at every moment it declares', async () => {
+    const { pipeline, run, runner, asked } = await withGate('never');
+    scriptHappyPath(runner);
+
+    const result = await pipeline.run(run.runId, 'a feature');
+
+    expect(result.plan.tasks.length).toBeGreaterThan(0);
+    expect(asked, 'the gate was never consulted').not.toHaveLength(0);
+    expect(asked).toContain('planning start');
   });
 });

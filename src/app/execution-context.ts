@@ -27,6 +27,7 @@ import { WorktreeRecovery } from './worktree-recovery.js';
 import {
   checkWorktreePreconditions,
   observePlanningBaseDrift,
+  worktreeRefusalAction,
 } from './run-git-identity.js';
 import { createGitCommand, type GitCommand } from '../adapters/git/git-command.js';
 import { createGitWorkspaces, type GitWorkspaces } from '../adapters/git/git-workspaces.js';
@@ -328,7 +329,14 @@ export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeli
         detail: preconditions.detail,
       });
 
-      return `${preconditions.code}: ${preconditions.detail}`;
+      // The canonical code and the action that resolves it, rather than one
+      // string with both flattened into it. The caller renders a refusal, and a
+      // refusal a person can act on needs the two apart.
+      return {
+        code: preconditions.code,
+        detail: preconditions.detail,
+        action: worktreeRefusalAction(preconditions.code),
+      };
     },
     config: context.config,
     capabilities: context.capabilities,
