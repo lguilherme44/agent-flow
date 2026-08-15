@@ -151,10 +151,12 @@ export class PlanningPipeline {
       // Resolve workflow classification safely with deterministic facts & override checks
       const state = await store.loadRun(runId);
       const explicitOverride = options.workflow ?? state.workflow;
+      const repoFiles = await collectRepoFactPaths(this.options.fs, this.options.projectDir);
       const classification = classifyWorkflow(featureRequest, {
         explicitOverride,
         projectDir: this.options.projectDir,
         projectConfig: this.options.config.project,
+        files: repoFiles,
       });
       const workflow: WorkflowClass = classification.workflow;
       await store.updateRun(runId, (s) => ({ ...s, workflow }));
@@ -539,4 +541,39 @@ export class PlanningPipeline {
 /** Cache key for discovery output. Currently informational. */
 export function architectureCacheKey(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 16);
+}
+
+/**
+ * Collects deterministic repository path facts cheaply to feed workflow classification.
+ * Scans top-level and first-level candidate directories without heavy recursive traversal.
+ */
+export async function collectRepoFactPaths(fs: FileSystem, projectDir: string): Promise<string[]> {
+  const result: string[] = [];
+  try {
+    const top = await fs.readDir(projectDir);
+    for (const entry of top) {
+      if (entry.startsWith('.')) continue;
+      result.push(entry);
+      const sub = `${projectDir}/${entry}`;
+      const stat = await fs.stat(sub);
+      if (
+        stat?.isDirectory &&
+        ['src', 'lib', 'app', 'db', 'auth', 'payment', 'iam', 'migrations'].includes(entry.toLowerCase())
+      ) {
+        try {
+          const children = await fs.readDir(sub);
+          for (const child of children) {
+            if (!child.startsWith('.')) {
+              result.push(`${entry}/${child}`);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return result;
 }

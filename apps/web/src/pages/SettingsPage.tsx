@@ -4,6 +4,7 @@ import type { ConfigSectionView, ConfigSettingView, ConfigView } from '@contract
 import { useProjectSelection } from '../app/project-context';
 import { useConfig } from '../lib/queries';
 import { Badge, Empty, Panel, SectionHeader, Tooltip, cx } from '../components/ui';
+import { useI18n } from '../lib/i18n/i18n-context';
 
 /**
  * Settings (UI-26, §85) — the configuration the tool is actually running on.
@@ -50,16 +51,17 @@ export function SettingsPage(): JSX.Element {
  * they appear alongside the reason instead of instead of it (§95).
  */
 function Sources(props: { data: ConfigView }): JSX.Element {
+  const { t } = useI18n();
   const { sources, configError } = props.data;
 
   return (
     <Panel
       className="shrink-0"
       header={
-        <SectionHeader title="Settings">
+        <SectionHeader title={t.settings.title}>
           <span className="flex items-center gap-1 text-micro text-faint">
             <Info className="h-3 w-3" aria-hidden />
-            read-only — edit the files below and reload
+            {t.settings.readOnlyNotice}
           </span>
         </SectionHeader>
       }

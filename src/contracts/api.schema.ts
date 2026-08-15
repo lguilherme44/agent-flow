@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ReasoningLevel } from './common.schema.js';
-import type { Finding } from './review.schema.js';
+import type { Finding, FindingAdjudication } from './review.schema.js';
 import type {
   Degradation,
   PipelineStage,
@@ -589,6 +589,8 @@ export interface ApprovalGateView {
     /** Whether the verdict is about the plan currently on disk. */
     readonly coversThisPlan: boolean;
     readonly findings: Finding[];
+    readonly adjudications?: FindingAdjudication[];
+    readonly residualRisks?: readonly string[];
   };
   readonly degradations: Degradation[];
 }

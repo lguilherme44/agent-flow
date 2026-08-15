@@ -187,16 +187,13 @@ export function classifyWorkflow(
 
   // Handle explicit override
   if (context.explicitOverride) {
-    // Safety Invariant: cannot downgrade a high-risk request to trivial or simple or standard without signaling
-    if (
-      detectedHighRisk.length > 0 &&
-      (context.explicitOverride === 'trivial' || context.explicitOverride === 'simple')
-    ) {
+    // Safety Invariant: cannot downgrade a high-risk request to trivial, simple, or standard
+    if (detectedHighRisk.length > 0 && context.explicitOverride !== 'high-risk') {
       return {
         workflow: 'high-risk',
         rationale:
-          `Explicit override "${context.explicitOverride}" refused: high-risk security/data signals ` +
-          `detected (${detectedHighRisk.join(', ')}). High-risk operations cannot be downgraded below standard safety.`,
+          `Explicit override "${context.explicitOverride}" refused: high-risk security/data/infrastructure signals ` +
+          `detected (${detectedHighRisk.join(', ')}). High-risk operations cannot be downgraded to ${context.explicitOverride}.`,
         deterministic: true,
         confidence: 1.0,
         highRiskSignalsDetected: detectedHighRisk,

@@ -734,4 +734,19 @@ describe('Adaptive Workflow Pipeline Execution', () => {
     expect((raised as PlanningRefusal).code).toBe('cross_provider_required');
     expect(runner.calls).toHaveLength(0); // Fails safely with 0 model calls
   });
+
+  it('detects sensitive repository paths (auth, db/migrations, payment) and escalates to HIGH-RISK', async () => {
+    const { pipeline, run, runner, fs } = await harness();
+    // Seed sensitive paths
+    fs.seed(`${PROJECT}/src/auth/token.ts`, 'export const token = "xyz";');
+    fs.seed(`${PROJECT}/db/migrations/001_init.sql`, 'CREATE TABLE users();');
+
+    // Pipeline with same provider will refuse when escalated to high-risk
+    const raised = await pipeline
+      .run(run.runId, 'Update user login session handling')
+      .catch((err: unknown) => err);
+    expect(raised).toBeInstanceOf(PlanningRefusal);
+    expect((raised as PlanningRefusal).code).toBe('cross_provider_required');
+    expect(runner.calls).toHaveLength(0);
+  });
 });

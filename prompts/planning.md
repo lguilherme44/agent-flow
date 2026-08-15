@@ -119,6 +119,12 @@ trivial change to a widely used contract is high risk.
 Set `flags` honestly. They drive routing: overstating them wastes the strongest
 model on trivia, understating them puts a weak model on something dangerous.
 
+## Finding Closure Proposals (for Revisions)
+
+If this is a revision addressing previous review findings, include `findingProposals` for each finding from the previous review:
+- `status`: `RESOLVED` (addressed by new or modified tasks), `SUPERSEDED` (no longer applicable), or `PROPOSE_ACCEPT_WITH_RATIONALE` (propose accepting as residual risk).
+- `rationale`: Clear explanation of the resolution.
+
 ## Output
 
 Return **only** a JSON object, no prose, no code fences:
@@ -134,7 +140,7 @@ Return **only** a JSON object, no prose, no code fences:
       "scope": "backend | frontend | database | infra | docs",
       "complexity": "trivial | normal | complex",
       "risk": "low | medium | high",
-      "dependencies": ["TASK-000"],
+      "dependencies": [],
       "requirements": ["FR-001"],
       "files": { "likely": ["src/path/to/file.ts"] },
       "flags": {
@@ -146,6 +152,13 @@ Return **only** a JSON object, no prose, no code fences:
       "acceptanceCriteria": ["Checkable statement."],
       "validation": ["test"],
       "validationExpectation": "pass"
+    }
+  ],
+  "findingProposals": [
+    {
+      "findingIndex": 0,
+      "status": "RESOLVED | SUPERSEDED | PROPOSE_ACCEPT_WITH_RATIONALE",
+      "rationale": "Addressed by adding TASK-002."
     }
   ]
 }

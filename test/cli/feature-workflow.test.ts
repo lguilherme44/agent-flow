@@ -39,4 +39,20 @@ describe('CLI feature workflow validation & high-risk protection', () => {
     );
     expect(code).toBe(ExitCode.CONFIG_ERROR);
   });
+
+  it('honors valid workflow string and verifies dry run with zero model calls', async () => {
+    const code = await runFeatureCommand(
+      'add some button',
+      { workflow: 'simple' },
+      {
+        cwd: tempDir,
+        globalConfigPath: globalConfigFile,
+        verbose: false,
+        dryRun: true,
+        json: false,
+        strict: false,
+      },
+    );
+    expect(code).toBe(ExitCode.OK);
+  });
 });

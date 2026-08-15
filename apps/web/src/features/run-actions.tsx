@@ -29,6 +29,7 @@ import { useArtifact } from '../lib/queries';
 import { formatWhen, humanise } from '../lib/format';
 import { formatPlanReviewVerdict } from '../lib/status';
 import { StructuredPlanView } from '../components/StructuredPlanView';
+import { useI18n } from '../lib/i18n/i18n-context';
 
 /**
  * The actions on a run (UI-27, §90, §91).
@@ -187,6 +188,7 @@ export function ReviewGateButton(props: {
   label?: string;
   variant?: 'primary' | 'surface';
 }): JSX.Element {
+  const { t } = useI18n();
   const [dialog, setDialog] = useState<'approve' | 'revise' | undefined>(undefined);
   const [revisionInstruction, setRevisionInstruction] = useState<string>('');
 
@@ -202,7 +204,7 @@ export function ReviewGateButton(props: {
           setDialog('approve');
         }}
       >
-        {props.label ?? 'Review & approve'}
+        {props.label ?? t.common.approve}
       </Button>
 
       <ApprovalDialog
@@ -271,6 +273,7 @@ function ApprovalDialog(props: {
   onClose: () => void;
   onRevise: (instruction?: string) => void;
 }): JSX.Element {
+  const { t, locale } = useI18n();
   const gate = useApprovalGate(props.projectId, props.run.runId, { enabled: props.open });
   const planArtifact = useArtifact(props.projectId, props.run.runId, 'plan', { enabled: props.open });
   const approve = useApprove(props.projectId, props.run.runId);
@@ -309,8 +312,8 @@ function ApprovalDialog(props: {
         approve.reset();
         props.onClose();
       }}
-      title={`Approve the plan for ${props.run.runId}`}
-      description="Approval is bound to this exact plan. Revise it and the gate closes again."
+      title={`${t.approval.dialogTitle} ${props.run.runId}`}
+      description={t.approval.dialogSubtitle}
       className="w-[min(780px,94vw)]"
       footer={
         <>
@@ -320,9 +323,13 @@ function ApprovalDialog(props: {
               props.onRevise(selectedFindingsInstruction);
             }}
           >
-            {selectedFindings.length > 0
-              ? `Request revision (${selectedFindings.length} selected)`
-              : 'Request revision'}
+            {locale === 'pt-BR'
+              ? selectedFindings.length > 0
+                ? `${t.approval.reviseButton} (${selectedFindings.length} selecionados)`
+                : t.approval.reviseButton
+              : selectedFindings.length > 0
+                ? `Request revision (${selectedFindings.length} selected)`
+                : 'Request revision'}
           </Button>
           <Button
             variant="primary"
@@ -504,6 +511,54 @@ function GateBody(props: {
         </section>
       )}
 
+      {/* 6.5 Residual Risks Requiring Human Sign-off */}
+      {review?.residualRisks && review.residualRisks.length > 0 ? (
+        <section className="flex flex-col gap-1.5 rounded-md border border-warning/40 bg-warning-soft/30 p-3">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 text-warning" aria-hidden />
+            <h3 className="text-micro font-semibold uppercase tracking-caps text-warning">
+              Residual Risks Requiring Human Sign-off ({review.residualRisks.length})
+            </h3>
+          </div>
+          <ul className="flex flex-col gap-1 pl-5 list-disc text-body-lg text-text">
+            {review.residualRisks.map((risk, idx) => (
+              <li key={idx}>{risk}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* 6.6 Finding Adjudications */}
+      {review?.adjudications && review.adjudications.length > 0 ? (
+        <section className="flex flex-col gap-1.5">
+          <h3 className="text-micro uppercase tracking-caps text-faint">
+            Finding Adjudications ({review.adjudications.length})
+          </h3>
+          <ul className="flex flex-col gap-1.5">
+            {review.adjudications.map((adj, idx) => (
+              <li key={idx} className="flex items-start gap-2 rounded border border-border bg-surface-2 p-2 text-body-lg">
+                <Badge
+                  tone={
+                    adj.decision === 'ACCEPTED'
+                      ? 'success'
+                      : adj.decision === 'ACCEPT_AS_RESIDUAL_RISK'
+                        ? 'warning'
+                        : 'danger'
+                  }
+                  caps
+                >
+                  {adj.decision}
+                </Badge>
+                <div className="flex flex-col flex-1">
+                  <span className="text-text font-medium">Finding #{adj.findingIndex + 1}</span>
+                  {adj.reason ? <span className="text-micro text-muted">{adj.reason}</span> : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {/* 7. Resource & Model-Call Impact */}
       <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 p-3 text-body-lg">
         <span className="text-micro font-semibold uppercase tracking-caps text-faint flex items-center gap-1">
@@ -586,6 +641,7 @@ function RevisionDialog(props: {
   initialInstruction?: string;
   onClose: () => void;
 }): JSX.Element {
+  const { t, locale } = useI18n();
   const [instruction, setInstruction] = useState(props.initialInstruction ?? '');
   const revise = useRevise(props.projectId, props.runId);
 
@@ -605,11 +661,11 @@ function RevisionDialog(props: {
     <Dialog
       open={props.open}
       onClose={close}
-      title="What should change?"
+      title={locale === 'pt-BR' ? t.approval.revisionPrompt : 'What should change?'}
       description="The planner re-plans with this instruction. Expected model calls: 2 before retries/fallbacks."
       footer={
         <>
-          <Button onClick={close}>Cancel</Button>
+          <Button onClick={close}>{locale === 'pt-BR' ? t.common.cancel : 'Cancel'}</Button>
           <Button
             variant="primary"
             disabled={instruction.trim().length === 0 || revise.isPending}
@@ -617,7 +673,7 @@ function RevisionDialog(props: {
               revise.mutate({ instruction }, { onSuccess: close });
             }}
           >
-            Request revision
+            {locale === 'pt-BR' ? t.approval.reviseButton : 'Request revision'}
           </Button>
         </>
       }
@@ -637,7 +693,11 @@ function RevisionDialog(props: {
               setInstruction(changed.target.value);
             }}
             rows={6}
-            placeholder="TASK-004 is too large — split the service from the scheduling rules."
+            placeholder={
+              locale === 'pt-BR'
+                ? t.approval.revisionPlaceholder
+                : 'TASK-004 is too large — split the service from the scheduling rules.'
+            }
             className="w-full rounded-md border border-border bg-sunken px-3 py-2 text-body-lg text-text placeholder:text-faint focus:border-border-strong focus:outline-none"
           />
         </label>
@@ -663,6 +723,7 @@ function RejectDialog(props: {
   runId: string;
   onClose: () => void;
 }): JSX.Element {
+  const { t, locale } = useI18n();
   const [reason, setReason] = useState('');
   const reject = useReject(props.projectId, props.runId);
 
@@ -676,11 +737,11 @@ function RejectDialog(props: {
     <Dialog
       open={props.open}
       onClose={close}
-      title={`Reject ${props.runId}?`}
+      title={locale === 'pt-BR' ? `${t.common.reject} ${props.runId}?` : `Reject ${props.runId}?`}
       description="The run closes without being implemented. Its artifacts stay on disk."
       footer={
         <>
-          <Button onClick={close}>Cancel</Button>
+          <Button onClick={close}>{locale === 'pt-BR' ? t.common.cancel : 'Cancel'}</Button>
           <Button
             variant="primary"
             disabled={reject.isPending}
@@ -692,7 +753,7 @@ function RejectDialog(props: {
               );
             }}
           >
-            Reject run
+            {locale === 'pt-BR' ? t.approval.rejectButton : 'Reject run'}
           </Button>
         </>
       }

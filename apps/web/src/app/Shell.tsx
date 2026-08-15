@@ -17,7 +17,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ProjectProvider, useProjectSelection } from './project-context';
-import { I18nProvider } from '../lib/i18n/i18n-context';
+import { I18nProvider, useI18n } from '../lib/i18n/i18n-context';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { useLiveEvents, type ConnectionState } from '../hooks/use-live-events';
 import { useProjects, useRunnerHealth, useRuns } from '../lib/queries';
@@ -102,17 +102,22 @@ interface NavEntry {
   readonly pending?: boolean;
 }
 
-const NAV: readonly NavEntry[] = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/runs', label: 'Runs', icon: Activity },
-  { to: '/projects', label: 'Projects', icon: FolderGit2 },
-  { to: '/agents', label: 'Agents & Models', icon: Cpu },
-  { to: '/prompts', label: 'Prompts', icon: FileText },
-  { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { to: '/settings', label: 'Settings', icon: Settings },
-];
+function useNavEntries(): readonly NavEntry[] {
+  const { t } = useI18n();
+  return [
+    { to: '/dashboard', label: t.nav.dashboard, icon: LayoutDashboard },
+    { to: '/runs', label: t.nav.runs, icon: Activity },
+    { to: '/projects', label: t.nav.projects, icon: FolderGit2 },
+    { to: '/agents', label: t.nav.agents, icon: Cpu },
+    { to: '/prompts', label: t.nav.prompts, icon: FileText },
+    { to: '/analytics', label: t.nav.analytics, icon: BarChart3 },
+    { to: '/settings', label: t.nav.settings, icon: Settings },
+  ];
+}
 
 function Sidebar(): JSX.Element {
+  const { t } = useI18n();
+  const navEntries = useNavEntries();
   const projects = useProjects();
   const { projectId, select } = useProjectSelection();
 
@@ -129,14 +134,14 @@ function Sidebar(): JSX.Element {
       </div>
 
       <nav className="flex flex-col gap-px px-2 py-2" aria-label="Sections">
-        {NAV.map((entry) => (
+        {navEntries.map((entry) => (
           <SidebarLink key={entry.to} entry={entry} />
         ))}
       </nav>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         <h2 className="px-2 pb-1 pt-3 text-micro uppercase tracking-caps text-faint">
-          Projects
+          {t.nav.projects}
         </h2>
 
         {projects.data === undefined || projects.data.length === 0 ? (
@@ -464,16 +469,18 @@ function workspaceName(): string {
  * the section a reader is in.
  */
 function useSectionLabel(): string {
+  const { t } = useI18n();
+  const navEntries = useNavEntries();
   const { pathname } = useLocation();
 
-  const entry = NAV.find(
+  const entry = navEntries.find(
     (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
   );
 
   // The dashboard shows a run, so its section is Runs rather than "Dashboard":
   // the crumb after it is a run id, and "Dashboard / AF-2026-104" describes a
   // relationship that does not exist.
-  if (entry === undefined || entry.to === '/dashboard') return 'Runs';
+  if (entry === undefined || entry.to === '/dashboard') return t.nav.runs;
   return entry.label;
 }
 
@@ -502,6 +509,7 @@ function Separator(): JSX.Element {
  * screen, and only one of those is worth telling somebody about.
  */
 function LiveIndicator(props: { connection: ConnectionState }): JSX.Element {
+  const { t } = useI18n();
   const { connection } = props;
 
   return (
@@ -527,10 +535,10 @@ function LiveIndicator(props: { connection: ConnectionState }): JSX.Element {
         aria-hidden
       />
       {connection === 'live'
-        ? 'Agent Flow is running'
+        ? t.nav.connected
         : connection === 'polling'
-          ? 'Reconnecting — polling'
-          : 'Connecting…'}
+          ? t.nav.connecting
+          : t.nav.disconnected}
     </span>
   );
 }

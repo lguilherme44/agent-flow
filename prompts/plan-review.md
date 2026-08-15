@@ -68,6 +68,13 @@ Severity means consequence if this ships unnoticed:
 - `medium` — a task that should be split, missing tests for risky behaviour
 - `low` — ordering that is suboptimal but works
 
+## Finding Closure Protocol & Adjudication
+
+If this plan includes revisions responding to previous findings (`findingProposals`):
+- Evaluate each proposed resolution (`RESOLVED`, `SUPERSEDED`, `PROPOSE_ACCEPT_WITH_RATIONALE`).
+- Adjudicate each finding: `ACCEPTED` (properly addressed), `REJECTED` (still unaddressed/invalid proposal), or `ACCEPT_AS_RESIDUAL_RISK` (known limitation requiring operator sign-off).
+- List any `residualRisks` that the human must decide whether to accept at the approval gate.
+
 ## Output
 
 Return **only** a JSON object, no prose, no code fences:
@@ -84,6 +91,16 @@ Return **only** a JSON object, no prose, no code fences:
       "description": "What is wrong.",
       "suggestedAction": "What should change."
     }
+  ],
+  "adjudications": [
+    {
+      "findingIndex": 0,
+      "decision": "ACCEPTED | REJECTED | ACCEPT_AS_RESIDUAL_RISK",
+      "reason": "Rationale for adjudication decision."
+    }
+  ],
+  "residualRisks": [
+    "Summary of residual risk for human operator."
   ]
 }
 ```

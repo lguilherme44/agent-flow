@@ -57,16 +57,26 @@ describe('Adaptive Workflow Classifier', () => {
     }
   });
 
-  it('refuses unsafe downgrades of HIGH-RISK requests to simple or trivial', () => {
-    const res = classifyWorkflow('Add auth token verification to payment gateway', {
-      explicitOverride: 'simple',
-    });
+  it('refuses unsafe downgrades of HIGH-RISK requests to trivial, simple, or standard', () => {
+    const overrides: Array<'trivial' | 'simple' | 'standard'> = ['trivial', 'simple', 'standard'];
+    for (const explicitOverride of overrides) {
+      const res = classifyWorkflow('Add auth token verification to payment gateway', {
+        explicitOverride,
+      });
 
-    expect(res.workflow).toBe('high-risk');
-    expect(res.rationale).toContain('refused');
-    expect(res.highRiskSignalsDetected).toContain('auth');
-    expect(res.highRiskSignalsDetected).toContain('token');
-    expect(res.highRiskSignalsDetected).toContain('payment');
+      expect(res.workflow).toBe('high-risk');
+      expect(res.rationale).toContain('refused');
+      expect(res.highRiskSignalsDetected).toContain('auth');
+      expect(res.highRiskSignalsDetected).toContain('token');
+      expect(res.highRiskSignalsDetected).toContain('payment');
+    }
+
+    // Explicit override to high-risk is valid and preserved
+    const validHighRisk = classifyWorkflow('Add auth token verification to payment gateway', {
+      explicitOverride: 'high-risk',
+    });
+    expect(validHighRisk.workflow).toBe('high-risk');
+    expect(validHighRisk.rationale).toContain('Explicit workflow override');
   });
 
   it('honors valid explicit overrides when no high-risk signals are present', () => {

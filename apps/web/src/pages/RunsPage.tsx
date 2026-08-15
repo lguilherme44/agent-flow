@@ -18,6 +18,7 @@ import {
 import { formatDuration, formatWhenCompact, humanise } from '../lib/format';
 import { stagesPresent } from '../lib/stages';
 import { TONE_BG, TONE_TEXT, runLabel, runTone } from '../lib/status';
+import { useI18n } from '../lib/i18n/i18n-context';
 
 /**
  * Runs (UI-21, §79) — history that can actually be navigated.
@@ -41,20 +42,20 @@ import { TONE_BG, TONE_TEXT, runLabel, runTone } from '../lib/status';
 
 type StatusFilter = 'all' | RunSummaryView['status'];
 
-const STATUS_OPTIONS: readonly { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'running', label: 'Running' },
-  { value: 'waiting_for_approval', label: 'Waiting approval' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'plan_rejected', label: 'Plan rejected' },
-];
-
 export function RunsPage(): JSX.Element {
+  const { t } = useI18n();
   const { projectId, select } = useProjectSelection();
   const projects = useProjects();
   const runs = useRuns(projectId);
+
+  const statusOptions: readonly { value: StatusFilter; label: string }[] = [
+    { value: 'all', label: 'All statuses' },
+    { value: 'running', label: t.status.running },
+    { value: 'waiting_for_approval', label: t.status.waiting_for_approval },
+    { value: 'completed', label: t.status.completed },
+    { value: 'failed', label: t.status.failed },
+    { value: 'plan_rejected', label: t.status.plan_rejected },
+  ];
 
   const [status, setStatus] = useState<StatusFilter>('all');
   const [stage, setStage] = useState<string>('all');
@@ -81,10 +82,10 @@ export function RunsPage(): JSX.Element {
 
   const projectOptions = useMemo(
     () => [
-      { value: '', label: 'All projects' },
+      { value: '', label: t.nav.allProjects },
       ...(projects.data ?? []).map((project) => ({ value: project.id, label: project.name })),
     ],
-    [projects.data],
+    [projects.data, t.nav.allProjects],
   );
 
   return (
@@ -92,7 +93,7 @@ export function RunsPage(): JSX.Element {
       className="h-full"
       divided
       header={
-        <SectionHeader title="Runs">
+        <SectionHeader title={t.nav.runs}>
           <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
             <SearchInput
               label="Search runs"
@@ -109,7 +110,7 @@ export function RunsPage(): JSX.Element {
                 select(value === '' ? undefined : value);
               }}
             />
-            <Select label="Status" value={status} options={STATUS_OPTIONS} onChange={setStatus} />
+            <Select label="Status" value={status} options={statusOptions} onChange={setStatus} />
             <Select label="Stage" value={stage} options={stageOptions} onChange={setStage} />
           </div>
         </SectionHeader>

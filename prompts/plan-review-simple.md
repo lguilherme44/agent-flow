@@ -40,6 +40,16 @@ Return **only** a valid JSON object:
       "description": "What is wrong.",
       "suggestedAction": "What should change."
     }
+  ],
+  "adjudications": [
+    {
+      "findingIndex": 0,
+      "decision": "ACCEPTED | REJECTED | ACCEPT_AS_RESIDUAL_RISK",
+      "reason": "Rationale."
+    }
+  ],
+  "residualRisks": [
+    "Residual risk summary."
   ]
 }
 ```

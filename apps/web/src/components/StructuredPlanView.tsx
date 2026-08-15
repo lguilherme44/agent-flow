@@ -30,9 +30,16 @@ export interface StructuredTask {
   validation?: string[];
 }
 
+export interface FindingProposal {
+  findingIndex: number;
+  status: 'RESOLVED' | 'SUPERSEDED' | 'PROPOSE_ACCEPT_WITH_RATIONALE';
+  rationale?: string;
+}
+
 export interface StructuredPlan {
   feature: string;
   tasks: StructuredTask[];
+  findingProposals?: FindingProposal[];
 }
 
 export function StructuredPlanView(props: {
@@ -117,13 +124,41 @@ export function StructuredPlanView(props: {
             onClick={() => {
               setShowRaw(true);
             }}
-            title="Inspect raw JSON format"
+            title="Switch to raw plan JSON"
           >
             <Code className="h-3.5 w-3.5" aria-hidden />
             View raw JSON
           </Button>
         ) : null}
       </div>
+
+      {parsedPlan.findingProposals && parsedPlan.findingProposals.length > 0 ? (
+        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 p-3">
+          <span className="text-micro font-medium uppercase tracking-caps text-faint">
+            Planner Finding Closure Proposals ({parsedPlan.findingProposals.length})
+          </span>
+          <div className="flex flex-col gap-1.5">
+            {parsedPlan.findingProposals.map((fp, idx) => (
+              <div key={idx} className="flex items-center gap-2 text-body-lg">
+                <Badge
+                  tone={
+                    fp.status === 'RESOLVED'
+                      ? 'success'
+                      : fp.status === 'SUPERSEDED'
+                        ? 'muted'
+                        : 'warning'
+                  }
+                  caps
+                >
+                  {fp.status}
+                </Badge>
+                <span className="text-text font-mono">Finding #{fp.findingIndex + 1}</span>
+                {fp.rationale ? <span className="text-muted">— {fp.rationale}</span> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Task list */}
       <div className="flex flex-col gap-3">

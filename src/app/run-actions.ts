@@ -369,6 +369,8 @@ export interface ApprovalGate {
     readonly planHash?: string;
     readonly coversThisPlan: boolean;
     readonly findings: ReviewResult['findings'];
+    readonly adjudications?: ReviewResult['adjudications'];
+    readonly residualRisks?: readonly string[];
   };
   readonly degradations: RunState['degradations'];
 }
@@ -431,6 +433,8 @@ export async function describeApprovalGate(
             // document is not a verdict about the one in hand (§17).
             coversThisPlan: review.planHash === hash,
             findings: review.findings,
+            adjudications: review.adjudications,
+            residualRisks: review.residualRisks,
           },
         }),
     degradations: state.degradations,
