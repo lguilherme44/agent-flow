@@ -2100,20 +2100,62 @@ describe('UtilityModel port boundary (M3-01)', () => {
     const { text } = read(join(ROOT, 'test/fakes/fake-utility-model.ts'));
     expect(importSpecifiers(text).some((s) => s.includes('ports'))).toBe(true);
   });
+});
 
-  it('no src/ module imports a utility-model adapter that does not exist yet', () => {
-    // M3-02 has not landed. Nothing in src/ should import from
-    // adapters/utility-model yet.
-    const offenders = sourceFiles('src')
-      .map(read)
-      .filter(({ text }) =>
-        importSpecifiers(text).some(
-          (s) =>
-            s.includes('adapters/utility-model') || s.includes('adapters/utility_model'),
-        ),
-      )
-      .map(({ path }) => path);
+describe('UtilityModel adapter boundary (M3-02)', () => {
+  it('OpenAiCompatibleUtilityModel does not implement or extend AgentRunner', () => {
+    const { text } = read(join(ROOT, 'src/adapters/utility-model/openai-utility-model.ts'));
+    const code = codeOnly(text);
+    const specifiers = importSpecifiers(text);
+
+    expect(specifiers.some((s) => s.includes('agent-runner'))).toBe(false);
+    expect(code).not.toMatch(/\bAgentRunner\b/);
+    expect(code).not.toMatch(/\bAgentRunInput\b/);
+    expect(code).not.toMatch(/\bAgentRunResult\b/);
+  });
+
+  it('OpenAiCompatibleUtilityModel does not import git, process, or worktree modules', () => {
+    const { text } = read(join(ROOT, 'src/adapters/utility-model/openai-utility-model.ts'));
+    const specifiers = importSpecifiers(text);
+    const forbidden = ['git', 'process-runner', 'node-process', 'worktree', 'node:child_process', 'file-system'];
+    for (const f of forbidden) {
+      expect(
+        specifiers.some((s) => s.includes(f)),
+        `openai-utility-model.ts imports ${f}`,
+      ).toBe(false);
+    }
+  });
+
+  it('coding agent runner registry does not import or register OpenAiCompatibleUtilityModel', () => {
+    const { text } = read(join(ROOT, 'src/adapters/runners/registry.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(specifiers.some((s) => s.includes('utility-model'))).toBe(false);
+    expect(code).not.toMatch(/\bOpenAiCompatibleUtilityModel\b/);
+    expect(code).not.toMatch(/\bUtilityModel\b/);
+  });
+
+  it('core and production workflows in src/core, src/app, src/server do not import utility-model adapters', () => {
+    const workflowDirs = ['src/core', 'src/app', 'src/server', 'src/contracts', 'src/adapters/runners'];
+    const offenders: string[] = [];
+
+    for (const dir of workflowDirs) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (importSpecifiers(text).some((s) => s.includes('adapters/utility-model'))) {
+          offenders.push(path);
+        }
+      }
+    }
 
     expect(offenders).toEqual([]);
+  });
+
+  it('barrel in src/adapters/utility-model exports OpenAiCompatibleUtilityModel and token estimator', () => {
+    const { text } = read(join(ROOT, 'src/adapters/utility-model/index.ts'));
+    const code = codeOnly(text);
+    expect(code).toContain('OpenAiCompatibleUtilityModel');
+    expect(code).toContain('estimateInputTokens');
   });
 });
