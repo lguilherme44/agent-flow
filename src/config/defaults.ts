@@ -77,19 +77,30 @@ fallback:
     - runner_unavailable
 
 parallelism:
-  # Accepted above 1, and capped at 1 at runtime. Tasks share one working tree,
-  # so running two at once would give them one diff, one AGENTS.md and one set of
-  # validation commands between them. A run that asked for more says so in its
-  # degradations, and \`agent-flow run --dry-run\` prints both numbers.
+  # How many tasks may run at once — a request, not a guarantee. What it is
+  # worth depends entirely on \`git.useWorktrees\` below: with worktrees off,
+  # tasks share one working tree, so this is capped at 1 at runtime and asking
+  # for more only produces a degradation. With worktrees on, each task gets its
+  # own checkout and this is honoured up to a ceiling of 8.
+  # \`agent-flow run --dry-run\` prints the requested and the effective number.
   maxTasks: 1
 
 retry:
   maxAttempts: 2
 
 git:
-  # Reserved for task isolation, and not implemented: nothing in the execution
-  # path creates a worktree, so turning this on changes nothing — including the
-  # cap above.
+  # Task isolation: each attempt runs in its own Git worktree on its own branch,
+  # and its work reaches the run's integration branch only after validation
+  # passes. That is what makes \`parallelism.maxTasks\` above mean anything.
+  #
+  # Off by default because it is not free: a worktree per task costs disk and one
+  # dependency install each, and the repository has to satisfy preconditions the
+  # sequential path never asks about — a clean working tree at the moment the
+  # plan is approved, first among them. Run \`agent-flow doctor\` before turning
+  # it on; it reports whether this repository qualifies.
+  #
+  # A run captures this value when it is created and never re-reads it, so
+  # editing it changes the next run, never one already in flight.
   useWorktrees: false
 
 approval:
