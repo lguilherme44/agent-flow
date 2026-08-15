@@ -80,6 +80,14 @@ describe('what it reports, against a real repository', () => {
     expect(await client.changedFiles()).toEqual([]);
     expect(await client.isClean()).toBe(true);
   });
+
+  it('lists tracked repository files via git ls-files', async () => {
+    repo = await makeTempRepoWithCommit();
+    const client = new GitClient(repo.git, repo.dir);
+
+    const tracked = await client.trackedFiles();
+    expect(tracked).toEqual(expect.arrayContaining(['README.md']));
+  });
 });
 
 describe('it goes through the wrapper (I-7)', () => {

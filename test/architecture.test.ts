@@ -2213,8 +2213,8 @@ describe('ContextPacket contract boundary (M3-03)', () => {
     expect(code).not.toMatch(/\bContextPacket\b/);
   });
 
-  it('core and production workflow engines in src/core, src/app, src/server do not import or execute ContextPacket (M3-08 boundary)', () => {
-    const workflowDirs = ['src/core', 'src/app', 'src/server'];
+  it('production workflow engines in src/app, src/server do not import ContextPacket (M3-08 boundary)', () => {
+    const workflowDirs = ['src/app', 'src/server'];
     const offenders: string[] = [];
 
     for (const dir of workflowDirs) {
@@ -2232,5 +2232,71 @@ describe('ContextPacket contract boundary (M3-03)', () => {
   it('contracts barrel exports ContextPacket contract and validator', () => {
     const { text } = read(join(ROOT, 'src/contracts/index.ts'));
     expect(text).toContain('context-packet.schema');
+  });
+});
+
+describe('Repository retrieval boundary (M3-04)', () => {
+  // RepositoryRetriever is provider-neutral, bounded candidate discovery and ranking orchestration.
+  // It must not acquire execution authority, depend on specific model vendors, or be wired
+  // into production workflow execution ahead of M3-08.
+
+  it('repository-retriever does not import child_process or raw network modules', () => {
+    const { text } = read(join(ROOT, 'src/core/repository-retriever.ts'));
+    const specifiers = importSpecifiers(text);
+    const forbidden = ['node:child_process', 'child_process', 'node:net', 'node:http', 'node:https'];
+    for (const f of forbidden) {
+      expect(
+        specifiers.some((s) => s.includes(f)),
+        `repository-retriever.ts imports ${f}`,
+      ).toBe(false);
+    }
+  });
+
+  it('repository-retriever does not import AgentRunner or AgentRunInput', () => {
+    const { text } = read(join(ROOT, 'src/core/repository-retriever.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(specifiers.some((s) => s.includes('agent-runner'))).toBe(false);
+    expect(code).not.toMatch(/\bAgentRunner\b/);
+    expect(code).not.toMatch(/\bAgentRunInput\b/);
+  });
+
+  it('repository-retriever contains no provider-specific vocabulary', () => {
+    const { text } = read(join(ROOT, 'src/core/repository-retriever.ts'));
+    const code = codeOnly(text).toLowerCase();
+    const forbidden = [
+      'qwen',
+      'no_think',
+      'ollama',
+      'lmstudio',
+      'openai',
+      'anthropic',
+      'llamacpp',
+    ];
+    for (const term of forbidden) {
+      expect(code.includes(term), `repository-retriever.ts contains provider term: ${term}`).toBe(false);
+    }
+  });
+
+  it('production workflow engines in src/app, src/server and adaptive-workflow.ts do not import RepositoryRetriever (M3-08 boundary)', () => {
+    const workflowDirs = ['src/app', 'src/server'];
+    const offenders: string[] = [];
+
+    for (const dir of workflowDirs) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (importSpecifiers(text).some((s) => s.includes('repository-retriever'))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    const adaptive = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    if (importSpecifiers(adaptive.text).some((s) => s.includes('repository-retriever'))) {
+      offenders.push(adaptive.path);
+    }
+
+    expect(offenders).toEqual([]);
   });
 });
