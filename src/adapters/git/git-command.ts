@@ -514,6 +514,12 @@ export const GIT_HOSTILE_ENVIRONMENT = [
  * cannot turn an orchestrated command into a process waiting on a terminal
  * nobody is watching.
  *
+ * `GIT_NO_REPLACE_OBJECTS=1` makes exact object ids mean the objects they name.
+ * Without it, a local `refs/replace/*` can silently substitute another commit
+ * or tree under the same 40-character id, corrupting every provenance read.
+ * It is set here for every internal Git invocation rather than left to each
+ * caller, and this trusted value overrides anything inherited from the shell.
+ *
  * The dates are set here and removed by {@link GIT_HOSTILE_ENVIRONMENT}, in that
  * order — `unsetEnv` is applied before `env`, so a caller that supplies dates
  * gets them and one that does not gets neither theirs nor the shell's.
@@ -521,6 +527,7 @@ export const GIT_HOSTILE_ENVIRONMENT = [
 function environmentFor(dates: GitDates | undefined): Record<string, string> {
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: '0',
+    GIT_NO_REPLACE_OBJECTS: '1',
   };
 
   if (dates !== undefined) {

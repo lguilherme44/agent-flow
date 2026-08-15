@@ -303,6 +303,19 @@ describe('what a caller controls, and what it does not', () => {
     expect(calls[0]?.env?.['GIT_TERMINAL_PROMPT']).toBe('0');
   });
 
+  it('disables replace-object refs for every canonical Git invocation', async () => {
+    const runner = recorder();
+    const git = commandWith(runner);
+
+    for (const subcommand of GIT_SUBCOMMANDS) {
+      await git.run({ subcommand, cwd: '/repo' });
+    }
+
+    for (const call of runner.calls) {
+      expect(call.env?.['GIT_NO_REPLACE_OBJECTS']).toBe('1');
+    }
+  });
+
   it('names every variable that could redirect which repository is acted on', () => {
     // Pinned as a list rather than left implicit, so that removing one is a
     // deliberate edit with a test to answer to. `GIT_INDEX_FILE` is the one
