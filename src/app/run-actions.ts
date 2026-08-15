@@ -890,14 +890,22 @@ async function execute(
     }
   }
 
+  const workflow = state.workflow ?? 'standard';
+  const sddRequired = workflow === 'standard' || workflow === 'high-risk';
+
   const sdd = await context.store.readArtifact(runId, 'sdd');
-  if (sdd === null) {
+  if (sddRequired && sdd === null) {
     return failed({
       code: 'no_sdd',
-      message: `${runId} has no SDD, which the implementation agent requires.`,
+      message: `${runId} has no SDD, which the ${workflow.toUpperCase()} workflow requires.`,
       action: 'Re-run the SDD stage before starting implementation.',
     });
   }
+
+  const requestContent = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
+  const effectiveSdd =
+    sdd ??
+    `# Feature Request & Scope (${workflow.toUpperCase()} Workflow)\n\n${requestContent}\n\n*Note: This ${workflow} workflow operates without a separate SDD. The approved Plan and its acceptance criteria define the specification.*`;
 
   // Resumed from what was persisted, so work already completed is not paid for
   // twice — a killed terminal, or a closed browser tab, is a normal event.
@@ -955,7 +963,7 @@ async function execute(
     });
   }
 
-  const outcome = await context.scheduler.run(plan, runId, sdd, previous, {
+  const outcome = await context.scheduler.run(plan, runId, effectiveSdd, previous, {
     ...(target === undefined ? {} : { only: new Set([target.id]) }),
   });
 
@@ -1166,13 +1174,29 @@ async function judgeRun(
     context.store.readArtifact(runId, 'sdd'),
   ]);
 
-  if (plan === null || sdd === null) {
+  if (plan === null) {
     return failed({
-      code: plan === null ? 'no_plan' : 'no_sdd',
-      message: `${runId} has no plan or SDD to review against.`,
+      code: 'no_plan',
+      message: `${runId} has no plan to review against.`,
       action: 'Finish planning before reviewing the implementation.',
     });
   }
+
+  const workflow = state.workflow ?? 'standard';
+  const sddRequired = workflow === 'standard' || workflow === 'high-risk';
+
+  if (sddRequired && sdd === null) {
+    return failed({
+      code: 'no_sdd',
+      message: `${runId} has no SDD, which the ${workflow.toUpperCase()} workflow requires.`,
+      action: 'Finish planning before reviewing the implementation.',
+    });
+  }
+
+  const requestContent = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
+  const effectiveSdd =
+    sdd ??
+    `# Feature Request & Scope (${workflow.toUpperCase()} Workflow)\n\n${requestContent}\n\n*Note: This ${workflow} workflow operates without a separate SDD. The approved Plan and its acceptance criteria define the specification.*`;
 
   // §19.2: **one tree, read once.** `state.integrationHead` is the commit the
   // Integrator advanced on every merge, and it is what verification, the
@@ -1210,7 +1234,7 @@ async function judgeRun(
         VERIFICATION_STAGE,
         runId,
         {
-          sdd,
+          sdd: effectiveSdd,
           changedFiles,
           commandResults,
           agentsMd: await readAgentsMd(context, tree.value.cwd),
@@ -1237,7 +1261,7 @@ async function judgeRun(
     FINAL_REVIEW_STAGE,
     runId,
     {
-      sdd,
+      sdd: effectiveSdd,
       plan: JSON.stringify(plan, null, 2),
       diffStat:
         tree.value.integration === undefined
@@ -1303,7 +1327,7 @@ async function judgeRun(
   const corrective =
     doneCheck.done || options.fix !== true
       ? undefined
-      : await correctPlan(context, runId, plan, sdd, finalReview);
+      : await correctPlan(context, runId, plan, effectiveSdd, finalReview);
 
   return done({
     runId,
@@ -1395,8 +1419,9 @@ async function correctPlan(
   sdd: string,
   finalReview: ReviewResult,
 ): Promise<CorrectiveRound | undefined> {
-  const architectureImpact = await context.store.readArtifact(runId, 'architectureImpact');
-  if (architectureImpact === null) return undefined;
+  const architectureImpact =
+    (await context.store.readArtifact(runId, 'architectureImpact')) ??
+    'None (adaptive workflow without separate architecture impact stage).';
 
   return runCorrectiveRound({
     store: context.store,

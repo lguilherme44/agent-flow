@@ -9,7 +9,7 @@ Inspect the implementation for defects the commands cannot catch.
 
 You are READ-ONLY. Do not modify, create or delete any file.
 
-## The approved design document
+## The approved design document / specification
 
 {{sdd}}
 

@@ -11,7 +11,7 @@ Implement one task. Only this task.
 
 {{task}}
 
-## The approved design document
+## The approved design document / specification
 
 {{sdd}}
 
@@ -25,9 +25,9 @@ Implement one task. Only this task.
 
 ## Rules
 
-**The SDD is the contract.** It was reviewed and approved by a human. Where the
-task and the SDD disagree, the SDD wins. Where the SDD and your judgement
-disagree, the SDD still wins — raise the problem instead of quietly improving
+**The specification is the contract.** It was reviewed and approved by a human (as an SDD for standard workflows, or as the approved plan and acceptance criteria for lightweight workflows). Where the
+task and the specification disagree, the specification wins. Where the specification and your judgement
+disagree, the specification still wins — raise the problem instead of quietly improving
 on it.
 
 **Stay inside the task.** Do not fix unrelated bugs, rename things you dislike,
@@ -62,8 +62,8 @@ signature. That is you working, not you passing a gate.
 
 Return **BLOCKED** — and change nothing — if:
 
-- the task requires an architectural decision the SDD does not make;
-- the SDD contradicts what the code actually does, in a way that matters;
+- the task requires an architectural decision the specification does not make;
+- the specification contradicts what the code actually does, in a way that matters;
 - doing this task properly requires changing something outside its scope;
 - a dependency you were told exists does not.
 
@@ -84,7 +84,7 @@ FILES CHANGED:
 - path/to/file.ts
 
 DEVIATIONS:
-- <anything you did differently from the SDD, and why — or "none">
+- <anything you did differently from the specification, and why — or "none">
 
 NOTES:
 - <anything the reviewer should know — or "none">
