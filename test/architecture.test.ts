@@ -2420,3 +2420,48 @@ describe('Hierarchical context compression boundary (M3-05)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('Mechanical log triage boundary (M3-06)', () => {
+  it('keeps log triage provider-neutral and without execution or workflow authority', () => {
+    const { text } = read(join(ROOT, 'src/core/log-triager.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(
+      specifiers.filter((specifier) =>
+        [
+          'adapters/',
+          'agent-runner',
+          'process-runner',
+          'git-',
+          'node:',
+          'http',
+          'task-state',
+          'validation-',
+        ].some((term) => specifier.includes(term)),
+      ),
+    ).toEqual([]);
+    expect(code).not.toMatch(
+      /\b(?:AgentRunner|AgentRunInput|ProcessRunner|GitClient|TaskState|ValidationJudgement)\b/,
+    );
+  });
+
+  it('does not wire log triage into production workflows before a later milestone', () => {
+    const offenders: string[] = [];
+    for (const dir of ['src/app', 'src/server', 'src/cli', 'src/adapters', 'src/config']) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (importSpecifiers(text).some((specifier) => specifier.includes('log-triager'))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    const adaptive = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    if (importSpecifiers(adaptive.text).some((specifier) => specifier.includes('log-triager'))) {
+      offenders.push(adaptive.path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
