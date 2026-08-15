@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   FindingSchema,
+  FindingAdjudicationSchema,
   ReviewResultSchema,
   roleConfigOf,
   type GlobalConfig,
@@ -22,6 +23,8 @@ export const PlanReviewResponseSchema = z
     verdict: z.enum(['PASS', 'FAIL']),
     summary: z.string().optional(),
     findings: z.array(FindingSchema).default([]),
+    adjudications: z.array(FindingAdjudicationSchema).default([]),
+    residualRisks: z.array(z.string()).default([]),
   })
   .refine((review) => review.verdict === 'PASS' || review.findings.length > 0, {
     message: 'a FAIL verdict must be accompanied by at least one finding',
@@ -65,6 +68,8 @@ export function buildReviewResult(
     independence,
     reviewer: provenance,
     findings: response.findings,
+    adjudications: response.adjudications ?? [],
+    residualRisks: response.residualRisks ?? [],
     ...(planHash === undefined ? {} : { planHash }),
     ...(response.summary === undefined ? {} : { summary: response.summary }),
   });

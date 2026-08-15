@@ -15,11 +15,13 @@ import {
   ARCHITECTURE_IMPACT_STAGE,
   DISCOVERY_STAGE,
   PLANNING_STAGE,
+  PLANNING_TRIVIAL_STAGE,
   PLANNING_SIMPLE_STAGE,
   SDD_STAGE,
 } from './stages/definitions.js';
 import { checkPlan } from './stages/planning-checks.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
+import { roleConfigOf } from '../contracts/index.js';
 import {
   computeFingerprint,
   fingerprintDifferences,
@@ -146,27 +148,22 @@ export class PlanningPipeline {
     await store.writeArtifact(runId, 'request', `${featureRequest}\n`);
 
     try {
-      // Resolve workflow classification
+      // Resolve workflow classification safely with deterministic facts & override checks
       const state = await store.loadRun(runId);
-      let workflow: WorkflowClass = options.workflow ?? state.workflow ?? 'standard';
-
-      if (options.workflow !== undefined) {
-        workflow = options.workflow;
-        await store.updateRun(runId, (s) => ({ ...s, workflow }));
-      } else if (state.workflow === undefined) {
-        const classification = classifyWorkflow(featureRequest, {
-          projectDir: this.options.projectDir,
-          projectConfig: this.options.config.project,
-        });
-        workflow = classification.workflow;
-        await store.updateRun(runId, (s) => ({ ...s, workflow }));
-        await store.appendEvent(runId, 'workflow_classified', {
-          workflow,
-          rationale: classification.rationale,
-          budget: getCeremonyBudget(workflow),
-          highRiskSignals: classification.highRiskSignalsDetected,
-        });
-      }
+      const explicitOverride = options.workflow ?? state.workflow;
+      const classification = classifyWorkflow(featureRequest, {
+        explicitOverride,
+        projectDir: this.options.projectDir,
+        projectConfig: this.options.config.project,
+      });
+      const workflow: WorkflowClass = classification.workflow;
+      await store.updateRun(runId, (s) => ({ ...s, workflow }));
+      await store.appendEvent(runId, 'workflow_classified', {
+        workflow,
+        rationale: classification.rationale,
+        budget: getCeremonyBudget(workflow),
+        highRiskSignals: classification.highRiskSignalsDetected,
+      });
 
       // §6.2, moment one: verify repository readiness at planning start
       await this.assertReady(runId, 'planning start');
@@ -174,7 +171,7 @@ export class PlanningPipeline {
       // ---- TRIVIAL workflow branch (1 model call)
       if (workflow === 'trivial') {
         options.onProgress?.('planning', 'started');
-        const result = await this.options.stageRunner.run(PLANNING_SIMPLE_STAGE, runId, {
+        const result = await this.options.stageRunner.run(PLANNING_TRIVIAL_STAGE, runId, {
           featureRequest,
           projectConfig,
           validationCommands: this.renderValidationCommands(),
@@ -261,12 +258,29 @@ export class PlanningPipeline {
         return { runId, plan, stagesRun, review };
       }
 
+      // ---- HIGH-RISK Workflow Guard: Enforce strict cross-provider independence
+      if (workflow === 'high-risk') {
+        const plannerRunner = roleConfigOf(this.options.config.global.roles, 'planner').runner;
+        const reviewerRunner = roleConfigOf(this.options.config.global.roles, 'planReviewer').runner;
+        const plannerProvider = this.options.providerOf(plannerRunner);
+        const reviewerProvider = this.options.providerOf(reviewerRunner);
+        if (plannerProvider !== undefined && reviewerProvider !== undefined && plannerProvider === reviewerProvider) {
+          throw new PlanningRefusal(
+            'cross_provider_required',
+            `HIGH-RISK workflows require independent cross-provider review. Both planner and planReviewer resolve to provider "${plannerProvider}".`,
+            'Configure independent providers for roles.planner and roles.planReviewer in config.yaml.',
+          );
+        }
+      }
+
       // ---- STANDARD / HIGH-RISK workflows: Full ceremony
       // Discovery: feature-agnostic, therefore cacheable across runs (R-07).
+      // In HIGH-RISK, discovery cache is refreshed to avoid stale assumptions.
+      const useDiscoveryCache = workflow === 'high-risk' ? false : !(options.noCache ?? false);
       const architecture = await this.discover(runId, {
         projectConfig,
         agentsMd,
-        useCache: !(options.noCache ?? false),
+        useCache: useDiscoveryCache,
         onProgress: options.onProgress,
         stagesRun,
       });

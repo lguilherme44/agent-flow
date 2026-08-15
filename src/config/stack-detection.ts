@@ -40,6 +40,7 @@ const MARKERS: readonly Marker[] = [
   { file: 'pyproject.toml', type: 'python' },
   { file: 'go.mod', type: 'go' },
   { file: 'Cargo.toml', type: 'rust' },
+  { file: 'index.html', type: 'static-web' },
 ];
 
 const SOURCE_CANDIDATES = ['src', 'lib', 'app', 'internal', 'cmd'];
@@ -74,6 +75,12 @@ async function detectFor(
   directoryName: string,
 ): Promise<Omit<DetectedStack, 'paths'>> {
   switch (type) {
+    case 'static-web':
+      return {
+        type: 'static-web',
+        name: directoryName,
+        commands: {},
+      };
     case 'node':
       return detectNode(fs, projectDir, directoryName);
     case 'flutter':

@@ -58,6 +58,27 @@ export type CorrectiveOrigin = z.infer<typeof CorrectiveOriginSchema>;
 export const IndependenceSchema = z.enum(['cross-provider', 'same-provider-fresh-context']);
 export type Independence = z.infer<typeof IndependenceSchema>;
 
+export const FindingClosureStatusSchema = z.enum([
+  'RESOLVED',
+  'SUPERSEDED',
+  'PROPOSE_ACCEPT_WITH_RATIONALE',
+]);
+export type FindingClosureStatus = z.infer<typeof FindingClosureStatusSchema>;
+
+export const FindingAdjudicationDecisionSchema = z.enum([
+  'ACCEPTED',
+  'REJECTED',
+  'ACCEPT_AS_RESIDUAL_RISK',
+]);
+export type FindingAdjudicationDecision = z.infer<typeof FindingAdjudicationDecisionSchema>;
+
+export const FindingAdjudicationSchema = z.object({
+  findingIndex: z.number().int().min(0),
+  decision: FindingAdjudicationDecisionSchema,
+  reason: z.string().optional(),
+});
+export type FindingAdjudication = z.infer<typeof FindingAdjudicationSchema>;
+
 export const ReviewResultSchema = z
   .object({
     verdict: z.enum(['PASS', 'FAIL']),
@@ -68,15 +89,17 @@ export const ReviewResultSchema = z
       reasoning: ReasoningLevelSchema,
     }),
     findings: z.array(FindingSchema).default([]),
-  /**
-   * The plan this verdict is about.
-   *
-   * A review is a statement concerning one specific document. Without this,
-   * a plan that changed after being reviewed still carried its old verdict —
-   * and the approval gate quoted findings about tasks that no longer existed.
-   * Optional so reviews written before the field remain readable.
-   */
-  planHash: z.string().min(1).optional(),
+    adjudications: z.array(FindingAdjudicationSchema).default([]),
+    residualRisks: z.array(z.string()).default([]),
+    /**
+     * The plan this verdict is about.
+     *
+     * A review is a statement concerning one specific document. Without this,
+     * a plan that changed after being reviewed still carried its old verdict —
+     * and the approval gate quoted findings about tasks that no longer existed.
+     * Optional so reviews written before the field remain readable.
+     */
+    planHash: z.string().min(1).optional(),
     summary: z.string().optional(),
   })
   .refine((review) => review.verdict === 'PASS' || review.findings.length > 0, {

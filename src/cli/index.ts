@@ -6,6 +6,12 @@ import { renderError } from './render/errors.js';
 import { runFeatureCommand, runReviseCommand } from './feature.js';
 import { runDoctorCommand } from './doctor.js';
 import { runInitCommand } from './init.js';
+import { runSetupCommand } from './setup.js';
+import {
+  runConfigGetCommand,
+  runConfigSetCommand,
+  runConfigListCommand,
+} from './config.js';
 import { runStatusCommand } from './status.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
 import { runRunCommand, runRetryCommand } from './run.js';
@@ -74,6 +80,40 @@ export async function main(argv: string[]): Promise<number> {
     .option('--deep', 'probe each runner for real (consumes quota)')
     .action(async (options: { deep?: boolean }, command: Command) => {
       exitCode = await runDoctorCommand(options, globalOptions(command));
+    });
+
+  program
+    .command('setup')
+    .description('Interactive setup wizard to initialize repository and verify environment')
+    .option('--force', 'overwrite files that already exist')
+    .action(async (options: { force?: boolean }, command: Command) => {
+      exitCode = await runSetupCommand(options, globalOptions(command));
+    });
+
+  const configCmd = program.command('config').description('Inspect or modify configuration');
+
+  configCmd
+    .command('get <key>')
+    .description('Get a configuration value (e.g. roles.planner.runner)')
+    .option('--global', 'read from global configuration file')
+    .action(async (key: string, options: { global?: boolean }, command: Command) => {
+      exitCode = await runConfigGetCommand(key, options, globalOptions(command));
+    });
+
+  configCmd
+    .command('set <key> <value>')
+    .description('Set a configuration value')
+    .option('--global', 'write to global configuration file')
+    .action(async (key: string, value: string, options: { global?: boolean }, command: Command) => {
+      exitCode = await runConfigSetCommand(key, value, options, globalOptions(command));
+    });
+
+  configCmd
+    .command('list')
+    .description('List effective or global configuration')
+    .option('--global', 'list global configuration file')
+    .action(async (options: { global?: boolean }, command: Command) => {
+      exitCode = await runConfigListCommand(options, globalOptions(command));
     });
 
   program

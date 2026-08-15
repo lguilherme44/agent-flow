@@ -58,7 +58,19 @@ export const PLANNING_STAGE: StageDefinition = {
 };
 
 /**
- * Direct / Short Planning for TRIVIAL and SIMPLE workflows (M2.1-C).
+ * Direct single-task Planning for TRIVIAL workflow (M2.1-C / P1-06).
+ * Strictly limits decomposition to 1 task ceiling.
+ */
+export const PLANNING_TRIVIAL_STAGE: StageDefinition = {
+  name: 'planning',
+  role: 'planner',
+  prompt: 'planning-trivial',
+  artifact: 'plan',
+  outputSchema: PlanSchema,
+};
+
+/**
+ * Direct / Short Planning for SIMPLE workflows (M2.1-C).
  * Bypasses SDD and discovery, focusing directly on focused task decomposition.
  */
 export const PLANNING_SIMPLE_STAGE: StageDefinition = {

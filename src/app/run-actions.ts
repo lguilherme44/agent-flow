@@ -56,6 +56,7 @@ import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js'
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { checkDefinitionOfDone, type DoneCheck } from '../core/definition-of-done.js';
+import { getCeremonyBudget } from '../core/adaptive-workflow.js';
 
 /**
  * Every state transition a person can ask for, as use cases (UI-27).
@@ -1020,6 +1021,7 @@ async function replan(
 
   const workflow = state.workflow ?? 'standard';
   const currentRevisions = state.revisionCount ?? 0;
+  const budget = getCeremonyBudget(workflow);
 
   if (workflow === 'trivial') {
     return failed({
@@ -1029,21 +1031,16 @@ async function replan(
     });
   }
 
-  if (workflow === 'simple' && currentRevisions >= 1) {
+  if (currentRevisions >= budget.maxRevisionCycles) {
     return failed({
       code: 'ceremony_budget_exceeded',
       message:
-        'STOP_AND_ASK_HUMAN: SIMPLE workflow reached its ceremony budget limit (1 revision cycle). ' +
+        `STOP_AND_ASK_HUMAN: ${workflow.toUpperCase()} workflow reached its ceremony budget limit ` +
+        `(${budget.maxRevisionCycles} revision cycle${budget.maxRevisionCycles === 1 ? '' : 's'}). ` +
         'Unresolved findings require human approval or workflow elevation.',
-      action: 'Review residual findings in Approval dialog and approve over them, or start a new run.',
+      action: 'Review residual findings in Approval dialog and approve over them, or start a new run with a higher workflow class.',
     });
   }
-
-  const nextRevisionCount = currentRevisions + 1;
-  await context.store.updateRun(runId, (entry) => ({
-    ...entry,
-    revisionCount: nextRevisionCount,
-  }));
 
   let approvalCleared = false;
   if (state.approved) {
@@ -1060,7 +1057,8 @@ async function replan(
 
   await context.store.appendEvent(runId, 'revision_requested', {
     instruction: trimmed,
-    revisionCount: nextRevisionCount,
+    attemptedRevision: currentRevisions + 1,
+    maxAllowed: budget.maxRevisionCycles,
   });
 
   const request = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
@@ -1071,6 +1069,16 @@ async function replan(
     `${request.trim()}\n\n---\n\nRevision requested by the reviewer:\n${trimmed}`,
     { from: 'planning', workflow },
   );
+
+  const nextRevisionCount = currentRevisions + 1;
+  await context.store.updateRun(runId, (entry) => ({
+    ...entry,
+    revisionCount: nextRevisionCount,
+  }));
+  await context.store.appendEvent(runId, 'revision_completed', {
+    instruction: trimmed,
+    revisionCount: nextRevisionCount,
+  });
 
   return done({
     runId,

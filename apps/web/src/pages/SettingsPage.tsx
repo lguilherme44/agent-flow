@@ -7,24 +7,6 @@ import { Badge, Empty, Panel, SectionHeader, Tooltip, cx } from '../components/u
 
 /**
  * Settings (UI-26, §85) — the configuration the tool is actually running on.
- *
- * Read-only, and the reason is not that a write API was out of reach. §86 lists
- * `PATCH /config`, and writing a *merged* value back means deciding which of three
- * layers it belongs in — built-in default, global file, or this project's overlay. A
- * page that guessed would eventually move a project's override into the global file
- * and change every other project on the machine, silently. Editing the file is the
- * honest interface until there is a design for that, so this page shows the values,
- * says where each came from, and names the file to edit.
- *
- * The origin is the part worth having. "Parallel tasks: 1" invites an edit to
- * whichever file the reader opens; "1, from this project's override" says which edit
- * will actually take effect.
- *
- * Three sections the spec names have nothing behind them and say so. Models is the
- * routing table, which has its own page — showing it twice would be two places to
- * read one thing, and eventually two answers. UI has no server-side settings at all.
- * Retention is a flag on `agent-flow clean` rather than configuration. Rendering a
- * plausible-looking control for any of them would be a control nothing reads.
  */
 export function SettingsPage(): JSX.Element {
   const { projectId } = useProjectSelection();

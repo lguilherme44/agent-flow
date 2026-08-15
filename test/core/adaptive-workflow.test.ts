@@ -85,6 +85,14 @@ describe('Adaptive Workflow Classifier', () => {
     expect(budget.maxRevisionCycles).toBe(2);
     expect(budget.maxTasks).toBe(8);
   });
+
+  it('escalates to HIGH-RISK when repository files contain sensitive database/auth/payment paths', () => {
+    const res = classifyWorkflow('Add user login and session handling', {
+      files: ['src/auth/jwt.ts', 'src/db/migrations/001_users.sql'],
+    });
+    expect(res.workflow).toBe('high-risk');
+    expect(res.highRiskSignalsDetected.some((s) => s.includes('auth'))).toBe(true);
+  });
 });
 
 describe('Ceremony Budget Stop Conditions', () => {
@@ -106,5 +114,12 @@ describe('Ceremony Budget Stop Conditions', () => {
   it('allows up to 2 revision cycles in STANDARD workflow', () => {
     expect(evaluateStopCondition('standard', 1, true).shouldStop).toBe(false);
     expect(evaluateStopCondition('standard', 2, true).shouldStop).toBe(true);
+    expect(evaluateStopCondition('standard', 2, true).reason).toContain('STOP_AND_ASK_HUMAN');
+  });
+
+  it('allows up to 3 revision cycles in HIGH-RISK workflow', () => {
+    expect(evaluateStopCondition('high-risk', 2, true).shouldStop).toBe(false);
+    expect(evaluateStopCondition('high-risk', 3, true).shouldStop).toBe(true);
+    expect(evaluateStopCondition('high-risk', 3, true).reason).toContain('STOP_AND_ASK_HUMAN');
   });
 });

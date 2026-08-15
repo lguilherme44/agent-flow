@@ -1,4 +1,10 @@
-import { RunStageSchema, type RunStage, type WorkflowClass } from '../contracts/index.js';
+import {
+  RunStageSchema,
+  WorkflowClassSchema,
+  WORKFLOW_CLASSES,
+  type RunStage,
+  type WorkflowClass,
+} from '../contracts/index.js';
 import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
@@ -51,6 +57,18 @@ export async function runFeatureCommand(
       return ExitCode.OK;
     }
 
+    let workflowOverride: WorkflowClass | undefined;
+    if (options.workflow !== undefined) {
+      const parsed = WorkflowClassSchema.safeParse(options.workflow);
+      if (!parsed.success) {
+        process.stderr.write(
+          `Invalid workflow class "${options.workflow}". Supported classes: ${WORKFLOW_CLASSES.join(', ')}\n`,
+        );
+        return ExitCode.CONFIG_ERROR;
+      }
+      workflowOverride = parsed.data;
+    }
+
     // Resuming must continue the existing run, not start a fresh one. Creating a
     // new run here would leave its artifacts empty and silently re-run the very
     // stages `--from` exists to skip — the opposite of the intent, at full cost.
@@ -68,13 +86,14 @@ export async function runFeatureCommand(
     // wirings of one pipeline is how the two stop being identical.
     const pipeline = buildPlanningPipeline(context);
 
-    process.stdout.write(`Run ${run.runId} — ${description}\n\n`);
+    process.stdout.write(`Run ${run.runId} — ${description}\n`);
+    process.stdout.write('Planning feature...\nNo implementation will occur before approval.\n\n');
 
     const result = await pipeline.run(run.runId, description, {
       ...(options.cache === false ? { noCache: true } : {}),
       ...(from === undefined ? {} : { from }),
       ...(options.skipReview === true ? { skipReview: true } : {}),
-      ...(options.workflow ? { workflow: options.workflow as WorkflowClass } : {}),
+      ...(workflowOverride !== undefined ? { workflow: workflowOverride } : {}),
       onProgress: (stage, status) => {
         const mark = status === 'completed' ? '✓' : status === 'cached' ? '·' : '→';
         if (status !== 'started' || globals.verbose) {

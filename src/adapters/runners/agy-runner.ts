@@ -1,13 +1,11 @@
 import type { AgentRunInput, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
-import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
 
-const EFFORT: Readonly<Record<ReasoningLevel, string>> = {
+const EFFORT: Readonly<Record<'low' | 'medium' | 'high', string>> = {
   low: 'low',
   medium: 'medium',
   high: 'high',
-  very_high: 'high',
 };
 
 interface AgyEnvelope {
@@ -32,13 +30,14 @@ export class AgyRunner extends BaseRunner {
 
   capabilities(): RunnerCapabilities {
     return {
-      supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],
-      // Strict containment has not been proven empirically across arbitrary filesystems,
+      supportedReasoningLevels: ['low', 'medium', 'high'],
+      // Strict containment is not guaranteed by standalone CLI flags (writes to ~/.gemini/antigravity-cli occurred during probe),
       // so supportsReadOnly is explicitly declared false per security baseline requirements.
       supportsReadOnly: false,
       supportsNonInteractive: true,
       supportsWorkingDirectory: true,
-      structuredOutputStrategy: 'native',
+      // Structured output strategy is prompted because native json-schema enforcement in headless CLI mode requires manual permission configuration.
+      structuredOutputStrategy: 'prompted',
     };
   }
 
@@ -83,12 +82,13 @@ export class AgyRunner extends BaseRunner {
       args.push('--model', input.model);
     }
 
-    args.push('--effort', EFFORT[input.reasoning]);
+    const effortKey = input.reasoning === 'very_high' ? 'high' : input.reasoning;
+    args.push('--effort', EFFORT[effortKey]);
 
     if (input.permissions === 'read-only') {
       args.push('--mode', 'plan');
     } else {
-      args.push('--mode', 'accept-edits', '--dangerously-skip-permissions');
+      args.push('--mode', 'accept-edits');
     }
 
     for (const path of input.additionalReadPaths ?? []) {

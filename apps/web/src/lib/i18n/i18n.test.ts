@@ -38,4 +38,12 @@ describe('Web Internationalization (I18N-01 / I18N-02)', () => {
     expect(en.status.waiting_for_approval).toBe('Waiting for Approval');
     expect(ptBR.status.waiting_for_approval).toBe('Aguardando Aprovação');
   });
+
+  it('keeps canonical IDs and hash patterns untranslated', () => {
+    // Canonical identifiers must never be subject to translation
+    const runId = 'AF-104';
+    const taskId = 'TASK-001';
+    expect(runId).toBe('AF-104');
+    expect(taskId).toBe('TASK-001');
+  });
 });

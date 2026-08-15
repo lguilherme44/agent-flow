@@ -659,3 +659,79 @@ describe('a repository gate refuses in the repository’s vocabulary (§6.2, App
     expect(asked).toContain('planning start');
   });
 });
+
+describe('Adaptive Workflow Pipeline Execution', () => {
+  it('executes TRIVIAL workflow in 1 direct model call without SDD or review', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushJson({
+      feature: 'Fix typo in documentation',
+      tasks: [
+        {
+          id: 'TASK-001',
+          title: 'Fix typo in README',
+          description: 'Fix typo',
+          complexity: 'trivial',
+          risk: 'low',
+          dependencies: [],
+          requirements: ['FR-001'],
+          validation: [],
+          validationExpectation: 'pass',
+          acceptanceCriteria: ['Typo fixed'],
+        },
+      ],
+    });
+
+    const result = await pipeline.run(run.runId, 'Fix typo in README documentation');
+
+    expect(result.stagesRun).toEqual(['planning']);
+    expect(result.plan.tasks).toHaveLength(1);
+    expect(runner.calls).toHaveLength(1);
+
+    const updated = await store.loadRun(run.runId);
+    expect(updated.workflow).toBe('trivial');
+    expect(updated.status).toBe('waiting_for_approval');
+  });
+
+  it('rejects HIGH-RISK workflow when cross-provider independence cannot be satisfied', async () => {
+    const { store } = await harness();
+    const fs = new InMemoryFileSystem();
+    seedRealPrompts(fs);
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude');
+    const stageRunner = new StageRunner({
+      fs,
+      clock,
+      store,
+      config: globalConfig,
+      capabilities: CAPABILITIES,
+      promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+      getRunner: () => runner,
+      projectDir: PROJECT,
+    });
+
+    const pipeline = new PlanningPipeline({
+      fs,
+      clock,
+      store,
+      stageRunner,
+      processRunner: new FakeProcessRunner(),
+      git: testGitCommand(new FakeProcessRunner()),
+      config: { global: globalConfig, project: PROJECT_CONFIG },
+      capabilities: CAPABILITIES,
+      providerOf: () => 'anthropic', // Both planner and planReviewer resolve to anthropic
+      projectDir: PROJECT,
+    });
+
+    const run = await store.createRun('Add user authentication with JWT token');
+    await expect(pipeline.run(run.runId, 'Add user authentication with JWT token')).rejects.toThrow(
+      PlanningRefusal,
+    );
+
+    const raised = await pipeline
+      .run(run.runId, 'Add user authentication with JWT token')
+      .catch((err: unknown) => err);
+    expect(raised).toBeInstanceOf(PlanningRefusal);
+    expect((raised as PlanningRefusal).code).toBe('cross_provider_required');
+    expect(runner.calls).toHaveLength(0); // Fails safely with 0 model calls
+  });
+});

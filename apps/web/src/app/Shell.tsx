@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ProjectProvider, useProjectSelection } from './project-context';
 import { I18nProvider } from '../lib/i18n/i18n-context';
+import { LanguageSelector } from '../components/LanguageSelector';
 import { useLiveEvents, type ConnectionState } from '../hooks/use-live-events';
 import { useProjects, useRunnerHealth, useRuns } from '../lib/queries';
 import { pickRun } from '../pages/DashboardPage';
@@ -355,6 +356,11 @@ function SidebarFooter(): JSX.Element {
             <span className="truncate">{summary}</span>
           </NavLink>
         )}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-border px-3 py-2">
+        <span className="text-micro text-faint">Language</span>
+        <LanguageSelector />
       </div>
     </div>
   );

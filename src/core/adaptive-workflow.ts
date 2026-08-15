@@ -147,16 +147,47 @@ export function classifyWorkflow(
 ): WorkflowClassificationResult {
   const normalized = featureRequest.toLowerCase();
 
-  // Detect high risk signals
-  const detectedHighRisk = HIGH_RISK_SIGNALS.filter((signal) => {
+  // Detect high risk signals from text
+  const detectedHighRisk: string[] = HIGH_RISK_SIGNALS.filter((signal) => {
     // Exact word or substring boundary check
     const regex = new RegExp(`\\b${signal.replace(/\s+/g, '\\s+')}\\b`, 'i');
     return regex.test(normalized);
   });
 
+  // Detect high risk signals from deterministic repository file facts
+  if (context.files && context.files.length > 0) {
+    for (const file of context.files) {
+      const lowerFile = file.toLowerCase();
+      if (
+        (lowerFile.includes('auth/') || lowerFile.includes('auth.') || lowerFile.includes('authentication')) &&
+        !detectedHighRisk.includes('auth')
+      ) {
+        if (normalized.includes('login') || normalized.includes('session') || normalized.includes('user') || normalized.includes('auth')) {
+          detectedHighRisk.push('auth (file: ' + file + ')');
+        }
+      }
+      if (
+        (lowerFile.includes('migration') || lowerFile.includes('db/migrations') || lowerFile.includes('schema.')) &&
+        !detectedHighRisk.includes('migration')
+      ) {
+        if (normalized.includes('db') || normalized.includes('table') || normalized.includes('database') || normalized.includes('schema')) {
+          detectedHighRisk.push('migration (file: ' + file + ')');
+        }
+      }
+      if (
+        (lowerFile.includes('payment') || lowerFile.includes('stripe') || lowerFile.includes('billing')) &&
+        !detectedHighRisk.includes('payment')
+      ) {
+        if (normalized.includes('pay') || normalized.includes('card') || normalized.includes('invoice') || normalized.includes('billing')) {
+          detectedHighRisk.push('payment (file: ' + file + ')');
+        }
+      }
+    }
+  }
+
   // Handle explicit override
   if (context.explicitOverride) {
-    // Safety Invariant: cannot downgrade a high-risk request to trivial or simple without signaling
+    // Safety Invariant: cannot downgrade a high-risk request to trivial or simple or standard without signaling
     if (
       detectedHighRisk.length > 0 &&
       (context.explicitOverride === 'trivial' || context.explicitOverride === 'simple')
@@ -230,7 +261,7 @@ export function classifyWorkflow(
     };
   }
 
-  // Default: STANDARD
+  // Default: STANDARD (never use simple as ambiguous fallback)
   return {
     workflow: 'standard',
     rationale: 'Standard feature workflow requiring complete architectural discovery and SDD contract.',

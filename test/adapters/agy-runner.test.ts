@@ -21,8 +21,12 @@ function valueAfter(args: readonly string[], flag: string): string | undefined {
 }
 
 describe('AgyRunner capabilities', () => {
-  it('reports native structured output strategy', () => {
-    expect(makeRunner().runner.capabilities().structuredOutputStrategy).toBe('native');
+  it('reports prompted structured output strategy', () => {
+    expect(makeRunner().runner.capabilities().structuredOutputStrategy).toBe('prompted');
+  });
+
+  it('declares supportedReasoningLevels as low, medium, high', () => {
+    expect(makeRunner().runner.capabilities().supportedReasoningLevels).toEqual(['low', 'medium', 'high']);
   });
 
   it('declares supportsReadOnly false per security baseline probe requirements', () => {
