@@ -2300,3 +2300,74 @@ describe('Repository retrieval boundary (M3-04)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('Repository content source seam (M3-05)', () => {
+  it('provider-neutral port imports no Node, adapter, runner, or model modules', () => {
+    const { text } = read(join(ROOT, 'src/ports/repository-content-source.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(
+      specifiers.filter((specifier) =>
+        ['node:', 'adapters/', 'agent-runner', 'utility-model'].some((term) =>
+          specifier.includes(term),
+        ),
+      ),
+    ).toEqual([]);
+    expect(code).not.toMatch(/\b(?:AgentRunner|AgentRunInput|UtilityModel)\b/);
+  });
+
+  it('Node content Adapter has filesystem authority only', () => {
+    const { text } = read(join(ROOT, 'src/adapters/fs/node-repository-content-source.ts'));
+    const specifiers = importSpecifiers(text);
+    const allowed = [
+      'node:fs',
+      'node:path',
+      'node:util',
+      '../../contracts/context-packet.schema.js',
+      '../../ports/repository-content-source.js',
+    ];
+
+    expect(specifiers.filter((specifier) => !allowed.includes(specifier))).toEqual([]);
+    expect(codeOnly(text)).not.toMatch(/\b(?:AgentRunner|AgentRunInput|UtilityModel|GitClient|ProcessRunner)\b/);
+  });
+
+  it('uses the host-native path implementation so Windows UNC roots keep their semantics', () => {
+    const { text } = read(join(ROOT, 'src/adapters/fs/node-repository-content-source.ts'));
+
+    expect(codeOnly(text)).not.toMatch(/\bposix\b/);
+  });
+
+  it('never derives post-open authority from path-based stat', () => {
+    const { text } = read(join(ROOT, 'src/adapters/fs/node-repository-content-source.ts'));
+
+    expect(codeOnly(text)).not.toMatch(/\bfs\.stat\s*\(/);
+  });
+
+  it('proves every candidate component against raw directory-entry bytes', () => {
+    const { text } = read(join(ROOT, 'src/adapters/fs/node-repository-content-source.ts'));
+    const code = withoutComments(text);
+
+    expect(code).toMatch(/fs\.readdir\s*\(/);
+    expect(code).toMatch(/encoding\s*:\s*['"]buffer['"]/);
+  });
+
+  it('does not wire candidate content into production workflows before M3-08, including through the ports barrel', () => {
+    const offenders: string[] = [];
+    for (const dir of ['src/app', 'src/server']) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (/\b(?:RepositoryContentSource|RepositoryContentResult)\b/.test(codeOnly(text))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    const adaptive = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    if (/\b(?:RepositoryContentSource|RepositoryContentResult)\b/.test(codeOnly(adaptive.text))) {
+      offenders.push(adaptive.path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});

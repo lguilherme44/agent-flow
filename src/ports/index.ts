@@ -25,3 +25,11 @@ export type {
   UtilityModelErrorCode,
 } from './utility-model.js';
 export { UTILITY_MODEL_ERROR_CODES } from './utility-model.js';
+export type {
+  RepositoryContentSource,
+  RepositoryContentResult,
+  RepositoryContentSuccess,
+  RepositoryContentFailure,
+  RepositoryContentErrorCode,
+} from './repository-content-source.js';
+export { REPOSITORY_CONTENT_ERROR_CODES } from './repository-content-source.js';
