@@ -9,9 +9,9 @@ specification and the code disagree, **the code is the current truth**.
 
 ```text
 MVP 1  ─────────────────────────────────►  the execution foundation, complete
-MVP 2  ────────────►                       Git-isolated execution, in progress
-                    ▲
-                    you are here: M2-06 done, M2-07 next
+MVP 2  ─────────────────────────────────►  safe parallel execution, complete
+                                        ▲
+                                        you are here: M2-12 done
 ```
 
 ---
@@ -38,12 +38,13 @@ unbuilt, and both have their own document:
 
 ---
 
-## MVP 2 — Safe Parallel Execution · in progress
+## MVP 2 — Safe Parallel Execution · complete
 
-**The order matters and is not negotiable: isolation first, parallelism last.** The
-milestone raises the concurrency ceiling in its *eleventh* item, after every guarantee
-that makes raising it safe is in place. Until then `effectiveConcurrency` resolves to
-1 however `parallelism.maxTasks` is written.
+**The order mattered and was not negotiable: isolation first, parallelism last.** The
+milestone raised the concurrency ceiling in its *eleventh* item, after every guarantee
+that makes raising it safe was in place. `effectiveConcurrency` is above 1 only for a
+run born in worktree mode; a sequential run still resolves to 1 however
+`parallelism.maxTasks` is written.
 
 | | Milestone | Status |
 |---|---|---|
@@ -54,12 +55,12 @@ that makes raising it safe is in place. Until then `effectiveConcurrency` resolv
 | M2-04 | Workspace lifecycle and setup cleanliness | **done** |
 | M2-05 | `TaskAttemptResult`, trusted receipt, marker | **done** |
 | M2-06 | Deterministic Integrator and integration-tree verification | **done** |
-| M2-07 | Crash recovery | **next** — not started |
-| M2-08 | Retry semantics and attempt retention | not started |
-| M2-09 | Git-aware cleanup | not started |
-| M2-10 | Read models, CLI and Web observability | not started |
-| M2-11 | Parallel scheduler activation | not started |
-| M2-12 | E2E, dogfood and documentation | not started |
+| M2-07 | Crash recovery | **done** |
+| M2-08 | Retry semantics and attempt retention | **done** |
+| M2-09 | Git-aware cleanup | **done** |
+| M2-10 | Read models, CLI and Web observability | **done** |
+| M2-11 | Parallel scheduler activation | **done** |
+| M2-12 | E2E, dogfood and documentation | **done** |
 
 ### What each of the completed items actually delivered
 
@@ -109,29 +110,58 @@ its work is on the integration branch, not when its agent exited. Final verifica
 and final review both run against that one tree, under the run execution lock, and the
 commit they describe is recorded on the run as `integrationHead`.
 
-### M2-07 — crash recovery · next
+**M2-07 — crash recovery.** Every crash window enumerated in §17.3 of the
+specification has a defined, tested resolution, driven by a deterministic injected
+fault against real Git. The rule is receipt-first: recovery reads the attempt artifact
+and uses the repository only to confirm what the artifact already claims. A ref, a
+trailer or a commit message is never sufficient on its own. Recovery runs no agent and
+no validation, and it never writes `completed`.
 
-Every crash window enumerated in §17.3 of the specification gets a defined, tested
-resolution, driven by a deterministic injected fault against real Git. The rule is
-receipt-first: recovery reads the attempt artifact and uses the repository only to
-confirm what the artifact already claims. A ref, a trailer or a commit message is
-never sufficient on its own.
+**M2-08 — retry is a fresh attempt.** New branch, new worktree, new evidence, cut from
+the integration head as it stands now — and the previous attempt's artifact and ref are
+retained, because they are the only record of what went wrong. Recovering an interrupted
+attempt does not spend one.
 
-### The remaining items, and why they are ordered this way
+**M2-09 — `clean` became Git-aware.** It reclaims the worktrees and attempt refs of the
+runs it removes, touches nothing foreign, and keeps an integration branch that is merged
+nowhere — that branch is the run's product rather than its debris, and `--branches` is
+the only flag that deletes it.
 
-- **M2-08** — a retry must always be a new attempt, on a new branch, in a new
-  worktree, and must never destroy the previous attempt's evidence.
-- **M2-09** — `agent-flow clean` becomes Git-aware: it reclaims worktrees and attempt
-  refs, touches nothing foreign, and keeps an unmerged integration branch, because
-  that branch is the run's product rather than its debris.
-- **M2-10** — the CLI and the dashboard learn to show what an isolated run is doing.
-  A parallel run whose state cannot be read is a parallel run nobody can debug, which
-  is why this lands *before* parallelism rather than after it.
-- **M2-11** — `effectiveConcurrency > 1`. One edit plus its wiring, and the last
-  functional item on purpose. Landing it early would be the M2-00 defect with extra
-  steps.
-- **M2-12** — E2E, dogfooding on two stacks, and the documentation the milestone owes:
-  every refusal code and its fix, the new test layers, and what dogfooding revealed.
+**M2-10 — the isolated run became readable.** Mode, requested and effective concurrency,
+which task holds a live workspace, what is awaiting integration, which paths conflicted
+and where the integration head is — in the CLI, in the read model and in the dashboard.
+A parallel run whose state cannot be read is a parallel run nobody can debug, which is
+why this landed *before* parallelism rather than after it.
+
+**M2-11 — `effectiveConcurrency > 1`.** The ceiling is raised only for a run in worktree
+mode, up to 8. Landing it earlier would have been the M2-00 defect with extra steps.
+
+### M2-12 — what closing the milestone actually closed
+
+The last item was not paperwork. It proved the composition rather than the parts, and
+in doing so found three things the unit suites structurally could not:
+
+- **A repository gate reported itself as a model failure.** A dirty working tree at
+  planning start reached the user as "the runner produced output that never satisfied
+  the contract" — a sentence about a model, printed when no model had run. The gate now
+  raises Appendix A's own code with the action that resolves it. Found by dogfood, on
+  the first real run.
+- **Two specified events were emitted by nothing.** `run_git_identity_assigned` and
+  `namespace_reclaimed` were in Appendix B from the start of the milestone and in no
+  module, so a run's history recorded neither the mode it was born in nor what `clean`
+  later removed. Both are emitted now, and Appendix B is pinned to the code by a test
+  in the same way Appendix A already was.
+- **The attempt ref reached the Integrator from the artifact.** Not a vulnerability —
+  the adapter re-validates every ref, and §11.3 already states that forging the artifact
+  and forging the ref need the same capability — but the authoritative ref is now
+  *derived* from the run's identity, with the recorded one required to agree.
+
+Plus what it was asked for: an end-to-end suite over a two-wave graph, a real crash, a
+retry and a cleanup; dogfood on Node and Flutter against live CLIs; and the
+documentation the milestone owed — every refusal code with its fix in
+[`troubleshooting.md`](troubleshooting.md), the new test layers in
+[`testing.md`](testing.md), and what dogfooding revealed in
+[`engineering/findings.md`](engineering/findings.md).
 
 ---
 

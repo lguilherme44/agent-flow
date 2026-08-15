@@ -5,11 +5,16 @@ another, and the most important thing to understand about the arrangement is whe
 one stops.
 
 ```
-Vitest        unit, integration, architecture     1637 tests, no browser, no coding CLI
-Playwright    deterministic browser E2E           16 scenarios, real server
+Vitest        unit, integration, architecture     1768 tests, no browser, no coding CLI
+Playwright    deterministic browser E2E           26 scenarios, real server, real Git
               visual regression                   22 views, 4 widths, 2 platforms
 gsd-browser   black-box packaged acceptance       2 journeys, against the tarball
+dogfood       real coding CLIs, two stacks        manual, never in CI
 ```
+
+Counts move as tests are added, and they are here to convey scale rather than to be
+matched. What is worth relying on is which question each layer answers, and where it
+stops.
 
 ```bash
 npm run check                  # typecheck + e2e typecheck + lint + Vitest + dashboard unit
@@ -53,10 +58,10 @@ Two suites, two configurations, because they need opposite things.
 
 ### `playwright.e2e.config.ts` — deterministic E2E
 
-Sixteen scenarios that stub **nothing**. Each test gets its own temp repository, runs
-the real `agent-flow feature` to produce a run, boots the real `agent-flow ui`, and then
-drives a browser against it. Browser → Fastify → application services → StateStore →
-filesystem, all production code.
+Scenarios that stub **nothing**. Each test gets its own temp repository, runs the real
+`agent-flow feature` to produce a run, boots the real `agent-flow ui`, and then drives a
+browser against it. Browser → Fastify → application services → StateStore → filesystem,
+all production code.
 
 The only thing replaced is the coding CLI, through the one seam designed for it —
 `runners.<id>.command` in the global configuration — by a script that speaks both
@@ -71,6 +76,27 @@ matching the contract.
 An architecture test forbids `page.route`. An E2E that intercepts the API proves the
 React app can render a fixture — which the unit suite already proves in a hundredth of
 the time — and deletes the only thing an E2E can prove.
+
+**Concurrency here is held still, never timed.** The scenarios that prove two or three
+agents ran at once do it with a latch, not a stopwatch: the fake writes a marker file
+when it enters a task and blocks on the absence of a release file the test writes. So
+"three agents were inside three worktrees simultaneously" is a state the test brought
+about and then looked at, with no sleep deciding anything on either side. A timing race
+would pass on a fast machine and fail on a loaded one, which is the same as not testing
+it.
+
+The same rule covers the crash scenario. The coordinator is spawned as a process the
+test still holds and killed with `SIGKILL` at a point the test arranged — one task
+parked, the previous wave already integrated — so no handler runs and nothing is
+flushed. That is a real crash rather than a simulated one, and the state it leaves is
+the state §17 is about.
+
+`closure.spec.ts` is the composition, added by M2-12: a two-wave graph with a fan-in
+(three tasks ready at once, one that must wait), the crash above, a retry that fails
+validation and then succeeds on a fresh worktree, and a cleanup that removes what the
+run owns while a foreign branch and a foreign worktree survive it. The dependent task
+*reads* its dependencies' files before writing its own, so a broken wave barrier fails
+inside the attempt rather than being caught by an assertion about commit shape.
 
 ### `playwright.config.ts` — visual regression
 
@@ -154,6 +180,64 @@ learn nothing. Both browser jobs upload the Playwright report — expected, actu
 diff for every mismatch — when they fail.
 
 Packaging and gsd-browser are local. See above for why.
+
+---
+
+## Dogfood — the real CLIs, never in CI
+
+The layers above are free, fast and deterministic because no coding CLI is ever
+invoked. That is also the exact shape of what they cannot see, so MVP 2 is not closed
+by them alone: §27 of the specification requires the whole matrix to run against live
+CLIs on two stacks — a Node repository and a Flutter one — with real quota spent and
+real models deciding what the code should be.
+
+It is manual, it is never in CI, and what it finds goes to
+[`engineering/findings.md`](engineering/findings.md).
+
+**It is worth the cost because it finds a different class of defect.** The M2-12 pass
+found a repository gate that reported itself as a model failure — a dirty working tree
+reaching the user as "the runner produced output that never satisfied the contract" —
+on the very first real run. No unit test could have: the fake never makes the working
+tree dirty, because a fake has no opinions and leaves no droppings.
+
+### What is measured, and the honest answer about speed
+
+Per worktree, on the M2-12 pass, against small repositories on an Apple Silicon laptop:
+
+| | Node | Flutter |
+|---|---|---|
+| `git worktree add` | 47 ms | 35 ms |
+| dependency install | `npm install` 0.2 s | `flutter pub get` 0.5 s |
+| one validation run | `node --test` ~0.2 s | `flutter test` 4.5 s |
+| worktree on disk | 28 KB | **43 MB** |
+
+Two of those numbers matter more than the rest.
+
+**Disk is the real cost of Flutter isolation, not time.** `flutter pub get` is fast
+because `~/.pub-cache` is global and shared across worktrees — nothing is re-downloaded
+— but `.dart_tool/` is per checkout and is most of the 43 MB. At four concurrent tasks
+that is ~170 MB for a package with no dependencies of its own; a real application scales
+from there. This is what `agent-flow doctor` projects before you turn isolation on, and
+what `MAX_ISOLATED_TASK_CONCURRENCY` bounds.
+
+**Validation cost is what decides whether parallelism pays.** A stack whose validation
+run is 4.5 s pays that per task per attempt, and the overlap has to be worth more than
+the sum of the fixed costs to come out ahead. On these repositories nothing is worth
+measuring a speedup on — the agent's own latency dominates everything else by an order
+of magnitude — so no wall-clock ratio is claimed here. **The number that would look best
+in a README is the one that is not reported.**
+
+**Parallelism also cannot be measured on a plan that has none.** The Flutter planner
+returned a strictly chained RED → GREEN graph — seven tasks, seven waves, one task each
+— so effective concurrency was 3 and observed concurrency was 1 throughout. That is a
+property of the plan rather than of the executor, and it is the ordinary case for
+test-first work: a plan whose tasks genuinely depend on each other has nothing to
+overlap. Isolation still applied, and still earned its place.
+
+**So: parallelism does not pay off everywhere, and where it does not, that is the
+recorded result rather than a benchmark chosen to look better.** Isolation is worth
+having on its own terms — it keeps two agents out of one tree, it makes a failed attempt
+something you can still read, and it is what lets a crashed run resume from evidence.
 
 ---
 

@@ -213,6 +213,21 @@ indistinguishable from normal agent output* to *requires escaping the worktree a
 into orchestrator-private state*. Containment during execution remains the runner's job,
 below, unchanged.
 
+**Which ref the Integrator asks Git about is derived, not read.** The artifact is the
+authority on *what was validated*; it is not the authority on which ref this process then
+resolves. Those are separable, so they are separated: the attempt ref is composed from the
+run's own identity through the same function that created it and that recovery re-derives,
+and the branch recorded in the artifact is required to agree with it. This closes nothing
+that §11.3 leaves open — an agent that can write the artifact can write the ref too — but
+it means a corrupted artifact is refused as a mismatch rather than sending a lookup
+somewhere else. Every ref is re-validated at the adapter besides, against a character
+allowlist and a hostile-pattern check, immediately before it becomes an argv element.
+
+**Parallel attempts do not share anything writable.** Each holds its own locked worktree,
+cut from the wave base on its own branch; nothing writes to the user's checkout at any
+point; and integration is serialised behind a mutex, so two merges never interleave even
+when four agents finish at once.
+
 **Containment during execution is the runner's, not ours.** Read-only stages run under
 `--permission-mode plan` (Claude Code) or `-s read-only` (Codex), and Agent Flow never
 passes the flags that disable them. But Agent Flow spawns a CLI as a child process and

@@ -1645,3 +1645,226 @@ reports as binary and `eslint` flags as `no-control-regex`; and `validRevision` 
 drifted from `validRef`, so a revision ending in `.lock` or `/` was refused by Git
 rather than by the layer that owns operand shape — turning a rejection into a
 `git_command_failed` from the far side of a spawn.
+
+---
+
+## M2-12 — what closing the milestone found, and what dogfood cost
+
+The last item was supposed to be proof and paperwork. It was mostly proof, and the
+proof found three defects that eleven items of unit and integration testing could not —
+each for a structural reason worth naming, because the reason is the reusable part.
+
+### A repository gate reported itself as a model failure
+
+The first real `agent-flow feature` run against a live CLI stopped with:
+
+```text
+Stage "planning" failed: invalid_output
+
+working_tree_dirty: the working tree has uncommitted changes: …
+
+The runner produced output that never satisfied the contract. This is not
+retried on another runner on purpose: a different model would hide the
+mismatch rather than fix it.
+```
+
+**No model had run.** The planning-base gate refused at `planning start`, 35 ms after
+the run was created, before discovery was dispatched. The three sentences a person
+reads all describe a runner, and the fix is `git commit`.
+
+The cause is a single line: `assertReady` threw
+`StageFailure('planning', 'invalid_output', reason)`, because `StageFailure` was the
+error type the pipeline already had and `RunnerErrorCode` was the only vocabulary it
+accepted. So a fact about the repository was expressed in the vocabulary of runner
+failures, and `renderError` then explained it accordingly — including the paragraph
+about not retrying elsewhere, which is advice for a different problem entirely.
+
+`task-executor.ts` had already got this right and written down why, in a comment about
+declining to put a Git failure into `RunnerErrorCodeSchema`: *"any code in that enum
+would name the wrong subsystem and send a person to read the wrong log."* The same
+mistake was live one module away, and nothing connected the two.
+
+**Why no test caught it.** `planningBaseGate` was injected as an option and no test
+ever injected one — the pipeline's suite constructs a harness without it, and the gate
+is `undefined`, so `assertReady` returns immediately. Twenty-six tests exercised the
+pipeline and none exercised the branch. The `run` and `approve` paths call a *different*
+implementation of the same gate, in `run-actions.ts`, which returns a full `ActionError`
+with the canonical code and its action; it was the one path with the right behaviour and
+the one path anybody had looked at.
+
+Fixed by giving the gate its own error type carrying Appendix A's code and the action
+that resolves it, so all three moments — approve, implementation start, planning start —
+now describe the same refusal the same way. Four tests, one of which asserts the
+negative: the error must not be a `StageFailure`, because `StageFailure` is what carries
+`fallbackEligible` and a refusal must not be able to enter the fallback path at all.
+
+**The general shape:** an unused injection point is an untested branch that looks
+configured. A default of "do nothing" is indistinguishable from "this works" in a suite
+that never supplies the dependency.
+
+### Two events were specified from the start and emitted by nothing
+
+`run_git_identity_assigned` and `namespace_reclaimed` are both in Appendix B, both with
+payloads, and neither existed anywhere in `src/`. So a run's `events.jsonl` recorded
+neither the mode the run was born in nor what `clean` later removed from its namespace
+— the two facts the specification says the audit trail carries, and the two whose
+absence R-11 and R-12 describe as silent.
+
+Appendix A had been pinned to `INTEGRATION_REFUSAL_CODES` by a test since M2-06,
+precisely because a vocabulary that drifts is worse than one that is incomplete.
+Appendix B had no such pin, and drifted in the one direction the pin would have caught.
+It has one now: the test scans every `appendEvent` call site under `src/` for its
+literal name and fails if the appendix specifies an event nothing emits.
+
+`attempt_tree_missing` was the mirror image — emitted by recovery, named as an event by
+§17.3 window 10, listed in Appendix A as a refusal, and absent from Appendix B. It is
+both, legitimately: recovery refuses to reconstruct the attempt and requeues rather than
+halting. The appendix now says so.
+
+**The general shape:** a specified-but-unemitted event is worse than an undocumented
+one. A reader who finds it in the appendix reasonably builds something that waits for it.
+
+### The attempt ref reached the Integrator from the artifact
+
+`integrateOne` resolved the marker with `refs/heads/${attempt.branch}` — a field of the
+attempt artifact — rather than deriving it from the run's identity. This is **not** a
+vulnerability, and saying otherwise would be the more comfortable claim rather than the
+true one: the adapter re-validates every ref against a character allowlist and a
+hostile-pattern check before it becomes argv, and §11.3 already states that forging the
+artifact and forging the ref require the same capability, so there is no escalation.
+
+It is still the wrong shape. The artifact is the authority on *what was validated*; it
+is not the authority on which ref this process then asks Git about, and separating the
+two costs one call to the `attemptRef` that `TaskWorkspaces` composed the branch with
+and that recovery already re-derives. The recorded value is now required to agree with
+the derived one, which turns a corrupted artifact into a named mismatch instead of a
+lookup somewhere else.
+
+While there: `readAttempt` returned any artifact that parsed, without checking that the
+`run`, `task` and `attempt` recorded *inside* it matched the path it was read from. Every
+caller treats the result as evidence about the attempt it asked for. Now the two must
+agree.
+
+### What dogfood actually cost, and what it bought
+
+The Node matrix ran against live Claude Code and Codex — planner on Codex, everything
+else on Claude — with real quota. It is the only layer that can produce a working tree
+somebody's tooling has written into, an agent that leaves droppings, or a model that
+plans eight tasks where the fixture plans two. All three happened.
+
+The first run also failed for a reason that was **not** a product defect and is worth
+recording so the next person does not chase it: the surrounding session's own tooling
+had written a scratch directory into the dogfood repository between `git commit` and
+`agent-flow feature`. Agent Flow refused, correctly, and named the files. The lesson is
+about the measurement rather than the product — a dogfood repository has to be clean at
+the moment the run is created, and "I committed everything" is not the same claim.
+
+### Parallel waves and test-first plans interact, and the interaction is not obvious
+
+The Node dogfood's first plan came back test-first, from a real planner, with this shape:
+
+```text
+TASK-001  fix the test script          pass
+TASK-002  failing weekly tests         fail   ─┐ same wave
+TASK-004  failing formatter tests      fail   ─┘
+TASK-003  implement weekly             pass   ─┐ same wave
+TASK-005  implement formatter          pass   ─┘
+TASK-006 … 008                                  later waves
+```
+
+Wave 2 integrated two RED tasks, both behaving exactly as planned. Wave 3 then ran
+TASK-003 and TASK-005 concurrently, each cut from a base holding **both** REDs. Each
+one implemented its own module correctly, ran `npm test` — the whole suite, because
+that is what `commands.test` is — and was judged `unsatisfied` **because of its
+sibling's red test**:
+
+```text
+TASK-003  implements weekly-rule   → date-range.test.js still red  → unsatisfied
+TASK-005  implements date-range    → weekly-rule.test.js still red → unsatisfied
+```
+
+Neither could go green alone. The wave was structurally unsatisfiable, and the run
+halted with two tasks in `review_required` whose agent notes each explain, correctly,
+that the thing they did not fix was out of their scope.
+
+**Nothing here is a defect.** §13.1 says the expectation is judged once, in the task's
+own worktree, against that task's base. §13.2 explicitly rejects a union-of-ids gate at
+integration, for good reasons that still hold. §13.3 says final verification is the only
+authority on "everything is green". Every one of those decisions is right, and the
+product did exactly what all three specify.
+
+**What was missing is the consequence, written down.** Three correct decisions —
+per-task expectation, whole-suite validation commands, and parallel waves — compose
+into a rule nobody had stated:
+
+> A wave may contain at most one unpaired RED per validation command. Two RED tasks in
+> one wave make every `pass` task in the *next* wave unsatisfiable, because each of them
+> inherits the other's failure and can only fix its own.
+
+This is a property of the plan, not of the executor, so the fix belongs upstream: a
+test-first task and its implementation belong in **one** task when the validation
+command is whole-suite, or the REDs belong in different waves. Re-planning with "each
+task must deliver both the implementation and its tests" produced a graph that ran
+clean.
+
+**Why no test could have found this.** The deterministic E2E fake writes one file per
+task and always succeeds; it has no opinion about test-first, and its validation command
+is `node --version`. Producing this required a real planner choosing a real strategy and
+a real test runner running the real suite. It is the clearest single argument for §27
+existing at all.
+
+It is documented in [`../troubleshooting.md`](../troubleshooting.md) and named as a
+limitation in both READMEs. Making the executor smarter about it was considered and
+rejected: scoping validation per task means teaching the orchestrator which tests belong
+to which task, which is exactly the union-gate design §13.2 turns down, one layer lower.
+
+### The §27 matrix, as it actually ran
+
+Two stacks, live CLIs, real quota. Planner on Codex, everything else on Claude Code,
+so plan review was genuinely cross-provider throughout.
+
+| Scenario | Node | Flutter |
+|---|---|---|
+| independent tasks | **3 at once**, three worktrees, one wave base | not exercised — the planner returned a chain |
+| fan-out / fan-in | wave 2 cut from wave 1's integrated head | every task cut from its predecessor's merge |
+| RED → GREEN | first plan deadlocked (above); second plan had no RED | **7 tasks, RED and GREEN alternating, all integrated** |
+| conflict | **`integration_conflict` on `src/index.js`**, `previouslyIntegrated: TASK-002` | not exercised |
+| retry | attempt 2 on a fresh worktree over the new head, attempt 1 retained | attempt 2 after the crash, integrated |
+| kill the coordinator | not exercised | **`SIGKILL` mid-run, resumed, finished** |
+
+Between the two stacks every row is covered, and no row is covered by a fixture
+standing in for a CLI. What each one taught:
+
+**Three agents at once, and the conflict that follows from it.** The Node plan's second
+wave had three genuinely independent tasks — `slugify`, `truncate`, `titleCase`, one
+module each. All three ran concurrently in their own worktrees, all three passed their
+own tests, and all three added an export to `src/index.js`. The first integrated; the
+second was refused with `integration_conflict`, `paths: ["src/index.js"]`,
+`previouslyIntegrated: "TASK-002"`, and the run halted with two merges on the branch and
+nothing half-merged. That is §15 exactly, produced by a plan a real reviewer had already
+approved as independent — because the tasks *are* independent, and the barrel file is
+not.
+
+A retry fixed the first of them: attempt 2 was cut from the head as it then stood, so
+the export it added went on top of the one already there. The second conflicted again,
+for the same reason — it was still running beside its sibling — and only integrated once
+it ran alone. **Two tasks that both edit one file cannot integrate in one wave, however
+many retries they get.** The retry that resolves a conflict is the retry that runs after
+the conflicting sibling has landed.
+
+**A real crash, mid-run, on the Flutter stack.** The coordinator was `SIGKILL`ed with
+two tasks integrated and a third in flight. Afterwards: the integration branch was at
+exactly the commit it had been, both merges intact, the user's checkout untouched, and
+the interrupted task left `running` with no artifact. `agent-flow run` then recovered
+it — `task_interrupted` with `requeued: true`, a new workspace at attempt 2 cut from the
+unchanged head — and neither completed task was executed again. Seven merges on the
+branch at the end, one per task, and the composed library builds and passes its tests.
+
+**The attempt limit is a real gate.** After two conflicts TASK-004 hit
+`retry.maxAttempts: 2` and the CLI refused, offering `--force` and saying it would be
+recorded as a degradation. It was, and the third attempt integrated.
+
+**What was not exercised, stated rather than implied.** The Flutter planner returned a
+strictly chained plan, so that stack never ran two tasks at once and no conflict was
+possible there; the Node stack never had its coordinator killed. Both rows are covered
+by the other stack and by the deterministic suites, and neither gap is hidden here.

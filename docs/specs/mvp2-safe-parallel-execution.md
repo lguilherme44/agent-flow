@@ -1267,6 +1267,24 @@ The consequence, stated plainly so nobody is surprised by it:
 > expected to fail". A plan whose RED task is never paired with a GREEN task that
 > makes it pass will fail final verification, and that is correct.
 
+**One consequence of §13.1 and §13.2 together, observed in dogfood (M2-12) and recorded
+here because it was not obvious to anybody who had read both.** A task is judged by
+running the validation commands in its own worktree, and `commands.test` is normally the
+whole suite — so a task inherits every test that is red in the base it was cut from,
+including one a *sibling* wrote deliberately. With parallel waves that composes into:
+
+> A wave may contain at most one unpaired RED per validation command. Two `fail` tasks in
+> one wave make every `pass` task in the next wave unsatisfiable, because each inherits
+> the other's failure and can only fix its own.
+
+This changes no requirement. §13.1 and §13.2 are unchanged and remain correct: scoping
+validation per task, so that a task's judgement ignored its siblings' tests, would
+require the orchestrator to know which tests belong to which task — which is the
+union-gate design §13.2 already rejects, moved one layer down and made harder. The
+property belongs to the *plan*, and the resolution is upstream: a module's tests and its
+implementation belong in one task when validation is whole-suite. It is documented for
+users in [`../troubleshooting.md`](../troubleshooting.md).
+
 ### 13.4 Per-wave verification as a signal
 
 Running `runVerification` on the integration tree after each wave would be useful
@@ -2557,7 +2575,7 @@ nothing.
 
 ---
 
-### M2-07 — Crash recovery · STATUS: NEXT
+### M2-07 — Crash recovery · STATUS: IMPLEMENTED
 
 **Goal.** Every window in §17.3 has a defined, tested resolution.
 
@@ -2584,7 +2602,7 @@ fault hook must be deterministic, not timing-based.
 
 ---
 
-### M2-08 — Retry semantics and attempt retention · STATUS: NOT STARTED
+### M2-08 — Retry semantics and attempt retention · STATUS: IMPLEMENTED
 
 **Goal.** A retry is always a new attempt, a new branch and a new worktree, and never
 destroys prior evidence.
@@ -2608,7 +2626,7 @@ today. §23 of Spec v3 (no automatic retry) is unchanged.
 
 ---
 
-### M2-09 — Git-aware cleanup · STATUS: NOT STARTED
+### M2-09 — Git-aware cleanup · STATUS: IMPLEMENTED
 
 **Goal.** `agent-flow clean` reclaims namespaces safely and touches nothing foreign.
 
@@ -2639,7 +2657,7 @@ run's own product, deleted by a housekeeping command weeks after anyone was watc
 
 ---
 
-### M2-10 — Read models, CLI and Web observability · STATUS: NOT STARTED
+### M2-10 — Read models, CLI and Web observability · STATUS: IMPLEMENTED
 
 **Goal.** A person can see what parallel execution is doing without reading a log,
 and no filesystem path or ref reaches the browser.
@@ -2668,7 +2686,7 @@ stores a relative path.
 
 ---
 
-### M2-11 — Parallel scheduler activation · STATUS: NOT STARTED
+### M2-11 — Parallel scheduler activation · STATUS: IMPLEMENTED
 
 **Goal.** `effectiveConcurrency > 1`. **This is the last functional item, and it is
 one edit plus its wiring.**
@@ -2701,7 +2719,7 @@ with extra steps.
 
 ---
 
-### M2-12 — E2E, dogfood and documentation · STATUS: NOT STARTED
+### M2-12 — E2E, dogfood and documentation · STATUS: IMPLEMENTED
 
 **Goal.** The milestone is proved outside the unit suite and written down.
 

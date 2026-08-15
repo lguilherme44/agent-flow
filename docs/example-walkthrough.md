@@ -116,10 +116,15 @@ parallelism:
   maxTasks: 4
 ```
 
-This is legal and records your intent. **It does not give you four concurrent tasks
-today** — the runtime ceiling is still 1, and `agent-flow run --dry-run` prints both
-numbers so the reduction is visible rather than mysterious. Raising the ceiling is
-M2-11, the eleventh of twelve milestone items; see [`roadmap.md`](roadmap.md).
+With `useWorktrees: true` above, this is honoured: up to four tasks at once, capped at a
+ceiling of 8. **Without worktrees it resolves to 1 whatever you write** — tasks would
+otherwise share one working tree — and the run records a `parallelism_clamped`
+degradation so the reduction is visible rather than mysterious. `agent-flow run
+--dry-run` prints both numbers before anything executes.
+
+What four concurrent tasks actually costs: four agent processes, four checkouts of this
+repository, and four dependency installs. `agent-flow doctor` projects the disk before
+you turn it on.
 
 ---
 
@@ -217,8 +222,14 @@ flowchart LR
 ```
 
 Three waves: `{TASK-001}`, then `{TASK-002, TASK-003}`, then `{TASK-004}`. TASK-002
-and TASK-003 are independent of each other — **that** is what MVP 2 exists to make
-safe to run at the same time, and what MVP 2 has not yet unlocked.
+and TASK-003 are independent of each other, so in worktree mode they run **at the same
+time**, in two different worktrees on two different branches, both cut from the same
+wave base — which is the integration branch as it stood when the wave opened, with
+TASK-001's work already on it.
+
+Whichever of the two finishes first, the integration order is the plan's, not the
+agents': TASK-002's marker is merged, then TASK-003's. Then the barrier closes, and
+TASK-004's worktree is cut from a base that holds all three.
 
 Two schema rules that catch bad plans before any reviewer reads them:
 
@@ -254,6 +265,26 @@ Integration happens after the wave barrier, serially, in the plan's topological 
 never in completion order. A task reaches `completed` when its marker is merged into
 the integration branch, and the Integrator is the only thing allowed to write that
 state.
+
+So the middle wave, concretely:
+
+```text
+wave 2 opens        base = integration head, which holds TASK-001
+   ├── TASK-002 ── own worktree, own branch ──┐   both agents inside at once
+   └── TASK-003 ── own worktree, own branch ──┘
+wave 2 barrier      both validated, both marked
+   ├── merge TASK-002   ← the plan's order …
+   └── merge TASK-003   ← … whatever order they finished in
+wave 3 opens        base = integration head, which now holds all three
+```
+
+If TASK-003's merge conflicts with TASK-002's, TASK-002 stays integrated, TASK-003
+becomes `review_required` with the conflicting paths recorded, and the run halts.
+Nothing is resolved automatically and nothing is rolled back. A retry gives TASK-003 a
+fresh worktree cut from the head as it now stands — which usually is the fix.
+
+Your own checkout is untouched throughout. It is on whatever branch you left it on,
+with whatever you had uncommitted, byte for byte.
 
 In **sequential mode** (the default) the agent runs in your project directory and the
 task completes when its validation is judged, exactly as it always has.

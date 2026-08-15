@@ -78,27 +78,29 @@ and in our first real run, that is exactly what caught a bad plan.
 ```text
 version          v0.1.0
 MVP 1            complete  (Implementation Spec v3)
-MVP 2            in progress — Safe Parallel Execution
-  completed      M2-00 · M2-01 · M2-02 · M2-03 · M2-04 · M2-05 · M2-06
-  next           M2-07 — crash recovery
-parallelism      effectiveConcurrency is still 1  (unlocked by M2-11)
+MVP 2            complete  — Safe Parallel Execution
+  items          M2-00 … M2-12, all closed
+parallelism      up to 8 tasks at once, in worktree mode only
 npm              not published; install from a checkout
 ```
 
-**M2-06 — Deterministic Integrator and integration-tree verification** is the most
-recent milestone to land. Worktree isolation, attempt receipts, marker commits and
-deterministic integration all work today, at **one task at a time**.
+**Parallel execution is a feature now, and only under isolation.** With
+`git.useWorktrees: true`, each task attempt runs in its own locked Git worktree on
+its own branch, and `parallelism.maxTasks` is honoured up to a ceiling of 8. Without
+worktrees the ceiling stays at 1 — tasks would otherwise share one working tree, one
+diff and one set of validation commands — and a run that asked for more records a
+`parallelism_clamped` degradation rather than quietly running narrow.
 
-**Parallel execution is architecture, not yet a feature.** MVP 2's ordering is
-deliberate: isolation first, parallelism eleventh of twelve items. `parallelism.maxTasks`
-is accepted above 1 and recorded as intent, and the runtime still resolves it to 1 —
-the reduction is recorded on the run as a `parallelism_clamped` degradation rather than
-happening quietly. Raising the ceiling is M2-11, and it waits on crash recovery
-(M2-07), retry semantics (M2-08) and observability (M2-10).
+**Two numbers, and the difference is the point.** `requestedConcurrency` is what the
+configuration asked for; `effectiveConcurrency` is what the run's mode allows. Both
+are on the run, in `agent-flow run --dry-run`, and in the dashboard.
 
-**Crash recovery for isolated runs is not built.** M2-07 is the next milestone, not a
-shipped capability. If a coordinator dies mid-run in worktree mode today, the evidence
-is on disk by design — but nothing yet reads it back and reconciles the run.
+**What a parallel run guarantees.** Work reaches the integration branch one task at a
+time, in the plan's topological order, whatever order the agents finished in; a task
+is `completed` only once its marker is merged; a wave's base is the previous wave's
+integrated result; a coordinator killed mid-run resumes without re-running an agent or
+merging anything twice; and the working tree you are sitting in is byte-identical
+before and after.
 
 Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
 [`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md).
@@ -124,11 +126,11 @@ Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
 | Deterministic serial integration in topological order | Available in worktree mode |
 | Verification and review against the integration tree | Available in worktree mode |
 | Git hook isolation for internal operations | Available |
-| Crash recovery for isolated runs | Not built — M2-07 |
-| Retry semantics under isolation | Not closed out — M2-08 |
-| Git-aware `clean` (worktrees, refs, branch retention) | Not built — M2-09 |
-| Worktree facts in the dashboard | Not built — M2-10 |
-| More than one task at a time | **Not enabled** — M2-11 |
+| Crash recovery for isolated runs, from evidence on disk | Available in worktree mode |
+| Retry as a fresh attempt, with the previous one retained | Available in worktree mode |
+| Git-aware `clean` (worktrees, refs, branch retention) | Available |
+| Isolation and concurrency facts in the dashboard | Available |
+| More than one task at a time | Available — worktree mode, up to 8 |
 | `pause` / `resume` / `cancel` | Designed, not built |
 | Configuration writes from the dashboard | Designed, not built |
 | Remote or distributed execution | Out of scope for MVP 2 |
@@ -148,7 +150,7 @@ human approval                     ← bound to this plan's hash
       ↓
 DAG over the plan's tasks
       ↓
-ready set → one wave                ← up to effectiveConcurrency (today: 1)
+ready set → one wave                ← up to effectiveConcurrency, in parallel
       ↓
 task attempt
       ↓
@@ -338,7 +340,7 @@ Walked through with a real four-task feature, a DAG and the artifacts it produce
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
 | `review` | Run validation, inspect the code, judge it against the SDD. In worktree mode all three read the integration tree, under the run lock. `--fix` turns findings into tasks and reviews the corrected plan. |
 | `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. See [`docs/web-ui.md`](docs/web-ui.md). |
-| `clean` | Remove old run state. Never the active run without `--force`. **State only** — worktrees and refs are M2-09. |
+| `clean` | Remove old run state, and the Git namespace that goes with it: this run's worktrees and attempt refs, never anything foreign. Keeps the five most recent runs, and never the active one without `--force`. An integration branch that is merged nowhere is **kept and reported** — `--branches` is the only flag that deletes work. |
 
 `--dry-run` shows the routing without invoking anything, and prints requested versus
 effective concurrency. `--verbose`, `--json`, `--strict` behave as you would expect.
@@ -423,13 +425,23 @@ every individual check passes while it happens. The mode is a property of the ru
 |---|---|
 | Controls | *requested* concurrency. Configuration records intent |
 | Constraint | the runtime resolves it against the run's isolation mode |
-| Today | the resolver is called with `isolation: 'none'`, so **effective concurrency is 1 whatever you write** |
+| In worktree mode | honoured, up to a ceiling of **8** |
+| Without worktrees | resolved to **1**, whatever you write |
 
-Requested and effective are two different numbers, and the product used to answer only
-one of them. `agent-flow run --dry-run` prints both, and a run that asked for more
-carries a `parallelism_clamped` degradation. When M2-11 lands, an admissible worktree
-run will honour up to 8 — a bound with a stated basis, since each concurrent task is an
-agent process, a full checkout and an install of your dependencies.
+Requested and effective are two different numbers, and the product answers both:
+`agent-flow run --dry-run` prints them side by side, and a run that asked for more than
+its mode allows carries a `parallelism_clamped` degradation rather than running narrow
+in silence.
+
+The ceiling of 8 has a stated basis rather than a round-number one: each concurrent
+task is an agent process, a full checkout of your repository and an install of its
+dependencies. `agent-flow doctor` projects the disk that implies before you turn it on.
+
+**Whether it is worth it depends on your project, and the honest answer is sometimes
+no.** A stack whose per-worktree install and analysis costs more than the work it
+parallelises will not go faster — see [`docs/testing.md`](docs/testing.md) for what was
+measured. Isolation is worth having on its own: it is what keeps two agents from
+writing into one tree, and what makes a failed attempt something you can still read.
 
 ---
 
@@ -619,18 +631,25 @@ matters, what each command prints, and where to look for every artifact afterwar
 
 Not a roadmap — what is true today.
 
-- **More than one task at a time is not enabled.** `parallelism.maxTasks` above 1 is
-  accepted, recorded and clamped. M2-11.
-- **No crash recovery for isolated runs.** The evidence is written to disk by design,
-  and nothing reads it back yet. M2-07.
-- **`agent-flow clean` is not Git-aware.** It removes run state only; worktrees and
-  attempt refs are left behind, and `git worktree prune` will not reclaim a locked one.
-  Remove them by hand until M2-09. Note the integration branch is your run's *product* —
-  do not delete it before you have merged it.
-- **The dashboard does not show worktree facts.** Attempt numbers,
-  awaiting-integration and conflicts are not rendered yet. M2-10.
+- **Parallel execution requires worktree mode.** Without `git.useWorktrees`,
+  `parallelism.maxTasks` above 1 is accepted, recorded and clamped to 1. There is no
+  path from "the worktrees are not usable" to "run two agents in your checkout" — an
+  unmet precondition is a refusal, not a downgrade.
 - **A merge conflict halts the run.** Automatic conflict resolution is explicitly out of
-  scope; the task becomes `review_required` with the conflicting paths recorded.
+  scope; the task becomes `review_required` with the conflicting paths recorded, and the
+  fix is a retry over the new integration head, or a plan whose tasks do not overlap.
+- **Parallelism does not pay off on every stack.** A per-worktree dependency install and
+  a heavy analyzer can consume the whole gain. It was measured rather than assumed —
+  [`docs/testing.md`](docs/testing.md) has the numbers, including where the answer is no.
+- **An isolated run needs a clean working tree at the gate.** The planning base is a
+  commit, and a dirty checkout means the plan was written against something that is not
+  in the repository. It refuses with `working_tree_dirty` and tells you which files.
+- **A wave may contain at most one unpaired RED per validation command.** A task is
+  judged by running your whole suite in its own worktree, so it inherits every test that
+  is red in its base — including one a sibling wrote deliberately. Two test-first tasks
+  in one wave therefore make the next wave's implementations unsatisfiable, each failing
+  on the other's test. Keep a module's tests and its implementation in one task. Found
+  by dogfood; see [`docs/troubleshooting.md`](docs/troubleshooting.md).
 - **No `pause`, `resume` or `cancel`.** The core has no semantics for any of them.
 - **No configuration writes.** `/settings` reads. Deciding which of three layers a value
   belongs in is the whole problem.
@@ -650,10 +669,10 @@ Not a roadmap — what is true today.
 
 ### Not yet validated
 
-- [ ] Flutter, Go or Rust repositories (stack detection is unit-tested only)
+- [x] Worktree mode dogfooded end to end against live CLIs, on Node and Flutter (M2-12)
+- [ ] Go or Rust repositories (stack detection is unit-tested only)
 - [ ] Fallback and reasoning clamping against a live CLI
 - [ ] Cost across models and repository sizes
-- [ ] Worktree mode dogfooded end to end against live CLIs — that is M2-12
 
 <details>
 <summary><b>What MVP 1 shipped</b> — the checklist, kept for the record</summary>
@@ -736,12 +755,14 @@ MVP 2 — Safe Parallel Execution
 [x] M2-04  workspace lifecycle and setup cleanliness
 [x] M2-05  TaskAttemptResult, trusted receipt, marker
 [x] M2-06  deterministic Integrator and integration-tree verification
-[ ] M2-07  crash recovery                              ← next
-[ ] M2-08  retry semantics and attempt retention
-[ ] M2-09  Git-aware cleanup
-[ ] M2-10  read models, CLI and Web observability
-[ ] M2-11  parallel scheduler activation               ← effectiveConcurrency > 1
-[ ] M2-12  E2E, dogfood and documentation
+[x] M2-07  crash recovery
+[x] M2-08  retry semantics and attempt retention
+[x] M2-09  Git-aware cleanup
+[x] M2-10  read models, CLI and Web observability
+[x] M2-11  parallel scheduler activation               ← effectiveConcurrency > 1
+[x] M2-12  E2E, dogfood and documentation
+
+MVP 2 complete.
 ```
 
 Full roadmap, including what MVP 1 established and what is deliberately out of scope:

@@ -155,19 +155,27 @@ progress *is*. There is no second channel reporting it.
 - **Adding a project** — the button exists, disabled, because §68 lists it. Adding one
   means writing to the registry.
 
-### What it does not show yet
+### What an isolated run shows
 
-Runs created in **worktree mode** execute, integrate and complete exactly as described
-elsewhere, but the dashboard does not yet render the facts that are specific to them:
-the attempt number a task is on, a task that is validated and awaiting integration, or
-a halted integration and the paths that conflicted. Those read models are M2-10 of
-[MVP 2](specs/mvp2-safe-parallel-execution.md); until then `agent-flow status` and the
-run's `events.jsonl` are where that detail lives.
+Runs created in **worktree mode** carry facts a sequential run does not have, and the
+dashboard renders them:
 
-When they do land, the constraint they land under is already fixed: the browser gets
-ids and rendered facts, never a worktree path, a ref or a branch name. The attempt
-artifact stores a workspace-relative path precisely so the absolute one is structurally
-unavailable to expose.
+| On screen | What it means |
+|---|---|
+| the isolation mode | whether this run puts each attempt in its own worktree, or shares your checkout. Fixed when the run was created and never re-read. |
+| **Tasks at once** | requested and effective concurrency. When they differ, the reason is beside them — a sequential run says `1 of 2` and explains that task workspace isolation is off, rather than showing a number nobody can account for. |
+| `in worktree` | this task has a live workspace right now: an agent is inside it. |
+| awaiting integration | validated, marked, and not yet merged. `completed` means merged, so this is the state between the two. |
+| the integration branch and how much of the plan is on it | the run's product, and its progress. |
+| a conflict, with its paths | which task could not be merged, which paths collided, and which sibling integrated first and moved the head. |
+| attempt number | which attempt a task is on, so a retry is visible as a retry. |
+
+**The constraint these land under is structural rather than a rule somebody follows.**
+The browser gets ids and rendered facts — never a worktree path, a ref, or a branch name
+it could send back. Conflict paths are repository-relative, which is exactly why they may
+be shown. No request contract has a ref-shaped or path-shaped field, and an architecture
+test asserts it in both directions; the attempt artifact stores a workspace-relative path
+precisely so the absolute one is structurally unavailable to expose.
 
 ---
 

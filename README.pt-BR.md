@@ -26,8 +26,8 @@ pedido de feature
   → Definition of Done
 ```
 
-**Estado:** `v0.1.0` · MVP 1 completo · MVP 2 em andamento no **M2-06** · não publicado no npm.
-Execução paralela **ainda não está habilitada** — veja [Estado atual](#estado-atual).
+**Estado:** `v0.1.0` · MVP 1 completo · MVP 2 completo · não publicado no npm.
+Execução paralela está disponível **no modo worktree** — veja [Estado atual](#estado-atual).
 
 ---
 
@@ -78,28 +78,29 @@ e na nossa primeira execução real foi exatamente isso que pegou um plano ruim.
 ```text
 versão           v0.1.0
 MVP 1            completo  (Implementation Spec v3)
-MVP 2            em andamento — Safe Parallel Execution
-  concluídos     M2-00 · M2-01 · M2-02 · M2-03 · M2-04 · M2-05 · M2-06
-  próximo        M2-07 — crash recovery
-paralelismo      effectiveConcurrency continua 1  (liberado pelo M2-11)
+MVP 2            completo  — Safe Parallel Execution
+  itens          M2-00 … M2-12, todos fechados
+paralelismo      até 8 tasks ao mesmo tempo, só no modo worktree
 npm              não publicado; instale a partir de um checkout
 ```
 
-**M2-06 — Deterministic Integrator e verificação sobre a integration tree** é o
-milestone mais recente a entrar. Isolamento por worktree, receipts de attempt, marker
-commits e integração determinística funcionam hoje, **uma task por vez**.
+**Execução paralela agora é feature, e só sob isolamento.** Com
+`git.useWorktrees: true`, cada attempt de task roda no seu próprio worktree Git travado,
+na sua própria branch, e `parallelism.maxTasks` é respeitado até um teto de 8. Sem
+worktrees o teto continua 1 — as tasks dividiriam uma working tree, um diff e um só
+conjunto de comandos de validação —, e um run que pediu mais registra uma degradação
+`parallelism_clamped` em vez de rodar estreito em silêncio.
 
-**Execução paralela é arquitetura, ainda não é feature.** A ordem do MVP 2 é
-deliberada: isolamento primeiro, paralelismo no décimo primeiro de doze itens.
-`parallelism.maxTasks` é aceito acima de 1 e registrado como intenção, e o runtime ainda
-resolve para 1 — a redução fica registrada no run como uma degradação
-`parallelism_clamped` em vez de acontecer em silêncio. Levantar o teto é o M2-11, e ele
-depende de crash recovery (M2-07), semântica de retry (M2-08) e observabilidade (M2-10).
+**Dois números, e a diferença é o ponto.** `requestedConcurrency` é o que a configuração
+pediu; `effectiveConcurrency` é o que o modo do run permite. Os dois aparecem no run, em
+`agent-flow run --dry-run` e no dashboard.
 
-**Crash recovery para runs isolados não está construído.** M2-07 é o próximo milestone,
-não uma capacidade entregue. Se o coordenador morrer no meio de um run em modo worktree
-hoje, a evidência está em disco por design — mas ainda não existe nada que a leia de
-volta e reconcilie o run.
+**O que um run paralelo garante.** O trabalho chega à integration branch uma task por
+vez, na ordem topológica do plano, qualquer que tenha sido a ordem em que os agentes
+terminaram; uma task só fica `completed` depois que seu marker foi mergeado; a base de
+uma wave é o resultado integrado da wave anterior; um coordenador morto no meio do run
+retoma sem re-executar agente nem mergear nada duas vezes; e a working tree em que você
+está fica byte a byte idêntica, antes e depois.
 
 Quadro completo: [`docs/roadmap.md`](docs/roadmap.md). Fonte normativa:
 [`docs/specs/mvp2-safe-parallel-execution.md`](docs/specs/mvp2-safe-parallel-execution.md).
@@ -125,11 +126,11 @@ Quadro completo: [`docs/roadmap.md`](docs/roadmap.md). Fonte normativa:
 | Integração serial determinística em ordem topológica | Disponível no modo worktree |
 | Verificação e review sobre a integration tree | Disponível no modo worktree |
 | Isolamento de Git hooks nas operações internas | Disponível |
-| Crash recovery para runs isolados | Não construído — M2-07 |
-| Semântica de retry sob isolamento | Não fechada — M2-08 |
-| `clean` ciente de Git (worktrees, refs, retenção de branch) | Não construído — M2-09 |
-| Fatos de worktree no dashboard | Não construído — M2-10 |
-| Mais de uma task ao mesmo tempo | **Não habilitado** — M2-11 |
+| Crash recovery para runs isolados, a partir da evidência em disco | Disponível no modo worktree |
+| Retry como attempt novo, com o anterior preservado | Disponível no modo worktree |
+| `clean` ciente de Git (worktrees, refs, retenção de branch) | Disponível |
+| Fatos de isolamento e concorrência no dashboard | Disponível |
+| Mais de uma task ao mesmo tempo | Disponível — modo worktree, até 8 |
 | `pause` / `resume` / `cancel` | Desenhado, não construído |
 | Escrita de configuração pelo dashboard | Desenhado, não construído |
 | Execução remota ou distribuída | Fora do escopo do MVP 2 |
@@ -149,7 +150,7 @@ aprovação humana                    ← vinculada ao hash deste plano
       ↓
 DAG sobre as tasks do plano
       ↓
-ready set → uma wave                ← até effectiveConcurrency (hoje: 1)
+ready set → uma wave                ← até effectiveConcurrency, em paralelo
       ↓
 task attempt
       ↓
@@ -342,7 +343,7 @@ Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela p
 | `run` · `task TASK-004` · `retry TASK-004` | Executa o plano aprovado. |
 | `review` | Roda a validação, inspeciona o código e o julga contra o SDD. No modo worktree os três leem a integration tree, sob o lock do run. `--fix` transforma os findings em tasks e revisa o plano corrigido. |
 | `ui [root]` | Serve o dashboard local em `127.0.0.1:4782`. Com um diretório, serve todo repositório inicializado abaixo dele como workspace. Veja [`docs/web-ui.md`](docs/web-ui.md). |
-| `clean` | Remove estado de runs antigos. Nunca o run ativo sem `--force`. **Só estado** — worktrees e refs são o M2-09. |
+| `clean` | Remove estado de runs antigos, e o namespace Git que vem junto: os worktrees e as refs de attempt deste run, nunca nada de terceiros. Mantém os cinco runs mais recentes, e nunca o ativo sem `--force`. Uma integration branch que não foi mergeada em lugar nenhum é **mantida e reportada** — `--branches` é a única flag que apaga trabalho. |
 
 `--dry-run` mostra o roteamento sem invocar nada, e imprime a concorrência pedida e a
 efetiva. `--verbose`, `--json` e `--strict` se comportam como você espera.
@@ -427,13 +428,24 @@ individual passa enquanto isso acontece. O modo é uma propriedade do run, entã
 |---|---|
 | Controla | a concorrência *pedida*. A configuração registra intenção |
 | Restrição | o runtime resolve isso contra o modo de isolamento do run |
-| Hoje | o resolver é chamado com `isolation: 'none'`, então a **concorrência efetiva é 1 independentemente do que você escrever** |
+| No modo worktree | respeitado, até um teto de **8** |
+| Sem worktrees | resolvido para **1**, independentemente do que você escrever |
 
-Pedida e efetiva são dois números diferentes, e o produto já respondeu só a um deles. O
-`agent-flow run --dry-run` imprime os dois, e um run que pediu mais carrega uma
-degradação `parallelism_clamped`. Quando o M2-11 entrar, um run worktree admissível vai
-honrar até 8 — um limite com base declarada, já que cada task concorrente é um processo
-de agente, um checkout completo e um install das suas dependências.
+Pedida e efetiva são dois números diferentes, e o produto responde aos dois: o
+`agent-flow run --dry-run` imprime os dois lado a lado, e um run que pediu mais do que
+seu modo permite carrega uma degradação `parallelism_clamped` em vez de rodar estreito
+em silêncio.
+
+O teto de 8 tem base declarada em vez de ser um número redondo: cada task concorrente é
+um processo de agente, um checkout completo do seu repositório e um install das
+dependências dele. O `agent-flow doctor` projeta o disco que isso implica antes de você
+ligar.
+
+**Se compensa depende do seu projeto, e a resposta honesta às vezes é não.** Uma stack
+cujo install por worktree e cuja análise custam mais do que o trabalho que se
+paraleliza não vai ficar mais rápida — veja [`docs/testing.md`](docs/testing.md) para o
+que foi medido. O isolamento vale por si: é o que impede dois agentes de escreverem numa
+mesma tree, e o que faz um attempt falho continuar legível.
 
 ---
 
@@ -626,19 +638,27 @@ inglês, como o resto da documentação técnica.
 
 Não é roadmap — é o que é verdade hoje.
 
-- **Mais de uma task ao mesmo tempo não está habilitado.** `parallelism.maxTasks` acima
-  de 1 é aceito, registrado e limitado. M2-11.
-- **Sem crash recovery para runs isolados.** A evidência é escrita em disco por design, e
-  ainda não existe nada que a leia de volta. M2-07.
-- **O `agent-flow clean` não é ciente de Git.** Ele remove só o estado do run; worktrees e
-  refs de attempt ficam para trás, e o `git worktree prune` não recupera um worktree
-  travado. Remova na mão até o M2-09. Atenção: a integration branch é o *produto* do run —
-  não apague antes de ter mergeado.
-- **O dashboard não mostra fatos de worktree.** Número de attempt, "aguardando
-  integração" e conflitos ainda não são renderizados. M2-10.
+- **Execução paralela exige o modo worktree.** Sem `git.useWorktrees`, um
+  `parallelism.maxTasks` acima de 1 é aceito, registrado e limitado a 1. Não existe
+  caminho de "os worktrees não estão utilizáveis" para "rode dois agentes no seu
+  checkout" — uma precondição não atendida é uma recusa, não um rebaixamento.
 - **Um conflito de merge para o run.** Resolução automática de conflito está
   explicitamente fora de escopo; a task vira `review_required` com os paths conflitantes
-  registrados.
+  registrados, e a saída é um retry sobre a nova integration head, ou um plano cujas
+  tasks não se sobreponham.
+- **Paralelismo não compensa em toda stack.** Um install por worktree e um analisador
+  pesado podem consumir o ganho inteiro. Isso foi medido, não presumido —
+  [`docs/testing.md`](docs/testing.md) tem os números, inclusive onde a resposta é não.
+- **Uma wave pode conter no máximo um RED sem par por comando de validação.** Uma task é
+  julgada rodando a sua suíte inteira no worktree dela, então ela herda todo teste que
+  esteja vermelho na sua base — inclusive um que uma task irmã escreveu de propósito.
+  Duas tasks test-first na mesma wave, portanto, tornam as implementações da wave
+  seguinte insatisfazíveis, cada uma falhando pelo teste da outra. Mantenha os testes de
+  um módulo e a implementação dele na mesma task. Descoberto por dogfood; veja
+  [`docs/troubleshooting.md`](docs/troubleshooting.md).
+- **Um run isolado precisa de working tree limpa no gate.** O planning base é um commit,
+  e um checkout sujo significa que o plano foi escrito contra algo que não está no
+  repositório. Ele recusa com `working_tree_dirty` e diz quais arquivos.
 - **Sem `pause`, `resume` ou `cancel`.** O core não tem semântica para nenhum deles.
 - **Sem escrita de configuração.** `/settings` só lê. Decidir em qual das três camadas um
   valor mora é o problema inteiro.
@@ -659,10 +679,10 @@ Não é roadmap — é o que é verdade hoje.
 
 ### Ainda não validado
 
-- [ ] Repositórios Flutter, Go ou Rust (detecção de stack só tem teste unitário)
+- [x] Modo worktree em dogfood de ponta a ponta contra CLIs reais, em Node e Flutter (M2-12)
+- [ ] Repositórios Go ou Rust (detecção de stack só tem teste unitário)
 - [ ] Fallback e clamp de reasoning contra uma CLI real
 - [ ] Custo entre modelos e tamanhos de repositório
-- [ ] Modo worktree em dogfood de ponta a ponta contra CLIs reais — isso é o M2-12
 
 <details>
 <summary><b>O que o MVP 1 entregou</b> — o checklist, mantido para registro</summary>
@@ -746,12 +766,14 @@ MVP 2 — Safe Parallel Execution
 [x] M2-04  ciclo de vida do workspace e limpeza do setup
 [x] M2-05  TaskAttemptResult, receipt confiável, marker
 [x] M2-06  Integrator determinístico e verificação da integration tree
-[ ] M2-07  crash recovery                              ← próximo
-[ ] M2-08  semântica de retry e retenção de attempts
-[ ] M2-09  cleanup ciente de Git
-[ ] M2-10  read models, observabilidade na CLI e na Web
-[ ] M2-11  ativação do scheduler paralelo               ← effectiveConcurrency > 1
-[ ] M2-12  E2E, dogfood e documentação
+[x] M2-07  crash recovery
+[x] M2-08  semântica de retry e retenção de attempts
+[x] M2-09  cleanup ciente de Git
+[x] M2-10  read models, observabilidade na CLI e na Web
+[x] M2-11  ativação do scheduler paralelo               ← effectiveConcurrency > 1
+[x] M2-12  E2E, dogfood e documentação
+
+MVP 2 completo.
 ```
 
 Roadmap completo, incluindo o que o MVP 1 estabeleceu e o que está deliberadamente fora
