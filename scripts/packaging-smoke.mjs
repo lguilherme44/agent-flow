@@ -40,7 +40,9 @@ const REQUIRED = [
   'prompts/architecture-impact.md',
   'prompts/sdd.md',
   'prompts/planning.md',
+  'prompts/planning-simple.md',
   'prompts/plan-review.md',
+  'prompts/plan-review-simple.md',
   'prompts/implementation.md',
   'prompts/verification.md',
   'prompts/final-review.md',
@@ -176,11 +178,11 @@ async function assertServed(url, fixture, root) {
   check(health.status === 'ok', `health reports ${health.status} on port ${String(health.port)}`);
   check(health.projects === 1, 'the registry holds the one project it was pointed at');
 
-  // The prompts came out of the package. Eight of them, and the planning run above
+  // The prompts came out of the package. Ten of them, and the planning run above
   // could not have happened without them — this names the count so a partially
   // packaged `prompts/` is caught rather than inferred.
   const prompts = await json(`${url}/api/v1/prompts`);
-  check(prompts.length === 8, `serves ${String(prompts.length)} packaged prompts`);
+  check(prompts.length === 10, `serves ${String(prompts.length)} packaged prompts`);
 
   // The dashboard, with the checkout's own bundle renamed away. A page that still
   // loads is being served from the install prefix.

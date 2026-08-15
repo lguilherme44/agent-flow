@@ -15,6 +15,7 @@ import {
   ARCHITECTURE_IMPACT_STAGE,
   DISCOVERY_STAGE,
   PLANNING_STAGE,
+  PLANNING_SIMPLE_STAGE,
   SDD_STAGE,
 } from './stages/definitions.js';
 import { checkPlan } from './stages/planning-checks.js';
@@ -26,6 +27,11 @@ import {
   readFingerprint,
   writeFingerprint,
 } from './discovery-cache.js';
+import {
+  classifyWorkflow,
+  getCeremonyBudget,
+  type WorkflowClass,
+} from '../core/adaptive-workflow.js';
 
 /** Ordered stages of the planning half of the workflow. */
 export const PLANNING_STAGES: readonly RunStage[] = [
@@ -79,23 +85,6 @@ export interface PlanningRefusalFacts {
   readonly action: string;
 }
 
-/**
- * The planning pipeline stopped because the *repository* is not ready.
- *
- * A distinct error type, and the distinction is the point. This used to be
- * raised as `StageFailure('planning', 'invalid_output')`, which reaches a person
- * as "the runner produced output that never satisfied the contract" — a sentence
- * about a model, printed when no model ran. Somebody reading it goes to look at
- * the planner's output; the fix is `git commit`.
- *
- * `RunnerErrorCode` is the vocabulary of *runner* failures, and every code in it
- * names a subsystem that was not involved here. Appendix A already has the right
- * word — `working_tree_dirty`, `planning_base_moved` — so this carries that one,
- * unchanged, along with the action that resolves it. It is the same shape
- * `run-actions.ts` returns for the same gate at approval and at implementation
- * start; before this, one of the three moments described itself differently from
- * the other two.
- */
 export class PlanningRefusal extends Error {
   constructor(
     readonly code: string,
@@ -114,6 +103,8 @@ export interface PipelineOptions {
   readonly from?: RunStage;
   /** Stops after planning, without the automated review. */
   readonly skipReview?: boolean;
+  /** Explicit workflow override or predetermined workflow. */
+  readonly workflow?: WorkflowClass;
   readonly onProgress?: (
     stage: RunStage,
     status: 'started' | 'completed' | 'cached' | 'stale',
@@ -129,12 +120,13 @@ export interface PipelineResult {
 }
 
 /**
- * Runs discovery → impact → SDD → planning.
+ * Adaptive planning pipeline (M2.1-C).
  *
- * State is persisted after every stage rather than at the end (R-08). With the
- * default configuration this pipeline is four expensive calls, and losing the
- * first three because the fourth failed is a bad trade — especially against a
- * subscription quota.
+ * Runs the minimal necessary ceremony for each workflow class:
+ *   - TRIVIAL: Direct Plan (1 call) -> Approval
+ *   - SIMPLE: Short Plan (1 call) -> Plan Review (1 call) -> Approval
+ *   - STANDARD: Discovery -> Impact -> SDD -> Planning -> Plan Review -> Approval
+ *   - HIGH-RISK: Full Discovery -> Full SDD -> Strict Planning -> Cross-provider Review -> Approval
  */
 export class PlanningPipeline {
   constructor(private readonly options: PlanningPipelineOptions) {}
@@ -153,110 +145,231 @@ export class PlanningPipeline {
 
     await store.writeArtifact(runId, 'request', `${featureRequest}\n`);
 
-    // §6.2, moment one: the map, the SDD and the plan must describe one tree.
-    await this.assertReady(runId, 'planning start');
+    try {
+      // Resolve workflow classification
+      const state = await store.loadRun(runId);
+      let workflow: WorkflowClass = options.workflow ?? state.workflow ?? 'standard';
 
-    // ---- Discovery: feature-agnostic, therefore cacheable across runs (R-07).
-    const architecture = await this.discover(runId, {
-      projectConfig,
-      agentsMd,
-      useCache: !(options.noCache ?? false),
-      onProgress: options.onProgress,
-      stagesRun,
-    });
+      if (options.workflow !== undefined) {
+        workflow = options.workflow;
+        await store.updateRun(runId, (s) => ({ ...s, workflow }));
+      } else if (state.workflow === undefined) {
+        const classification = classifyWorkflow(featureRequest, {
+          projectDir: this.options.projectDir,
+          projectConfig: this.options.config.project,
+        });
+        workflow = classification.workflow;
+        await store.updateRun(runId, (s) => ({ ...s, workflow }));
+        await store.appendEvent(runId, 'workflow_classified', {
+          workflow,
+          rationale: classification.rationale,
+          budget: getCeremonyBudget(workflow),
+          highRiskSignals: classification.highRiskSignalsDetected,
+        });
+      }
 
-    // §6.2, moment two: a stage that observed a different tree from its
-    // predecessor produces an artifact that silently disagrees with the one
-    // before it. Checked between stages rather than only at the ends.
-    await this.assertReady(runId, 'architecture-impact');
+      // §6.2, moment one: verify repository readiness at planning start
+      await this.assertReady(runId, 'planning start');
 
-    // ---- Architecture impact: what this particular feature reaches.
-    const architectureImpact = await this.stageOrExisting(
-      'architecture-impact',
-      skipUntil,
-      runId,
-      'architectureImpact',
-      { featureRequest, architecture, projectConfig, agentsMd },
-      stagesRun,
-      options.onProgress,
-    );
+      // ---- TRIVIAL workflow branch (1 model call)
+      if (workflow === 'trivial') {
+        options.onProgress?.('planning', 'started');
+        const result = await this.options.stageRunner.run(PLANNING_SIMPLE_STAGE, runId, {
+          featureRequest,
+          projectConfig,
+          validationCommands: this.renderValidationCommands(),
+          agentsMd,
+        });
 
-    await this.assertReady(runId, 'sdd');
+        const plan = PlanSchema.parse(result.data);
+        const problems = checkPlan(plan, '', buildValidationRegistry(this.options.config.project));
+        if (plan.tasks.length > 1) {
+          problems.push(`TRIVIAL workflow ceremony budget allows at most 1 task (got ${plan.tasks.length}).`);
+        }
 
-    // ---- SDD: the contract every later stage is judged against.
-    const sdd = await this.stageOrExisting(
-      'sdd',
-      skipUntil,
-      runId,
-      'sdd',
-      { featureRequest, architecture, architectureImpact, projectConfig, agentsMd },
-      stagesRun,
-      options.onProgress,
-    );
+        if (problems.length > 0) {
+          await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
+          throw new StageFailure(
+            'planning',
+            'invalid_output',
+            `The plan violates TRIVIAL ceremony budget/checks:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+            undefined,
+            result.execution,
+          );
+        }
 
-    await this.assertReady(runId, 'planning');
+        stagesRun.push('planning');
+        options.onProgress?.('planning', 'completed');
+        await store.updateRun(runId, (s) => ({ ...s, status: 'waiting_for_approval' }));
+        return { runId, plan, stagesRun };
+      }
 
-    // ---- Planning.
-    options.onProgress?.('planning', 'started');
-    const result = await this.options.stageRunner.run(PLANNING_STAGE, runId, {
-      featureRequest,
-      sdd,
-      architectureImpact,
-      projectConfig,
-      validationCommands: this.renderValidationCommands(),
-    });
+      // ---- SIMPLE workflow branch (2 model calls: short plan + plan review)
+      if (workflow === 'simple') {
+        options.onProgress?.('planning', 'started');
+        const result = await this.options.stageRunner.run(PLANNING_SIMPLE_STAGE, runId, {
+          featureRequest,
+          projectConfig,
+          validationCommands: this.renderValidationCommands(),
+          agentsMd,
+        });
 
-    const plan = PlanSchema.parse(result.data);
-    // Who actually produced the plan — not who was configured to. A fallback
-    // may have sent it elsewhere, and that is precisely what decides whether
-    // the review that follows is independent of it.
-    const plannerRunner = result.execution.runner;
+        const plan = PlanSchema.parse(result.data);
+        const plannerRunner = result.execution.runner;
 
-    // Coverage, validation ids and graph checks run after the schema, because
-    // they need the SDD and the project config as well. A plan that fails here
-    // is a planning failure, not bad luck.
-    const problems = checkPlan(plan, sdd, buildValidationRegistry(this.options.config.project));
-    if (problems.length > 0) {
-      await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
-      throw new StageFailure(
-        'planning',
-        'invalid_output',
-        `The plan does not satisfy the SDD:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
-        undefined,
-        // The plan parsed and then failed a check agent-flow makes itself. It
-        // was still written by somebody, and the run should be able to say by
-        // whom — the answer is already in hand a few lines above.
-        result.execution,
+        const problems = checkPlan(plan, '', buildValidationRegistry(this.options.config.project));
+        if (plan.tasks.length > 3) {
+          problems.push(`SIMPLE workflow ceremony budget allows at most 3 tasks (got ${plan.tasks.length}).`);
+        }
+
+        if (problems.length > 0) {
+          await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
+          throw new StageFailure(
+            'planning',
+            'invalid_output',
+            `The plan violates SIMPLE ceremony budget/checks:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+            undefined,
+            result.execution,
+          );
+        }
+
+        stagesRun.push('planning');
+        options.onProgress?.('planning', 'completed');
+
+        if (options.skipReview === true) {
+          await store.updateRun(runId, (s) => ({ ...s, status: 'waiting_for_approval' }));
+          return { runId, plan, stagesRun };
+        }
+
+        // ---- Plan review
+        options.onProgress?.('plan-review', 'started');
+        const review = await this.planReview().reviewSimple({
+          runId,
+          plan,
+          featureRequest,
+          authors: [plannerRunner],
+        });
+
+        stagesRun.push('plan-review');
+        options.onProgress?.('plan-review', 'completed');
+
+        await store.updateRun(runId, (s) => ({
+          ...s,
+          status: review.verdict === 'PASS' ? 'waiting_for_approval' : 'plan_rejected',
+        }));
+
+        return { runId, plan, stagesRun, review };
+      }
+
+      // ---- STANDARD / HIGH-RISK workflows: Full ceremony
+      // Discovery: feature-agnostic, therefore cacheable across runs (R-07).
+      const architecture = await this.discover(runId, {
+        projectConfig,
+        agentsMd,
+        useCache: !(options.noCache ?? false),
+        onProgress: options.onProgress,
+        stagesRun,
+      });
+
+      await this.assertReady(runId, 'architecture-impact');
+
+      // ---- Architecture impact: what this particular feature reaches.
+      const architectureImpact = await this.stageOrExisting(
+        'architecture-impact',
+        skipUntil,
+        runId,
+        'architectureImpact',
+        { featureRequest, architecture, projectConfig, agentsMd },
+        stagesRun,
+        options.onProgress,
       );
+
+      await this.assertReady(runId, 'sdd');
+
+      // ---- SDD: the contract every later stage is judged against.
+      const sdd = await this.stageOrExisting(
+        'sdd',
+        skipUntil,
+        runId,
+        'sdd',
+        { featureRequest, architecture, architectureImpact, projectConfig, agentsMd },
+        stagesRun,
+        options.onProgress,
+      );
+
+      await this.assertReady(runId, 'planning');
+
+      // ---- Planning.
+      options.onProgress?.('planning', 'started');
+      const result = await this.options.stageRunner.run(PLANNING_STAGE, runId, {
+        featureRequest,
+        sdd,
+        architectureImpact,
+        projectConfig,
+        validationCommands: this.renderValidationCommands(),
+      });
+
+      const plan = PlanSchema.parse(result.data);
+      const plannerRunner = result.execution.runner;
+
+      const problems = checkPlan(plan, sdd, buildValidationRegistry(this.options.config.project));
+      if (problems.length > 0) {
+        await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
+        throw new StageFailure(
+          'planning',
+          'invalid_output',
+          `The plan does not satisfy the SDD:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+          undefined,
+          result.execution,
+        );
+      }
+
+      stagesRun.push('planning');
+      options.onProgress?.('planning', 'completed');
+
+      if (options.skipReview === true) {
+        await store.updateRun(runId, (s) => ({ ...s, status: 'waiting_for_approval' }));
+        return { runId, plan, stagesRun };
+      }
+
+      // ---- Plan review, in a fresh context holding only the artifacts (§27).
+      options.onProgress?.('plan-review', 'started');
+      const review = await this.planReview().review({
+        runId,
+        plan,
+        sdd,
+        architectureImpact,
+        authors: [plannerRunner],
+      });
+
+      stagesRun.push('plan-review');
+      options.onProgress?.('plan-review', 'completed');
+
+      await store.updateRun(runId, (s) => ({
+        ...s,
+        status: review.verdict === 'PASS' ? 'waiting_for_approval' : 'plan_rejected',
+      }));
+
+      return { runId, plan, stagesRun, review };
+    } catch (error) {
+      if (error instanceof PlanningRefusal) {
+        await store.updateRun(runId, (state) => ({
+          ...state,
+          status: 'failed',
+        }));
+        await store.appendEvent(runId, 'planning_refused', {
+          code: error.code,
+          detail: error.message,
+          action: error.action,
+        });
+      } else {
+        await store.updateRun(runId, (state) => ({
+          ...state,
+          status: 'failed',
+        }));
+      }
+      throw error;
     }
-
-    stagesRun.push('planning');
-    options.onProgress?.('planning', 'completed');
-
-    if (options.skipReview === true) {
-      await store.updateRun(runId, (state) => ({ ...state, status: 'waiting_for_approval' }));
-      return { runId, plan, stagesRun };
-    }
-
-    // ---- Plan review, in a fresh context holding only the artifacts (§27).
-    options.onProgress?.('plan-review', 'started');
-    const review = await this.planReview().review({
-      runId,
-      plan,
-      sdd,
-      architectureImpact,
-      authors: [plannerRunner],
-    });
-
-    stagesRun.push('plan-review');
-    options.onProgress?.('plan-review', 'completed');
-
-    await store.updateRun(runId, (state) => ({
-      ...state,
-      status: review.verdict === 'PASS' ? 'waiting_for_approval' : 'plan_rejected',
-    }));
-
-    return { runId, plan, stagesRun, review };
   }
 
   /**

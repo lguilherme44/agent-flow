@@ -4,6 +4,7 @@ import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import { StateStore, StateError } from '../../src/app/state-store.js';
 import {
+  checkPlanningPreflight,
   checkWorktreePreconditions,
   composeRunIdentity,
   decideNamespace,
@@ -208,6 +209,60 @@ describe('what a new run is born with (§6.1)', () => {
     if (resolved.ok) return;
     expect(resolved.refusal.code).toBe('repository_has_no_commits');
     empty.cleanup();
+  });
+});
+
+describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
+  it('passes on a clean repository with ignored agent-flow paths', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.commitAll('ignore agent-flow');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+    expect(result.satisfied).toBe(true);
+  });
+
+  it('refuses before run creation when the working tree is dirty', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.commitAll('ignore agent-flow');
+    repo.write('dirty.txt', 'uncommitted changes\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('working_tree_dirty');
+    expect(result.detail).toContain('dirty.txt');
+  });
+
+  it('refuses before run creation when agent-flow state paths are not ignored', async () => {
+    repo = await makeTempRepoWithCommit();
+    // No .gitignore committed
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('agent_flow_state_not_ignored');
+  });
+
+  it('passes when worktrees are disabled even if the tree is dirty', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.write('dirty.txt', 'uncommitted changes\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, false));
+    expect(result.satisfied).toBe(true);
+  });
+
+  it('refuses before run creation in a directory that is not a repository', async () => {
+    repo = await makeTempRepoWithCommit();
+    const result = await checkPlanningPreflight({
+      ...depsFor(repo, true),
+      projectDir: repo.home,
+    });
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('not_a_git_repository');
   });
 });
 

@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ProjectProvider, useProjectSelection } from './project-context';
+import { I18nProvider } from '../lib/i18n/i18n-context';
 import { useLiveEvents, type ConnectionState } from '../hooks/use-live-events';
 import { useProjects, useRunnerHealth, useRuns } from '../lib/queries';
 import { pickRun } from '../pages/DashboardPage';
@@ -37,20 +38,22 @@ import { runLabel, runTone, TONE_DOT } from '../lib/status';
  */
 export function Shell(): JSX.Element {
   return (
-    <ProjectProvider>
-      <div className="flex h-full min-h-0 bg-bg">
-        <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar />
-          <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-page">
-            <UnknownProject />
-            <div className="min-h-0 flex-1">
-              <Outlet />
-            </div>
-          </main>
+    <I18nProvider>
+      <ProjectProvider>
+        <div className="flex h-full min-h-0 bg-bg">
+          <Sidebar />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <Topbar />
+            <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-page">
+              <UnknownProject />
+              <div className="min-h-0 flex-1">
+                <Outlet />
+              </div>
+            </main>
+          </div>
         </div>
-      </div>
-    </ProjectProvider>
+      </ProjectProvider>
+    </I18nProvider>
   );
 }
 

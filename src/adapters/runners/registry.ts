@@ -9,6 +9,7 @@ import type { ProcessRunner } from '../../ports/process-runner.js';
 import type { FileSystem } from '../../ports/file-system.js';
 import { ClaudeCodeRunner } from './claude-code-runner.js';
 import { CodexRunner } from './codex-runner.js';
+import { AgyRunner } from './agy-runner.js';
 
 export class RegistryError extends Error {
   constructor(message: string) {
@@ -50,6 +51,13 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       processRunner: deps.processRunner,
       // Needed because `--output-schema` takes a file path rather than a string.
       fs: deps.fs,
+      ...(config.command === undefined ? {} : { command: config.command }),
+    }),
+
+  'agy-cli': (id, config, deps) =>
+    new AgyRunner({
+      id,
+      processRunner: deps.processRunner,
       ...(config.command === undefined ? {} : { command: config.command }),
     }),
 };

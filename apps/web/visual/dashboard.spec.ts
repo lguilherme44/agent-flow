@@ -357,7 +357,7 @@ test.describe('the human gate', () => {
     const dialog = page.getByRole('dialog');
 
     await expect(dialog.getByRole('button', { name: 'Approve Plan' })).toBeDisabled();
-    await dialog.getByRole('checkbox').check();
+    await dialog.getByRole('checkbox', { name: /Approve over this refusal/i }).check();
     await expect(dialog.getByRole('button', { name: 'Approve over the review' })).toBeEnabled();
   });
 

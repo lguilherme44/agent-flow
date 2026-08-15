@@ -186,8 +186,33 @@ describe('RunHeader', () => {
     expect(screen.getByRole('button', { name: 'Revise' })).toBeEnabled();
   });
 
+  it('does not offer approval CTA when planning is still running (§UX-02)', () => {
+    render(
+      withTooltips(
+        <RunHeader
+          run={run({ status: 'running', approved: false, progress: 0, stage: 'planning' })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
+
+    expect(screen.queryByRole('button', { name: 'Review & approve' })).toBeNull();
+    expect(screen.getByText(/Planning in progress/i)).toBeInTheDocument();
+  });
+
   it('asks for approval before it offers to start', () => {
-    render(withTooltips(<RunHeader run={run({ approved: false, progress: 0 })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
+    render(
+      withTooltips(
+        <RunHeader
+          run={run({ status: 'waiting_for_approval', approved: false, progress: 0 })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
 
     expect(screen.getByRole('button', { name: 'Review & approve' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: /run$/ })).toBeNull();

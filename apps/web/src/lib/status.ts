@@ -185,3 +185,83 @@ export function runToneOf(status: string): Tone {
 export function taskToneOf(state: string): Tone {
   return taskTone(state as TaskState);
 }
+
+export interface FormattedReviewVerdict {
+  readonly label: string;
+  readonly fullLabel: string;
+  readonly tone: Tone;
+  readonly isPassing: boolean;
+  readonly isPassingWithFindings: boolean;
+  readonly isBlocking: boolean;
+  readonly severityCounts: Record<string, number>;
+  readonly totalFindings: number;
+}
+
+/**
+ * Derived presentation for plan review verdicts (§27, MVP2.1 M2.1-B).
+ *
+ * Verdict is preserved strictly as PASS | FAIL in the domain / storage contract.
+ * PASS WITH FINDINGS is purely a presentation-level derivation when verdict is PASS
+ * and findings.length > 0.
+ */
+export function formatPlanReviewVerdict(review?: {
+  verdict: string;
+  findings?: Array<{ severity: string }>;
+}): FormattedReviewVerdict {
+  if (review === undefined) {
+    return {
+      label: 'NO REVIEW',
+      fullLabel: 'No review',
+      tone: 'warning',
+      isPassing: false,
+      isPassingWithFindings: false,
+      isBlocking: false,
+      severityCounts: {},
+      totalFindings: 0,
+    };
+  }
+
+  const findings = review.findings ?? [];
+  const severityCounts: Record<string, number> = {};
+  for (const f of findings) {
+    severityCounts[f.severity] = (severityCounts[f.severity] ?? 0) + 1;
+  }
+  const totalFindings = findings.length;
+
+  if (review.verdict === 'FAIL') {
+    return {
+      label: 'FAIL',
+      fullLabel: 'Plan review: FAIL',
+      tone: 'danger',
+      isPassing: false,
+      isPassingWithFindings: false,
+      isBlocking: true,
+      severityCounts,
+      totalFindings,
+    };
+  }
+
+  if (totalFindings > 0) {
+    return {
+      label: 'PASS WITH FINDINGS',
+      fullLabel: 'Plan review: PASS WITH FINDINGS',
+      tone: 'warning',
+      isPassing: true,
+      isPassingWithFindings: true,
+      isBlocking: false,
+      severityCounts,
+      totalFindings,
+    };
+  }
+
+  return {
+    label: 'PASS',
+    fullLabel: 'Plan review: PASS',
+    tone: 'success',
+    isPassing: true,
+    isPassingWithFindings: false,
+    isBlocking: false,
+    severityCounts: {},
+    totalFindings: 0,
+  };
+}

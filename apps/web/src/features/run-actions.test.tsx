@@ -239,10 +239,71 @@ describe('the approval gate', () => {
     const approve = within(dialog).getByRole('button', { name: /Approve/ });
     expect(approve).toBeDisabled();
 
-    await userEvent.click(within(dialog).getByRole('checkbox'));
+    await userEvent.click(within(dialog).getByLabelText(/Approve over this refusal/i));
 
     // Only now, and the label says what forcing costs.
     expect(within(dialog).getByRole('button', { name: 'Approve over the review' })).toBeEnabled();
+  });
+
+  it('displays derived PASS WITH FINDINGS when verdict is PASS but findings exist', async () => {
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = {
+      ...PASSING_GATE,
+      review: {
+        ...PASSING_GATE.review!,
+        verdict: 'PASS',
+        findings: [
+          {
+            severity: 'medium',
+            type: 'style',
+            description: 'TASK-002 could have tighter scope.',
+            suggestedAction: 'Refine scope description.',
+          },
+        ],
+      },
+    };
+    renderActions();
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Plan review: PASS WITH FINDINGS')).toBeInTheDocument();
+    expect(within(dialog).getByText(/non-blocking finding/)).toBeInTheDocument();
+    // Non-blocking: can approve directly without forcing
+    expect(within(dialog).getByRole('button', { name: 'Approve Plan' })).toBeEnabled();
+  });
+
+  it('displays resource & model-call impact clearly in approval dialog', async () => {
+    renderActions();
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Resource & Model-Call Impact')).toBeInTheDocument();
+    expect(within(dialog).getByText('0 model calls')).toBeInTheDocument();
+    expect(within(dialog).getByText('~9 executor calls')).toBeInTheDocument();
+    expect(within(dialog).getByText('2 expected calls')).toBeInTheDocument();
+  });
+
+  it('allows selecting findings to populate revision instruction', async () => {
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = FAILING_GATE;
+    renderActions();
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    // Check the finding checkbox
+    const findingCheckbox = within(dialog).getByRole('checkbox', {
+      name: /TASK-004 has no validation command/i,
+    });
+    await userEvent.click(findingCheckbox);
+
+    const reviseBtn = within(dialog).getByRole('button', {
+      name: /Request revision \(1 selected\)/i,
+    });
+    await userEvent.click(reviseBtn);
+
+    // Revision dialog should open with prefilled instruction
+    const revDialog = await screen.findByRole('dialog');
+    const textarea = within(revDialog).getByRole('textbox') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('TASK-004 has no validation command.');
+    expect(textarea.value).toContain('Add a validation id the project config declares.');
   });
 
   it('says a refusal that cannot be overridden cannot be overridden', async () => {
@@ -255,7 +316,7 @@ describe('the approval gate', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+    expect(within(dialog).queryByLabelText(/Approve over this refusal/i)).toBeNull();
     expect(within(dialog).getByText(/cannot be overridden/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Approve Plan' })).toBeDisabled();
   });

@@ -6,6 +6,7 @@ import type {
   PipelineStage,
   PipelineStatus,
   RunStatus,
+  WorkflowClass,
 } from './state.schema.js';
 import type { TaskState } from './task.schema.js';
 
@@ -217,6 +218,8 @@ export interface RunSummaryView {
    */
   readonly progress: number;
   readonly durationMs: number;
+  readonly workflow?: WorkflowClass;
+  readonly revisionCount?: number;
 }
 
 /**

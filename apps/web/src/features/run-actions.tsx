@@ -1,5 +1,13 @@
-import { useState } from 'react';
-import { AlertTriangle, Check, Loader2, Play, Pencil, X } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import {
+  AlertTriangle,
+  Check,
+  Coins,
+  Loader2,
+  Play,
+  Pencil,
+  X,
+} from 'lucide-react';
 import type { ActionJobView, ApprovalGateView, RunDetailView } from '@contracts/index.js';
 import {
   ActionRefusal,
@@ -17,7 +25,10 @@ import {
   useRevise,
   useStart,
 } from '../lib/mutations';
+import { useArtifact } from '../lib/queries';
 import { formatWhen, humanise } from '../lib/format';
+import { formatPlanReviewVerdict } from '../lib/status';
+import { StructuredPlanView } from '../components/StructuredPlanView';
 
 /**
  * The actions on a run (UI-27, §90, §91).
@@ -38,6 +49,7 @@ export function RunActions(props: {
 }): JSX.Element {
   const { run } = props;
   const [dialog, setDialog] = useState<'approve' | 'revise' | 'reject' | undefined>(undefined);
+  const [revisionInstruction, setRevisionInstruction] = useState<string>('');
 
   const job = useActiveJob(props.projectId, run.runId);
   const start = useStart(props.projectId, run.runId);
@@ -45,8 +57,10 @@ export function RunActions(props: {
   const active = job.data ?? undefined;
   const busy = active !== undefined;
 
-  const terminal = run.status === 'completed' || run.status === 'plan_rejected';
+  const terminal = run.status === 'completed' || run.status === 'plan_rejected' || run.status === 'failed';
   const canStart = run.approved && !terminal && run.progress < 100;
+  const isWaitingApproval = run.status === 'waiting_for_approval';
+  const isPlanning = run.status === 'running' && !run.approved;
 
   return (
     <div className="flex items-center gap-1.5">
@@ -58,6 +72,7 @@ export function RunActions(props: {
             <>
               <Button
                 onClick={() => {
+                  setRevisionInstruction('');
                   setDialog('revise');
                 }}
                 title="Ask for a different plan"
@@ -91,12 +106,7 @@ export function RunActions(props: {
               <Play className="h-3.5 w-3.5" aria-hidden />
               {run.progress > 0 ? 'Resume run' : 'Start run'}
             </Button>
-          ) : terminal || run.approved ? null : (
-            // Not offered once the gate is open. A run that is approved and has
-            // no work left is not terminal — its status is `approved` until the
-            // final review moves it — and this button used to appear on it,
-            // whose only outcome is `already_approved`. Found on a real run, and
-            // the exact thing the comment above says this file avoids.
+          ) : terminal || run.approved ? null : isWaitingApproval ? (
             <Button
               variant="primary"
               onClick={() => {
@@ -105,7 +115,17 @@ export function RunActions(props: {
             >
               Review &amp; approve
             </Button>
-          )}
+          ) : isPlanning ? (
+            <Button
+              variant="surface"
+              disabled
+              title={`Planning stage in progress: ${run.stage ?? 'planning'}`}
+              className="cursor-not-allowed opacity-80"
+            >
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden />
+              Planning in progress…
+            </Button>
+          ) : null}
         </>
       )}
 
@@ -125,7 +145,8 @@ export function RunActions(props: {
         onClose={() => {
           setDialog(undefined);
         }}
-        onRevise={() => {
+        onRevise={(inst?: string) => {
+          setRevisionInstruction(inst ?? '');
           setDialog('revise');
         }}
       />
@@ -135,6 +156,7 @@ export function RunActions(props: {
         projectId={props.projectId}
         runId={run.runId}
         approved={run.approved}
+        initialInstruction={revisionInstruction}
         onClose={() => {
           setDialog(undefined);
         }}
@@ -159,19 +181,6 @@ export function RunActions(props: {
  * `state.json`, so it would never reach the stream and the screen would sit there
  * looking like nothing had happened.
  */
-/**
- * The gate, reachable from wherever a person notices it is open (§94).
- *
- * The Plan approval card used to say "Review & approve is in the run header",
- * which is a direction rather than a control: §94's waiting state is meant to be
- * operational, and pointing across the screen is not that.
- *
- * Self-contained, and holding nothing. The two booleans are which dialog is open
- * — local UI state §88 allows — and the gate itself is read from the server every
- * time one opens. So a second trigger elsewhere on the page is a second *button*,
- * never a second answer: both ask the same endpoint, and the plan hash the person
- * sees is the one the server just computed from disk.
- */
 export function ReviewGateButton(props: {
   projectId: string | undefined;
   run: RunDetailView;
@@ -179,12 +188,16 @@ export function ReviewGateButton(props: {
   variant?: 'primary' | 'surface';
 }): JSX.Element {
   const [dialog, setDialog] = useState<'approve' | 'revise' | undefined>(undefined);
+  const [revisionInstruction, setRevisionInstruction] = useState<string>('');
+
+  const isWaiting = props.run.status === 'waiting_for_approval';
 
   return (
     <>
       <Button
         variant={props.variant ?? 'primary'}
         size="sm"
+        disabled={!isWaiting}
         onClick={() => {
           setDialog('approve');
         }}
@@ -199,7 +212,8 @@ export function ReviewGateButton(props: {
         onClose={() => {
           setDialog(undefined);
         }}
-        onRevise={() => {
+        onRevise={(inst?: string) => {
+          setRevisionInstruction(inst ?? '');
           setDialog('revise');
         }}
       />
@@ -208,6 +222,7 @@ export function ReviewGateButton(props: {
         projectId={props.projectId}
         runId={props.run.runId}
         approved={props.run.approved}
+        initialInstruction={revisionInstruction}
         onClose={() => {
           setDialog(undefined);
         }}
@@ -254,36 +269,60 @@ function ApprovalDialog(props: {
   projectId: string | undefined;
   run: RunDetailView;
   onClose: () => void;
-  onRevise: () => void;
+  onRevise: (instruction?: string) => void;
 }): JSX.Element {
   const gate = useApprovalGate(props.projectId, props.run.runId, { enabled: props.open });
+  const planArtifact = useArtifact(props.projectId, props.run.runId, 'plan', { enabled: props.open });
   const approve = useApprove(props.projectId, props.run.runId);
   const [override, setOverride] = useState(false);
+  const [selectedFindings, setSelectedFindings] = useState<number[]>([]);
 
   const data = gate.data;
   const forcible = data?.refusal?.forcible === true;
   const blocked = data !== undefined && !data.canApprove;
+
+  const findings = data?.review?.findings ?? [];
+  const selectedFindingsInstruction = useMemo(() => {
+    if (selectedFindings.length === 0) return undefined;
+    const selected = selectedFindings
+      .map((i) => findings[i])
+      .filter((f): f is NonNullable<typeof f> => f !== undefined);
+    return (
+      'Please address the following review findings:\n' +
+      selected
+        .map(
+          (f) =>
+            `- [${f.severity}] ${f.description}${
+              f.suggestedAction ? ` (Action: ${f.suggestedAction})` : ''
+            }`,
+        )
+        .join('\n')
+    );
+  }, [selectedFindings, findings]);
 
   return (
     <Dialog
       open={props.open}
       onClose={() => {
         setOverride(false);
+        setSelectedFindings([]);
         approve.reset();
         props.onClose();
       }}
       title={`Approve the plan for ${props.run.runId}`}
       description="Approval is bound to this exact plan. Revise it and the gate closes again."
-      className="w-[min(680px,94vw)]"
+      className="w-[min(780px,94vw)]"
       footer={
         <>
           <Button
             onClick={() => {
               props.onClose();
-              props.onRevise();
+              props.onRevise(selectedFindingsInstruction);
             }}
           >
-            Request revision
+            {selectedFindings.length > 0
+              ? `Request revision (${selectedFindings.length} selected)`
+              : 'Request revision'}
           </Button>
           <Button
             variant="primary"
@@ -309,8 +348,12 @@ function ApprovalDialog(props: {
       ) : (
         <GateBody
           gate={data}
+          run={props.run}
+          planRaw={planArtifact.data?.content}
           override={override}
           onOverrideChange={setOverride}
+          selectedFindings={selectedFindings}
+          onSelectedFindingsChange={setSelectedFindings}
           error={approve.error}
         />
       )}
@@ -320,26 +363,37 @@ function ApprovalDialog(props: {
 
 function GateBody(props: {
   gate: ApprovalGateView;
+  run: RunDetailView;
+  planRaw?: string | undefined;
   override: boolean;
   onOverrideChange: (value: boolean) => void;
+  selectedFindings: number[];
+  onSelectedFindingsChange: (selected: number[]) => void;
   error: unknown;
 }): JSX.Element {
-  const { gate } = props;
+  const { gate, run, planRaw, selectedFindings, onSelectedFindingsChange } = props;
   const review = gate.review;
   const forcible = gate.refusal?.forcible === true;
+  const verdictInfo = formatPlanReviewVerdict(review);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3.5">
+      {/* 1. Feature Context */}
+      <div className="rounded-md border border-border bg-surface-2 px-3 py-2">
+        <span className="text-micro font-medium uppercase tracking-caps text-faint">Feature Request</span>
+        <p className="text-body-lg font-semibold text-text">{run.feature}</p>
+      </div>
+
+      {/* 2. Review Verdict & Badges */}
       <div className="flex flex-wrap items-center gap-2">
-        {review === undefined ? (
-          <Badge tone="warning" caps>
-            no review
-          </Badge>
-        ) : (
-          <Badge tone={review.verdict === 'PASS' ? 'success' : 'danger'} caps>
-            Plan review: {review.verdict}
-          </Badge>
-        )}
+        <Badge tone={verdictInfo.tone} caps>
+          {verdictInfo.fullLabel}
+        </Badge>
+        {verdictInfo.isPassingWithFindings ? (
+          <span className="text-micro text-warning">
+            ({verdictInfo.totalFindings} non-blocking finding{verdictInfo.totalFindings === 1 ? '' : 's'})
+          </span>
+        ) : null}
         {review?.coversThisPlan === false ? (
           <Badge tone="warning" caps>
             judged a different plan
@@ -352,8 +406,7 @@ function GateBody(props: {
         ) : null}
       </div>
 
-      {/* The identities. No versions: neither the SDD nor the plan declares one, and
-          a digest that says it is a digest beats a number nobody maintains. */}
+      {/* 3. Plan Identifiers */}
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border border-border bg-surface-2 px-3 py-2.5 xl:grid-cols-4">
         <Fact label="Plan hash" value={gate.planHash} mono />
         <Fact label="SDD digest" value={gate.sddDigest ?? 'no SDD'} mono />
@@ -368,7 +421,19 @@ function GateBody(props: {
         />
       </dl>
 
-      {/* Degradations, before the decision rather than in a post-mortem (R-16). */}
+      {/* 4. Structured Plan & Tasks Preview */}
+      {planRaw ? (
+        <section className="flex flex-col gap-1.5">
+          <h3 className="text-micro uppercase tracking-caps text-faint">
+            Plan &amp; Tasks Preview
+          </h3>
+          <div className="max-h-[260px] overflow-y-auto rounded-md border border-border bg-surface p-2.5">
+            <StructuredPlanView rawContent={planRaw} />
+          </div>
+        </section>
+      ) : null}
+
+      {/* 5. Degradation Warnings */}
       {gate.warnings.length === 0 ? null : (
         <ul className="flex flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-3 py-2">
           {gate.warnings.map((warning) => (
@@ -380,37 +445,89 @@ function GateBody(props: {
         </ul>
       )}
 
+      {/* 6. Review Findings (Selectable for Revision) */}
       {review === undefined || review.findings.length === 0 ? null : (
         <section className="flex flex-col gap-1.5">
-          <h3 className="text-micro uppercase tracking-caps text-faint">
-            Review findings ({review.findings.length})
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-micro uppercase tracking-caps text-faint">
+              Review findings ({review.findings.length})
+            </h3>
+            <span className="text-micro text-muted">
+              Select findings to include in revision instruction
+            </span>
+          </div>
           <ul className="flex flex-col divide-y divide-border">
-            {review.findings.map((finding, index) => (
-              <li
-                key={`${finding.type}:${String(index)}`}
-                className="flex flex-col gap-0.5 py-1.5"
-              >
-                <span className="flex items-center gap-1.5">
-                  <Badge
-                    tone={
-                      finding.severity === 'critical' || finding.severity === 'high'
-                        ? 'danger'
-                        : 'warning'
-                    }
-                    caps
-                  >
-                    {finding.severity}
-                  </Badge>
-                  <span className="truncate text-micro text-faint">{finding.type}</span>
-                </span>
-                <span className="text-body-lg text-text">{finding.description}</span>
-                <span className="text-body-lg text-muted">→ {finding.suggestedAction}</span>
-              </li>
-            ))}
+            {review.findings.map((finding, index) => {
+              const checked = selectedFindings.includes(index);
+              return (
+                <li
+                  key={`${finding.type}:${String(index)}`}
+                  className={cx(
+                    'flex items-start gap-2.5 py-2 px-1 rounded transition-colors',
+                    checked ? 'bg-primary-soft/40' : '',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    id={`finding-${index}`}
+                    checked={checked}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        onSelectedFindingsChange([...selectedFindings, index]);
+                      } else {
+                        onSelectedFindingsChange(selectedFindings.filter((i) => i !== index));
+                      }
+                    }}
+                    className="mt-1 h-3.5 w-3.5 rounded border-border"
+                  />
+                  <label htmlFor={`finding-${index}`} className="flex flex-col gap-0.5 flex-1 cursor-pointer">
+                    <span className="flex items-center gap-1.5">
+                      <Badge
+                        tone={
+                          finding.severity === 'critical' || finding.severity === 'high'
+                            ? 'danger'
+                            : 'warning'
+                        }
+                        caps
+                      >
+                        {finding.severity}
+                      </Badge>
+                      <span className="truncate text-micro text-faint">{finding.type}</span>
+                    </span>
+                    <span className="text-body-lg text-text">{finding.description}</span>
+                    <span className="text-body-lg text-muted">→ {finding.suggestedAction}</span>
+                  </label>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
+
+      {/* 7. Resource & Model-Call Impact */}
+      <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 p-3 text-body-lg">
+        <span className="text-micro font-semibold uppercase tracking-caps text-faint flex items-center gap-1">
+          <Coins className="h-3 w-3 text-primary" aria-hidden />
+          Resource &amp; Model-Call Impact
+        </span>
+        <ul className="grid grid-cols-1 md:grid-cols-3 gap-2 text-micro">
+          <li className="flex flex-col rounded bg-surface p-2 border border-border">
+            <span className="text-faint uppercase tracking-caps">Approve</span>
+            <span className="font-semibold text-success">0 model calls</span>
+            <span className="text-muted">Signs off plan without invoking models</span>
+          </li>
+          <li className="flex flex-col rounded bg-surface p-2 border border-border">
+            <span className="text-faint uppercase tracking-caps">Implementation</span>
+            <span className="font-semibold text-text">~{gate.taskCount} executor calls</span>
+            <span className="text-muted">~1 call per task (before retries)</span>
+          </li>
+          <li className="flex flex-col rounded bg-surface p-2 border border-border">
+            <span className="text-faint uppercase tracking-caps">Request Revision</span>
+            <span className="font-semibold text-warning">2 expected calls</span>
+            <span className="text-muted">1 planner + 1 reviewer (before retries)</span>
+          </li>
+        </ul>
+      </div>
 
       {gate.approved ? (
         <p className="flex items-center gap-1.5 text-body-lg text-success">
@@ -425,9 +542,6 @@ function GateBody(props: {
             The gate refuses this plan: {humanise(gate.refusal.kind)}.
           </span>
 
-          {/* Not a button. Forcing is a decision, and a decision needs a deliberate
-              act rather than a click that happens to be in the right place — the
-              override says what it costs before it is available. */}
           {forcible ? (
             <label className="flex items-start gap-2 text-body-lg text-muted">
               <input
@@ -469,10 +583,17 @@ function RevisionDialog(props: {
   projectId: string | undefined;
   runId: string;
   approved: boolean;
+  initialInstruction?: string;
   onClose: () => void;
 }): JSX.Element {
-  const [instruction, setInstruction] = useState('');
+  const [instruction, setInstruction] = useState(props.initialInstruction ?? '');
   const revise = useRevise(props.projectId, props.runId);
+
+  useEffect(() => {
+    if (props.open) {
+      setInstruction(props.initialInstruction ?? '');
+    }
+  }, [props.open, props.initialInstruction]);
 
   const close = (): void => {
     setInstruction('');
@@ -485,7 +606,7 @@ function RevisionDialog(props: {
       open={props.open}
       onClose={close}
       title="What should change?"
-      description="The planner re-plans with this instruction. Re-planning spends quota."
+      description="The planner re-plans with this instruction. Expected model calls: 2 before retries/fallbacks."
       footer={
         <>
           <Button onClick={close}>Cancel</Button>
@@ -502,6 +623,12 @@ function RevisionDialog(props: {
       }
     >
       <div className="flex flex-col gap-3">
+        {/* Cost awareness notification */}
+        <div className="flex items-center gap-2 rounded-md border border-primary-border bg-primary-soft px-3 py-2 text-micro text-text">
+          <Coins className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+          <span>Re-planning consumes 2 expected model calls (1 planner + 1 plan reviewer) before retries/fallbacks.</span>
+        </div>
+
         <label className="flex flex-col gap-1.5">
           <span className="sr-only">What should change?</span>
           <textarea

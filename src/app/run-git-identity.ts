@@ -259,6 +259,56 @@ export async function resolveRunGitIdentity(
 }
 
 /**
+ * Evaluates deterministic repository preflight checks before a run is created.
+ *
+ * Checks structural conditions (1–6), repository commits, state paths ignored (8),
+ * and clean working tree (9) when worktrees are requested.
+ *
+ * If this returns satisfied: false, StateStore.createRun MUST NOT be called.
+ */
+export async function checkPlanningPreflight(
+  deps: RunGitIdentityDeps,
+): Promise<WorktreePreconditions> {
+  const wantsWorktrees = deps.config.global.git.useWorktrees;
+  if (!wantsWorktrees) return SATISFIED;
+
+  const structural = await checkStructuralPreconditions(deps);
+  if (structural !== null) return refuse(structural.code, structural.detail);
+
+  const head = await deps.workspaces.resolveHead(deps.projectDir);
+  if (!head.ok) return unreadable(head.failure.message);
+  if (head.value === null) {
+    return refuse(
+      'repository_has_no_commits',
+      'HEAD does not name a commit, so there is no base to cut the run from',
+    );
+  }
+
+  const ignored = await checkStatePathsIgnored(deps);
+  if (ignored.kind === 'unreadable') return unreadable(ignored.detail);
+  if (ignored.kind === 'not_ignored') {
+    return refuse(
+      'agent_flow_state_not_ignored',
+      `${ignored.path} is not ignored by this repository, so Agent Flow's own state would dirty the tree`,
+    );
+  }
+
+  const status = await deps.workspaces.status({ cwd: deps.projectDir });
+  if (!status.ok) return unreadable(status.failure.message);
+  if (!status.value.clean) {
+    const changed = status.value.entries.slice(0, 5).map((entry) => entry.path);
+    return refuse(
+      'working_tree_dirty',
+      `the working tree has uncommitted changes: ${changed.join(', ')}${
+        status.value.entries.length > changed.length ? ' …' : ''
+      }`,
+    );
+  }
+
+  return SATISFIED;
+}
+
+/**
  * Best-effort base for a sequential run.
  *
  * Every failure is absence, never a refusal. A project that is not a repository

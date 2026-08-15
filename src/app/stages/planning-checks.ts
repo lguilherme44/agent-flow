@@ -29,9 +29,12 @@ export function checkPlan(
   // must each have a task. Passing just the FRs here would report a task that
   // correctly cites NFR-003 as referencing something undefined — which is what
   // happened the first time this ran against a real SDD.
-  const declared = extractRequirementIds(sddText);
-  const coverage = checkCoverage({ declared }, plan.tasks);
-  problems.push(...coverage.problems);
+  // For lightweight workflows (SIMPLE/TRIVIAL), SDD is dispensed with.
+  if (sddText.trim().length > 0) {
+    const declared = extractRequirementIds(sddText);
+    const coverage = checkCoverage({ declared }, plan.tasks);
+    problems.push(...coverage.problems);
+  }
 
   // The second half of the validation trust boundary. The schema already
   // guarantees an id cannot express a command; this guarantees the id is one the

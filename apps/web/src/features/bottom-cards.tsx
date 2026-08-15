@@ -100,6 +100,10 @@ export function ApprovalCard(props: {
           <span>Bound to this exact plan — a revision reopens the gate</span>
         ) : run.status === 'waiting_for_approval' ? (
           <span>The SDD and the plan are in Artifacts, beside this card</span>
+        ) : run.status === 'running' ? (
+          <span>Planning in progress ({run.stage ?? 'running'})</span>
+        ) : run.status === 'plan_rejected' ? (
+          <span>Plan review rejected this plan</span>
         ) : (
           <span>Review &amp; approve is in the run header</span>
         )

@@ -91,10 +91,11 @@ export async function main(argv: string[]): Promise<number> {
     .option('--no-cache', 'ignore the cached repository map and re-run discovery')
     .option('--from <stage>', 'resume from a stage (discovery, architecture-impact, sdd, planning)')
     .option('--skip-review', 'stop after planning, without the automated review')
+    .option('--workflow <class>', 'workflow class override: trivial, simple, standard, high-risk')
     .action(
       async (
         description: string,
-        options: { cache?: boolean; from?: string; skipReview?: boolean },
+        options: { cache?: boolean; from?: string; skipReview?: boolean; workflow?: string },
         command: Command,
       ) => {
         exitCode = await runFeatureCommand(description, options, globalOptions(command));

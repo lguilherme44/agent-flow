@@ -35,6 +35,13 @@ export const PLAN_REVIEW_STAGE: StageDefinition = {
   outputSchema: PlanReviewResponseSchema,
 };
 
+export const PLAN_REVIEW_SIMPLE_STAGE: StageDefinition = {
+  name: 'plan-review',
+  role: 'planReviewer',
+  prompt: 'plan-review-simple',
+  outputSchema: PlanReviewResponseSchema,
+};
+
 /**
  * The runner a role is configured to use, before anything has run.
  *

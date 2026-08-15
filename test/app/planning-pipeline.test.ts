@@ -617,6 +617,37 @@ describe('a repository gate refuses in the repository’s vocabulary (§6.2, App
     expect(runner.calls).toHaveLength(0);
   });
 
+  it('marks run as failed and records planning_refused audit event when refused late', async () => {
+    const { pipeline, run, runner, store } = await withGate('architecture-impact');
+    scriptHappyPath(runner);
+
+    await expect(pipeline.run(run.runId, 'a feature')).rejects.toThrow(PlanningRefusal);
+
+    const updated = await store.loadRun(run.runId);
+    expect(updated.status).toBe('failed');
+
+    const events = await store.readEvents(run.runId);
+    const refusalEvent = events.find((e) => e.type === 'planning_refused');
+    expect(refusalEvent).toBeDefined();
+    expect(refusalEvent?.detail['code']).toBe('working_tree_dirty');
+    expect(refusalEvent?.detail['action']).toMatch(/Commit or stash/);
+  });
+
+  it('marks run as failed and preserves stage_failed event on runner failure', async () => {
+    const { pipeline, run, runner, store } = await withGate('never');
+    // Runner fails with quota_exceeded
+    runner.pushFailure('quota_exceeded');
+
+    await expect(pipeline.run(run.runId, 'a feature')).rejects.toThrow(StageFailure);
+
+    const updated = await store.loadRun(run.runId);
+    expect(updated.status).toBe('failed');
+
+    const events = await store.readEvents(run.runId);
+    expect(events.some((e) => e.type === 'stage_failed')).toBe(true);
+    expect(events.some((e) => e.type === 'planning_refused')).toBe(false);
+  });
+
   it('lets a satisfied gate through, and asks it at every moment it declares', async () => {
     const { pipeline, run, runner, asked } = await withGate('never');
     scriptHappyPath(runner);

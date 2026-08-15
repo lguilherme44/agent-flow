@@ -1,4 +1,4 @@
-import { RunStageSchema, type RunStage } from '../contracts/index.js';
+import { RunStageSchema, type RunStage, type WorkflowClass } from '../contracts/index.js';
 import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
@@ -10,14 +10,17 @@ import { renderError } from './render/errors.js';
 import {
   composeRunIdentity,
   resolveRunGitIdentity,
+  checkPlanningPreflight,
   worktreeRefusalAction,
 } from '../app/run-git-identity.js';
+import { PlanningRefusal } from '../app/planning-pipeline.js';
 import type { GlobalOptions } from './index.js';
 
 export interface FeatureOptions {
   readonly cache?: boolean;
   readonly from?: string;
   readonly skipReview?: boolean;
+  readonly workflow?: string;
 }
 
 /**
@@ -71,6 +74,7 @@ export async function runFeatureCommand(
       ...(options.cache === false ? { noCache: true } : {}),
       ...(from === undefined ? {} : { from }),
       ...(options.skipReview === true ? { skipReview: true } : {}),
+      ...(options.workflow ? { workflow: options.workflow as WorkflowClass } : {}),
       onProgress: (stage, status) => {
         const mark = status === 'completed' ? '✓' : status === 'cached' ? '·' : '→';
         if (status !== 'started' || globals.verbose) {
@@ -238,19 +242,29 @@ async function createRunWithIdentity(
   context: Awaited<ReturnType<typeof buildExecutionContext>>,
   description: string,
 ) {
-  const identity = await resolveRunGitIdentity({
+  const deps = {
     workspaces: context.workspaces,
     fs: context.fs,
     host: context.host,
     config: context.config,
     projectDir: context.projectDir,
-  });
+  };
 
+  const preflight = await checkPlanningPreflight(deps);
+  if (!preflight.satisfied) {
+    throw new PlanningRefusal(
+      preflight.code,
+      `Worktree mode was requested and this repository is not ready (${preflight.code}): ${preflight.detail}`,
+      worktreeRefusalAction(preflight.code),
+    );
+  }
+
+  const identity = await resolveRunGitIdentity(deps);
   if (!identity.ok) {
-    throw new Error(
-      `Worktree mode was requested and this repository cannot support it ` +
-        `(${identity.refusal.code}): ${identity.refusal.detail}\n` +
-        `  ${worktreeRefusalAction(identity.refusal.code)}`,
+    throw new PlanningRefusal(
+      identity.refusal.code,
+      `Worktree mode was requested and this repository cannot support it (${identity.refusal.code}): ${identity.refusal.detail}`,
+      worktreeRefusalAction(identity.refusal.code),
     );
   }
 

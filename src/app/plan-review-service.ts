@@ -5,6 +5,7 @@ import type { StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import {
   PLAN_REVIEW_STAGE,
+  PLAN_REVIEW_SIMPLE_STAGE,
   PlanReviewResponseSchema,
   buildReviewResult,
 } from './stages/plan-review.js';
@@ -70,6 +71,48 @@ export class PlanReviewService {
       // §56 allows this, but the protection cross-provider review exists to
       // provide is simply absent — so it is recorded on the run rather than
       // left for a reader to infer (R-16).
+      await store.recordDegradation(request.runId, {
+        kind: 'single_provider',
+        reason: explainIndependence(request.authors, result.execution.runner, providerOf),
+        impact:
+          'the plan review is same-provider: a wrong assumption made while planning may be ' +
+          'repeated rather than caught',
+      });
+    }
+
+    const review = buildReviewResult(
+      response,
+      {
+        runner: result.execution.runner,
+        ...(result.execution.model === undefined ? {} : { model: result.execution.model }),
+        reasoning: result.execution.reasoning,
+      },
+      independence,
+      planHash(request.plan),
+    );
+
+    await store.writeArtifact(request.runId, 'planReview', `${JSON.stringify(review, null, 2)}\n`);
+    return review;
+  }
+
+  async reviewSimple(request: {
+    runId: string;
+    plan: Plan;
+    featureRequest: string;
+    authors: readonly string[];
+  }): Promise<ReviewResult> {
+    const { store, providerOf } = this.options;
+
+    const result = await this.options.stageRunner.run(PLAN_REVIEW_SIMPLE_STAGE, request.runId, {
+      featureRequest: request.featureRequest,
+      plan: JSON.stringify(request.plan, null, 2),
+    });
+
+    const response = PlanReviewResponseSchema.parse(result.data);
+
+    const independence = assessIndependence(request.authors, result.execution.runner, providerOf);
+
+    if (independence === 'same-provider-fresh-context') {
       await store.recordDegradation(request.runId, {
         kind: 'single_provider',
         reason: explainIndependence(request.authors, result.execution.runner, providerOf),

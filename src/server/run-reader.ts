@@ -608,6 +608,8 @@ export class RunReader {
       // touched since yesterday took the time it took, and reporting "18h" for
       // an abandoned run would say something about the clock, not about the run.
       durationMs: Math.max(0, Date.parse(state.updatedAt) - Date.parse(state.createdAt)),
+      ...(state.workflow === undefined ? {} : { workflow: state.workflow }),
+      ...(state.revisionCount === undefined ? {} : { revisionCount: state.revisionCount }),
     };
   }
 

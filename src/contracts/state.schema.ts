@@ -111,11 +111,17 @@ export const TaskProgressSchema = z.object({
 });
 export type TaskProgress = z.infer<typeof TaskProgressSchema>;
 
+export const WORKFLOW_CLASSES = ['trivial', 'simple', 'standard', 'high-risk'] as const;
+export const WorkflowClassSchema = z.enum(WORKFLOW_CLASSES);
+export type WorkflowClass = z.infer<typeof WorkflowClassSchema>;
+
 export const RunStateSchema = z.object({
   runId: RunIdSchema,
   feature: z.string().min(1),
   stage: RunStageSchema,
   status: RunStatusSchema,
+  workflow: WorkflowClassSchema.optional(),
+  revisionCount: z.number().int().min(0).default(0),
 
   approved: z.boolean().default(false),
   approvedAt: IsoTimestampSchema.optional(),

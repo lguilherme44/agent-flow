@@ -23,6 +23,7 @@ import {
   ModelUsageCard,
 } from '../features/bottom-cards';
 import { Empty, Notice } from '../components/ui';
+import { StructuredPlanView } from '../components/StructuredPlanView';
 import { ApiError } from '../lib/api';
 import { INSPECTOR_PANE, useMediaQuery } from '../hooks/use-media-query';
 import type { TaskDetailView } from '@contracts/index.js';
@@ -374,6 +375,8 @@ function ArtifactDialog(props: {
               />
             ) : artifact.data === undefined ? (
               <Empty title={artifact.isLoading ? 'Loading…' : 'Not available.'} />
+            ) : props.name === 'plan' ? (
+              <StructuredPlanView rawContent={artifact.data.content} />
             ) : (
               <pre className="whitespace-pre-wrap break-words font-mono text-micro leading-relaxed text-muted">
                 {artifact.data.content}

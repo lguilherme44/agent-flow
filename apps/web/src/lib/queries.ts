@@ -167,11 +167,12 @@ export function useArtifact(
   projectId: string | undefined,
   runId: string | undefined,
   name: string | undefined,
+  options?: { enabled?: boolean },
 ): UseQueryResult<ArtifactContentView> {
   return useQuery({
     queryKey: keys.artifact(projectId, runId ?? '', name ?? ''),
     queryFn: () => api.artifact(runId as string, name as string, projectId),
-    enabled: runId !== undefined && name !== undefined,
+    enabled: (options?.enabled ?? true) && runId !== undefined && name !== undefined,
   });
 }
 

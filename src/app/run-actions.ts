@@ -112,6 +112,7 @@ export type ActionErrorCode =
   | 'unmet_dependencies'
   | 'run_busy'
   | 'invalid_input'
+  | 'ceremony_budget_exceeded'
   // MVP 2 §6.3. Every one of these names a repository state a user changes with
   // one command, and none of them is forcible: there is no `--force` for a moved
   // planning base or a dirty tree, and adding one would be adding a flag whose
@@ -1017,6 +1018,33 @@ async function replan(
   const notCurrent = await requireCurrent(context, runId);
   if (notCurrent !== undefined) return failed(notCurrent);
 
+  const workflow = state.workflow ?? 'standard';
+  const currentRevisions = state.revisionCount ?? 0;
+
+  if (workflow === 'trivial') {
+    return failed({
+      code: 'ceremony_budget_exceeded',
+      message: 'TRIVIAL workflow does not support automated revision cycles (budget = 0).',
+      action: 'Approve the plan as is, or start a new run with STANDARD workflow.',
+    });
+  }
+
+  if (workflow === 'simple' && currentRevisions >= 1) {
+    return failed({
+      code: 'ceremony_budget_exceeded',
+      message:
+        'STOP_AND_ASK_HUMAN: SIMPLE workflow reached its ceremony budget limit (1 revision cycle). ' +
+        'Unresolved findings require human approval or workflow elevation.',
+      action: 'Review residual findings in Approval dialog and approve over them, or start a new run.',
+    });
+  }
+
+  const nextRevisionCount = currentRevisions + 1;
+  await context.store.updateRun(runId, (entry) => ({
+    ...entry,
+    revisionCount: nextRevisionCount,
+  }));
+
   let approvalCleared = false;
   if (state.approved) {
     await context.store.updateRun(runId, (entry) => ({
@@ -1030,7 +1058,10 @@ async function replan(
     approvalCleared = true;
   }
 
-  await context.store.appendEvent(runId, 'revision_requested', { instruction: trimmed });
+  await context.store.appendEvent(runId, 'revision_requested', {
+    instruction: trimmed,
+    revisionCount: nextRevisionCount,
+  });
 
   const request = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
   const pipeline = buildPlanningPipeline(context);
@@ -1038,7 +1069,7 @@ async function replan(
   const result = await pipeline.run(
     runId,
     `${request.trim()}\n\n---\n\nRevision requested by the reviewer:\n${trimmed}`,
-    { from: 'planning' },
+    { from: 'planning', workflow },
   );
 
   return done({

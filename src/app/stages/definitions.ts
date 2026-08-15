@@ -56,3 +56,24 @@ export const PLANNING_STAGE: StageDefinition = {
   artifact: 'plan',
   outputSchema: PlanSchema,
 };
+
+/**
+ * Direct / Short Planning for TRIVIAL and SIMPLE workflows (M2.1-C).
+ * Bypasses SDD and discovery, focusing directly on focused task decomposition.
+ */
+export const PLANNING_SIMPLE_STAGE: StageDefinition = {
+  name: 'planning',
+  role: 'planner',
+  prompt: 'planning-simple',
+  artifact: 'plan',
+  outputSchema: PlanSchema,
+};
+
+/**
+ * Lightweight Plan Review for SIMPLE workflow (M2.1-C).
+ */
+export const PLAN_REVIEW_SIMPLE_STAGE: StageDefinition = {
+  name: 'plan-review',
+  role: 'planReviewer',
+  prompt: 'plan-review-simple',
+};

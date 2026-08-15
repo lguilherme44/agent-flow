@@ -164,6 +164,16 @@ export async function runDoctorCommand(
       lines.push('');
     }
 
+    const remediations = generateRemediations(observed, verdict, node, git);
+    if (remediations.length > 0) {
+      lines.push('Remediation:');
+      for (const rem of remediations) {
+        lines.push(`  → ${rem.problem}`);
+        lines.push(`    Fix: ${rem.fix}`);
+      }
+      lines.push('');
+    }
+
     lines.push(verdict.status);
 
     if (verdict.status === 'DEGRADED' && !globals.strict) {
@@ -395,5 +405,85 @@ function renderAuth(auth: ObservedRunner['auth']): string {
       return `${CROSS} not configured`;
     default:
       return 'not verified (use --deep)';
+  }
+}
+
+export interface DoctorRemediation {
+  readonly problem: string;
+  readonly fix: string;
+}
+
+export function generateRemediations(
+  observed: readonly ObservedRunner[],
+  _verdict: ReturnType<typeof assessHealth>,
+  node: ToolStatus,
+  git: ToolStatus,
+): DoctorRemediation[] {
+  const remediations: DoctorRemediation[] = [];
+
+  if (!node.present) {
+    remediations.push({
+      problem: 'Node.js is missing from PATH',
+      fix: 'Install Node.js 20+ (https://nodejs.org or via fnm/nvm)',
+    });
+  }
+
+  if (!git.present) {
+    remediations.push({
+      problem: 'Git is missing or older than 2.38',
+      fix: 'Install Git 2.38+ (https://git-scm.com or via your package manager)',
+    });
+  }
+
+  for (const runner of observed) {
+    if (!runner.installed || !runner.executable) {
+      const guide = getRunnerInstallGuide(runner.id);
+      if (guide) {
+        remediations.push({
+          problem: `Runner "${runner.id}" is not installed or executable`,
+          fix: guide,
+        });
+      }
+    } else if (runner.auth === 'not_configured') {
+      const guide = getRunnerAuthGuide(runner.id);
+      if (guide) {
+        remediations.push({
+          problem: `Runner "${runner.id}" is missing credentials`,
+          fix: guide,
+        });
+      }
+    }
+  }
+
+  return remediations;
+}
+
+function getRunnerInstallGuide(runnerId: string): string | undefined {
+  switch (runnerId) {
+    case 'claude':
+      return 'npm install -g @anthropic-ai/claude-code';
+    case 'codex':
+      return 'npm install -g @openai/codex';
+    case 'cursor':
+      return 'Install Cursor CLI and ensure `cursor` is available in PATH';
+    case 'agy':
+      return 'curl -fsSL https://antigravity.run/install.sh | bash';
+    default:
+      return undefined;
+  }
+}
+
+function getRunnerAuthGuide(runnerId: string): string | undefined {
+  switch (runnerId) {
+    case 'claude':
+      return 'Run `claude login` or export ANTHROPIC_API_KEY';
+    case 'codex':
+      return 'Run `codex login` or export OPENAI_API_KEY';
+    case 'cursor':
+      return 'Run `cursor auth login` in your terminal';
+    case 'agy':
+      return 'Run `agy auth login` or export ANTIGRAVITY_API_KEY';
+    default:
+      return undefined;
   }
 }
