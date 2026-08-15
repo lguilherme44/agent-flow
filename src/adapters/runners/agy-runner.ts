@@ -9,11 +9,14 @@ const EFFORT: Readonly<Record<'low' | 'medium' | 'high', string>> = {
 };
 
 interface AgyEnvelope {
-  is_error?: boolean;
-  error?: string;
+  conversation_id?: string;
+  status?: string;
+  response?: string;
   result?: string;
-  structured_output?: unknown;
+  error?: string;
+  is_error?: boolean;
   status_code?: number | null;
+  structured_output?: unknown;
 }
 
 function asEnvelope(value: unknown): AgyEnvelope | undefined {
@@ -76,7 +79,7 @@ export class AgyRunner extends BaseRunner {
   }
 
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
-    const args = ['-p', '--output-format', 'json'];
+    const args = ['--output-format', 'json'];
 
     if (input.model !== undefined) {
       args.push('--model', input.model);
@@ -90,6 +93,8 @@ export class AgyRunner extends BaseRunner {
     } else {
       args.push('--mode', 'accept-edits');
     }
+
+    args.push('--add-dir', input.workingDirectory);
 
     for (const path of input.additionalReadPaths ?? []) {
       args.push('--add-dir', path);
@@ -112,8 +117,9 @@ export class AgyRunner extends BaseRunner {
 
   protected override isDefiniteSuccess(result: ProcessResult, parsed: unknown): boolean {
     const envelope = asEnvelope(parsed);
+    if (envelope?.status === 'SUCCESS' && result.exitCode === 0) return true;
     if (envelope?.is_error === false && result.exitCode === 0) return true;
-    if (result.exitCode === 0 && envelope?.error === undefined) return true;
+    if (result.exitCode === 0 && envelope?.error === undefined && envelope?.status !== 'ERROR' && envelope?.status !== 'FAILED') return true;
     return false;
   }
 
@@ -137,7 +143,7 @@ export class AgyRunner extends BaseRunner {
       },
       {
         code: 'execution_failed',
-        when: (_result, parsed) => asEnvelope(parsed)?.is_error === true,
+        when: (_result, parsed) => asEnvelope(parsed)?.is_error === true || asEnvelope(parsed)?.status === 'ERROR' || asEnvelope(parsed)?.status === 'FAILED',
       },
     ];
   }
@@ -150,7 +156,7 @@ export class AgyRunner extends BaseRunner {
     const raw = result.stdout.trim();
     const envelope = asEnvelope(this.parseEnvelope(result));
 
-    const text = envelope?.result ?? raw;
+    const text = envelope?.response ?? envelope?.result ?? raw;
 
     if (input.outputSchema === undefined) return { text };
 
@@ -168,6 +174,6 @@ export class AgyRunner extends BaseRunner {
 
 function diagnosisOf(result: ProcessResult, parsed: unknown): string {
   const envelope = asEnvelope(parsed);
-  const message = envelope?.is_error === true ? (envelope.error ?? envelope.result ?? '') : '';
+  const message = envelope?.error ?? (envelope?.is_error === true ? (envelope.result ?? envelope.response ?? '') : '');
   return `${String(message)} ${result.stderr}`;
 }

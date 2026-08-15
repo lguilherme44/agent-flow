@@ -41,23 +41,28 @@ describe('AgyRunner capabilities', () => {
 });
 
 describe('AgyRunner argv construction', () => {
-  it('runs non-interactively with json output format', async () => {
+  it('runs non-interactively with json output format and workingDirectory in add-dir', async () => {
     const { runner, proc } = makeRunner(
       new FakeProcessRunner().always({
-        stdout: JSON.stringify({ is_error: false, result: 'done' }),
+        stdout: JSON.stringify({ status: 'SUCCESS', response: 'done' }),
       }),
     );
 
-    await runner.run(baseInput);
+    const result = await runner.run(baseInput);
 
     expect(proc.lastCall?.command).toBe('agy');
-    expect(proc.lastCall?.args).toContain('-p');
+    expect(proc.lastCall?.args).not.toContain('-p');
     expect(valueAfter(proc.lastCall?.args ?? [], '--output-format')).toBe('json');
+    expect(valueAfter(proc.lastCall?.args ?? [], '--add-dir')).toBe('/repo');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.text).toBe('done');
+    }
   });
 
   it('maps reasoning level to CLI effort flags', async () => {
     const proc = new FakeProcessRunner().always({
-      stdout: JSON.stringify({ is_error: false, result: 'done' }),
+      stdout: JSON.stringify({ status: 'SUCCESS', response: 'done' }),
     });
     const runner = new AgyRunner({ id: 'agy', processRunner: proc });
 
@@ -71,7 +76,7 @@ describe('AgyRunner argv construction', () => {
   it('passes prompt on stdin', async () => {
     const { runner, proc } = makeRunner(
       new FakeProcessRunner().always({
-        stdout: JSON.stringify({ is_error: false, result: 'done' }),
+        stdout: JSON.stringify({ status: 'SUCCESS', response: 'done' }),
       }),
     );
 
@@ -108,6 +113,21 @@ describe('AgyRunner error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errorCode).toBe('auth_required');
+    }
+  });
+
+  it('classifies error status in envelope as execution_failed', async () => {
+    const { runner } = makeRunner(
+      new FakeProcessRunner().always({
+        exitCode: 0,
+        stdout: JSON.stringify({ status: 'ERROR', error: 'Internal failure' }),
+      }),
+    );
+
+    const result = await runner.run(baseInput);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorCode).toBe('execution_failed');
     }
   });
 });
