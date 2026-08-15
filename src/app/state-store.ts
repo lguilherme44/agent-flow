@@ -147,6 +147,29 @@ export class StateStore {
     await this.setCurrentRun(runId);
     await this.appendEvent(runId, 'run_created', { feature });
 
+    // Appendix B, `at createRun`. The three frozen fields are already in
+    // `state.json`, so this event adds no fact — it adds the *moment*. R-11 is a
+    // failure nobody can see afterwards from state alone: a run that executed
+    // under a mode it was not planned under looks, at rest, exactly like one that
+    // did not. The audit trail is where "this run was born `worktree`, against
+    // this base" becomes something a person can point at, and a run that never
+    // said it is a run whose mode has no recorded origin.
+    //
+    // Emitted only for a run that has the fields. A legacy run (§25.2) and every
+    // test that does not care about Git carry none of them, and an event with
+    // three empty values would assert an identity that was never assigned.
+    if (
+      state.gitRunKey !== undefined &&
+      state.planningBase !== undefined &&
+      state.isolationMode !== undefined
+    ) {
+      await this.appendEvent(runId, 'run_git_identity_assigned', {
+        gitRunKey: state.gitRunKey,
+        planningBase: state.planningBase,
+        isolationMode: state.isolationMode,
+      });
+    }
+
     return state;
   }
 

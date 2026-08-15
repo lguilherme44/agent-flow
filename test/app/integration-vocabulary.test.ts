@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { INTEGRATION_REFUSAL_CODES, MARKER_TRAILERS } from '../../src/app/integrator.js';
 import { RECOVERY_REFUSAL_CODES } from '../../src/app/worktree-recovery.js';
@@ -190,6 +190,93 @@ describe('Appendix A is the canonical refusal vocabulary', () => {
       if (!(INTEGRATION_REFUSAL_CODES as readonly string[]).includes(match[1] ?? '')) continue;
       expect((match[3] ?? '').trim().replace(/\*/g, '')).toBe('no');
     }
+  });
+});
+
+/**
+ * Appendix B's event names, from the fenced block that lists them.
+ *
+ * The payload shape after the name is deliberately not parsed. What this pins is
+ * that the name reaches `events.jsonl` at all; the fields are checked by the
+ * tests that assert on the events those modules emit, where a wrong field is a
+ * visible failure rather than a documentation drift.
+ */
+function appendixB(): string[] {
+  const body = section(spec(), 'Appendix B — New events');
+  const start = body.indexOf('```text');
+  const end = body.indexOf('```', start + 7);
+  if (start === -1 || end === -1) throw new Error('Appendix B has no event block');
+
+  const names = body
+    .slice(start, end)
+    .split('\n')
+    .map((line) => /^([a-z][a-z_]+)\s{2,}\{/.exec(line.trim())?.[1])
+    .filter((name): name is string => name !== undefined);
+
+  if (names.length === 0) throw new Error('Appendix B parsed to zero events');
+  return names;
+}
+
+/** Every event name any module under `src/` passes to `appendEvent`. */
+function emittedEvents(): Set<string> {
+  const found = new Set<string>();
+
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) {
+        walk(path);
+        continue;
+      }
+      if (!entry.endsWith('.ts')) continue;
+
+      // `appendEvent(<something>, '<name>'` — the second argument, as a literal.
+      // A name assembled from a variable would not be found, and that is the
+      // intended reading: an event whose name a module computes is one no reader
+      // can look up either.
+      for (const match of readFileSync(path, 'utf8').matchAll(
+        /appendEvent\(\s*[^,]+,\s*'([a-z][a-z_]+)'/g,
+      )) {
+        found.add(match[1] ?? '');
+      }
+    }
+  };
+
+  walk(join(ROOT, 'src'));
+  if (found.size === 0) throw new Error('no appendEvent call sites found under src/');
+  return found;
+}
+
+describe('Appendix B is the canonical event vocabulary', () => {
+  it('specifies only events that something emits', () => {
+    // The direction that matters, and the one M2-12 found broken twice.
+    // `run_git_identity_assigned` and `namespace_reclaimed` were specified from
+    // the start of this milestone and emitted by nothing, so a run's history
+    // recorded neither the mode it was born in nor what `clean` later removed —
+    // both of them facts the spec says the audit trail carries.
+    const emitted = emittedEvents();
+    const silent = appendixB().filter((name) => !emitted.has(name));
+
+    expect(
+      silent,
+      `Appendix B specifies these events and no module under src/ emits them: ${
+        silent.join(', ') || 'none'
+      }`,
+    ).toEqual([]);
+  });
+
+  it('carries attempt_tree_missing, which §17.3 names as an event', () => {
+    // The regression test for the omission itself. Window 10 says "event
+    // `attempt_tree_missing`", recovery emits it, and the appendix listed every
+    // other event this milestone added. A reader building on the audit trail
+    // would have had no reason to expect it.
+    expect(appendixB()).toContain('attempt_tree_missing');
+    expect(emittedEvents().has('attempt_tree_missing')).toBe(true);
+  });
+
+  it('names no event twice', () => {
+    const names = appendixB();
+    expect(new Set(names).size).toBe(names.length);
   });
 });
 

@@ -2990,9 +2990,25 @@ task_attempt_validated         { task, attempt, judgement, validationIds }
 task_attempt_marker_created    { task, attempt, marker, tree }
 task_integrated                { task, attempt, marker, mergeCommit }
 integration_conflict           { task, attempt, paths, previouslyIntegrated? }
+attempt_tree_missing           { task, attempt, tree }                    §17.3 window 10
 integration_recovered          { task, attempt, window }
 namespace_reclaimed            { gitRunKey, worktrees, attemptRefs, integrationBranchKept }
 ```
+
+`attempt_tree_missing` is the one name that appears in both appendices, and the
+duplication is not an error. §17.3 window 10 calls it an event and Appendix A lists it
+as a refusal, because it is both: recovery refuses to reconstruct an attempt whose
+validated tree Git no longer has, and *requeues* rather than halting. The refusal is
+what the attempt gets; the event is what the run's history keeps, since a requeue that
+left no trace would present attempt *n+1* as if attempt *n* had never happened.
+
+**This block is pinned by `test/app/integration-vocabulary.test.ts`**, in the same
+direction and for the same reason as Appendix A: every name here must be emitted by
+some module under `src/`. A specified event that nothing emits is worse than an
+undocumented one — a reader who finds it here reasonably concludes it will appear in
+`events.jsonl`, and builds something that waits for it. Both `run_git_identity_assigned`
+and `namespace_reclaimed` were in exactly that state until M2-12, which is why the pin
+exists rather than a note asking the next author to check.
 
 ---
 

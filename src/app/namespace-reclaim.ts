@@ -146,6 +146,24 @@ export async function reclaimNamespace(
   // -- 4: the integration branch, which is the product (§20.4) -------------
   const integrationBranch = await resolveIntegrationBranch(deps, gitRunKey, options, failures);
 
+  // Appendix B. `clean` is the one operation in this milestone that *removes*
+  // things, and it runs long after the run finished, usually with nobody
+  // watching — R-12 is exactly the case of somebody discovering weeks later that
+  // a branch is gone. The counts and the branch's fate are recorded where the
+  // rest of the run's history is, so "what did `clean` do to this run" has an
+  // answer that does not depend on somebody having kept the terminal output.
+  //
+  // Not emitted for a dry run: `--dry-run` reports and changes nothing, and an
+  // event saying a namespace was reclaimed would be the one change it made.
+  if (options.dryRun !== true) {
+    await deps.store.appendEvent(runId, 'namespace_reclaimed', {
+      gitRunKey,
+      worktrees: reclaimed.removed.length,
+      attemptRefs: attemptRefs.length,
+      integrationBranchKept: integrationBranch.kind === 'kept',
+    });
+  }
+
   return {
     runId,
     worktrees: reclaimed.removed,
