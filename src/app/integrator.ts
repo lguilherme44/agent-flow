@@ -9,7 +9,7 @@ import {
 import type { Clock } from '../ports/index.js';
 import type { CommitObject } from '../adapters/git/git-workspaces.js';
 import { topologicalOrder, type Dag } from '../core/dag.js';
-import { integrationRef, integrationWorkspace } from '../core/worktree-policy.js';
+import { attemptRef, integrationRef, integrationWorkspace } from '../core/worktree-policy.js';
 import { MARKER_IDENTITY, readAttempt } from './attempt-receipt.js';
 import { runPaths } from './paths.js';
 import { decideNamespace, deriveRepoKey, type RepositoryDeps } from './run-git-identity.js';
@@ -539,9 +539,36 @@ export class Integrator implements WaveIntegrator, RecoveryIntegrator {
 
     // 3 — the marker must exist as a commit. A branch that never moved off its
     // base is an attempt that was never marked.
+    //
+    // **The ref is derived, not read.** `attempt.branch` is a field of the
+    // artifact, and §11.1 makes the artifact the authority — but the authority
+    // over *what was validated*, not over which ref this module then asks Git
+    // about. Those are separable, and separating them costs one function call:
+    // the run's own identity already decides the ref, through the same
+    // `attemptRef` that `TaskWorkspaces` composed it with and that recovery
+    // re-derives (§7.3). There is no second ref policy here, only the existing
+    // one asked a second time.
+    //
+    // The recorded value is then required to agree. It is diagnostic — an
+    // artifact naming a different branch is an artifact describing a different
+    // attempt, and merging what it points at would put work on the integration
+    // branch under another attempt's evidence.
+    const expected = attemptRef(this.gitRunKeyOf(workspace.branch), offered.task, offered.attempt);
+    if (!expected.ok) {
+      return this.refuseTask(offered, 'attempt_marker_missing', expected.refusal.reason);
+    }
+    if (attempt.branch !== expected.value) {
+      return this.refuseTask(
+        offered,
+        'attempt_marker_mismatch',
+        `the evidence for ${offered.task} names branch "${attempt.branch}" and attempt ` +
+          `${String(offered.attempt)} of this run is "${expected.value}"`,
+      );
+    }
+
     const marker = await this.deps.workspaces.revParse({
       cwd: this.deps.projectDir,
-      rev: `refs/heads/${attempt.branch}`,
+      rev: `refs/heads/${expected.value}`,
     });
     if (!marker.ok) {
       return this.refuseTask(

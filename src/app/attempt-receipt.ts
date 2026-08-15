@@ -446,7 +446,23 @@ export async function readAttempt(
   }
 
   const parsed = TaskAttemptResultSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+
+  // The artifact has to be the one this path names. `run`, `task` and `attempt`
+  // are recorded *inside* the file as well as encoded in its location, and the
+  // schema can only check that each is well-formed — not that the two agree.
+  //
+  // Every caller treats what comes back as evidence about the attempt it asked
+  // for: the Integrator composes the expected marker trailers from these three
+  // fields, and recovery re-derives the attempt ref from them. An artifact
+  // describing a different attempt would therefore be checked against the wrong
+  // marker, and a mismatch there reads as corruption rather than as a file in
+  // the wrong place. Refusing here says which of the two it is, and costs a
+  // comparison.
+  const self = parsed.data;
+  if (self.run !== run || self.task !== task || self.attempt !== attempt) return null;
+
+  return self;
 }
 
 function attemptPath(deps: Pick<AttemptEvidenceDeps, 'projectDir'>, attempt: TaskAttemptResult): string {

@@ -415,6 +415,50 @@ describe('what integration refuses to merge (§14.3, I-5, I-6, S-9)', () => {
     expect(headOf(current)).toBe(current.planningBase);
   });
 
+  it('refuses an artifact describing a different attempt than its path', async () => {
+    // `readAttempt` is the one gate every caller reads evidence through, and the
+    // three identity fields are recorded *inside* the file as well as encoded in
+    // its location. Nothing but this comparison makes the two agree: the schema
+    // can only say each is well-formed. An artifact for attempt 2 sitting at
+    // attempt 1's path would otherwise be checked against attempt 1's marker,
+    // and the mismatch would read as corruption rather than as a misplaced file.
+    const { current, workspace } = await dispatched();
+    run = current;
+    const planted = await current.plant('TASK-001', 1, { write: { 'a.txt': 'a\n' } });
+
+    const path = runPaths(current.repo.dir, current.runId).taskAttempt('TASK-001', 1);
+    const artifact = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...artifact, attempt: 2 }, null, 2));
+
+    expect((await refusalOf(current, workspace, planted)).code).toBe('attempt_evidence_missing');
+    expect(headOf(current)).toBe(current.planningBase);
+  });
+
+  it('refuses an artifact naming a branch that is not this attempt’s ref', async () => {
+    // The negative half of deriving the ref rather than reading it. The
+    // Integrator resolves the marker through `attemptRef(gitRunKey, task,
+    // attempt)` — the same function that created the branch — and requires the
+    // recorded value to agree. A crafted artifact pointing somewhere else does
+    // not redirect the lookup; it is refused for disagreeing.
+    //
+    // The branch below is well-formed and belongs to this run's own namespace,
+    // so nothing but the comparison rejects it: a hostile string would be caught
+    // one layer down by the adapter's ref allowlist and would prove less.
+    const { current, workspace } = await dispatched();
+    run = current;
+    const planted = await current.plant('TASK-001', 1, { write: { 'a.txt': 'a\n' } });
+
+    const path = runPaths(current.repo.dir, current.runId).taskAttempt('TASK-001', 1);
+    const artifact = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    const elsewhere = `agent-flow/${current.gitRunKey}/TASK-002/attempt-1`;
+    writeFileSync(path, JSON.stringify({ ...artifact, branch: elsewhere }, null, 2));
+
+    const refusal = await refusalOf(current, workspace, planted);
+    expect(refusal.code).toBe('attempt_marker_mismatch');
+    expect(refusal.detail).toContain('TASK-002');
+    expect(headOf(current)).toBe(current.planningBase);
+  });
+
   it('refuses an unsatisfied attempt, which has no receipt and no marker', async () => {
     const { current, workspace } = await dispatched();
     run = current;
