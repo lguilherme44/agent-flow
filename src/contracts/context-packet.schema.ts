@@ -355,15 +355,62 @@ const ALLOWED_FILE_KEYS = new Set(['path', 'reason']);
 const ALLOWED_SYMBOL_KEYS = new Set(['symbol', 'path', 'reason']);
 const ALLOWED_EVIDENCE_KEYS = new Set(['kind', 'id']);
 
+function sanitizeBudget(custom?: Partial<ContextPacketBudget>): ContextPacketBudget {
+  const d = DEFAULT_CONTEXT_PACKET_BUDGET;
+  if (!custom || typeof custom !== 'object') return d;
+
+  const resolve = (val: unknown, fallback: number): number => {
+    if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+      return Math.floor(val);
+    }
+    return fallback;
+  };
+
+  return Object.freeze({
+    maxRelevantFiles: resolve(custom.maxRelevantFiles, d.maxRelevantFiles),
+    maxRelevantSymbols: resolve(custom.maxRelevantSymbols, d.maxRelevantSymbols),
+    maxConstraints: resolve(custom.maxConstraints, d.maxConstraints),
+    maxArchitectureNotes: resolve(custom.maxArchitectureNotes, d.maxArchitectureNotes),
+    maxRisks: resolve(custom.maxRisks, d.maxRisks),
+    maxEvidenceReferences: resolve(custom.maxEvidenceReferences, d.maxEvidenceReferences),
+    maxObjectiveLength: resolve(custom.maxObjectiveLength, d.maxObjectiveLength),
+    maxStringLength: resolve(custom.maxStringLength, d.maxStringLength),
+    maxSymbolLength: resolve(custom.maxSymbolLength, d.maxSymbolLength),
+    maxPathLength: resolve(custom.maxPathLength, d.maxPathLength),
+    maxEvidenceIdLength: resolve(custom.maxEvidenceIdLength, d.maxEvidenceIdLength),
+    maxTaskIdLength: resolve(custom.maxTaskIdLength, d.maxTaskIdLength),
+    maxTotalCharacters: resolve(custom.maxTotalCharacters, d.maxTotalCharacters),
+  });
+}
+
 function isPathAllowed(path: string, authority: AllowedPathsAuthority): boolean {
   if (authority instanceof Set) {
-    return authority.has(path);
+    if (authority.has(path)) return true;
+    for (const item of authority) {
+      if (typeof item === 'string') {
+        const norm = validateAndNormalizeRepositoryPath(item);
+        if (norm.valid && norm.normalizedPath === path) return true;
+      }
+    }
+    return false;
   }
   if (Array.isArray(authority)) {
-    return authority.includes(path);
+    if (authority.includes(path)) return true;
+    for (const item of authority) {
+      if (typeof item === 'string') {
+        const norm = validateAndNormalizeRepositoryPath(item);
+        if (norm.valid && norm.normalizedPath === path) return true;
+      }
+    }
+    return false;
   }
   if (typeof authority === 'function') {
-    return authority(path);
+    try {
+      const res = authority(path);
+      return res === true;
+    } catch {
+      return false;
+    }
   }
   return false;
 }
@@ -376,7 +423,12 @@ function isEvidenceAllowed(ref: EvidenceReference, authority: AllowedEvidenceAut
     return authority.includes(`${ref.kind}:${ref.id}`) || authority.includes(ref.id);
   }
   if (typeof authority === 'function') {
-    return authority(ref);
+    try {
+      const res = authority(ref);
+      return res === true;
+    } catch {
+      return false;
+    }
   }
   return false;
 }
@@ -399,50 +451,48 @@ export function validateContextPacket(
   input: unknown,
   options?: ContextPacketValidationOptions,
 ): ContextPacketValidationResult {
-  const issues: ContextPacketValidationIssue[] = [];
+  try {
+    const issues: ContextPacketValidationIssue[] = [];
 
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-    return {
-      ok: false,
-      issues: Object.freeze([
-        {
-          code: 'invalid_type',
-          path: '(root)',
-          message: 'expected a non-null object',
-          received: input,
-        },
-      ]),
-    };
-  }
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      return {
+        ok: false,
+        issues: Object.freeze([
+          {
+            code: 'invalid_type',
+            path: '(root)',
+            message: 'expected a non-null object',
+            received: input,
+          },
+        ]),
+      };
+    }
 
-  const rawObj = input as Record<string, unknown>;
+    const rawObj = input as Record<string, unknown>;
 
-  if (hasDangerousKeys(rawObj)) {
-    issues.push({
-      code: 'prototype_pollution',
-      path: '(root)',
-      message: 'object contains dangerous prototype keys',
-    });
-  }
-
-  // Check unknown top-level properties
-  for (const key of Object.keys(rawObj)) {
-    if (!ALLOWED_TOP_LEVEL_KEYS.has(key)) {
+    if (hasDangerousKeys(rawObj)) {
       issues.push({
-        code: 'unknown_field',
-        path: key,
-        message: `unknown property '${key}' is not allowed on ContextPacket`,
-        received: key,
+        code: 'prototype_pollution',
+        path: '(root)',
+        message: 'object contains dangerous prototype keys',
       });
     }
-  }
 
-  const budget: ContextPacketBudget = {
-    ...DEFAULT_CONTEXT_PACKET_BUDGET,
-    ...(options?.budget ?? {}),
-  };
+    // Check unknown top-level properties
+    for (const key of Object.keys(rawObj)) {
+      if (!ALLOWED_TOP_LEVEL_KEYS.has(key)) {
+        issues.push({
+          code: 'unknown_field',
+          path: key,
+          message: `unknown property '${key}' is not allowed on ContextPacket`,
+          received: key,
+        });
+      }
+    }
 
-  const trust = options?.trust;
+    const budget = sanitizeBudget(options?.budget);
+
+    const trust = options?.trust;
 
   let totalChars = 0;
 
@@ -1169,8 +1219,21 @@ export function validateContextPacket(
     evidence: Object.freeze(validatedEvidence),
   });
 
-  return {
-    ok: true,
-    packet,
-  };
+    return {
+      ok: true,
+      packet,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      issues: Object.freeze([
+        {
+          code: 'invalid_type' as const,
+          path: '(root)',
+          message: error instanceof Error ? error.message : 'validation encountered unhandled error on input',
+          received: error,
+        },
+      ]),
+    };
+  }
 }

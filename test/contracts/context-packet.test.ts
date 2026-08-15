@@ -650,4 +650,200 @@ describe('ContextPacket Contract & Validator (M3-03)', () => {
       expect(result.issues.some((i) => i.code === 'budget_exceeded')).toBe(true);
     });
   });
+
+  describe('13. Trust Predicate Attacks & Resilience', () => {
+    it('fails closed when an async predicate returns a Promise (prevents truthy Promise bypass)', () => {
+      const asyncFalsePredicate = async () => false;
+      const input = {
+        ...minimalValid,
+        relevantFiles: [{ path: 'src/a.ts', reason: 'Some file' }],
+      };
+      // Runtime cast of async predicate
+      const res = validateContextPacket(input, {
+        trust: { allowedPaths: asyncFalsePredicate as unknown as (p: string) => boolean },
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'path_not_allowed')).toBe(true);
+    });
+
+    it('fails closed when an evidence predicate returns an async Promise', () => {
+      const asyncFalseEvidence = async () => false;
+      const input = {
+        ...minimalValid,
+        evidence: [{ kind: 'file' as const, id: 'src/a.ts' }],
+      };
+      const res = validateContextPacket(input, {
+        trust: { allowedEvidence: asyncFalseEvidence as unknown as (r: unknown) => boolean },
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'evidence_not_allowed')).toBe(true);
+    });
+
+    it('fails closed when a trust predicate throws an Error or string', () => {
+      const throwingPredicate = () => {
+        throw new Error('Database disconnected');
+      };
+      const input = {
+        ...minimalValid,
+        relevantFiles: [{ path: 'src/a.ts', reason: 'Some file' }],
+      };
+      const res = validateContextPacket(input, {
+        trust: { allowedPaths: throwingPredicate },
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'path_not_allowed')).toBe(true);
+    });
+
+    it('matches normalized aliases inside allowedPaths sets and arrays', () => {
+      const unnormalizedAuthority = new Set(['./src/contracts/index.ts']);
+      const input = {
+        ...minimalValid,
+        relevantFiles: [{ path: 'src/contracts/index.ts', reason: 'Match' }],
+      };
+      const res = validateContextPacket(input, {
+        trust: { allowedPaths: unnormalizedAuthority },
+      });
+      expect(res.ok).toBe(true);
+    });
+
+    it('ensures intrinsic path safety rules cannot be overridden by malformed allowedPaths', () => {
+      const hostileAuthority = new Set(['../secret', '/etc/passwd']);
+      const input = {
+        ...minimalValid,
+        relevantFiles: [{ path: '../secret', reason: 'Traversal' }],
+      };
+      const res = validateContextPacket(input, {
+        trust: { allowedPaths: hostileAuthority },
+      });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'invalid_path')).toBe(true);
+    });
+  });
+
+  describe('14. Custom Budget Sanitization Attacks', () => {
+    it('sanitizes NaN, negative, Infinity, undefined, and non-numeric custom budgets to safe defaults', () => {
+      const malformedBudget = {
+        maxRelevantFiles: NaN,
+        maxRelevantSymbols: -5,
+        maxConstraints: Infinity,
+        maxArchitectureNotes: undefined,
+        maxRisks: '20' as unknown as number,
+      };
+
+      const input = {
+        ...minimalValid,
+        relevantFiles: Array.from({ length: 60 }, (_, i) => ({
+          path: `src/file_${i}.ts`,
+          reason: 'Reason',
+        })),
+      };
+
+      // NaN should NOT disable the default 50 limit!
+      const res = validateContextPacket(input, { budget: malformedBudget });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'budget_exceeded' && i.path === 'relevantFiles')).toBe(
+        true,
+      );
+    });
+
+    it('accepts zero as a valid strict budget constraint', () => {
+      const zeroBudget = {
+        maxConstraints: 0,
+      };
+      const emptyOk = validateContextPacket(minimalValid, { budget: zeroBudget });
+      expect(emptyOk.ok).toBe(true);
+
+      const oneConstraint = {
+        ...minimalValid,
+        constraints: ['Constraint 1'],
+      };
+      const failOne = validateContextPacket(oneConstraint, { budget: zeroBudget });
+      expect(failOne.ok).toBe(false);
+      if (failOne.ok) return;
+      expect(failOne.issues.some((i) => i.code === 'budget_exceeded' && i.path === 'constraints')).toBe(
+        true,
+      );
+    });
+  });
+
+  describe('15. Runtime Adversarial Objects (Getters, Cycles, Sparse, Null Proto)', () => {
+    it('handles adversarial throwing property getters safely without crashing', () => {
+      const hostileObj: Record<string, unknown> = { ...minimalValid };
+      Object.defineProperty(hostileObj, 'objective', {
+        get() {
+          throw new Error('Hostile getter trap');
+        },
+      });
+
+      const res = validateContextPacket(hostileObj);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'invalid_type')).toBe(true);
+    });
+
+    it('rejects circular object references safely without infinite recursion', () => {
+      const cyclic: Record<string, unknown> = { ...minimalValid };
+      cyclic['self'] = cyclic;
+
+      const res = validateContextPacket(cyclic);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'unknown_field' && i.path === 'self')).toBe(true);
+    });
+
+    it('rejects sparse arrays in place of dense arrays', () => {
+      const sparse = {
+        ...minimalValid,
+        relevantFiles: new Array(5),
+      };
+
+      const res = validateContextPacket(sparse);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.issues.some((i) => i.code === 'invalid_type')).toBe(true);
+    });
+
+    it('accepts Object.create(null) dictionary inputs with valid shape', () => {
+      const nullProto = Object.create(null);
+      nullProto.objective = 'Null prototype object test';
+      nullProto.relevantFiles = [];
+      nullProto.relevantSymbols = [];
+      nullProto.constraints = [];
+      nullProto.architectureNotes = [];
+      nullProto.risks = [];
+      nullProto.evidence = [];
+
+      const res = validateContextPacket(nullProto);
+      expect(res.ok).toBe(true);
+    });
+  });
+
+  describe('16. ContextPacketSchema vs Authoritative Validation Boundary', () => {
+    it('demonstrates that ContextPacketSchema only parses shapes while validateContextPacket enforces full security and authority', () => {
+      const candidateWithHallucination = {
+        objective: 'Test',
+        relevantFiles: [{ path: 'src/invented.ts', reason: 'Invented by LLM' }],
+        relevantSymbols: [],
+        constraints: [],
+        architectureNotes: [],
+        risks: [],
+        evidence: [],
+      };
+
+      // Zod schema only checks types (for JSON Schema generation / AD-08)
+      const zodParsed = ContextPacketSchema.safeParse(candidateWithHallucination);
+      expect(zodParsed.success).toBe(true);
+
+      // Authoritative validator rejects hallucinated path when trust is enforced
+      const validated = validateContextPacket(candidateWithHallucination, {
+        trust: { requireTrustedPaths: true, allowedPaths: new Set(['src/real.ts']) },
+      });
+      expect(validated.ok).toBe(false);
+    });
+  });
 });
