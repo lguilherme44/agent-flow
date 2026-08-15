@@ -2007,3 +2007,113 @@ describe('the E2E suite crosses the real server (UI-31)', () => {
     }
   });
 });
+
+describe('UtilityModel port boundary (M3-01)', () => {
+  // The UtilityModel is an optional auxiliary model for advisory tasks.
+  // These rules keep it from silently accumulating runner authority or becoming
+  // coupled to the primary workflow.
+
+  it('utility-model port does not import AgentRunner or AgentRunInput', () => {
+    const { text } = read(join(ROOT, 'src/ports/utility-model.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    // Must not import the agent-runner port
+    expect(specifiers.some((s) => s.includes('agent-runner'))).toBe(false);
+    // Must not reference AgentRunInput or AgentRunner as identifiers
+    expect(code).not.toMatch(/\bAgentRunInput\b/);
+    expect(code).not.toMatch(/\bAgentRunner\b/);
+  });
+
+  it('utility-model port does not import git or process modules', () => {
+    const { text } = read(join(ROOT, 'src/ports/utility-model.ts'));
+    const specifiers = importSpecifiers(text);
+
+    const forbidden = ['git', 'process-runner', 'node-process', 'worktree', 'node:child_process'];
+    for (const f of forbidden) {
+      expect(
+        specifiers.some((s) => s.includes(f)),
+        `utility-model.ts imports ${f}`,
+      ).toBe(false);
+    }
+  });
+
+  it('utility-model port does not import file-system for operational authority', () => {
+    const { text } = read(join(ROOT, 'src/ports/utility-model.ts'));
+    const specifiers = importSpecifiers(text);
+    // file-system port grants write access — a utility model must not import it
+    expect(specifiers.some((s) => s.includes('file-system'))).toBe(false);
+  });
+
+  it('core/adaptive-workflow does not import the utility-model port', () => {
+    const { text } = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    const specifiers = importSpecifiers(text);
+    expect(specifiers.some((s) => s.includes('utility-model'))).toBe(false);
+  });
+
+  it('core adaptive-workflow classifies workflows without UtilityModel (decisions remain deterministic)', () => {
+    // TRIVIAL / SIMPLE / STANDARD / HIGH-RISK classification is deterministic
+    // and must never depend on an optional model.
+    const { text } = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    const code = codeOnly(text);
+    expect(code).not.toMatch(/\bUtilityModel\b/);
+    expect(code).not.toMatch(/\butilityModel\b/);
+  });
+
+  it('utility-model port contains no provider-specific vocabulary', () => {
+    const { text } = read(join(ROOT, 'src/ports/utility-model.ts'));
+    const code = codeOnly(text).toLowerCase();
+    const forbidden = [
+      'qwen',
+      'no_think',
+      'ollama',
+      'lmstudio',
+      'openai',
+      'anthropic',
+      'llamacpp',
+    ];
+    for (const term of forbidden) {
+      expect(code.includes(term), `utility-model.ts contains provider term: ${term}`).toBe(false);
+    }
+  });
+
+  it('utility-model port does not hardcode 40000 as a token budget', () => {
+    // M3-00 finding: 40000 is an operational budget for one specific endpoint.
+    // The port must not bake it in as a universal constant.
+    const { text } = read(join(ROOT, 'src/ports/utility-model.ts'));
+    expect(codeOnly(text)).not.toMatch(/\b40000\b/);
+  });
+
+  it('FakeUtilityModel does not import git or process modules', () => {
+    const { text } = read(join(ROOT, 'test/fakes/fake-utility-model.ts'));
+    const specifiers = importSpecifiers(text);
+    const forbidden = ['git', 'process-runner', 'node-process', 'worktree', 'node:child_process'];
+    for (const f of forbidden) {
+      expect(
+        specifiers.some((s) => s.includes(f)),
+        `fake-utility-model.ts imports ${f}`,
+      ).toBe(false);
+    }
+  });
+
+  it('FakeUtilityModel imports only from the ports barrel (structural alignment with port)', () => {
+    const { text } = read(join(ROOT, 'test/fakes/fake-utility-model.ts'));
+    expect(importSpecifiers(text).some((s) => s.includes('ports'))).toBe(true);
+  });
+
+  it('no src/ module imports a utility-model adapter that does not exist yet', () => {
+    // M3-02 has not landed. Nothing in src/ should import from
+    // adapters/utility-model yet.
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) =>
+        importSpecifiers(text).some(
+          (s) =>
+            s.includes('adapters/utility-model') || s.includes('adapters/utility_model'),
+        ),
+      )
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+});
