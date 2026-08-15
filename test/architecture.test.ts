@@ -2159,3 +2159,78 @@ describe('UtilityModel adapter boundary (M3-02)', () => {
     expect(code).toContain('estimateInputTokens');
   });
 });
+
+describe('ContextPacket contract boundary (M3-03)', () => {
+  // ContextPacket is provider-neutral, authority-free advisory data.
+  // It must not acquire execution authority, depend on adapters, or be wired
+  // into production workflows ahead of M3-08.
+
+  it('context-packet schema does not import git, process, or worktree modules', () => {
+    const { text } = read(join(ROOT, 'src/contracts/context-packet.schema.ts'));
+    const specifiers = importSpecifiers(text);
+    const forbidden = ['git', 'process-runner', 'node-process', 'worktree', 'node:child_process', 'file-system'];
+    for (const f of forbidden) {
+      expect(
+        specifiers.some((s) => s.includes(f)),
+        `context-packet.schema.ts imports ${f}`,
+      ).toBe(false);
+    }
+  });
+
+  it('context-packet schema does not import AgentRunner or AgentRunInput', () => {
+    const { text } = read(join(ROOT, 'src/contracts/context-packet.schema.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(specifiers.some((s) => s.includes('agent-runner'))).toBe(false);
+    expect(code).not.toMatch(/\bAgentRunner\b/);
+    expect(code).not.toMatch(/\bAgentRunInput\b/);
+  });
+
+  it('context-packet schema contains no provider-specific vocabulary', () => {
+    const { text } = read(join(ROOT, 'src/contracts/context-packet.schema.ts'));
+    const code = codeOnly(text).toLowerCase();
+    const forbidden = [
+      'qwen',
+      'no_think',
+      'ollama',
+      'lmstudio',
+      'openai',
+      'anthropic',
+      'llamacpp',
+    ];
+    for (const term of forbidden) {
+      expect(code.includes(term), `context-packet.schema.ts contains provider term: ${term}`).toBe(false);
+    }
+  });
+
+  it('OpenAI-compatible utility model adapter does not depend on ContextPacket', () => {
+    const { text } = read(join(ROOT, 'src/adapters/utility-model/openai-utility-model.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(specifiers.some((s) => s.includes('context-packet'))).toBe(false);
+    expect(code).not.toMatch(/\bContextPacket\b/);
+  });
+
+  it('core and production workflow engines in src/core, src/app, src/server do not import or execute ContextPacket (M3-08 boundary)', () => {
+    const workflowDirs = ['src/core', 'src/app', 'src/server'];
+    const offenders: string[] = [];
+
+    for (const dir of workflowDirs) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (importSpecifiers(text).some((s) => s.includes('context-packet'))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('contracts barrel exports ContextPacket contract and validator', () => {
+    const { text } = read(join(ROOT, 'src/contracts/index.ts'));
+    expect(text).toContain('context-packet.schema');
+  });
+});
