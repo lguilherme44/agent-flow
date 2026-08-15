@@ -15,6 +15,7 @@ import type {
 // ─── Candidate Discovery Types & Constants ───────────────────────────────────
 
 export const DEFAULT_MAX_CANDIDATES = 200;
+export const HARD_MAX_CANDIDATES = 1000;
 
 export const DEFAULT_EXCLUDED_SEGMENTS = Object.freeze([
   '.git',
@@ -35,10 +36,103 @@ const SECRET_OR_ENV_FILE_REGEX =
 export interface CandidateFilterOptions {
   readonly maxCandidates?: number;
   readonly excludedSegments?: readonly string[];
+  readonly objective?: string;
+}
+
+function sanitizeMaxCandidates(val?: number): number {
+  if (val === 0) return 0;
+  if (typeof val !== 'number' || !Number.isFinite(val) || val < 0) {
+    return DEFAULT_MAX_CANDIDATES;
+  }
+  return Math.min(Math.floor(val), HARD_MAX_CANDIDATES);
+}
+
+// ─── Deterministic Objective-Path Relevance Scorer (Hotspot B) ────────────────
+
+const COMMON_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'this',
+  'that',
+  'from',
+  'into',
+  'file',
+  'files',
+  'code',
+  'implement',
+  'fix',
+  'test',
+  'tests',
+  'update',
+  'change',
+  'add',
+  'remove',
+  'delete',
+  'issue',
+  'bug',
+]);
+
+function extractObjectiveTokens(objective?: string): readonly string[] {
+  if (!objective || typeof objective !== 'string') return [];
+  const rawTokens = objective
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/g)
+    .filter((t) => t.length >= 2);
+
+  const filtered = rawTokens.filter((t) => !COMMON_STOP_WORDS.has(t));
+  return filtered.length > 0 ? filtered : rawTokens;
+}
+
+function tokenizePath(path: string): { readonly segments: readonly string[]; readonly basenameTokens: readonly string[] } {
+  const norm = path.toLowerCase();
+  const rawSegments = norm.split('/');
+  const basename = rawSegments[rawSegments.length - 1] ?? '';
+
+  // Split basename by delimiters and camelCase
+  const basenameTokens = basename
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[^a-z0-9]+/g)
+    .filter((t) => t.length >= 2);
+
+  return {
+    segments: rawSegments,
+    basenameTokens,
+  };
+}
+
+function scorePathRelevance(path: string, objectiveTokens: readonly string[]): number {
+  if (objectiveTokens.length === 0) return 0;
+
+  const { segments, basenameTokens } = tokenizePath(path);
+  const basename = segments[segments.length - 1] ?? '';
+  let score = 0;
+
+  for (const token of objectiveTokens) {
+    // 1. Exact token in basename tokens
+    if (basenameTokens.includes(token)) {
+      score += 100;
+    } else if (basename.includes(token)) {
+      score += 50;
+    }
+
+    // 2. Segment match
+    for (let i = 0; i < segments.length - 1; i++) {
+      const seg = segments[i] ?? '';
+      if (seg === token) {
+        score += 30;
+      } else if (seg.includes(token)) {
+        score += 10;
+      }
+    }
+  }
+
+  return score;
 }
 
 /**
- * Deterministically filters, normalizes, deduplicates, and bounds repository candidate paths.
+ * Deterministically filters, normalizes, scores against objective, deduplicates, and bounds repository candidate paths.
  *
  * Excludes:
  * - Empty or whitespace paths
@@ -46,18 +140,25 @@ export interface CandidateFilterOptions {
  * - Internal state and VCS directories (.git, .agent-flow)
  * - Build output and dependencies (node_modules, dist, coverage, .turbo, .next)
  * - Sensitive credential files (.env*, *.pem, *.key, id_rsa, etc.)
+ *
+ * Scoring & Selection (Hotspot B):
+ * - When an objective is provided, candidates are scored by lexical relevance to objective tokens.
+ * - Candidates are sorted by score descending, then tie-broken deterministically by normalized path.
+ * - The top `maxCandidates` candidates are selected, ensuring relevant files are not starved by alphabetic order.
  */
 export function filterAndNormalizeCandidatePaths(
   rawPaths: readonly string[],
   options?: CandidateFilterOptions,
 ): readonly string[] {
-  const maxCandidates = options?.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
+  const maxCandidates = sanitizeMaxCandidates(options?.maxCandidates);
+  if (maxCandidates === 0) return Object.freeze([]);
+
   const excludedSegments = new Set(
     (options?.excludedSegments ?? DEFAULT_EXCLUDED_SEGMENTS).map((s) => s.toLowerCase()),
   );
 
   const seen = new Set<string>();
-  const normalizedList: string[] = [];
+  const validList: string[] = [];
 
   for (const raw of rawPaths) {
     if (typeof raw !== 'string') continue;
@@ -86,35 +187,61 @@ export function filterAndNormalizeCandidatePaths(
 
     if (!seen.has(norm)) {
       seen.add(norm);
-      normalizedList.push(norm);
+      validList.push(norm);
     }
   }
 
-  // Deterministic lexicographical ordering
-  normalizedList.sort((a, b) => a.localeCompare(b));
+  const objectiveTokens = extractObjectiveTokens(options?.objective);
 
-  if (normalizedList.length > maxCandidates) {
-    return Object.freeze(normalizedList.slice(0, maxCandidates));
+  if (objectiveTokens.length > 0) {
+    // Score each candidate against objective tokens
+    const scored = validList.map((path) => ({
+      path,
+      score: scorePathRelevance(path, objectiveTokens),
+    }));
+
+    // Sort by score descending, then tie-break deterministically by path ascending
+    scored.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return a.path.localeCompare(b.path);
+    });
+
+    const selected = scored.slice(0, maxCandidates).map((s) => s.path);
+    return Object.freeze(selected);
   }
 
-  return Object.freeze(normalizedList);
+  // Deterministic lexicographical ordering fallback
+  validList.sort((a, b) => a.localeCompare(b));
+
+  if (validList.length > maxCandidates) {
+    return Object.freeze(validList.slice(0, maxCandidates));
+  }
+
+  return Object.freeze(validList);
 }
 
 // ─── Candidate Discovery Implementations ──────────────────────────────────────
 
 export interface CandidateDiscovery {
-  discoverCandidates(projectDir: string): Promise<readonly string[]>;
+  discoverCandidates(projectDir: string, objective?: string): Promise<readonly string[]>;
 }
 
 export class StaticCandidateDiscovery implements CandidateDiscovery {
-  private readonly candidates: readonly string[];
+  private readonly rawCandidates: readonly string[];
+  private readonly options?: CandidateFilterOptions;
 
   constructor(candidates: readonly string[], options?: CandidateFilterOptions) {
-    this.candidates = filterAndNormalizeCandidatePaths(candidates, options);
+    this.rawCandidates = Object.freeze([...candidates]);
+    this.options = options;
   }
 
-  async discoverCandidates(_projectDir: string): Promise<readonly string[]> {
-    return this.candidates;
+  async discoverCandidates(_projectDir: string, objective?: string): Promise<readonly string[]> {
+    return filterAndNormalizeCandidatePaths(this.rawCandidates, {
+      ...this.options,
+      objective: objective ?? this.options?.objective,
+    });
   }
 }
 
@@ -124,11 +251,13 @@ export class FileSystemCandidateDiscovery implements CandidateDiscovery {
     private readonly options?: CandidateFilterOptions,
   ) {}
 
-  async discoverCandidates(projectDir: string): Promise<readonly string[]> {
+  async discoverCandidates(projectDir: string, objective?: string): Promise<readonly string[]> {
     const rawPaths: string[] = [];
     const excludedSegments = new Set(
       (this.options?.excludedSegments ?? DEFAULT_EXCLUDED_SEGMENTS).map((s) => s.toLowerCase()),
     );
+
+    const realProjectDir = (await this.fs.realPath(projectDir)) ?? projectDir;
 
     const walk = async (currentRelDir: string): Promise<void> => {
       const fullDir = currentRelDir ? `${projectDir}/${currentRelDir}` : projectDir;
@@ -156,7 +285,14 @@ export class FileSystemCandidateDiscovery implements CandidateDiscovery {
         if (!st) continue;
 
         if (st.isDirectory) {
-          await walk(relPath);
+          // Prevent symlink directory escapes and cycles
+          const realDirPath = await this.fs.realPath(fullPath);
+          if (
+            realDirPath &&
+            (realDirPath === realProjectDir || realDirPath.startsWith(`${realProjectDir}/`))
+          ) {
+            await walk(relPath);
+          }
         } else {
           rawPaths.push(relPath);
         }
@@ -164,7 +300,10 @@ export class FileSystemCandidateDiscovery implements CandidateDiscovery {
     };
 
     await walk('');
-    return filterAndNormalizeCandidatePaths(rawPaths, this.options);
+    return filterAndNormalizeCandidatePaths(rawPaths, {
+      ...this.options,
+      objective: objective ?? this.options?.objective,
+    });
   }
 }
 
@@ -208,7 +347,7 @@ export interface RepositoryRetrieverOptions {
 }
 
 const DEFAULT_SYSTEM_INSTRUCTION =
-  'You are a repository context ranker. Given an objective and a list of candidate repository files, select and rank the files most relevant to understanding or implementing the objective. Return a structured JSON response conforming to the schema. Do not invent paths outside the candidate list.';
+  'You are a repository context ranker. Given an objective and a list of candidate repository files, select and rank the files most relevant to understanding or implementing the objective. Return a structured JSON response conforming to the schema. Do not invent paths outside the candidate list. Do not reference evidence.';
 
 // ─── RepositoryRetriever ──────────────────────────────────────────────────────
 
@@ -217,11 +356,13 @@ const DEFAULT_SYSTEM_INSTRUCTION =
  *
  * Guarantees:
  * - Deterministic candidate discovery (repository defines the candidate universe)
+ * - Objective-sensitive lexical candidate preselection (Hotspot B) prevents alphabetic starvation
  * - The local UtilityModel NEVER discovers the repository; it only ranks candidates
  * - Zero shell, zero arbitrary filesystem write authority
  * - Model output is treated as untrusted and strictly validated via validateContextPacket
  * - Model-invented paths fail closed and cannot cross the ContextPacket trust boundary
- * - Any model failure or validation refusal safely degrades into a deterministic bypass
+ * - Model cannot reference unauthorized evidence (Hotspot A: allowedEvidence: new Set(), requireTrustedEvidence: true)
+ * - Any model failure, validation refusal, or discovery error safely degrades into a deterministic bypass
  * - Number of inference calls is at most 1
  */
 export class RepositoryRetriever {
@@ -235,22 +376,43 @@ export class RepositoryRetriever {
     this.utilityModel = options?.utilityModel;
     this.candidateDiscovery = options?.candidateDiscovery;
     this.projectDir = options?.projectDir;
-    this.maxCandidates = options?.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
+    this.maxCandidates = sanitizeMaxCandidates(options?.maxCandidates);
     this.systemInstruction = options?.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION;
   }
 
   async retrieve(input: RepositoryRetrievalInput): Promise<RepositoryRetrievalResult> {
     const projectDir = input.projectDir ?? this.projectDir ?? process.cwd();
 
+    if (this.maxCandidates === 0) {
+      return {
+        ok: false,
+        bypass: true,
+        reason: 'maxCandidates is configured to 0',
+        errorCode: 'empty_candidates',
+        candidateCount: 0,
+      };
+    }
+
     // 1. Resolve candidates deterministically
     let candidates: readonly string[] = [];
 
-    if (input.explicitCandidates !== undefined) {
-      candidates = filterAndNormalizeCandidatePaths(input.explicitCandidates, {
-        maxCandidates: this.maxCandidates,
-      });
-    } else if (this.candidateDiscovery !== undefined) {
-      candidates = await this.candidateDiscovery.discoverCandidates(projectDir);
+    try {
+      if (input.explicitCandidates !== undefined) {
+        candidates = filterAndNormalizeCandidatePaths(input.explicitCandidates, {
+          maxCandidates: this.maxCandidates,
+          objective: input.objective,
+        });
+      } else if (this.candidateDiscovery !== undefined) {
+        candidates = await this.candidateDiscovery.discoverCandidates(projectDir, input.objective);
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        bypass: true,
+        reason: `Candidate discovery failed: ${err instanceof Error ? err.message : String(err)}`,
+        errorCode: 'empty_candidates',
+        candidateCount: 0,
+      };
     }
 
     if (candidates.length === 0) {
@@ -344,22 +506,31 @@ export class RepositoryRetriever {
       }
     }
 
-    if (rawPayload === undefined) {
+    if (rawPayload === undefined || typeof rawPayload !== 'object' || rawPayload === null) {
       return {
         ok: false,
         bypass: true,
-        reason: 'Model returned empty structured output',
+        reason: 'Model returned empty or non-object structured output',
         errorCode: 'invalid_response',
         candidateCount: candidates.length,
       };
     }
 
-    // 6. Validate ContextPacket against trusted candidate authority
+    // Preserve trusted caller fields (objective, taskId)
+    const payloadObj = { ...(rawPayload as Record<string, unknown>) };
+    payloadObj.objective = input.objective;
+    if (input.taskId !== undefined) {
+      payloadObj.taskId = input.taskId;
+    }
+
+    // 6. Validate ContextPacket against trusted candidate authority and strict empty evidence authority (Hotspot A)
     const candidateSet = new Set(candidates);
-    const validation = validateContextPacket(rawPayload, {
+    const validation = validateContextPacket(payloadObj, {
       trust: {
         allowedPaths: candidateSet,
         requireTrustedPaths: true,
+        allowedEvidence: new Set<string>(),
+        requireTrustedEvidence: true,
       },
     });
 

@@ -129,12 +129,12 @@ export class GitClient {
     return (await this.changedFiles()).length === 0;
   }
 
-  /** Tracked repository files (`git ls-files`). */
+  /** Tracked repository files (`git ls-files -z`). */
   async trackedFiles(): Promise<string[]> {
-    const result = await this.run('ls-files', []);
+    const result = await this.run('ls-files', ['-z']);
     return result.exitCode === 0
       ? result.stdout
-          .split('\n')
+          .split('\0')
           .map((line) => line.trim())
           .filter((line) => line.length > 0)
       : [];

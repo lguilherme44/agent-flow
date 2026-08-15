@@ -14,12 +14,15 @@ export class GitCandidateDiscovery implements CandidateDiscovery {
     private readonly options?: CandidateFilterOptions,
   ) {}
 
-  async discoverCandidates(_projectDir: string): Promise<readonly string[]> {
+  async discoverCandidates(_projectDir: string, objective?: string): Promise<readonly string[]> {
     const isRepo = await this.gitClient.isRepository();
     if (!isRepo) {
       return Object.freeze([]);
     }
     const tracked = await this.gitClient.trackedFiles();
-    return filterAndNormalizeCandidatePaths(tracked, this.options);
+    return filterAndNormalizeCandidatePaths(tracked, {
+      ...this.options,
+      objective: objective ?? this.options?.objective,
+    });
   }
 }
