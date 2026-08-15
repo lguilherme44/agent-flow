@@ -77,6 +77,15 @@ export interface WorldOptions {
    */
   readonly hold?: boolean;
   /**
+   * Park only this task, and let every other agent run to completion.
+   *
+   * Requires `hold`. A run where every agent waits can only be interrupted before
+   * anything reached the integration branch; parking one task in a later wave puts
+   * the interruption after some tasks are `completed` and integrated, which is the
+   * state §17 recovery actually has to tell apart.
+   */
+  readonly holdTask?: string;
+  /**
    * `parallelism.maxTasks`. Defaults to the shipped 1.
    *
    * What the run *asks* for. What it gets depends on the mode it was born in
@@ -92,6 +101,15 @@ export interface WorldOptions {
    * from a sequential one.
    */
   readonly independentTasks?: boolean;
+  /**
+   * Plan two waves with a fan-in: TASK-001 and TASK-002 independent, TASK-003
+   * depending on both, TASK-004 independent of everything.
+   *
+   * Three tasks ready at once and one that must wait, which is the smallest graph
+   * that can be wrong about a wave *base* rather than only about a wave's width.
+   * Mutually exclusive with `independentTasks` — they select the same plan slot.
+   */
+  readonly wavePlan?: boolean;
   /**
    * Check the repository out on this branch before anything is planned.
    *
@@ -120,6 +138,14 @@ export interface RunnerCall {
   readonly dialect: string;
   readonly role: string;
   readonly argv: string[];
+  /**
+   * What was under `src/` in the directory this invocation was spawned in.
+   *
+   * The one observation that distinguishes *which tree* an agent was handed, from
+   * outside the process. §19.2's claim is about the reviewer's checkout, and a
+   * response body cannot carry it.
+   */
+  readonly sees?: string[];
 }
 
 export class World {
@@ -221,6 +247,38 @@ export class World {
     );
   }
 
+  /**
+   * The CLI as a process this test still holds, rather than as a promise of its
+   * output.
+   *
+   * §26.5 asks for crashes "driven by killing the coordinator at a deterministic
+   * point", and `cli` above cannot be killed — by the time it resolves the run is
+   * over. This returns the child so a scenario can `SIGKILL` it while an agent is
+   * parked, which is a real crash: no signal handler runs, nothing is flushed,
+   * and whatever was half-written stays half-written.
+   *
+   * `SIGKILL` and not `SIGTERM` on purpose. A terminated process gets to unwind,
+   * and a run that unwound tidily is not the state §17 is about.
+   */
+  spawnCli(project: string, args: readonly string[]): ChildProcess {
+    const cwd = this.dirOf(project);
+    return spawn(
+      process.execPath,
+      [CLI, '--cwd', cwd, '--config', this.globalConfigPath, ...args],
+      { env: { ...process.env, ...this.fakeEnv }, stdio: ['ignore', 'pipe', 'pipe'], detached: true },
+    );
+  }
+
+  /** Kills a spawned coordinator and its whole process group, and waits for it. */
+  async kill(child: ChildProcess): Promise<void> {
+    const exited = new Promise<void>((done) => {
+      if (child.exitCode !== null) return done();
+      child.once('exit', () => done());
+    });
+    signal(child, 'SIGKILL');
+    await exited;
+  }
+
   dirOf(project: string): string {
     const dir = this.projectDirs[project];
     if (dir === undefined) throw new Error(`no project "${project}" in this world`);
@@ -230,6 +288,20 @@ export class World {
   async runIdOf(project: string): Promise<string> {
     const path = join(this.dirOf(project), '.agent-flow/current-run');
     return (await readFile(path, 'utf8')).trim();
+  }
+
+  /**
+   * A file under a project directory, or the empty string if it is not there.
+   *
+   * Absence is an answer rather than a throw, because "this artifact was never
+   * written" is a thing scenarios assert on as often as its contents.
+   */
+  async readProjectFile(project: string, relativePath: string): Promise<string> {
+    try {
+      return await readFile(join(this.dirOf(project), relativePath), 'utf8');
+    } catch {
+      return '';
+    }
   }
 
   async stateOf(project: string, runId?: string): Promise<Record<string, unknown>> {
@@ -290,7 +362,14 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
         ? { AF_FAKE_WRITE: options.collidingTasks === true ? 'shared' : '1' }
         : {}),
       ...(holdDir === undefined ? {} : { AF_FAKE_HOLD: holdDir }),
-      ...(options.independentTasks === true ? { AF_FAKE_PLAN: 'independent' } : {}),
+      ...(holdDir !== undefined && options.holdTask !== undefined
+        ? { AF_FAKE_HOLD_TASK: options.holdTask }
+        : {}),
+      ...(options.wavePlan === true
+        ? { AF_FAKE_PLAN: 'wave' }
+        : options.independentTasks === true
+          ? { AF_FAKE_PLAN: 'independent' }
+          : {}),
     };
 
     for (const name of names) {

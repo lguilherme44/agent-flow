@@ -27,7 +27,14 @@
  *   AF_FAKE_HOLD  directory: park every implementation agent until released
  */
 
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -150,6 +157,57 @@ const INDEPENDENT_PLAN = {
 };
 
 /**
+ * Two waves, and a fan-in — the shape M2-12 needs and neither plan above has.
+ *
+ * ```text
+ * TASK-001 ─┐
+ *           ├──> TASK-003
+ * TASK-002 ─┘
+ *
+ * TASK-004 (independent)
+ * ```
+ *
+ * `INDEPENDENT_PLAN` proves width and `BASE_PLAN` proves order, and each is blind
+ * to what the other shows. Only a graph with both can be wrong about the thing
+ * §14.2 and §4.3 actually promise: that a wave's base is the *previous wave's
+ * integrated result*, so a task with dependencies starts from a tree that already
+ * holds their work. A chain would prove it too, but only one dependency deep and
+ * never against a sibling that finished in a different order.
+ *
+ * Three tasks are ready at once here rather than two, because a width of two is
+ * the one number that cannot tell "as many as the plan allows" apart from "two".
+ */
+const WAVE_PLAN = {
+  feature: 'weekly-recurrence',
+  tasks: [
+    { ...(BASE_PLAN.tasks[0]), dependencies: [] },
+    { ...(BASE_PLAN.tasks[1]), dependencies: [] },
+    {
+      id: 'TASK-003',
+      title: 'Compose the series',
+      description: 'Read what the first two produced and compose them.',
+      complexity: 'normal',
+      risk: 'low',
+      dependencies: ['TASK-001', 'TASK-002'],
+      requirements: ['FR-001'],
+      acceptanceCriteria: ['The composition names both inputs.'],
+      validation: ['test'],
+    },
+    {
+      id: 'TASK-004',
+      title: 'Document the rule',
+      description: 'Independent of everything above.',
+      complexity: 'trivial',
+      risk: 'low',
+      dependencies: [],
+      requirements: ['FR-001'],
+      acceptanceCriteria: ['The rule is written down.'],
+      validation: ['test'],
+    },
+  ],
+};
+
+/**
  * The plan a revision produces: a third task, and a new edge.
  *
  * Different in the graph rather than only in prose, so the DAG view has
@@ -227,7 +285,11 @@ const role = /^ROLE:\s*([A-Z_]+)\s*$/m.exec(prompt)?.[1] ?? 'UNKNOWN';
 // `exec` is the Codex subcommand; the Claude adapter never passes it.
 const dialect = argv[0] === 'exec' ? 'codex' : 'claude';
 
-log({ dialect, role, argv });
+// `sees` is the tree this invocation was actually given, as repository-relative
+// names. §19.2 says final verification and review read the *integration* tree,
+// and the only way to tell that from the user's checkout from outside is to ask
+// what was in front of the agent: the composed work is on one and on no other.
+log({ dialect, role, argv, sees: listing('src') });
 
 /**
  * The task this invocation is about, from the task the prompt renders.
@@ -260,7 +322,34 @@ if (role === 'IMPLEMENTATION_AGENT') {
         ? 'src/shared.txt'
         : `src/${task.toLowerCase()}.txt`;
     mkdirSync(dirname(touched), { recursive: true });
-    writeFileSync(touched, `${task} wrote this line\n`);
+
+    // A dependent task **reads its dependencies' work before writing its own.**
+    //
+    // This is the assertion §4.3 cannot make from outside. A test can check that
+    // wave 2's base contains wave 1's merges, but that only proves the commit
+    // graph is the right shape; it does not prove the agent was given a checkout
+    // of it. Here the agent fails on its own if the files are absent, and it
+    // fails inside the attempt — which is exactly what a dependent task in a real
+    // repository does when the barrier is broken.
+    if (process.env['AF_FAKE_PLAN'] === 'wave' && task === 'TASK-003') {
+      const inputs = ['src/task-001.txt', 'src/task-002.txt'];
+      const missing = inputs.filter((path) => !existsSync(path));
+      if (missing.length > 0) {
+        process.stderr.write(
+          `ERROR: {"status":500,"error":{"message":"the dependencies' work is not in this checkout: ${missing.join(
+            ', ',
+          )}"}}\n`,
+        );
+        process.exit(1);
+      }
+      touched = 'src/composed.txt';
+      writeFileSync(
+        touched,
+        inputs.map((path) => readFileSync(path, 'utf8').trim()).join(' + ') + '\n',
+      );
+    } else {
+      writeFileSync(touched, `${task} wrote this line\n`);
+    }
   }
 
   // Parked on evidence, released on evidence. The marker file says "an agent is
@@ -268,7 +357,14 @@ if (role === 'IMPLEMENTATION_AGENT') {
   // — and the release file is the test's hand on the clock. No sleep decides
   // anything on either side.
   const hold = process.env['AF_FAKE_HOLD'];
-  if (hold !== undefined) {
+  // `AF_FAKE_HOLD_TASK` narrows the hold to one task. A run that parks every
+  // agent can only be interrupted before anything has been integrated; parking
+  // exactly one lets a scenario put the coordinator's death *after* a wave has
+  // merged and *during* the next one, which is the state recovery has to
+  // distinguish — completed work it must not touch, beside an attempt it must
+  // requeue.
+  const only = process.env['AF_FAKE_HOLD_TASK'];
+  if (hold !== undefined && (only === undefined || only === task)) {
     writeFileSync(join(hold, `${task}.entered`), `${String(process.pid)}\n`);
     while (!existsSync(join(hold, 'release'))) pause(25);
   }
@@ -329,8 +425,14 @@ function answerFor(agentRole, promptText) {
       // Content-driven, not order-driven: `revise` renders the instruction into
       // the same prompt, so the revised plan is chosen by what was asked for.
       const revised = /Revision requested by the reviewer/.test(promptText);
-      const independent = process.env['AF_FAKE_PLAN'] === 'independent';
-      const plan = revised ? REVISED_PLAN : independent ? INDEPENDENT_PLAN : BASE_PLAN;
+      const shape = process.env['AF_FAKE_PLAN'];
+      const plan = revised
+        ? REVISED_PLAN
+        : shape === 'wave'
+          ? WAVE_PLAN
+          : shape === 'independent'
+            ? INDEPENDENT_PLAN
+            : BASE_PLAN;
       return { body: JSON.stringify(plan, null, 2), json: plan };
     }
 
@@ -369,6 +471,18 @@ function answerFor(agentRole, promptText) {
  */
 function pause(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** The files directly under `dir` in the current working directory, sorted. */
+function listing(dir) {
+  try {
+    return readdirSync(dir).sort();
+  } catch {
+    // No such directory is a normal answer — a checkout of the planning base has
+    // none of this yet — and it is reported as the empty list rather than as an
+    // error, because "the agent saw nothing there" is the fact being recorded.
+    return [];
+  }
 }
 
 function log(entry) {
