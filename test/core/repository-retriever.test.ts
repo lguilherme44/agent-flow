@@ -54,6 +54,22 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
       expect(filtered).toEqual(['src/index.ts']);
     });
 
+    it('excludes tool-owned generated directories via default segments (.atl, caches)', () => {
+      const raw = [
+        'src/valid.ts',
+        '.atl/skill-registry.md',
+        '.atl/.skill-registry.cache.json',
+        '__pycache__/mod.cpython-312.pyc',
+        '.pytest_cache/CACHEDIR.TAG',
+        '.ruff_cache/cache',
+        'src/deep/__pycache__/x.pyc',
+        'src/deep/.atl/nested.md',
+      ];
+      const filtered = filterAndNormalizeCandidatePaths(raw);
+
+      expect(filtered).toEqual(['src/valid.ts']);
+    });
+
     it('excludes secrets, env files and private keys', () => {
       const raw = [
         'src/app.ts',
@@ -189,6 +205,89 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
       const candidates = await discovery.discoverCandidates('/nonexistent');
 
       expect(candidates).toEqual([]);
+    });
+
+    it('excludes tool-owned generated directories from candidate discovery (.atl, caches)', async () => {
+      const fs = new InMemoryFileSystem();
+      await fs.mkdirp('/project/src');
+      await fs.mkdirp('/project/.atl');
+      await fs.mkdirp('/project/__pycache__');
+      await fs.mkdirp('/project/.pytest_cache');
+      await fs.mkdirp('/project/.ruff_cache');
+      await fs.writeFileAtomic('/project/src/index.ts', 'export const a = 1;');
+      await fs.writeFileAtomic('/project/.atl/skill-registry.md', 'ignored tool droppings');
+      await fs.writeFileAtomic('/project/.atl/.skill-registry.cache.json', 'ignored tool droppings');
+      await fs.writeFileAtomic('/project/__pycache__/mod.cpython-312.pyc', 'ignored');
+      await fs.writeFileAtomic('/project/.pytest_cache/CACHEDIR.TAG', 'ignored');
+      await fs.writeFileAtomic('/project/.ruff_cache/cache', 'ignored');
+
+      const discovery = new FileSystemCandidateDiscovery(fs);
+      const candidates = await discovery.discoverCandidates('/project');
+
+      expect(candidates).toEqual(['src/index.ts']);
+    });
+
+    it('does NOT exclude legitimate similarly-named source directories or files', async () => {
+      const fs = new InMemoryFileSystem();
+      await fs.mkdirp('/project/atl');
+      await fs.mkdirp('/project/pycache');
+      await fs.mkdirp('/project/pytest_cache');
+      await fs.mkdirp('/project/ruff_cache');
+      await fs.mkdirp('/project/__pycache');
+      await fs.writeFileAtomic('/project/atl/registry.ts', 'legit source');
+      await fs.writeFileAtomic('/project/pycache/helper.ts', 'legit source');
+      await fs.writeFileAtomic('/project/pytest_cache/run.ts', 'legit source');
+      await fs.writeFileAtomic('/project/ruff_cache/config.ts', 'legit source');
+      await fs.writeFileAtomic('/project/__pycache/legit.ts', 'legit source');
+      await fs.writeFileAtomic('/project/.atl.tools.ts', 'legit file whose prefix looks like .atl');
+      await fs.writeFileAtomic('/project/src/__pycache___NOT.py', 'legit file with pycache in name');
+
+      const discovery = new FileSystemCandidateDiscovery(fs);
+      const candidates = await discovery.discoverCandidates('/project');
+
+      expect(candidates).toEqual([
+        '__pycache/legit.ts',
+        '.atl.tools.ts',
+        'atl/registry.ts',
+        'pycache/helper.ts',
+        'pytest_cache/run.ts',
+        'ruff_cache/config.ts',
+        'src/__pycache___NOT.py',
+      ]);
+    });
+
+    it('keeps candidate ordering deterministic with the new exclusions', async () => {
+      const fs = new InMemoryFileSystem();
+      await fs.mkdirp('/project/src/modules');
+      await fs.mkdirp('/project/.ruff_cache');
+      await fs.mkdirp('/project/__pycache__');
+      await fs.writeFileAtomic('/project/src/modules/b.ts', 'b');
+      await fs.writeFileAtomic('/project/src/modules/a.ts', 'a');
+      await fs.writeFileAtomic('/project/src/z.ts', 'z');
+      await fs.writeFileAtomic('/project/.ruff_cache/junk', 'ignored');
+
+      const discovery = new FileSystemCandidateDiscovery(fs);
+      const first = await discovery.discoverCandidates('/project');
+      const second = await discovery.discoverCandidates('/project');
+
+      expect(first).toEqual(['src/modules/a.ts', 'src/modules/b.ts', 'src/z.ts']);
+      expect(second).toEqual(first);
+    });
+
+    it('applies exclusions at every nesting level, not just the repo root', async () => {
+      const fs = new InMemoryFileSystem();
+      await fs.mkdirp('/project/src/deep/nested');
+      await fs.mkdirp('/project/src/deep/__pycache__');
+      await fs.mkdirp('/project/src/.atl');
+      await fs.writeFileAtomic('/project/src/deep/nested/keep.ts', 'keep');
+      await fs.writeFileAtomic('/project/src/deep/__pycache__/drop.pyc', 'ignored');
+      await fs.writeFileAtomic('/project/src/.atl/droppings.md', 'ignored');
+      await fs.writeFileAtomic('/project/src/keep.ts', 'keep');
+
+      const discovery = new FileSystemCandidateDiscovery(fs);
+      const candidates = await discovery.discoverCandidates('/project');
+
+      expect(candidates).toEqual(['src/deep/nested/keep.ts', 'src/keep.ts']);
     });
   });
 

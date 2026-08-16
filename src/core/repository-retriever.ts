@@ -28,6 +28,13 @@ export const DEFAULT_EXCLUDED_SEGMENTS = Object.freeze([
   '.nuxt',
   'build',
   '.output',
+  // Tool-owned generated directories discovered in the M3-09 dogfood: Claude
+  // Code drops `.atl/` droppings, uv/ruff/pytest leave cache dirs behind. They
+  // are clearly generated/tool-owned, never legitimate repository content.
+  '.atl',
+  '__pycache__',
+  '.pytest_cache',
+  '.ruff_cache',
 ]);
 
 const SECRET_OR_ENV_FILE_REGEX =
