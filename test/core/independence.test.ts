@@ -56,6 +56,19 @@ describe('assessIndependence', () => {
     // evidence. Reporting cross-provider here would be inventing a guarantee.
     expect(assessIndependence([], 'codex', providerOf)).toBe('same-provider-fresh-context');
   });
+
+  it('fails closed when an author provider is unknown, even if another author is clean', () => {
+    // An author whose provider cannot be resolved is treated as sharing the
+    // reviewer's provider — not knowing is never the same as a clean separation.
+    const providerOfWithUnknown = (id: string): string | undefined =>
+      id === 'mystery' ? undefined : PROVIDERS[id];
+    expect(assessIndependence(['mystery'], 'codex', providerOfWithUnknown)).toBe(
+      'same-provider-fresh-context',
+    );
+    expect(assessIndependence(['codex', 'mystery'], 'claude', providerOfWithUnknown)).toBe(
+      'same-provider-fresh-context',
+    );
+  });
 });
 
 describe('explainIndependence', () => {
@@ -70,5 +83,10 @@ describe('explainIndependence', () => {
 
   it('says so plainly when there are no recorded authors', () => {
     expect(explainIndependence([], 'codex', providerOf)).toContain('(none)');
+  });
+
+  it('handles unknown reviewer provider gracefully', () => {
+    const explanation = explainIndependence(['claude'], 'unknownRunner', providerOf);
+    expect(explanation).toContain('(unknown)');
   });
 });

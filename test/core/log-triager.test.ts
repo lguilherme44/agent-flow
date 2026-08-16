@@ -119,6 +119,13 @@ describe('LogTriager mechanical truth', () => {
     expect(policy.maxModelCalls).toBe(HARD_LOG_TRIAGE_POLICY_CAPS.maxModelCalls);
     expect(policy.modelTimeoutMs).toBe(HARD_LOG_TRIAGE_POLICY_CAPS.modelTimeoutMs);
     expect(sanitizeLogTriagePolicy({ modelTimeoutMs: NaN }).modelTimeoutMs).toBe(5_000);
+    expect(sanitizeLogTriagePolicy(null as unknown as undefined).maxSources).toBe(32);
+    const throwingPolicy = {
+      get maxSources() {
+        throw new Error('Hostile getter');
+      },
+    };
+    expect(sanitizeLogTriagePolicy(throwingPolicy as unknown as undefined).maxSources).toBe(32);
 
     const triager = new LogTriager({
       policy: {
@@ -528,6 +535,43 @@ describe('LogTriager optional UtilityModel boundary', () => {
     const hostileResult = await new LogTriager({ utilityModel: hostile }).triage({ sources: [failureSource()] });
     expect(textReads).toBe(1);
     expect(hostileResult.status).toBe('model_enriched');
+
+    const throwingLength = {
+      get length() { throw new Error('Hostile length getter'); },
+    };
+    const throwingLengthModel = new FakeUtilityModel().pushStructured('{"advisories":[]}', {
+      advisories: throwingLength,
+    });
+    const throwingLengthResult = await new LogTriager({ utilityModel: throwingLengthModel }).triage({
+      sources: [failureSource()],
+    });
+    expect(throwingLengthResult.modelBypassReason).toBe('invalid_model_output');
+
+    const duplicateGroup = new FakeUtilityModel().pushStructured('{"advisories":[]}', {
+      advisories: [
+        { groupId: 'log-group-1', summary: 'first' },
+        { groupId: 'log-group-1', summary: 'second' },
+      ],
+    });
+    const duplicateResult = await new LogTriager({ utilityModel: duplicateGroup }).triage({
+      sources: [failureSource()],
+    });
+    expect(duplicateResult.modelBypassReason).toBe('invalid_model_output');
+
+    const throwingIndexArr: unknown[] = [];
+    Object.defineProperty(throwingIndexArr, 'length', { value: 1 });
+    Object.defineProperty(throwingIndexArr, '0', {
+      get() {
+        throw new Error('Hostile index getter');
+      },
+    });
+    const throwingIndexModel = new FakeUtilityModel().pushStructured('{"advisories":[]}', {
+      advisories: throwingIndexArr,
+    });
+    const throwingIndexResult = await new LogTriager({ utilityModel: throwingIndexModel }).triage({
+      sources: [failureSource()],
+    });
+    expect(throwingIndexResult.modelBypassReason).toBe('invalid_model_output');
   });
 
   it('enforces context safety even when an optional estimator undercounts UTF-8', async () => {

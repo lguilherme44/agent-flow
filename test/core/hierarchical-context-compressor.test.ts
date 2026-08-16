@@ -851,4 +851,122 @@ describe('HierarchicalContextCompressor', () => {
       expect(result.artifact.finalContext).not.toContain('bad:bad.ts');
     },
   );
+
+  it('fails closed to built-in estimator when a custom estimator throws', async () => {
+    const throwingEstimator: ContextTokenEstimator = {
+      estimateTokens(_text: string): number {
+        throw new Error('estimator failure');
+      },
+    };
+    const { compressor } = createCompressor(
+      { 'a.ts': 'export const a = 1;' },
+      new RecordingModel(),
+      undefined,
+      throwingEstimator,
+    );
+    const result = await compressor.compress({
+      projectDir: '/repo',
+      sources: [{ path: 'a.ts', sourceId: 'a' }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('bypasses with no_content when all candidate reads throw unexpectedly', async () => {
+    const throwingSource: RepositoryContentSource = {
+      async readCandidate() {
+        throw new Error('EACCES: permission denied');
+      },
+    };
+    const compressor = new HierarchicalContextCompressor({
+      contentSource: throwingSource,
+      utilityModel: new RecordingModel(),
+    });
+    const result = await compressor.compress({
+      projectDir: '/repo',
+      sources: [{ path: 'a.ts', sourceId: 'a' }],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('no_content');
+  });
+
+  it('bypasses with invalid_health when health status is unknown or detail is malformed', async () => {
+    const invalidHealthModel = new RecordingModel();
+    invalidHealthModel.healthCheck = async () => ({
+      status: 'something_else' as unknown as 'available',
+      detail: 'unknown status',
+    });
+    const { compressor: c1 } = createCompressor({ 'a.ts': 'export const a = 1;' }, invalidHealthModel);
+    const r1 = await c1.compress({ projectDir: '/repo', sources: [{ path: 'a.ts', sourceId: 'a' }] });
+    expect(r1.ok).toBe(false);
+    if (r1.ok) return;
+    expect(r1.reason).toBe('invalid_health');
+
+    const invalidDetailModel = new RecordingModel();
+    invalidDetailModel.healthCheck = async () => ({
+      status: 'available',
+      detail: 123 as unknown as string,
+    });
+    const { compressor: c2 } = createCompressor({ 'a.ts': 'export const a = 1;' }, invalidDetailModel);
+    const r2 = await c2.compress({ projectDir: '/repo', sources: [{ path: 'a.ts', sourceId: 'a' }] });
+    expect(r2.ok).toBe(false);
+    if (r2.ok) return;
+    expect(r2.reason).toBe('invalid_health');
+  });
+
+  it('bypasses with invalid_input when input or sources has hostile or malformed getters', async () => {
+    const { compressor } = createCompressor({ 'a.ts': 'export const a = 1;' }, new RecordingModel());
+
+    const throwingInput = {
+      get projectDir() {
+        throw new Error('Hostile projectDir');
+      },
+    };
+    const r1 = await compressor.compress(throwingInput as unknown as { projectDir: string; sources: [] });
+    expect(r1.ok).toBe(false);
+    if (r1.ok) return;
+    expect(r1.reason).toBe('invalid_input');
+
+    const throwingSourcesLength = new Proxy([], {
+      get(_target, prop) {
+        if (prop === 'length') throw new Error('Hostile length');
+        return Reflect.get(_target, prop);
+      },
+    });
+    const r2 = await compressor.compress({
+      projectDir: '/repo',
+      sources: throwingSourcesLength as unknown as [],
+    });
+    expect(r2.ok).toBe(false);
+    if (r2.ok) return;
+    expect(r2.reason).toBe('invalid_input');
+
+    const throwingSourcesItem = new Proxy([{ path: 'a.ts', sourceId: 'a' }], {
+      get(_target, prop) {
+        if (prop === '0') throw new Error('Hostile item');
+        return Reflect.get(_target, prop);
+      },
+    });
+    const r3 = await compressor.compress({
+      projectDir: '/repo',
+      sources: throwingSourcesItem as unknown as [],
+    });
+    expect(r3.ok).toBe(false);
+    if (r3.ok) return;
+    expect(r3.reason).toBe('invalid_input');
+
+    const throwingSourceProp = {
+      get path() {
+        throw new Error('Hostile path');
+      },
+      sourceId: 'a',
+    };
+    const r4 = await compressor.compress({
+      projectDir: '/repo',
+      sources: [throwingSourceProp as unknown as { path: string; sourceId: string }],
+    });
+    expect(r4.ok).toBe(false);
+    if (r4.ok) return;
+    expect(r4.reason).toBe('invalid_input');
+  });
 });

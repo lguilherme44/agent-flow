@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveRole, RoleResolutionError } from '../../src/core/role.js';
+import { resolveRole, resolveFallback, RoleResolutionError } from '../../src/core/role.js';
 import { GlobalConfigSchema, type GlobalConfig, type RunnerCapabilitiesMap } from '../../src/core/role.js';
 
 const fullCapabilities = {
@@ -80,6 +80,17 @@ describe('configuration errors surface at resolution, not at run time (R-05)', (
       expect((error as RoleResolutionError).kind).toBe('unknown_runner');
       expect((error as Error).message).toContain('ghost');
       expect((error as Error).message).toContain('sdd');
+    }
+
+    const noRunnersConfig = {
+      ...config(),
+      runners: {},
+    };
+    try {
+      resolveRole('sdd', noRunnersConfig, {});
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect((error as Error).message).toContain('(none)');
     }
   });
 
@@ -208,5 +219,115 @@ describe('structured output requirement', () => {
     } catch (error) {
       expect((error as RoleResolutionError).kind).toBe('missing_capability');
     }
+  });
+});
+
+describe('resolveFallback', () => {
+  const fallbackConfig = (role: string, runner: string): GlobalConfig =>
+    GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      roles: {
+        architect: { runner: 'claude', effort: 'very_high' },
+        sdd: { runner: 'claude', effort: 'high' },
+        planner: { runner: 'claude', effort: 'high' },
+        planReviewer: { runner: 'claude', effort: 'high' },
+        executors: {
+          trivial: { runner: 'claude', effort: 'low' },
+          normal: { runner: 'claude', effort: 'medium' },
+          complex: { runner: 'claude', effort: 'high' },
+        },
+        verification: { runner: 'claude', effort: 'medium' },
+        finalReviewer: { runner: 'claude', effort: 'very_high' },
+      },
+      fallback: { enabled: true, roles: { [role]: { runner, effort: 'medium' } } },
+    });
+
+  const codexCaps: RunnerCapabilitiesMap = { codex: fullCapabilities };
+
+  it('resolves a declared, usable fallback as its own configuration', () => {
+    const resolved = resolveFallback(
+      'verification',
+      fallbackConfig('verification', 'codex'),
+      codexCaps,
+    );
+    expect(resolved).not.toBeUndefined();
+    expect(resolved?.runner).toBe('codex');
+  });
+
+  it('returns undefined when fallback is disabled or not configured for the role', () => {
+    expect(
+      resolveFallback('sdd', GlobalConfigSchema.parse({ runners: {}, roles: fallbackConfig('sdd', 'codex').roles, fallback: { enabled: false } }), codexCaps),
+    ).toBeUndefined();
+    // A role absent from fallback.roles has no fallback.
+    const noEntry = GlobalConfigSchema.parse({
+      runners: { codex: { type: 'codex-cli' } },
+      roles: fallbackConfig('sdd', 'codex').roles,
+      fallback: { enabled: true, roles: {} },
+    });
+    expect(resolveFallback('sdd', noEntry, codexCaps)).toBeUndefined();
+  });
+
+  it('returns undefined when the fallback runner is disabled or unknown', () => {
+    const disabled = GlobalConfigSchema.parse({
+      runners: { codex: { type: 'codex-cli', enabled: false } },
+      roles: fallbackConfig('sdd', 'codex').roles,
+      fallback: { enabled: true, roles: { sdd: { runner: 'codex', effort: 'medium' } } },
+    });
+    expect(resolveFallback('sdd', disabled, codexCaps)).toBeUndefined();
+
+    const unknown = GlobalConfigSchema.parse({
+      runners: {},
+      roles: fallbackConfig('sdd', 'ghost').roles,
+      fallback: { enabled: true, roles: { sdd: { runner: 'ghost', effort: 'medium' } } },
+    });
+    expect(resolveFallback('sdd', unknown, {})).toBeUndefined();
+  });
+
+  it('returns undefined when the fallback cannot satisfy the stage requirement', () => {
+    // A fallback that cannot offer what the stage demands is no fallback, and
+    // quietly using it would break the guarantee the requirement expresses
+    // (§55): a read-only stage has to stay read-only even when the primary
+    // runner is down.
+    const caps: RunnerCapabilitiesMap = {
+      codex: { ...fullCapabilities, supportsNonInteractive: false },
+    };
+    expect(resolveFallback('sdd', fallbackConfig('sdd', 'codex'), caps)).toBeUndefined();
+
+    const noCwd: RunnerCapabilitiesMap = {
+      codex: { ...fullCapabilities, supportsWorkingDirectory: false },
+    };
+    expect(resolveFallback('sdd', fallbackConfig('sdd', 'codex'), noCwd)).toBeUndefined();
+
+    const noReadOnly: RunnerCapabilitiesMap = {
+      codex: { ...fullCapabilities, supportsReadOnly: false },
+    };
+    expect(resolveFallback('sdd', fallbackConfig('sdd', 'codex'), noReadOnly, { readOnly: true }))
+      .toBeUndefined();
+
+    const prompted: RunnerCapabilitiesMap = {
+      codex: { ...fullCapabilities, structuredOutputStrategy: 'prompted' },
+    };
+    expect(
+      resolveFallback('planner', fallbackConfig('planner', 'codex'), prompted, {
+        nativeStructuredOutput: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('clamps fallback reasoning to what the fallback runner supports', () => {
+    const caps: RunnerCapabilitiesMap = {
+      codex: { ...fullCapabilities, supportedReasoningLevels: ['low', 'medium', 'high'] },
+    };
+    const requested = GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      roles: fallbackConfig('architect', 'codex').roles,
+      fallback: {
+        enabled: true,
+        roles: { architect: { runner: 'codex', effort: 'very_high' } },
+      },
+    });
+    const resolved = resolveFallback('architect', requested, caps);
+    expect(resolved?.reasoning).toBe('high');
+    expect(resolved?.reasoningClamped).toBe(true);
   });
 });

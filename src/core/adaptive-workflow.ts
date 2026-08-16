@@ -160,7 +160,7 @@ export function classifyWorkflow(
       const lowerFile = file.toLowerCase();
       if (
         (lowerFile.includes('auth/') || lowerFile.includes('auth.') || lowerFile.includes('authentication')) &&
-        !detectedHighRisk.includes('auth')
+        !detectedHighRisk.some((s) => s.startsWith('auth'))
       ) {
         if (normalized.includes('login') || normalized.includes('session') || normalized.includes('user') || normalized.includes('auth')) {
           detectedHighRisk.push('auth (file: ' + file + ')');
@@ -168,7 +168,7 @@ export function classifyWorkflow(
       }
       if (
         (lowerFile.includes('migration') || lowerFile.includes('db/migrations') || lowerFile.includes('schema.')) &&
-        !detectedHighRisk.includes('migration')
+        !detectedHighRisk.some((s) => s.startsWith('migration'))
       ) {
         if (normalized.includes('db') || normalized.includes('table') || normalized.includes('database') || normalized.includes('schema')) {
           detectedHighRisk.push('migration (file: ' + file + ')');
@@ -176,7 +176,7 @@ export function classifyWorkflow(
       }
       if (
         (lowerFile.includes('payment') || lowerFile.includes('stripe') || lowerFile.includes('billing')) &&
-        !detectedHighRisk.includes('payment')
+        !detectedHighRisk.some((s) => s.startsWith('payment'))
       ) {
         if (normalized.includes('pay') || normalized.includes('card') || normalized.includes('invoice') || normalized.includes('billing')) {
           detectedHighRisk.push('payment (file: ' + file + ')');

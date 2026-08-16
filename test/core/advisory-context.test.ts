@@ -100,4 +100,21 @@ describe('renderAdvisoryContext', () => {
     );
     expect(rendered).toBeDefined();
   });
+
+  it('renders reasons and a blank objective as present-but-empty fields', () => {
+    // reason is optional per-entry; the line renders without the separator
+    // rather than inventing one. A missing objective renders as an empty
+    // objective line — still honest, never a substitute for validation.
+    const rendered = renderAdvisoryContext(
+      packet({
+        objective: undefined as unknown as string,
+        relevantFiles: [{ path: 'src/core/task-executor.ts' } as unknown as { path: string; reason: string }],
+        relevantSymbols: [{ symbol: 'X', path: 'src/app/stage-runner.ts' } as unknown as { symbol: string; path: string; reason: string }],
+      }),
+    );
+    expect(rendered).toBeDefined();
+    expect(rendered!.text).toContain('Objective: ');
+    expect(rendered!.text).toContain('  - src/core/task-executor.ts');
+    expect(rendered!.text).toContain('  - X (src/app/stage-runner.ts)');
+  });
 });

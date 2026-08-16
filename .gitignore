@@ -44,3 +44,6 @@ apps/web/dist.hidden-by-packaging-smoke/
 **/.impeccable/hook.cache.json
 **/.impeccable/hook.pending.json
 **/.impeccable/config.local.json
+
+# Local design mockups
+ui/

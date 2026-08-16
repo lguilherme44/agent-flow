@@ -8,6 +8,7 @@ import {
 } from '../../src/core/repository-retriever.js';
 import { FakeUtilityModel } from '../fakes/fake-utility-model.js';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
+import type { UtilityModel } from '../../src/ports/utility-model.js';
 
 describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
   // ─── 1. Candidate Filtering & Normalization ─────────────────────────────────
@@ -717,6 +718,170 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
       expect(result.bypass).toBe(true);
       expect(result.errorCode).toBe('execution_failed');
       expect(result.reason).toContain('Socket abruptly closed');
+    });
+
+    it('bypasses safely when health check throws an unexpected error', async () => {
+      const model: UtilityModel = {
+        id: 'throwing-health-model',
+        capabilities: () => ({
+          contextWindow: 32_768,
+          structuredOutput: true,
+          tools: false,
+          streaming: false,
+        }),
+        healthCheck: async () => {
+          throw new Error('Health check socket dropped');
+        },
+        run: async () => ({ ok: true, text: '' }),
+      };
+
+      const retriever = new RepositoryRetriever({
+        utilityModel: model,
+        candidateDiscovery: new StaticCandidateDiscovery(['src/a.ts']),
+      });
+
+      const result = await retriever.retrieve({ objective: 'Health error' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.bypass).toBe(true);
+      expect(result.errorCode).toBe('unavailable');
+      expect(result.reason).toContain('Health check socket dropped');
+    });
+
+    it('bypasses safely when model returns non-object structured output', async () => {
+      const model = new FakeUtilityModel().push(() => ({
+        ok: true,
+        text: '{}',
+        structured: 42 as unknown as Record<string, unknown>,
+      }));
+
+      const retriever = new RepositoryRetriever({
+        utilityModel: model,
+        candidateDiscovery: new StaticCandidateDiscovery(['src/a.ts']),
+      });
+
+      const result = await retriever.retrieve({ objective: 'Non-object structured output' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.bypass).toBe(true);
+      expect(result.errorCode).toBe('invalid_response');
+    });
+
+    it('accepts explicitCandidates directly without candidateDiscovery', async () => {
+      const model = new FakeUtilityModel().pushStructured('{}', {
+        objective: 'Test explicit',
+        relevantFiles: [{ path: 'src/explicit.ts', reason: 'target file' }],
+        relevantSymbols: [],
+        constraints: [],
+        architectureNotes: [],
+        risks: [],
+        evidence: [],
+      });
+
+      const retriever = new RepositoryRetriever({
+        utilityModel: model,
+      });
+
+      const result = await retriever.retrieve({
+        objective: 'Test explicit',
+        explicitCandidates: ['src/explicit.ts', 'src/other.ts'],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.packet.relevantFiles[0]?.path).toBe('src/explicit.ts');
+    });
+
+    it('continues when FileSystemCandidateDiscovery encounters an unreadable entry during stat', async () => {
+      const fs = new InMemoryFileSystem();
+      fs.seed('/repo/src/ok.ts', 'export const ok = 1;');
+      fs.seed('/repo/src/bad.ts', 'unreadable');
+
+      // Override stat to throw on unreadable file
+      const originalStat = fs.stat.bind(fs);
+      fs.stat = async (path: string) => {
+        if (path === '/repo/src/bad.ts') throw new Error('EACCES');
+        return originalStat(path);
+      };
+
+      const discovery = new FileSystemCandidateDiscovery(fs);
+      const candidates = await discovery.discoverCandidates('/repo');
+      expect(candidates).toContain('src/ok.ts');
+    });
+
+    it('handles readDir throwing an error gracefully', async () => {
+      const fs = new InMemoryFileSystem();
+      fs.readDir = async () => {
+        throw new Error('EACCES');
+      };
+      const discovery = new FileSystemCandidateDiscovery(fs);
+      const candidates = await discovery.discoverCandidates('/repo');
+      expect(candidates).toEqual([]);
+    });
+
+    it('handles non-Error thrown exceptions in discovery, health check, and inference safely', async () => {
+      const stringThrowingDiscovery = {
+        async discoverCandidates(): Promise<readonly string[]> {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error
+          throw 'Non-error string thrown in discovery';
+        },
+      };
+      const r1 = new RepositoryRetriever({
+        candidateDiscovery: stringThrowingDiscovery,
+      });
+      const res1 = await r1.retrieve({ objective: 'Test' });
+      expect(res1.ok).toBe(false);
+      if (res1.ok) return;
+      expect(res1.reason).toContain('Non-error string thrown in discovery');
+
+      const stringThrowingHealthModel = new FakeUtilityModel();
+      stringThrowingHealthModel.healthCheck = async () => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Non-error string thrown in healthCheck';
+      };
+      const r2 = new RepositoryRetriever({
+        candidateDiscovery: new StaticCandidateDiscovery(['src/a.ts']),
+        utilityModel: stringThrowingHealthModel,
+      });
+      const res2 = await r2.retrieve({ objective: 'Test' });
+      expect(res2.ok).toBe(false);
+      if (res2.ok) return;
+      expect(res2.reason).toContain('Non-error string thrown in healthCheck');
+
+      const stringThrowingRunModel = new FakeUtilityModel().push(() => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Non-error string thrown in run';
+      });
+      const r3 = new RepositoryRetriever({
+        candidateDiscovery: new StaticCandidateDiscovery(['src/a.ts']),
+        utilityModel: stringThrowingRunModel,
+      });
+      const res3 = await r3.retrieve({ objective: 'Test' });
+      expect(res3.ok).toBe(false);
+      if (res3.ok) return;
+      expect(res3.reason).toContain('Non-error string thrown in run');
+    });
+
+    it('handles custom excludedSegments, dot entries, and null stats in FileSystemCandidateDiscovery', async () => {
+      const fs = new InMemoryFileSystem();
+      fs.seed('/repo/src/ok.ts', 'export const ok = 1;');
+      fs.seed('/repo/custom_excluded/file.ts', 'export const hidden = 1;');
+      fs.readDir = async (path: string) => {
+        if (path === '/repo') return ['.', '..', 'src', 'custom_excluded', 'missing.ts'];
+        return ['ok.ts'];
+      };
+      const originalStat = fs.stat.bind(fs);
+      fs.stat = async (path: string) => {
+        if (path.endsWith('missing.ts')) return null;
+        return originalStat(path);
+      };
+
+      const discovery = new FileSystemCandidateDiscovery(fs, {
+        excludedSegments: ['custom_excluded'],
+        objective: 'Test default objective',
+      });
+      const candidates = await discovery.discoverCandidates('/repo');
+      expect(candidates).toContain('src/ok.ts');
+      expect(candidates).not.toContain('custom_excluded/file.ts');
     });
   });
 });

@@ -118,5 +118,6 @@ describe('explainRouting', () => {
 
   it('falls back to complexity', () => {
     expect(explainRouting(task({ complexity: 'normal', risk: 'low' }))).toContain('normal');
+    expect(explainRouting(task({ complexity: 'complex', risk: 'low' }))).toBe('complexity is complex');
   });
 });

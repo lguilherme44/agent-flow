@@ -492,6 +492,13 @@ describe('DiffTriager mechanical truth', () => {
     expect(policy.maxModelCalls).toBe(HARD_DIFF_TRIAGE_POLICY_CAPS.maxModelCalls);
     expect(policy.modelTimeoutMs).toBe(HARD_DIFF_TRIAGE_POLICY_CAPS.modelTimeoutMs);
     expect(sanitizeDiffTriagePolicy({ maxFiles: 0 }).maxFiles).toBe(0);
+    expect(sanitizeDiffTriagePolicy(null as unknown as undefined).maxFiles).toBe(256);
+    const throwingPolicy = {
+      get maxFiles() {
+        throw new Error('Hostile getter');
+      },
+    };
+    expect(sanitizeDiffTriagePolicy(throwingPolicy as unknown as undefined).maxFiles).toBe(256);
   });
 
   it('single-reads own DTO getters, ignores prototypes and caller array methods', async () => {
@@ -950,6 +957,10 @@ describe('DiffTriager optional advisory model', () => {
       { advisories: [{ fileId: 'caller-file-1', path: 'invented.ts', risk: 'low', tags: ['tests'] }] },
       { advisories: [{ fileId: 'caller-file-1', risk: 'low', tags: ['tests'], validationJudgement: 'PASS' }] },
       { advisories: [{ fileId: 'caller-file-1', risk: 'low', tags: ['MERGE APPROVED'] }] },
+      { advisories: [{ fileId: 'caller-file-1', risk: 'low', tags: ['tests', 'tests'] }] },
+      { advisories: [{ fileId: 'caller-file-1', risk: 'low', tags: ['not_a_valid_tag'] }] },
+      { advisories: [{ fileId: 'caller-file-1', risk: 'invalid_risk', tags: ['tests'] }] },
+      { advisories: [{ fileId: 123, risk: 'low', tags: ['tests'] }] },
       { advisories: 'not-an-array' },
     ];
     for (const structured of cases) {
@@ -959,6 +970,25 @@ describe('DiffTriager optional advisory model', () => {
       expect(artifact.modelBypassReason).toBe('invalid_model_output');
       expect(artifact.advisories).toHaveLength(0);
     }
+
+    const throwingTags = {
+      advisories: [
+        {
+          fileId: 'caller-file-1',
+          risk: 'low',
+          get tags() {
+            throw new Error('Hostile getter in tags');
+          },
+        },
+      ],
+    };
+    const throwingModel = new FakeUtilityModel().push(() => ({
+      ok: true,
+      text: '',
+      structured: throwingTags,
+    }));
+    const throwingArtifact = await new DiffTriager({ utilityModel: throwingModel }).triage(input(snapshot()));
+    expect(throwingArtifact.modelBypassReason).toBe('invalid_model_output');
 
     const oversizedPayload = { advisories: Array.from({ length: 20 }, () => ({
       fileId: 'caller-file-1', risk: 'high', tags: ['tests'],
@@ -970,7 +1000,6 @@ describe('DiffTriager optional advisory model', () => {
     }).triage(input(snapshot()));
     expect(artifact.modelBypassReason).toBe('oversized_model_output');
     expect(artifact.advisories).toHaveLength(0);
-
   });
 
   it('keeps secrets out of the JSON prompt and rejects model authority claims', async () => {
@@ -1038,6 +1067,93 @@ describe('DiffTriager optional advisory model', () => {
     expect(artifact.advisories[0]).toEqual({
       fileId: 'caller-file-1', risk: 'medium', tags: ['control_flow'],
     });
+  });
+
+  it('marks hunks untrusted when hunk has invalid No newline placement or bad count', async () => {
+    const rawPatch = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      'index 1111111..2222222 100644',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1,1 +1,1 @@',
+      '\\ No newline at end of file',
+      '-old',
+      '+new',
+    ].join('\n');
+    const artifact = await new DiffTriager().triage(input(snapshot({ rawPatch })));
+    expect(artifact.files[0]?.patchTrusted).toBe(false);
+  });
+
+  it('handles typechange and mode change semantics correctly', async () => {
+    const rawPatch = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      'old mode 100644',
+      'new mode 100755',
+    ].join('\n');
+    const artifact = await new DiffTriager().triage(input(snapshot({
+      changes: [{ status: 'T', path: 'src/a.ts', binary: false }],
+      rawPatch,
+    })));
+    expect(artifact.files[0]?.patchTrusted).toBe(true);
+  });
+
+  it('rejects binary patch with more than two sections', async () => {
+    const rawPatch = [
+      'diff --git a/assets/bin b/assets/bin',
+      'new file mode 100644',
+      'index 0000000..3333333',
+      'GIT binary patch',
+      'literal 1',
+      'A00000',
+      '',
+      'literal 1',
+      'A00000',
+      '',
+      'literal 1',
+      'A00000',
+    ].join('\n');
+    const artifact = await new DiffTriager().triage(input(snapshot({
+      changes: [{ status: 'A', path: 'assets/bin', binary: true }],
+      rawPatch,
+    })));
+    expect(artifact.files[0]?.patchTrusted).toBe(false);
+  });
+
+  it('handles invalid tag types and out of bounds tag arrays safely', async () => {
+    const invalidTagTypeModel = new FakeUtilityModel().pushText(
+      JSON.stringify({
+        advisories: [{ fileId: 'caller-file-1', risk: 'low', tags: [123] }],
+      }),
+    );
+    const invalidTagTypeResult = await new DiffTriager({ utilityModel: invalidTagTypeModel }).triage(
+      input(snapshot()),
+    );
+    expect(invalidTagTypeResult.modelBypassReason).toBe('invalid_model_output');
+
+    const tooManyTagsModel = new FakeUtilityModel().pushText(
+      JSON.stringify({
+        advisories: [
+          {
+            fileId: 'caller-file-1',
+            risk: 'low',
+            tags: [
+              'api_surface',
+              'configuration',
+              'control_flow',
+              'data_model',
+              'generated_or_binary',
+              'security_sensitive',
+              'tests',
+              'extra_tag',
+            ],
+          },
+        ],
+      }),
+    );
+    const tooManyTagsResult = await new DiffTriager({ utilityModel: tooManyTagsModel }).triage(
+      input(snapshot()),
+    );
+    expect(tooManyTagsResult.modelBypassReason).toBe('invalid_model_output');
   });
 });
 

@@ -16,6 +16,9 @@ describe('buildDag', () => {
     const dag = buildDag([node('TASK-001'), node('TASK-002', ['TASK-001'])]);
     expect(dag.ids).toEqual(['TASK-001', 'TASK-002']);
     expect(dag.dependenciesOf('TASK-002')).toEqual(['TASK-001']);
+    expect(dag.dependenciesOf('TASK-UNKNOWN')).toEqual([]);
+    expect(dag.dependentsOf('TASK-002')).toEqual([]);
+    expect(dag.dependentsOf('TASK-UNKNOWN')).toEqual([]);
   });
 
   it('reports a dependency on a task that does not exist', () => {

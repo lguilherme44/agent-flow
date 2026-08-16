@@ -102,6 +102,38 @@ describe('Adaptive Workflow Classifier', () => {
     });
     expect(res.workflow).toBe('high-risk');
     expect(res.highRiskSignalsDetected.some((s) => s.includes('auth'))).toBe(true);
+
+    const authDotRes = classifyWorkflow('Configure user session', { files: ['src/auth.config.ts'] });
+    expect(authDotRes.workflow).toBe('high-risk');
+
+    const authenticationRes = classifyWorkflow('Fix login authentication endpoint', {
+      files: ['src/authentication/handler.ts'],
+    });
+    expect(authenticationRes.workflow).toBe('high-risk');
+
+    const migrationRes = classifyWorkflow('Alter database table schema', {
+      files: ['db/migrations/002_accounts.sql'],
+    });
+    expect(migrationRes.workflow).toBe('high-risk');
+    expect(migrationRes.highRiskSignalsDetected.some((s) => s.includes('migration'))).toBe(true);
+
+    const paymentRes = classifyWorkflow('Process customer billing invoice and card payment', {
+      files: ['src/services/payment.ts'],
+    });
+    expect(paymentRes.workflow).toBe('high-risk');
+    expect(paymentRes.highRiskSignalsDetected.some((s) => s.includes('payment'))).toBe(true);
+
+    const cardRes = classifyWorkflow('Process card verification', { files: ['src/stripe/client.ts'] });
+    expect(cardRes.workflow).toBe('high-risk');
+
+    const invoiceRes = classifyWorkflow('Send invoice reminder', { files: ['src/billing/api.ts'] });
+    expect(invoiceRes.workflow).toBe('high-risk');
+
+    const nonCorrelated = classifyWorkflow('Update banner styling in UI', {
+      files: ['src/db/migrations/002.sql', 'src/services/payment.ts'],
+    });
+    expect(nonCorrelated.workflow).toBe('standard');
+    expect(nonCorrelated.highRiskSignalsDetected).toHaveLength(0);
   });
 });
 

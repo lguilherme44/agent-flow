@@ -10,6 +10,8 @@ import {
   type ContextTelemetryStage,
 } from '../contracts/context-telemetry.schema.js';
 
+export { MAX_CONTEXT_TELEMETRY_INTEGER };
+
 /**
  * Pure, best-effort projections for operational context estimates.
  *
