@@ -269,9 +269,19 @@ function snapshotNativeResponse(value: unknown): SnapshotResult<{ readonly respo
     if (
       RESPONSE_STATUS_GETTER === undefined ||
       RESPONSE_JSON_METHOD === undefined ||
-      Object.getPrototypeOf(value) !== RESPONSE_PROTOTYPE ||
-      Reflect.ownKeys(Object.getOwnPropertyDescriptors(value)).length !== 0
+      Object.getPrototypeOf(value) !== RESPONSE_PROTOTYPE
     ) return failedSnapshot();
+
+    // A genuine native Response exposes engine-internal own symbol slots
+    // (Node exposes Symbol(state)/Symbol(headers)), so own keys are expected.
+    // What must be rejected is any own *string-keyed* property, which is how
+    // hostile code shadows the prototype's status getter or json method. Only
+    // string keys can carry such a patch, so symbols are allowed through.
+    const ownKeys = Reflect.ownKeys(Object.getOwnPropertyDescriptors(value));
+    for (const key of ownKeys) {
+      if (typeof key === 'string') return failedSnapshot();
+    }
+
     const status = RESPONSE_STATUS_GETTER.call(value);
     if (!Number.isSafeInteger(status) || status < 100 || status > 599) return failedSnapshot();
     return { ok: true, value: Object.freeze({ response: value as Response, status }) };

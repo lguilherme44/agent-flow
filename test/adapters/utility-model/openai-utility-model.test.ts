@@ -1450,4 +1450,66 @@ describe('OpenAiCompatibleUtilityModel — hostile DTO snapshots (M3-07 review)'
       provenance: { provider: 'openai-compatible' },
     });
   });
+
+  it('accepts a native Response that carries engine-internal own symbol slots', async () => {
+    // Node's undici Response stores its state in own symbol properties
+    // (Symbol(state), Symbol(headers)). A snapshot boundary that treated every
+    // own property as hostile rejected every genuine Response and made the whole
+    // adapter unusable. Only own string-keyed properties can shadow the native
+    // status getter or json method, so symbols must be allowed through.
+    const healthApiResponse = () =>
+      new Response(JSON.stringify({ data: [{ id: VALID_CONFIG.model }] }), {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const chatApiResponse = () =>
+      new Response(
+        JSON.stringify({ model: 'Qwen/Qwen3.5-30B_A3B', choices: [{ message: { content: 'answer' } }] }),
+        { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/json' } },
+      );
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(({ url }) =>
+        url.endsWith('/models') ? healthApiResponse() : chatApiResponse(),
+      ),
+    });
+
+    const health = await adapter.healthCheck();
+    expect(health.status).toBe('available');
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.provenance?.model).toBe('Qwen/Qwen3.5-30B_A3B');
+  });
+
+  it('rejects a native Response shadowed with an own string-keyed json property', async () => {
+    const response = new Response(JSON.stringify({ choices: [{ message: { content: 'safe' } }] }), {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    Object.defineProperty(response, 'json', {
+      value: async () => {
+        throw new Error('secret-shadowed-json-detail');
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() => response),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'invalid_response',
+      message: 'Invalid utility model response',
+      usage: expect.objectContaining({ estimatedInputTokens: expect.any(Number) }),
+      provenance: { provider: 'openai-compatible' },
+    });
+    expect(JSON.stringify(result)).not.toContain('secret-shadowed');
+  });
 });
