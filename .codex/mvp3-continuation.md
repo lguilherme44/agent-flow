@@ -1,11 +1,11 @@
 # MVP3 Continuation State
 
 Updated: 2026-08-16
-Published HEAD: 620b5fe (M3-07 read-only Analytics UI)
-origin/master: 620b5fe
-Local HEAD: 620b5fe
+Published HEAD: 9df0029 (M3-08 advisory runtime)
+origin/master: 25182ca
+Local HEAD: 9df0029
 Current milestone: M3-08 — Primary-runner context integration
-Current status: M3-07 CLOSED / M3-08 RECONNAISSANCE NEXT
+Current status: M3-08 CLOSED / M3-09 DOGFOOD NEXT
 
 ## Completed milestones
 
@@ -508,9 +508,16 @@ packaging: PASS
 
 ## Next action
 
-M3-08 — primary-runner context integration: consume validated advisory ContextPacket at a provider-neutral runner seam; primary runner retains raw follow-up context access; ContextPacket never becomes the only evidence source; UtilityModel failures degrade to bypass without disturbing the workflow. Assemble a ContextPacket from the retrieval/compression/triage producers and emit mechanical+adapter telemetry observations through ContextTelemetryRecorder during integration, wired into the primary workflow (this is where M3-07 projections become effective).
+M3-09 — dogfood and benchmark: run the MVP3 minimal matrix (small/medium/large cross-module task, large failing test log, large diff review, utility model offline, malformed output, context > 64k candidates) comparing without vs with local utility; measure correctness, primary context sent, latency, retries, review findings, bypass behavior. Requires wiring a real UtilityModel through config: secret-safe `apiKeyEnv` (dedicated `AGENT_FLOW_UTILITY_MODEL_API_KEY`), production config/composition wiring for `BuildContextOptions.utilityModel`.
 
 ## Blockers
 
 - Local `moe` production wiring needs a secret-safe `apiKeyEnv` reference; never persist the value in YAML/state/logs.
 - UtilityModel has no production config/composition wiring yet (required for M3-09 real dogfood; tests must keep using the fake).
+
+## M3-08 summary
+
+- Advisory runtime wired: `StageAdvisor` seam (stage-runner), `renderAdvisoryContext` (fail-closed paths), `RepositoryContextAdvisor` (Retriever+UtilityModel), mechanical telemetry via `ContextTelemetryRecorder`, composition-root wiring behind optional `utilityModel` (offline = unchanged workflow). Commits `135f91c`, `9be49cb`, `901ec99`, `9df0029`.
+- Implementation stage passes a task-derived objective so retrieval ranks against the real work.
+- Self-audit findings fixed: (1) objective degraded to literal stage name without task pass-through; (2) repair loop would drop advisory context on re-prompts (base-prompt seed). Both locked by regression tests.
+- Gates green: check 2414+243, E2E 26/26, visual 137/3, packaging PASS, diff --check clean.
