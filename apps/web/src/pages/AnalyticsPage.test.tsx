@@ -231,6 +231,116 @@ describe('analytics', () => {
     expect(document.body.textContent).not.toMatch(/cost|price|\$|usd/i);
   });
 
+  it('shows what Context Intelligence actually did when telemetry observed it', async () => {
+    routes['/api/v1/analytics'] = {
+      ...ANALYTICS,
+      context: {
+        basis: 'estimated_operational_not_billing' as const,
+        scope: {
+          runsObserved: 2,
+          observations: 6,
+          observationLimit: 256,
+          eventLogsTruncated: 0,
+          truncated: false,
+        },
+        aggregate: {
+          stage: 'aggregate',
+          source: 'aggregate',
+          provenance: 'aggregate',
+          estimatedInputTokens: 47_390,
+          estimatedPrimaryContextTokens: 11_180,
+          estimatedAvoidedTokens: 36_210,
+          utilityCalls: 3,
+          utilityFailures: 0,
+          structuredOutputFailures: 0,
+          utilityLatencyMs: 3_842,
+          effectiveProvider: 'openai-compatible',
+          effectiveModel: 'Qwen/Qwen3.5-30B_A3B',
+        },
+      },
+    };
+    renderPage();
+    await screen.findByRole('heading', { name: 'Context intelligence' });
+
+    const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
+    expect(within(panelRoot).getByText('estimated, not billing')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('47.4k tokens')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('11.2k tokens')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('36.2k tokens')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('3')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('3s')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('2 runs observed · 6 of 256 observations')).toBeInTheDocument();
+    expect(within(panelRoot).getByText(/openai-compatible · Qwen\/Qwen3.5-30B_A3B/)).toBeInTheDocument();
+  });
+
+  it('reports Context Intelligence degradation when utility calls failed', async () => {
+    routes['/api/v1/analytics'] = {
+      ...ANALYTICS,
+      context: {
+        basis: 'estimated_operational_not_billing' as const,
+        scope: {
+          runsObserved: 1,
+          observations: 2,
+          observationLimit: 256,
+          eventLogsTruncated: 1,
+          truncated: true,
+        },
+        aggregate: {
+          stage: 'aggregate',
+          source: 'aggregate',
+          provenance: 'aggregate',
+          estimatedInputTokens: 120,
+          estimatedPrimaryContextTokens: 50,
+          estimatedAvoidedTokens: 70,
+          utilityCalls: 2,
+          utilityFailures: 1,
+          structuredOutputFailures: 1,
+        },
+      },
+    };
+    renderPage();
+    await screen.findByRole('heading', { name: 'Context intelligence' });
+
+    const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
+    const degradedStrip = within(panelRoot).getByText('Degraded').closest('div') as HTMLElement;
+    expect(within(degradedStrip).getByText('2')).toBeInTheDocument();
+    expect(within(panelRoot).getByText(/older observations excluded; some event logs cut/)).toBeInTheDocument();
+  });
+
+  it('omits the Context Intelligence panel when nothing observed it', async () => {
+    // Absent means nothing recorded it — never zero.
+    renderPage();
+    await screen.findByRole('heading', { name: 'Analytics' });
+
+    expect(screen.queryByRole('heading', { name: 'Context intelligence' })).toBeNull();
+  });
+
+  it('says nothing rather than a nonsense number when the aggregate lacks estimates', async () => {
+    routes['/api/v1/analytics'] = {
+      ...ANALYTICS,
+      context: {
+        basis: 'estimated_operational_not_billing' as const,
+        scope: {
+          runsObserved: 1,
+          observations: 1,
+          observationLimit: 256,
+          eventLogsTruncated: 0,
+          truncated: false,
+        },
+        aggregate: {
+          stage: 'aggregate',
+          source: 'aggregate',
+          provenance: 'aggregate',
+        },
+      },
+    };
+    renderPage();
+    await screen.findByRole('heading', { name: 'Context intelligence' });
+
+    const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
+    expect(within(panelRoot).getAllByText('—').length).toBeGreaterThan(0);
+  });
+
   it('tells somebody with no history that there is nothing to measure', async () => {
     routes['/api/v1/analytics'] = {
       ...ANALYTICS,

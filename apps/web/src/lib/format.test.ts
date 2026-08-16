@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatPercent, formatTime, formatWhen, humanise } from './format';
+import {
+  formatCompactCount,
+  formatDuration,
+  formatPercent,
+  formatTime,
+  formatWhen,
+  humanise,
+} from './format';
 
 describe('formatDuration', () => {
   it('reads at a glance, never in three units', () => {
@@ -73,5 +80,31 @@ describe('humanise', () => {
 describe('formatPercent', () => {
   it('rounds, because a dashboard is not a report', () => {
     expect(formatPercent(78.4)).toBe('78%');
+  });
+});
+
+describe('formatCompactCount', () => {
+  it('prints the exact number when it is short enough to read', () => {
+    expect(formatCompactCount(0)).toBe('0');
+    expect(formatCompactCount(999)).toBe('999');
+    expect(formatCompactCount(9_999)).toBe('9999');
+  });
+
+  it('switches to one decimal at ten thousand', () => {
+    expect(formatCompactCount(10_000)).toBe('10k');
+    expect(formatCompactCount(47_390)).toBe('47.4k');
+    expect(formatCompactCount(1_234_567)).toBe('1.2M');
+  });
+
+  it('drops a trailing zero from the decimal', () => {
+    expect(formatCompactCount(11_000)).toBe('11k');
+    expect(formatCompactCount(2_000_000)).toBe('2M');
+  });
+
+  it('says nothing rather than a nonsense number', () => {
+    expect(formatCompactCount(undefined)).toBe('—');
+    expect(formatCompactCount(-1)).toBe('—');
+    expect(formatCompactCount(Number.NaN)).toBe('—');
+    expect(formatCompactCount(Number.POSITIVE_INFINITY)).toBe('—');
   });
 });

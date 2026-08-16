@@ -1,5 +1,10 @@
 import { Info } from 'lucide-react';
-import type { AnalyticsView, MetricBucketView } from '@contracts/index.js';
+import type {
+  AnalyticsView,
+  ContextTelemetryAnalyticsView,
+  ContextTelemetryObservation,
+  MetricBucketView,
+} from '@contracts/index.js';
 import { useProjectSelection } from '../app/project-context';
 import { useAnalytics } from '../lib/queries';
 import {
@@ -10,7 +15,7 @@ import {
   Tooltip,
   cx,
 } from '../components/ui';
-import { formatDuration, humanise } from '../lib/format';
+import { formatCompactCount, formatDuration, humanise } from '../lib/format';
 import { stageIndex } from '../lib/stages';
 import { TONE_DOT, magnitudeStep as step, runToneOf, taskToneOf } from '../lib/status';
 
@@ -111,8 +116,118 @@ export function AnalyticsPage(): JSX.Element {
         <RunsPerProject data={data} />
         <TasksByState data={data} />
       </div>
+
+      {data.context === undefined ? null : <ContextIntelligencePanel data={data.context} />}
     </div>
   );
+}
+
+/**
+ * What Context Intelligence did, operationally — the part of §23 that can be
+ * measured rather than claimed.
+ *
+ * Estimates, and says so. The adapter counts a provider-independent estimate of
+ * the tokens it assembled and the tokens that actually left, and the reader
+ * subtracts the second from the first. No number on this page is a bill, and none
+ * claims to be: the header and the basis row say so, the way every other claim on
+ * the page has a guardrail around it.
+ *
+ * The panel only appears when the read model found observations. Absent means
+ * nothing recorded it, never zero — recording "zero avoided" when nothing
+ * observed anything would be a different and dishonest claim.
+ */
+function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }): JSX.Element {
+  const { data } = props;
+  const aggregate = data.aggregate;
+  const scope = data.scope;
+
+  return (
+    <Panel
+      divided
+      className="shrink-0"
+      header={
+        <SectionHeader title="Context intelligence">
+          <span className="whitespace-nowrap text-micro text-faint">estimated, not billing</span>
+        </SectionHeader>
+      }
+    >
+      {aggregate === undefined ? (
+        <Empty
+          title="Telemetry recorded, none aggregated."
+          hint="Adaptive run telemetry could not be summed — check the run audit trail."
+        />
+      ) : (
+        <>
+          <div className="flex flex-wrap items-stretch divide-x divide-border px-4 pb-3">
+            <StripItem label="Estimated input" value={tokenLabel(aggregate.estimatedInputTokens)} />
+            <StripItem
+              label="Primary context"
+              value={tokenLabel(
+                aggregate.estimatedPrimaryContextTokens ?? aggregate.estimatedCompressedTokens,
+              )}
+            />
+            <StripItem
+              label="Estimated avoided"
+              value={tokenLabel(aggregate.estimatedAvoidedTokens)}
+            />
+            <StripItem label="Utility calls" value={countLabel(aggregate.utilityCalls)} />
+            <StripItem
+              label="Utility latency"
+              value={formatDuration(aggregate.utilityLatencyMs)}
+            />
+            {(aggregate.utilityFailures !== undefined && aggregate.utilityFailures > 0) ||
+            aggregate.structuredOutputFailures !== undefined &&
+              aggregate.structuredOutputFailures > 0 ? (
+              <StripItem
+                label="Degraded"
+                tone="warning"
+                value={String(
+                  (aggregate.utilityFailures ?? 0) + (aggregate.structuredOutputFailures ?? 0),
+                )}
+              />
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border px-4 pb-3 pt-2.5 text-micro text-faint">
+            <span>
+              {scope.runsObserved} run{scope.runsObserved === 1 ? '' : 's'} observed ·{' '}
+              {scope.observations} of {scope.observationLimit} observations
+            </span>
+            {effectiveIdentity(aggregate) === undefined ? null : (
+              <span>
+                effective {aggregate.effectiveProvider} · {aggregate.effectiveModel}
+              </span>
+            )}
+            {scope.truncated ? (
+              <span className="flex items-center gap-1 text-warning">
+                <Info className="h-3 w-3" aria-hidden />
+                older observations excluded{scope.eventLogsTruncated > 0 ? '; some event logs cut' : ''}
+              </span>
+            ) : null}
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function tokenLabel(value: number | undefined): string {
+  return value === undefined
+    ? '—'
+    : `${formatCompactCount(value)} token${value === 1 ? '' : 's'}`;
+}
+
+function countLabel(value: number | undefined): string {
+  return value === undefined ? '—' : String(value);
+}
+
+function effectiveIdentity(
+  aggregate: ContextTelemetryObservation,
+): { provider: string; model: string } | undefined {
+  if (aggregate.effectiveProvider === undefined || aggregate.effectiveModel === undefined) {
+    return undefined;
+  }
+  return { provider: aggregate.effectiveProvider, model: aggregate.effectiveModel };
 }
 
 /**

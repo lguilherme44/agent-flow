@@ -115,3 +115,16 @@ export function humanise(value: string): string {
 export function formatPercent(value: number): string {
   return `${String(Math.round(value))}%`;
 }
+
+/**
+ * A count a person can compare at a glance.
+ *
+ * 47,390 → "47.4k". Never "47,390 tokens" at the width this page can spare, and
+ * never `4.739e4`. Below 10_000 the exact number is short enough to print.
+ */
+export function formatCompactCount(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return '—';
+  if (value < 10_000) return String(Math.round(value));
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}
