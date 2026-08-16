@@ -27,6 +27,7 @@ import {
   type RunnerHealthView,
   type RunnerView,
   type ServerEvent,
+  type TelemetryEntry,
 } from '../contracts/index.js';
 import { StateStore } from '../app/state-store.js';
 import { PromptLoader } from '../app/prompt-loader.js';
@@ -56,6 +57,7 @@ import { ConfigReader } from './config-reader.js';
 import { ActionJobs, type ActionJob, type JobResult } from './action-jobs.js';
 import { createEventBus, RunWatcher, type EventBus } from './event-bridge.js';
 import type { ProjectRegistry, RegisteredProject } from './project-registry.js';
+import { ContextTelemetryReader } from './context-telemetry-reader.js';
 
 /**
  * The local control plane (§59, §86).
@@ -321,8 +323,16 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       return notFound(reply, 'no such run');
     }
 
-    const entries = await collectTelemetry(store, state);
-    return { entries, summary: summariseTelemetry(entries) };
+    const entries: TelemetryEntry[] = await collectTelemetry(store, state);
+    const context = await new ContextTelemetryReader({
+      fs: options.fs,
+      projectDir: scope.project.path,
+    }).read(scope.runId);
+    return {
+      entries,
+      summary: summariseTelemetry(entries),
+      ...(context === undefined ? {} : { context }),
+    };
   });
 
   app.get('/api/v1/runners', async (request, reply): Promise<RunnerView[] | undefined> => {

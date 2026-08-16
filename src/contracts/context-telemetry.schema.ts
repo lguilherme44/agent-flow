@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** Stable discriminator for the append-only context observation audit event. */
+export const CONTEXT_TELEMETRY_EVENT_TYPE = 'context_telemetry_observed' as const;
+
 /**
  * Operational context telemetry only. These observations are estimates and
  * must never be interpreted as provider billing or workflow authority.

@@ -6,6 +6,7 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { buildServer, type RunningServer } from '../../src/server/server.js';
 import { registryOf } from '../../src/server/project-registry.js';
 import { StateStore } from '../../src/app/state-store.js';
+import { ContextTelemetryRecorder } from '../../src/app/context-telemetry-recorder.js';
 import { PlanSchema, type TaskState } from '../../src/contracts/index.js';
 import { planHash } from '../../src/app/approval.js';
 import type {
@@ -456,6 +457,57 @@ describe('UI-04 — the run read API', () => {
     ).json<{ entries: unknown[]; summary: { entries: number } }>();
 
     expect(telemetry.summary.entries).toBe(1);
+    expect(telemetry).not.toHaveProperty('context');
+  });
+
+  it('adds separately labelled estimated context observations when they exist', async () => {
+    const { server, store, run } = await serve();
+    new ContextTelemetryRecorder(store).record(run.runId, {
+      stage: 'primary_context',
+      source: 'primary_runner',
+      provenance: 'runtime_observation',
+      estimatedInputTokens: 120,
+      estimatedPrimaryContextTokens: 50,
+      estimatedAvoidedTokens: 70,
+    });
+    await Promise.resolve();
+
+    const response = await server.app.inject(`/api/v1/runs/${run.runId}/telemetry`);
+    const telemetry = response.json<{
+      summary: { entries: number };
+      context?: {
+        basis: string;
+        aggregate: { estimatedInputTokens?: number; estimatedAvoidedTokens?: number };
+      };
+    }>();
+
+    expect(response.statusCode).toBe(200);
+    expect(telemetry.summary.entries).toBe(1);
+    expect(telemetry.context).toMatchObject({
+      basis: 'estimated_operational_not_billing',
+      aggregate: { estimatedInputTokens: 120, estimatedAvoidedTokens: 70 },
+    });
+    expect(JSON.stringify(telemetry.context)).not.toMatch(/cost|price|billingTokens/i);
+  });
+
+  it('keeps current telemetry available when a hostile legacy event line is malformed', async () => {
+    const { server, fs, run } = await serve();
+    await fs.appendFile(
+      `/repo/.agent-flow/runs/${run.runId}/events.jsonl`,
+      '{malformed credential=do-not-reflect\n',
+    );
+
+    const response = await server.app.inject(`/api/v1/runs/${run.runId}/telemetry`);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ summary: { entries: number } }>().summary.entries).toBe(1);
+    expect(response.body).not.toContain('do-not-reflect');
+  });
+
+  it('404s telemetry for an unknown run', async () => {
+    const { server } = await serve();
+    const response = await server.app.inject('/api/v1/runs/AF-2026-999/telemetry');
+    expect(response.statusCode).toBe(404);
   });
 });
 
@@ -875,6 +927,60 @@ describe('UI-25 — analytics', () => {
     // they could differ, one of them would be a second source of truth.
     expect(analytics.totals.durationMs).toBe(single.summary.durationMs);
     expect(analytics.totals.entries).toBe(single.summary.entries);
+  });
+
+  it('aggregates context estimates separately from runner billing telemetry', async () => {
+    const { server, store, run } = await serve();
+    const recorder = new ContextTelemetryRecorder(store);
+    recorder.record(run.runId, {
+      stage: 'retrieval',
+      source: 'repository_retrieval',
+      provenance: 'mechanical_projection',
+      candidatesBefore: 8,
+      candidatesAfter: 3,
+      filesAfter: 3,
+      utilityCalls: 1,
+      utilityFailures: 0,
+      structuredOutputFailures: 0,
+    });
+    await Promise.resolve();
+
+    const analytics = (await server.app.inject('/api/v1/analytics')).json<AnalyticsView>();
+
+    expect(analytics.context).toMatchObject({
+      basis: 'estimated_operational_not_billing',
+      scope: { runsObserved: 1, observations: 1, eventLogsTruncated: 0 },
+      aggregate: { candidatesBefore: 8, candidatesAfter: 3, utilityCalls: 1 },
+    });
+    expect(analytics.totals.entries).toBe(1);
+  });
+
+  it('exposes a truncated context scope without inventing zero observations', async () => {
+    const { server, fs, run } = await serve();
+    const legacy = `${JSON.stringify({
+      at: '2026-08-09T20:00:00.000Z',
+      type: 'legacy_event',
+      detail: {},
+    })}\n`;
+    await fs.appendFile(
+      `/repo/.agent-flow/runs/${run.runId}/events.jsonl`,
+      legacy.repeat(300),
+    );
+
+    const single = (
+      await server.app.inject(`/api/v1/runs/${run.runId}/telemetry`)
+    ).json<{ context?: { scope: { observations: number; truncated: boolean }; aggregate?: unknown } }>();
+    const analytics = (await server.app.inject('/api/v1/analytics')).json<AnalyticsView>();
+
+    expect(single.context?.scope).toMatchObject({ observations: 0, truncated: true });
+    expect(single.context).not.toHaveProperty('aggregate');
+    expect(analytics.context?.scope).toMatchObject({
+      runsObserved: 0,
+      observations: 0,
+      eventLogsTruncated: 1,
+      truncated: true,
+    });
+    expect(analytics.context).not.toHaveProperty('aggregate');
   });
 
   it('reports the bound rather than applying it quietly', async () => {

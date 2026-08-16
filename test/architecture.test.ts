@@ -2547,12 +2547,21 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
     );
   });
 
-  it('does not wire context telemetry into production workflow authority before M3-08', () => {
+  it('wires M3-07 only to the dedicated audit recorder and read-only server projections', () => {
     const offenders: string[] = [];
     for (const dir of ['src/app', 'src/server', 'src/cli', 'src/adapters', 'src/config']) {
       for (const file of sourceFiles(dir)) {
         const { path, text } = read(file);
-        if (importSpecifiers(text).some((specifier) => specifier.includes('context-telemetry'))) {
+        const allowed = [
+          'src/app/context-telemetry-recorder.ts',
+          'src/server/context-telemetry-reader.ts',
+          'src/server/analytics-reader.ts',
+          'src/server/server.ts',
+        ].some((suffix) => path.endsWith(suffix));
+        if (
+          !allowed &&
+          importSpecifiers(text).some((specifier) => specifier.includes('context-telemetry'))
+        ) {
           offenders.push(path);
         }
       }
@@ -2564,5 +2573,58 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  it('allows only the dedicated recorder to emit context telemetry events', () => {
+    const emitters: string[] = [];
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (
+        /appendEvent\s*\([^)]*(?:CONTEXT_TELEMETRY_EVENT_TYPE|['"]context_telemetry_observed['"])/s.test(
+          codeOnly(text),
+        )
+      ) {
+        emitters.push(path);
+      }
+    }
+
+    expect(emitters.map((path) => path.replace(`${ROOT}/`, ''))).toEqual([
+      'src/app/context-telemetry-recorder.ts',
+    ]);
+  });
+
+  it('keeps context read models out of workflow, scheduling, core, and adapters', () => {
+    const offenders: string[] = [];
+    for (const dir of ['src/core', 'src/app', 'src/adapters', 'src/cli', 'src/config']) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (
+          importSpecifiers(text).some((specifier) =>
+            specifier.includes('context-telemetry-reader'),
+          )
+        ) {
+          offenders.push(path);
+        }
+      }
+    }
+    const reader = read(join(ROOT, 'src/server/context-telemetry-reader.ts'));
+
+    expect(offenders).toEqual([]);
+    expect(codeOnly(reader.text)).not.toMatch(
+      /\b(?:appendEvent|writeFile|updateRun|Scheduler|AdaptiveWorkflow|TaskState|ValidationJudgement)\b/,
+    );
+  });
+
+  it('reserves tolerant audit reads for the telemetry read model', () => {
+    const users: string[] = [];
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path.endsWith('src/app/state-store.ts')) continue;
+      if (/\.readEventsBestEffort\s*\(/.test(codeOnly(text))) users.push(path);
+    }
+
+    expect(users.map((path) => path.replace(`${ROOT}/`, ''))).toEqual([
+      'src/app/telemetry.ts',
+    ]);
   });
 });

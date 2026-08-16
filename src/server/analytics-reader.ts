@@ -7,8 +7,13 @@ import type {
 import { StateStore } from '../app/state-store.js';
 import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry, type TelemetryBucket } from '../core/telemetry.js';
+import { aggregateContextTelemetry } from '../core/context-telemetry.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
+import {
+  CONTEXT_TELEMETRY_BASIS,
+  ContextTelemetryReader,
+} from './context-telemetry-reader.js';
 
 /**
  * Operational analytics (§84, UI-25) — a projection, never a store.
@@ -36,6 +41,7 @@ import type { RegisteredProject } from './project-registry.js';
 
 /** How many runs an aggregate covers when the caller does not say. */
 export const DEFAULT_ANALYTICS_RUNS = 25;
+export const MAX_CONTEXT_TELEMETRY_ANALYTICS_OBSERVATIONS = 256;
 
 export interface AnalyticsReaderOptions {
   readonly fs: FileSystem;
@@ -52,14 +58,22 @@ export class AnalyticsReader {
     const entries: TelemetryEntry[] = [];
     const tasksByState: Record<string, number> = {};
     const runsByProject: AnalyticsView['runsByProject'] = [];
+    const contextObservations: unknown[] = [];
 
     let runsAvailable = 0;
     let runsConsidered = 0;
+    let contextRunsObserved = 0;
+    let contextEventLogsTruncated = 0;
+    let contextObservationsTruncated = false;
 
     for (const project of projects) {
       const store = new StateStore({
         fs: this.options.fs,
         clock: this.options.clock,
+        projectDir: project.path,
+      });
+      const contextReader = new ContextTelemetryReader({
+        fs: this.options.fs,
         projectDir: project.path,
       });
 
@@ -90,13 +104,50 @@ export class AnalyticsReader {
           tasksByState[task.state] = (tasksByState[task.state] ?? 0) + 1;
         }
 
-        entries.push(...(await collectTelemetry(store, state)));
+        try {
+          entries.push(...(await collectTelemetry(store, state)));
+        } catch {
+          // A malformed historical audit line cannot take analytics down.
+        }
+
+        const context = await contextReader.read(runId);
+        if (context !== undefined) {
+          if (context.observations.length > 0) contextRunsObserved += 1;
+          if (context.scope.truncated) contextEventLogsTruncated += 1;
+          for (const observation of context.observations) {
+            if (contextObservations.length === MAX_CONTEXT_TELEMETRY_ANALYTICS_OBSERVATIONS) {
+              contextObservationsTruncated = true;
+              break;
+            }
+            contextObservations.push(observation);
+          }
+        }
       }
 
       runsByProject.push({ projectId: project.id, total, byStatus });
     }
 
     const summary = summariseTelemetry(entries);
+
+    const contextAggregate =
+      contextObservations.length === 0
+        ? undefined
+        : aggregateContextTelemetry(contextObservations);
+    const context =
+      (contextObservations.length > 0 && contextAggregate !== undefined) ||
+      contextEventLogsTruncated > 0
+        ? {
+            basis: CONTEXT_TELEMETRY_BASIS,
+            scope: {
+              runsObserved: contextRunsObserved,
+              observations: contextObservations.length,
+              observationLimit: MAX_CONTEXT_TELEMETRY_ANALYTICS_OBSERVATIONS,
+              eventLogsTruncated: contextEventLogsTruncated,
+              truncated: contextObservationsTruncated || contextEventLogsTruncated > 0,
+            },
+            ...(contextAggregate === undefined ? {} : { aggregate: contextAggregate }),
+          }
+        : undefined;
 
     return {
       scope: {
@@ -119,6 +170,7 @@ export class AnalyticsReader {
       byModel: buckets(summary.byModel),
       byRole: buckets(summary.byRole),
       byStage: buckets(summary.byStage),
+      ...(context === undefined ? {} : { context }),
     };
   }
 }

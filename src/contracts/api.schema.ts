@@ -9,6 +9,7 @@ import type {
   WorkflowClass,
 } from './state.schema.js';
 import type { TaskState } from './task.schema.js';
+import type { ContextTelemetryObservation } from './context-telemetry.schema.js';
 
 /**
  * The contract between the local server and the browser (§86).
@@ -521,6 +522,33 @@ export interface MetricBucketView {
   readonly retries: number;
 }
 
+/** Context estimates observed from the run audit trail; never provider billing. */
+export interface ContextTelemetryView {
+  readonly basis: 'estimated_operational_not_billing';
+  readonly scope: {
+    readonly eventsScanned: number;
+    readonly eventLimit: number;
+    readonly observations: number;
+    readonly truncated: boolean;
+  };
+  readonly observations: readonly ContextTelemetryObservation[];
+  /** Absent only when a capped log prevents an honest not-observed conclusion. */
+  readonly aggregate?: ContextTelemetryObservation;
+}
+
+/** Bounded cross-run context estimates, kept separate from runner telemetry. */
+export interface ContextTelemetryAnalyticsView {
+  readonly basis: 'estimated_operational_not_billing';
+  readonly scope: {
+    readonly runsObserved: number;
+    readonly observations: number;
+    readonly observationLimit: number;
+    readonly eventLogsTruncated: number;
+    readonly truncated: boolean;
+  };
+  readonly aggregate?: ContextTelemetryObservation;
+}
+
 /**
  * Operational analytics (§84), derived and never stored.
  *
@@ -558,6 +586,8 @@ export interface AnalyticsView {
   readonly byModel: MetricBucketView[];
   readonly byRole: MetricBucketView[];
   readonly byStage: MetricBucketView[];
+  /** Absent means context telemetry was not observed; it never means zero. */
+  readonly context?: ContextTelemetryAnalyticsView;
 }
 
 /**

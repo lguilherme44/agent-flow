@@ -31,7 +31,7 @@ export async function collectTelemetry(
   store: StateStore,
   state: RunState,
 ): Promise<TelemetryEntry[]> {
-  const events = await store.readEvents(state.runId);
+  const events = await store.readEventsBestEffort(state.runId);
 
   return [
     ...stageEntries(state.runId, events),

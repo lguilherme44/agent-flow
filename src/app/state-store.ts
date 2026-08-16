@@ -312,6 +312,30 @@ export class StateStore {
   }
 
   /**
+   * Read-model variant of `readEvents`: one malformed legacy audit line creates
+   * a visible data gap, not the loss of every otherwise valid projection.
+   * Workflow authority continues to use the strict method above.
+   */
+  async readEventsBestEffort(runId: string): Promise<RunEvent[]> {
+    const path = runPaths(this.projectDir, runId).events;
+    if (!(await this.fs.exists(path))) return [];
+
+    const events: RunEvent[] = [];
+    const raw = await this.fs.readFile(path);
+    for (const line of raw.split('\n')) {
+      const candidate = line.trim();
+      if (candidate.length === 0) continue;
+      try {
+        const parsed = RunEventSchema.safeParse(JSON.parse(candidate));
+        if (parsed.success) events.push(parsed.data);
+      } catch {
+        // Invalid historical audit entries are absent from this read model only.
+      }
+    }
+    return events;
+  }
+
+  /**
    * Records a lost capability on the run itself (R-16).
    *
    * The risk introduced by tolerating a broken runner is that DEGRADED quietly
