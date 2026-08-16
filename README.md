@@ -113,7 +113,7 @@ Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
 
 | Capability | Status |
 |---|---|
-| Local-first execution, no API key, no telemetry upload | Available |
+| Local-first execution (CLI credentials, optional UtilityModel apiKeyEnv), no telemetry upload | Available |
 | Persistent run state and append-only event log | Available |
 | DAG scheduling with wave/barrier semantics | Available |
 | Claude Code and Codex adapters | Available |

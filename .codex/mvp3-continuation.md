@@ -1,22 +1,24 @@
 # MVP3 Continuation State
 
 Updated: 2026-08-16
-Published HEAD: 85a3c5f
-origin/master: 85a3c5f
-Local HEAD: 85a3c5f
+Published HEAD: bd872dfbe1c854a724d123e44d5361d268686645
+origin/master: bd872dfbe1c854a724d123e44d5361d268686645
+Local HEAD: bd872dfbe1c854a724d123e44d5361d268686645
 Current milestone: M3-09 — dogfood and benchmark
 Current status: MVP3 COMPLETE — 100% GREEN CI — READY FOR INDEPENDENT FINAL AUDIT
 
 ## Completed milestones
 
-- M3-00: PASS
-- M3-01: PASS
-- M3-02: PASS
-- M3-03: PASS / PUBLISHED
-- M3-04: PASS / PUBLISHED
-- M3-05: PASS / PUBLISHED
-- M3-06: PASS / PUBLISHED
-- M3-07: PASS / PUBLISHED (69660ae, dc58dc6, 0b645d4, 974a504, 620b5fe)
+- M3-00: PASS (Architecture and probes)
+- M3-01: PASS (UtilityModel port)
+- M3-02: PASS (OpenAI-compatible adapter)
+- M3-03: PASS / PUBLISHED (ContextPacket)
+- M3-04: PASS / PUBLISHED (Repository retrieval)
+- M3-05: PASS / PUBLISHED (Hierarchical compression)
+- M3-06: PASS / PUBLISHED (Log and diff triage)
+- M3-07: PASS / PUBLISHED (Context telemetry)
+- M3-08: PASS / PUBLISHED (Primary-runner context integration)
+- M3-09: PASS / PUBLISHED (Dogfood and benchmark)
 
 ## Historical findings
 
@@ -486,21 +488,21 @@ severity: P2
 milestone: M3-07
 finding: Production context telemetry dropped observable model metrics (estimatedInputTokens, estimatedOutputTokens, utilityLatencyMs, effectiveProvider, effectiveModel).
 resolution: Propagated usage and provenance from UtilityModel through RepositoryRetriever, RepositoryContextAdvisor, and projectRepositoryRetrievalTelemetry, with strict trust validation (allowedEffectiveModels) and fail-closed malformed metric rejection.
-commit: pending
+commit: bd872dfbe1c854a724d123e44d5361d268686645
 
 ID: AUD-M3-09-01
 severity: P2
 milestone: M3-09
 finding: Dogfood matrix reported only 6 scenarios and made causal claims without recorded telemetry support.
 resolution: Expanded to normative 8-scenario empirical validation matrix with explicit classifications (LIVE PASS, LIVE BLOCKED, DETERMINISTIC TEST-COVERED, FAIL) and revised A/B analysis to state observed facts without unsupported causal claims.
-commit: pending
+commit: f9d54f5
 
 ID: AUD-DOC-01
 severity: P2
 milestone: DOC
 finding: Public documentation contained obsolete claims ("Nothing here talks to a model API", "no API key") contradicting MVP 3 optional UtilityModel architecture.
 resolution: Updated README.md, README.pt-BR.md, docs/security.md, and docs/roadmap.md to accurately document the dual-layer architecture (local CLI runner + optional advisory local utility model) and credential containment (apiKeyEnv).
-commit: pending
+commit: f9d54f5
 
 ## Current architecture invariants
 
@@ -551,16 +553,16 @@ Status: PASS / READY FOR INDEPENDENT FINAL GITHUB AUDIT
 
 ## 1. Milestone Delivery Status
 
-- **M3-00 (UtilityModel Port & Capabilities Contract)**: PASS / PUBLISHED
-- **M3-01 (OpenAI-Compatible Utility Adapter)**: PASS / PUBLISHED
-- **M3-02 (Advisory Context Packet Contract & Trust Boundary)**: PASS / PUBLISHED
-- **M3-03 (Context Compressor & Multi-Level Budgeting)**: PASS / PUBLISHED
-- **M3-04 (Repository Retriever & Lexical Candidate Discovery)**: PASS / PUBLISHED
-- **M3-05 (Secure Content Reader & Symlink Defense)**: PASS / PUBLISHED
-- **M3-06 (Log & Diff Mechanical Triager)**: PASS / PUBLISHED
-- **M3-07 (Context Telemetry & Observability Aggregates)**: PASS / PUBLISHED
-- **M3-08 (Runtime Stage Advisor & Advisory Context Injection)**: PASS / PUBLISHED
-- **M3-09 (Empirical Dogfooding & Empirical Validation Matrix)**: PASS / PUBLISHED
+- **M3-00 (Architecture and probes)**: PASS / PUBLISHED
+- **M3-01 (UtilityModel port)**: PASS / PUBLISHED
+- **M3-02 (OpenAI-compatible adapter)**: PASS / PUBLISHED
+- **M3-03 (ContextPacket)**: PASS / PUBLISHED
+- **M3-04 (Repository retrieval)**: PASS / PUBLISHED
+- **M3-05 (Hierarchical compression)**: PASS / PUBLISHED
+- **M3-06 (Log and diff triage)**: PASS / PUBLISHED
+- **M3-07 (Context telemetry)**: PASS / PUBLISHED
+- **M3-08 (Primary-runner context integration)**: PASS / PUBLISHED
+- **M3-09 (Dogfood and benchmark)**: PASS / PUBLISHED
 
 ## 2. Invariant Verification Matrix
 
@@ -578,4 +580,5 @@ Status: PASS / READY FOR INDEPENDENT FINAL GITHUB AUDIT
 ## 3. Final Conclusion
 
 All corrective findings from the independent audit (AUD-M3-07-01, AUD-M3-09-01, AUD-DOC-01) have been implemented, locked with regression tests, verified with quality gates, and documented.
+Closure code baseline before this documentation commit: bd872dfbe1c854a724d123e44d5361d268686645.
 MVP3 is complete and **READY FOR INDEPENDENT FINAL GITHUB AUDIT**.

@@ -49,22 +49,22 @@ crash recovery, and parallel scheduler activation across M2-00 through M2-12.
 
 ## MVP 3 — Context Intelligence & Advisory Local Model · complete
 
-Specified in [`specs/mvp3-context-intelligence.md`](specs/mvp3-context-intelligence.md).
+Specified in [`specs/implementation-spec-v4-draft.md`](specs/implementation-spec-v4-draft.md).
 Introduces an optional, provider-neutral, strictly advisory local UtilityModel layer that reduces
 context bloat and accelerates stage execution while preserving all security invariants.
 
 | | Milestone | Status |
 |---|---|---|
-| M3-00 | UtilityModel Port & Capabilities Contract | **done** |
-| M3-01 | OpenAI-Compatible Utility Adapter | **done** |
-| M3-02 | Advisory Context Packet Contract & Trust Boundary (`ContextPacket` Schema) | **done** |
-| M3-03 | Context Compressor & Multi-Level Budgeting | **done** |
-| M3-04 | Repository Retriever & Lexical Candidate Discovery | **done** |
-| M3-05 | Secure Content Reader & Symlink Defense | **done** |
-| M3-06 | Log & Diff Mechanical Triager | **done** |
-| M3-07 | Context Telemetry & Observability Aggregates | **done** |
-| M3-08 | Runtime Stage Advisor & Advisory Context Injection | **done** |
-| M3-09 | Empirical Dogfooding & Empirical Validation Matrix | **done** |
+| M3-00 | Architecture and probes | **done** |
+| M3-01 | UtilityModel port | **done** |
+| M3-02 | OpenAI-compatible adapter | **done** |
+| M3-03 | ContextPacket | **done** |
+| M3-04 | Repository retrieval | **done** |
+| M3-05 | Hierarchical compression | **done** |
+| M3-06 | Log and diff triage | **done** |
+| M3-07 | Context telemetry | **done** |
+| M3-08 | Primary-runner context integration | **done** |
+| M3-09 | Dogfood and benchmark | **done** |
 
 ### Core Invariants Guaranteed by MVP 3
 

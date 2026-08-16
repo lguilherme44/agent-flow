@@ -113,7 +113,7 @@ Quadro completo: [`docs/roadmap.md`](docs/roadmap.md). Fonte normativa:
 
 | Capacidade | Status |
 |---|---|
-| Execução local-first, sem API key, sem envio de telemetria | Disponível |
+| Execução local-first (credenciais CLI, apiKeyEnv opcional para UtilityModel), sem envio de telemetria | Disponível |
 | Estado de run persistido e event log append-only | Disponível |
 | Scheduling por DAG com semântica de wave/barrier | Disponível |
 | Adapters de Claude Code e Codex | Disponível |
