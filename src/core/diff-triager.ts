@@ -324,25 +324,20 @@ function utf8Prefix(text: string, maxBytes: number): { readonly text: string; re
   return { text: text.slice(0, end), bytes };
 }
 
-const ESCAPE = String.fromCharCode(27);
-const BELL = String.fromCharCode(7);
-const ANSI_ESCAPE_PATTERN = new RegExp(
-  `${ESCAPE}(?:\\[[0-?]*[ -/]*[@-~]|\\][^${BELL}]*(?:${BELL}|${ESCAPE}\\\\))`,
-  'g',
-);
+const ANSI_ESCAPE_PATTERN =
+  // Strip both 7-bit ESC forms and their 8-bit C1 CSI/OSC forms before
+  // deleting controls, otherwise a credential marker can be split into two
+  // harmless-looking words (for example `pass<C1 CSI>word`).
+  // eslint-disable-next-line no-control-regex
+  /(?:\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u009c\u001b]*(?:\u0007|\u009c|\u001b\\|$))|\u009b[0-?]*[ -/]*[@-~]|\u009d[^\u0007\u009c\u001b]*(?:\u0007|\u009c|\u001b\\|$))/g;
 
 function singleLine(text: string): string {
-  let output = '';
-  const withoutAnsi = text.replace(ANSI_ESCAPE_PATTERN, '').split(String.fromCharCode(0)).join('');
-  for (const character of withoutAnsi) {
-    const code = character.codePointAt(0)!;
-    output += code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029
-      ? ' '
-      : character;
-  }
-  return output
-    .replace(/\p{Cf}+/gu, '')
-    .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
+  return text
+    .replace(ANSI_ESCAPE_PATTERN, '')
+    .replace(/[\t\r\n]+/g, ' ')
+    // Invisible non-whitespace controls are deleted so they cannot split a
+    // security marker. C1 ST is included here even when it appears standalone.
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, '')
     .replace(/\s+/gu, ' ')
     .trim();
 }
@@ -360,9 +355,10 @@ function redact(text: string): string {
       continue;
     }
     result.push(line
-      .replace(/\bauthorization\b\s*[:=]\s*.*$/gi, 'Authorization: [REDACTED]')
+      .replace(/["']?\b(?:proxy-)?authorization\b["']?\s*[:=]\s*.*$/gi, 'Authorization: [REDACTED]')
+      .replace(/\bdigest\b(?=\s+.*\b[A-Za-z][A-Za-z0-9_-]*\s*=)\s+.*$/gi, 'Digest [REDACTED]')
+      .replace(/\b[Bb][Aa][Ss][Ii][Cc]\b\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|(?=[A-Za-z0-9._~+/=-]*[A-Z0-9._~+/=-])[A-Za-z0-9._~+/=-]+)\s*$/g, 'Basic [REDACTED]')
       .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
-      .replace(/\b(?:basic|digest)\s+[^\s,;}]+/gi, '[REDACTED AUTH]')
       .replace(/["']?\b((?:[A-Za-z0-9]+[._-])*(?:api[._ -]?key|secret[._-]?access[._-]?key|client[._-]?secret|access[._-]?(?:key(?:[._-]?id)?|token)|refresh[._-]?token|private[._-]?key|password|passwd|secret|token|credentials?))\b["']?\s*[:=]\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,;}]+)/gi, '$1=[REDACTED]')
       .replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1[REDACTED]@'));
   }
@@ -388,7 +384,7 @@ function validChange(value: unknown, id: unknown, ordinal: number): CapturedChan
     const path = own(value, 'path');
     const previousPath = own(value, 'previousPath');
     const binary = own(value, 'binary');
-    const scored = typeof status === 'string' && /^[RC](?:0\d\d|100)$/.test(status);
+    const scored = typeof status === 'string' && /^[RC](?:0|[1-9]\d?|100)$/.test(status);
     const simple = typeof status === 'string' && /^[AMDTUXB]$/.test(status);
     if (
       (!scored && !simple) ||

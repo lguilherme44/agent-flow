@@ -44,6 +44,8 @@ const DIFF_DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const DIFF_HARD_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DIFF_DEFAULT_MAX_RAW_PATCH_CHARACTERS = 256 * 1024;
 const DIFF_HARD_MAX_RAW_PATCH_CHARACTERS = 1024 * 1024;
+const EXACT_OBJECT_TYPE_MAX_OUTPUT_BYTES = 32;
+const PORCELAIN_SCORED_DIFF_STATUS_PATTERN = /^[RC]\d{3}$/;
 
 /**
  * The bits of git the workflow needs.
@@ -171,6 +173,11 @@ export class GitClient {
     const { maxOutputBytes, maxRawPatchCharacters } = safeOptions.value;
     const detection = ['--find-renames', '--find-copies-harder'] as const;
 
+    for (const oid of range) {
+      const verified = await this.verifyExactCommit(oid);
+      if (!verified.ok) return verified;
+    }
+
     const namesResult = await this.git.run({
       subcommand: 'diff',
       args: ['--name-status', '-z', '--no-textconv', ...detection, ...range, '--'],
@@ -233,6 +240,39 @@ export class GitClient {
       rawPatchTruncated,
       rawPatchOmittedCharacters,
     });
+  }
+
+  private async verifyExactCommit(oid: string): Promise<GitResult<true>> {
+    const result = await this.git.run({
+      subcommand: 'cat-file',
+      args: ['-t', oid],
+      cwd: this.cwd,
+      timeoutSeconds: GIT_TIMEOUT_SECONDS.quick,
+      maxOutputBytes: EXACT_OBJECT_TYPE_MAX_OUTPUT_BYTES,
+    });
+    if (!result.ok) return result;
+
+    const outcome = result.value;
+    if (outcome.truncated) {
+      return gitFailure({
+        code: 'git_output_truncated',
+        message: 'git cat-file object type output hit its safety ceiling',
+        exitCode: outcome.exitCode,
+        stderr: outcome.stderr,
+      });
+    }
+    if (outcome.exitCode !== 0) {
+      return gitFailure({
+        code: 'git_command_failed',
+        message: `git cat-file -t failed with exit code ${String(outcome.exitCode)}`,
+        exitCode: outcome.exitCode,
+        stderr: outcome.stderr,
+      });
+    }
+    if (outcome.stdout !== 'commit\n') {
+      return invalidDiffOutput('base/head object is not an exact commit object');
+    }
+    return gitOk(true);
   }
 
   /** Changed paths with their status letters, plus untracked files. */
@@ -419,12 +459,15 @@ function parseNameStatusZ(stdout: string): GitResult<readonly GitDiffChange[]> {
     }
     const statusKind = status[0];
     const scored = statusKind === 'R' || statusKind === 'C';
+    let normalizedStatus = status;
     if (scored) {
-      const scoreText = status.slice(1);
-      const score = /^\d{1,3}$/.test(scoreText) ? Number(scoreText) : Number.NaN;
+      const score = PORCELAIN_SCORED_DIFF_STATUS_PATTERN.test(status)
+        ? Number(status.slice(1))
+        : Number.NaN;
       if (!Number.isInteger(score) || score < 0 || score > 100) {
         return invalidDiffOutput('rename/copy status contains an invalid similarity score');
       }
+      normalizedStatus = `${statusKind}${String(score)}`;
     } else if (status.length !== 1 || !/^[ADMTUXB]$/.test(status)) {
       return invalidDiffOutput('name/status output contains an unknown status');
     }
@@ -436,14 +479,14 @@ function parseNameStatusZ(stdout: string): GitResult<readonly GitDiffChange[]> {
       if (previousPath === undefined || path === undefined) {
         return invalidDiffOutput('rename/copy status does not have exactly two paths');
       }
-      changes.push({ status, previousPath, path });
+      changes.push({ status: normalizedStatus, previousPath, path });
       index += 2;
       continue;
     }
 
     const path = fields[index];
     if (path === undefined) return invalidDiffOutput('change status does not have a path');
-    changes.push({ status, path });
+    changes.push({ status: normalizedStatus, path });
     index += 1;
   }
 

@@ -19,6 +19,12 @@ import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js'
 
 let repo: TempRepo | undefined;
 
+function verifiedCommitRunner(): FakeProcessRunner {
+  return new FakeProcessRunner()
+    .push({ stdout: 'commit\n' })
+    .push({ stdout: 'commit\n' });
+}
+
 afterEach(() => {
   repo?.cleanup();
   repo = undefined;
@@ -235,9 +241,80 @@ describe('bounded commit diff snapshots (M3-06)', () => {
     });
   });
 
+  it('refuses exact tree, blob, and annotated-tag object ids instead of peeling or diffing them', async () => {
+    repo = await makeTempRepoWithCommit();
+    const commit = repo.head();
+    const tree = repo.userGit(['rev-parse', `${commit}^{tree}`]).trim();
+    const blob = repo.userGit(['rev-parse', `${commit}:README.md`]).trim();
+    repo.userGit(['tag', '-a', 'snapshot-tag', '-m', 'snapshot tag', commit]);
+    const tag = repo.userGit(['rev-parse', 'snapshot-tag']).trim();
+    const client = new GitClient(repo.git, repo.dir);
+
+    for (const nonCommit of [tree, blob, tag]) {
+      const result = await client.diffSnapshotBetween(nonCommit, commit);
+      expect(result).toMatchObject({
+        ok: false,
+        failure: { code: 'git_invalid_output' },
+      });
+    }
+  });
+
+  it('verifies both exact object types before invoking either diff command', async () => {
+    const runner = new FakeProcessRunner()
+      .push({ stdout: 'commit\n' })
+      .push({ stdout: 'commit\n' })
+      .push({ stdout: '' })
+      .push({ stdout: '' });
+
+    const result = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
+      'a'.repeat(40),
+      'b'.repeat(40),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(runner.calls).toHaveLength(4);
+    expect(runner.calls.slice(0, 2).map((call) => call.args)).toEqual([
+      expect.arrayContaining(['cat-file', '-t', 'a'.repeat(40)]),
+      expect.arrayContaining(['cat-file', '-t', 'b'.repeat(40)]),
+    ]);
+    expect(runner.calls.slice(2).every((call) => call.args.includes('diff'))).toBe(true);
+  });
+
+  it.each([
+    ['non-zero', { exitCode: 2, stderr: 'missing' }, 'git_command_failed'],
+    ['truncated', { stdout: 'comm', truncated: true }, 'git_output_truncated'],
+    ['malformed type', { stdout: 'tree\n' }, 'git_invalid_output'],
+  ] as const)('refuses %s exact-object verification before diff truth', async (_name, outcome, code) => {
+    const runner = new FakeProcessRunner().push(outcome);
+
+    const result = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
+      'a'.repeat(40),
+      'b'.repeat(40),
+    );
+
+    expect(result).toMatchObject({ ok: false, failure: { code } });
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.args).toEqual(expect.arrayContaining(['cat-file', '-t', 'a'.repeat(40)]));
+  });
+
+  it('refuses a malformed head type after verifying base and before invoking diff', async () => {
+    const runner = new FakeProcessRunner()
+      .push({ stdout: 'commit\n' })
+      .push({ stdout: 'tag\n' });
+
+    const result = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
+      'a'.repeat(40),
+      'b'.repeat(40),
+    );
+
+    expect(result).toMatchObject({ ok: false, failure: { code: 'git_invalid_output' } });
+    expect(runner.calls).toHaveLength(2);
+    expect(runner.calls.every((call) => call.args.includes('cat-file'))).toBe(true);
+  });
+
   it('bounds raw patch before inspection and reports exactly what it omitted', async () => {
     const patch = 'diff --git a/file.txt b/file.txt\n' + 'x'.repeat(100);
-    const runner = new FakeProcessRunner()
+    const runner = verifiedCommitRunner()
       .push({ stdout: 'M\0file.txt\0' })
       .push({ stdout: patch });
     const client = new GitClient(testGitCommand(runner), '/repo');
@@ -289,7 +366,7 @@ describe('bounded commit diff snapshots (M3-06)', () => {
     ['patch non-zero', {}, { exitCode: 2, stderr: 'bad object' }, 'git_command_failed'],
     ['patch truncation', {}, { truncated: true }, 'git_output_truncated'],
   ] as const)('refuses %s rather than returning partial truth', async (_name, names, patch, code) => {
-    const runner = new FakeProcessRunner()
+    const runner = verifiedCommitRunner()
       .push({ stdout: 'M\0file.txt\0', ...names })
       .push({ stdout: 'diff --git a/file.txt b/file.txt\n', ...patch });
 
@@ -302,7 +379,7 @@ describe('bounded commit diff snapshots (M3-06)', () => {
   });
 
   it.each(['name/status', 'patch'])('propagates an explicit GitCommand refusal from %s', async (at) => {
-    const runner = new FakeProcessRunner();
+    const runner = verifiedCommitRunner();
     if (at === 'patch') runner.push({ stdout: 'M\0file.txt\0' });
     runner.push({ spawnFailed: true, stderr: 'ENOENT' });
 
@@ -321,20 +398,20 @@ describe('bounded commit diff snapshots (M3-06)', () => {
     ['empty interior field', 'M\0\0'],
     ['unknown status', 'Q\0file.txt\0'],
   ])('refuses malformed -z name-status output: %s', async (_name, stdout) => {
-    const runner = new FakeProcessRunner().always({ stdout });
+    const runner = verifiedCommitRunner().push({ stdout });
     const result = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
       'a'.repeat(40),
       'b'.repeat(40),
     );
 
     expect(result).toMatchObject({ ok: false, failure: { code: 'git_invalid_output' } });
-    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls).toHaveLength(3);
   });
 
-  it.each(['R', 'C', 'R101', 'C999'])(
+  it.each(['R', 'C', 'R101', 'C999', 'R00', 'R50', 'C01', 'R0500', 'R0x0'])(
     'refuses impossible rename/copy status %s before reading a patch',
     async (status) => {
-      const runner = new FakeProcessRunner()
+      const runner = verifiedCommitRunner()
         .push({ stdout: `${status}\0old.txt\0new.txt\0` })
         .always({ stdout: 'diff --git a/old.txt b/new.txt\n' });
 
@@ -344,15 +421,23 @@ describe('bounded commit diff snapshots (M3-06)', () => {
       );
 
       expect(result).toMatchObject({ ok: false, failure: { code: 'git_invalid_output' } });
-      expect(runner.calls).toHaveLength(1);
+      expect(runner.calls).toHaveLength(3);
     },
   );
 
-  it.each(['R0', 'R50', 'R050', 'R100', 'C0', 'C100'])(
-    'accepts bounded rename/copy score format %s',
-    async (status) => {
-      const runner = new FakeProcessRunner()
-        .push({ stdout: `${status}\0old.txt\0new.txt\0` })
+  it.each([
+    ['R000', 'R0'],
+    ['R050', 'R50'],
+    ['R090', 'R90'],
+    ['R100', 'R100'],
+    ['C000', 'C0'],
+    ['C050', 'C50'],
+    ['C100', 'C100'],
+  ])(
+    'normalizes Git porcelain rename/copy score %s to internal %s',
+    async (porcelainStatus, normalizedStatus) => {
+      const runner = verifiedCommitRunner()
+        .push({ stdout: `${porcelainStatus}\0old.txt\0new.txt\0` })
         .push({ stdout: 'diff --git a/old.txt b/new.txt\n' });
 
       const result = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
@@ -360,12 +445,15 @@ describe('bounded commit diff snapshots (M3-06)', () => {
         'b'.repeat(40),
       );
 
-      expect(result).toMatchObject({ ok: true, value: { changes: [{ status }] } });
+      expect(result).toMatchObject({
+        ok: true,
+        value: { changes: [{ status: normalizedStatus, previousPath: 'old.txt', path: 'new.txt' }] },
+      });
     },
   );
 
   it('refuses a complete patch that cannot correspond to the name/status output', async () => {
-    const runner = new FakeProcessRunner()
+    const runner = verifiedCommitRunner()
       .push({ stdout: 'M\0one.txt\0M\0two.txt\0' })
       .push({ stdout: 'diff --git a/one.txt b/one.txt\n' });
 
@@ -387,7 +475,7 @@ describe('bounded commit diff snapshots (M3-06)', () => {
       1.75,
       Number.MAX_VALUE,
     ]) {
-      const runner = new FakeProcessRunner()
+      const runner = verifiedCommitRunner()
         .push({ stdout: '' })
         .push({ stdout: '' });
 
@@ -397,8 +485,10 @@ describe('bounded commit diff snapshots (M3-06)', () => {
         { maxOutputBytes: hostile },
       );
 
-      expect(runner.calls).toHaveLength(2);
-      for (const call of runner.calls) {
+      expect(runner.calls).toHaveLength(4);
+      const diffCalls = runner.calls.filter((call) => call.args.includes('diff'));
+      expect(diffCalls).toHaveLength(2);
+      for (const call of diffCalls) {
         expect(call.args).toContain('diff');
         expect(call.args).toContain('--no-textconv');
         expect(Number.isSafeInteger(call.maxOutputBytes)).toBe(true);
@@ -438,7 +528,7 @@ describe('bounded commit diff snapshots (M3-06)', () => {
         return 1024;
       },
     };
-    const runner = new FakeProcessRunner().push({ stdout: '' }).push({ stdout: '' });
+    const runner = verifiedCommitRunner().push({ stdout: '' }).push({ stdout: '' });
 
     const result = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
       'a'.repeat(40),
@@ -452,7 +542,7 @@ describe('bounded commit diff snapshots (M3-06)', () => {
 
   it('falls back safely when a fractional raw-patch cap floors below one', async () => {
     const patch = 'diff --git a/file.txt b/file.txt\n';
-    const runner = new FakeProcessRunner()
+    const runner = verifiedCommitRunner()
       .push({ stdout: 'M\0file.txt\0' })
       .push({ stdout: patch });
 

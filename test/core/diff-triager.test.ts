@@ -9,6 +9,8 @@ import type { UtilityModel } from '../../src/ports/utility-model.js';
 import { FakeUtilityModel } from '../fakes/fake-utility-model.js';
 import { GitClient } from '../../src/adapters/git/git-client.js';
 import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
+import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
+import { testGitCommand } from '../fakes/test-git-command.js';
 
 let repo: TempRepo | undefined;
 afterEach(() => {
@@ -71,7 +73,7 @@ describe('DiffTriager mechanical truth', () => {
     ].join('\n');
     const artifact = await new DiffTriager().triage(input(snapshot({
       changes: [
-        { status: 'R090', previousPath: 'src/old name.ts', path: 'src/new name.ts', binary: false },
+        { status: 'R90', previousPath: 'src/old name.ts', path: 'src/new name.ts', binary: false },
         { status: 'D', path: 'docs/gone.md', binary: false },
         { status: 'A', path: 'assets/logo.bin', binary: true },
       ],
@@ -99,7 +101,7 @@ describe('DiffTriager mechanical truth', () => {
     }))).toEqual([
       { id: 'binary-id', status: 'A', path: 'assets/logo.bin', previousPath: undefined, binary: true, hunks: 0 },
       { id: 'delete-id', status: 'D', path: 'docs/gone.md', previousPath: undefined, binary: false, hunks: 1 },
-      { id: 'rename-id', status: 'R090', path: 'src/new name.ts', previousPath: 'src/old name.ts', binary: false, hunks: 1 },
+      { id: 'rename-id', status: 'R90', path: 'src/new name.ts', previousPath: 'src/old name.ts', binary: false, hunks: 1 },
     ]);
     expect(artifact.modules.map((module) => ({ name: module.name, fileIds: module.fileIds }))).toEqual([
       { name: 'assets', fileIds: ['binary-id'] },
@@ -608,6 +610,135 @@ describe('DiffTriager mechanical truth', () => {
     expect(artifact.files[0]?.hunks[0]?.excerpt).toContain('[REDACTED]');
   });
 
+  it('strips C1 escape sequences and redacts complete Digest credential tails before artifacts and prompts', async () => {
+    const c1SplitSecret = 'c1-split-secret';
+    const c1OscSecret = 'c1-osc-secret';
+    const c1StSecret = 'c1-st-secret';
+    const digestUsername = 'digest-admin';
+    const digestResponse = 'digest-response-secret';
+    const rawPatch = [
+      'diff --git a/src/core/worker.ts b/src/core/worker.ts',
+      'index 1111111..2222222',
+      '--- a/src/core/worker.ts',
+      '+++ b/src/core/worker.ts',
+      '@@ -1 +1,4 @@',
+      '-safe',
+      `+pass\u009b31mword=${c1SplitSecret}`,
+      `+pass\u009dterminal-title\u009cword=${c1OscSecret}`,
+      `+pass\u009cword=${c1StSecret}`,
+      `+Digest username="${digestUsername}", response="${digestResponse}"`,
+    ].join('\n');
+    const model = new FakeUtilityModel().pushText(JSON.stringify({ advisories: [] }));
+
+    const artifact = await new DiffTriager({ utilityModel: model }).triage(input(snapshot({ rawPatch })));
+    const observable = `${JSON.stringify(artifact)}\n${model.lastCall?.content ?? ''}`;
+
+    expect(observable).not.toContain(c1SplitSecret);
+    expect(observable).not.toContain(c1OscSecret);
+    expect(observable).not.toContain(c1StSecret);
+    expect(observable).not.toContain(digestUsername);
+    expect(observable).not.toContain(digestResponse);
+    expect(artifact.files[0]?.hunks[0]?.excerpt).toContain('[REDACTED]');
+  });
+
+  it('redacts auth-shaped Basic and Digest values without corrupting ordinary prose', async () => {
+    const secrets = [
+      'abc.def-secret',
+      'tab-basic-secret',
+      'quoted basic secret',
+      'digest-response-secret',
+      'header-bearer-secret',
+      'proxy-basic-secret',
+    ];
+    const rawPatch = [
+      'diff --git a/src/core/worker.ts b/src/core/worker.ts',
+      'index 1111111..2222222',
+      '--- a/src/core/worker.ts',
+      '+++ b/src/core/worker.ts',
+      '@@ -1 +1,8 @@',
+      '-safe',
+      '+Use basic arithmetic for totals',
+      '+Compute digest values for cache keys',
+      `+Basic ${secrets[0]}`,
+      `+Basic\t${secrets[1]}`,
+      `+Basic "${secrets[2]}"`,
+      `+Digest username="admin", response="${secrets[3]}"`,
+      `+Authorization: Bearer ${secrets[4]} trailing-auth-data`,
+      `+Proxy-Authorization: Basic ${secrets[5]}`,
+    ].join('\n');
+    const model = new FakeUtilityModel().pushText(JSON.stringify({ advisories: [] }));
+
+    const artifact = await new DiffTriager({ utilityModel: model }).triage(input(snapshot({ rawPatch })));
+    const observable = `${JSON.stringify(artifact)}\n${model.lastCall?.content ?? ''}`;
+
+    expect(artifact.files[0]?.hunks[0]?.excerpt).toContain('+Use basic arithmetic for totals');
+    expect(artifact.files[0]?.hunks[0]?.excerpt).toContain('+Compute digest values for cache keys');
+    expect(model.lastCall?.content).toContain('Use basic arithmetic for totals');
+    expect(model.lastCall?.content).toContain('Compute digest values for cache keys');
+    for (const secret of secrets) expect(observable).not.toContain(secret);
+  });
+
+  it('preserves lowercase line-final Basic prose that has no credential signal', async () => {
+    const rawPatch = [
+      'diff --git a/src/core/worker.ts b/src/core/worker.ts',
+      'index 1111111..2222222',
+      '--- a/src/core/worker.ts',
+      '+++ b/src/core/worker.ts',
+      '@@ -1 +1 @@',
+      '-safe',
+      '+Use basic arithmetic',
+    ].join('\n');
+    const model = new FakeUtilityModel().pushText(JSON.stringify({ advisories: [] }));
+
+    const artifact = await new DiffTriager({ utilityModel: model }).triage(input(snapshot({ rawPatch })));
+
+    expect(artifact.files[0]?.hunks[0]?.excerpt).toContain('+Use basic arithmetic');
+    expect(artifact.files[0]?.hunks[0]?.excerpt).not.toContain('[REDACTED]');
+    expect(model.lastCall?.content).toContain('Use basic arithmetic');
+  });
+
+  it('ends a C1 OSC sequence at 7-bit ST and preserves the visible suffix', async () => {
+    const rawPatch = [
+      'diff --git a/src/core/worker.ts b/src/core/worker.ts',
+      'index 1111111..2222222',
+      '--- a/src/core/worker.ts',
+      '+++ b/src/core/worker.ts',
+      '@@ -1 +1 @@',
+      '-safe',
+      '+prefix \u009dtitle\u001b\\visible suffix',
+    ].join('\n');
+    const model = new FakeUtilityModel().pushText(JSON.stringify({ advisories: [] }));
+
+    const artifact = await new DiffTriager({ utilityModel: model }).triage(input(snapshot({ rawPatch })));
+    const excerpt = artifact.files[0]?.hunks[0]?.excerpt;
+
+    expect(excerpt).toContain('+prefix visible suffix');
+    expect(excerpt).not.toContain('title');
+    expect(model.lastCall?.content).toContain('visible suffix');
+    expect(model.lastCall?.content).not.toContain('title');
+  });
+
+  it('ends a 7-bit OSC sequence at 7-bit ST and preserves the visible suffix', async () => {
+    const rawPatch = [
+      'diff --git a/src/core/worker.ts b/src/core/worker.ts',
+      'index 1111111..2222222',
+      '--- a/src/core/worker.ts',
+      '+++ b/src/core/worker.ts',
+      '@@ -1 +1 @@',
+      '-safe',
+      '+prefix \u001b]title\u001b\\visible suffix',
+    ].join('\n');
+    const model = new FakeUtilityModel().pushText(JSON.stringify({ advisories: [] }));
+
+    const artifact = await new DiffTriager({ utilityModel: model }).triage(input(snapshot({ rawPatch })));
+    const excerpt = artifact.files[0]?.hunks[0]?.excerpt;
+
+    expect(excerpt).toContain('+prefix visible suffix');
+    expect(excerpt).not.toContain('title');
+    expect(model.lastCall?.content).toContain('visible suffix');
+    expect(model.lastCall?.content).not.toContain('title');
+  });
+
   it('redacts prefixed environment credential identifiers from artifacts and prompts', async () => {
     const secrets = ['aws-secret-value', 'github-token-value', 'database-password-value'];
     const rawPatch = [
@@ -666,6 +797,53 @@ describe('DiffTriager mechanical truth', () => {
     });
     expect(JSON.stringify(renamed)).not.toContain(secret);
   });
+
+  it.each(['R0', 'R50', 'R90', 'R100', 'C0', 'C50', 'C100'])(
+    'trusts canonical Git rename/copy similarity status %s end to end',
+    async (status) => {
+      const kind = status[0];
+      const score = status.slice(1);
+      const porcelainStatus = `${kind}${score.padStart(3, '0')}`;
+      const verb = kind === 'R' ? 'rename' : 'copy';
+      const rawPatch = [
+          'diff --git a/src/old.ts b/src/new.ts',
+          `similarity index ${score}%`,
+          `${verb} from src/old.ts`,
+          `${verb} to src/new.ts`,
+        ].join('\n');
+      const runner = new FakeProcessRunner()
+        .push({ stdout: 'commit\n' })
+        .push({ stdout: 'commit\n' })
+        .push({ stdout: `${porcelainStatus}\0src/old.ts\0src/new.ts\0` })
+        .push({ stdout: rawPatch });
+      const produced = await new GitClient(testGitCommand(runner), '/repo').diffSnapshotBetween(
+        oid('a'), oid('b'),
+      );
+
+      expect(produced.ok).toBe(true);
+      if (!produced.ok) return;
+      expect(produced.value.changes[0]?.status).toBe(status);
+      const artifact = await new DiffTriager().triage(input(produced.value, ['scored-file']));
+
+      expect(artifact.invalidChangeCount).toBe(0);
+      expect(artifact.files).toEqual([
+        expect.objectContaining({ id: 'scored-file', status, patchTrusted: true }),
+      ]);
+    },
+  );
+
+  it.each(['R', 'R101', 'R00', 'R050', 'C01'])(
+    'rejects non-canonical rename/copy similarity status %s',
+    async (status) => {
+      const artifact = await new DiffTriager().triage(input(snapshot({
+        changes: [{ status, previousPath: 'src/old.ts', path: 'src/new.ts', binary: false }],
+        rawPatch: '', rawPatchTruncated: true, rawPatchOmittedCharacters: 1,
+      }), ['invalid-score']));
+
+      expect(artifact.files).toHaveLength(0);
+      expect(artifact.invalidChangeCount).toBe(1);
+    },
+  );
 });
 
 describe('DiffTriager optional advisory model', () => {
