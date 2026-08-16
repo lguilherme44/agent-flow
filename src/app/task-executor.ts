@@ -122,6 +122,7 @@ export class TaskExecutor {
         runId,
         {
           task: toYaml(task).trim(),
+          objective: `${task.title}\n${task.description}`,
           sdd,
           projectConfig: config.project === undefined ? 'None.' : toYaml(config.project).trim(),
           agentsMd: await this.readAgentsMd(workingDirectory),

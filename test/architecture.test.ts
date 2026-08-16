@@ -2279,18 +2279,37 @@ describe('Repository retrieval boundary (M3-04)', () => {
     }
   });
 
-  it('production workflow engines in src/app, src/server and adaptive-workflow.ts do not import RepositoryRetriever (M3-08 boundary)', () => {
-    const workflowDirs = ['src/app', 'src/server'];
+  it('composes RepositoryRetriever only at the advisor and composition root, never in engines (M3-08 boundary)', () => {
+    // M3-08 wires advisory retrieval into the workflow, but deliberately at the
+    // composition root: the stage engine must stay retriever-free so a stage
+    // keeps working verbatim when advisory context is absent or bypassed.
+    const allowed = [
+      'src/app/repository-context-advisor.ts',
+      'src/app/execution-context.ts',
+      'src/adapters/git/git-candidate-discovery.ts',
+    ];
+    const workflowDirs = ['src/app', 'src/server', 'src/cli', 'src/adapters'];
     const offenders: string[] = [];
 
     for (const dir of workflowDirs) {
       for (const file of sourceFiles(dir)) {
         const { path, text } = read(file);
-        if (importSpecifiers(text).some((s) => s.includes('repository-retriever'))) {
+        if (
+          !allowed.some((suffix) => path.endsWith(suffix)) &&
+          importSpecifiers(text).some((s) => s.includes('repository-retriever'))
+        ) {
           offenders.push(path);
         }
       }
     }
+
+    // The production advisor must exist and be wired, or this test trivially
+    // passes with M3-08 missing entirely.
+    expect(
+      allowed.every((suffix) =>
+        read(join(ROOT, suffix)).text.includes('repository-retriever'),
+      ),
+    ).toBe(true);
 
     const adaptive = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
     if (importSpecifiers(adaptive.text).some((s) => s.includes('repository-retriever'))) {
@@ -2547,13 +2566,18 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
     );
   });
 
-  it('wires M3-07 only to the dedicated audit recorder and read-only server projections', () => {
+  it('wires M3-07 telemetry only through the recorder and read-only server projections, plus the M3-08 advisory singleton', () => {
     const offenders: string[] = [];
     for (const dir of ['src/app', 'src/server', 'src/cli', 'src/adapters', 'src/config']) {
       for (const file of sourceFiles(dir)) {
         const { path, text } = read(file);
         const allowed = [
           'src/app/context-telemetry-recorder.ts',
+          // M3-08: the advisory singleton projects retrieval outcomes and the
+          // composition root wires the recorder — the schedule of calls that
+          // makes M3-07 projections effective.
+          'src/app/repository-context-advisor.ts',
+          'src/app/execution-context.ts',
           'src/server/context-telemetry-reader.ts',
           'src/server/analytics-reader.ts',
           'src/server/server.ts',

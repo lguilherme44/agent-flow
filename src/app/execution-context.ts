@@ -13,6 +13,9 @@ import { PromptLoader } from './prompt-loader.js';
 import { TaskExecutor } from './task-executor.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
+import { RepositoryContextAdvisor } from './repository-context-advisor.js';
+import { ContextTelemetryRecorder } from './context-telemetry-recorder.js';
+import { RepositoryRetriever, FileSystemCandidateDiscovery } from '../core/repository-retriever.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
 import {
   resolveTaskConcurrency,
@@ -31,7 +34,7 @@ import {
 } from './run-git-identity.js';
 import { createGitCommand, type GitCommand } from '../adapters/git/git-command.js';
 import { createGitWorkspaces, type GitWorkspaces } from '../adapters/git/git-workspaces.js';
-import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
+import type { Clock, FileSystem, Host, ProcessRunner, UtilityModel } from '../ports/index.js';
 
 /**
  * The wiring every execution command needs.
@@ -128,6 +131,15 @@ export interface BuildContextOptions {
   readonly globalConfigPath: string;
   /** Where the shipped prompts live. Resolved by whoever knows the install. */
   readonly promptsDir: string;
+  /**
+   * Optional local model that *advisory* context comes from (§18, M3-08).
+   *
+   * When absent, the workflow runs exactly as before M3: no retrieval, no
+   * advisory blocks, no telemetry. When present, repository retrieval and
+   * ranking feed an advisory block into the primary runner's prompt — which the
+   * runner is never forced to trust, and which never becomes workflow truth.
+   */
+  readonly utilityModel?: UtilityModel;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
@@ -161,6 +173,22 @@ export async function buildExecutionContext(
     onFallback: recordFallback(store),
   });
 
+  // M3-08: advisory context is optional by contract. A configured utility model
+  // earns the workflow an advisory block on primary-runner prompts; its absence
+  // leaves every prompt exactly as-rendered (§14.3, §18). Telemetry flows
+  // through the recorder whenever the advisor runs, at no cost when absent.
+  const advisor =
+    options.utilityModel === undefined
+      ? undefined
+      : new RepositoryContextAdvisor({
+          retriever: new RepositoryRetriever({
+            utilityModel: options.utilityModel,
+            candidateDiscovery: new FileSystemCandidateDiscovery(fs),
+            projectDir: options.projectDir,
+          }),
+          telemetry: new ContextTelemetryRecorder(store),
+        });
+
   const stageRunner = new StageRunner({
     fs,
     clock,
@@ -170,6 +198,7 @@ export async function buildExecutionContext(
     promptLoader: new PromptLoader({ fs, promptsDir: options.promptsDir }),
     getRunner,
     projectDir: options.projectDir,
+    ...(advisor === undefined ? {} : { advisor }),
   });
 
   const executor = new TaskExecutor({
