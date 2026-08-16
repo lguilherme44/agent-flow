@@ -1,11 +1,11 @@
 # MVP3 Continuation State
 
-Updated: 2026-08-15
-Published HEAD: 18030fcea1b48bfc2887eb4b6e59c08ab76e6261
-origin/master: 18030fcea1b48bfc2887eb4b6e59c08ab76e6261
-Local HEAD: dc58dc6 (M3-07 closed context telemetry contract)
-Current milestone: M3-07 — Context Telemetry and UI
-Current status: RECONNAISSANCE COMPLETE / IMPLEMENTATION NEXT
+Updated: 2026-08-16
+Published HEAD: 620b5fe (M3-07 read-only Analytics UI)
+origin/master: 620b5fe
+Local HEAD: 620b5fe
+Current milestone: M3-08 — Primary-runner context integration
+Current status: M3-07 CLOSED / M3-08 RECONNAISSANCE NEXT
 
 ## Completed milestones
 
@@ -16,6 +16,7 @@ Current status: RECONNAISSANCE COMPLETE / IMPLEMENTATION NEXT
 - M3-04: PASS / PUBLISHED
 - M3-05: PASS / PUBLISHED
 - M3-06: PASS / PUBLISHED
+- M3-07: PASS / PUBLISHED (69660ae, dc58dc6, 0b645d4, 974a504, 620b5fe)
 
 ## Historical findings
 
@@ -464,6 +465,20 @@ finding: Inherited/accessor response properties and hostile HTTP status values c
 resolution: Closed by an exact native Response trust boundary, bounded status and deep own-data JSON snapshots.
 commit: 69660ae
 
+ID: M3-07-F05
+severity: P1
+milestone: M3-07
+finding: snapshotNativeResponse rejected every genuine native Response because Node's undici Response stores its state in own symbol properties (Symbol(state)/Symbol(headers)) and the trust boundary treated any own property as hostile, so healthCheck and run always failed. Shipped broken in 69660ae with 48 red tests.
+resolution: Closed by rejecting only own string-keyed properties (which is how hostile code shadows the prototype status getter or json method) while allowing native symbol internals; regression tests pin both acceptance and native shadow rejection.
+commit: 974a504
+
+ID: M3-07-F06
+severity: P3
+milestone: M3-07
+finding: The Analytics page ignored the context telemetry aggregate the read model already served, so M3-07's UI/read-model exposure was missing.
+resolution: Closed by a read-only "Context intelligence" panel rendering estimated/not-billing metrics, degradation counts and the closed effective identity, with unit tests for presence, degradation and absence semantics.
+commit: 620b5fe
+
 ## Current architecture invariants
 
 - UtilityModel is optional, advisory, provider-neutral, and non-authoritative.
@@ -476,12 +491,12 @@ commit: 69660ae
 
 ## Last quality gates
 
-targeted: PASS — 242/242 (M3-06 Git/diff/log + architecture)
+targeted: PASS — M3-07 telemetry/adapter/server suites green
 architecture: PASS
-check: PASS — 2279 core passed, 2 skipped; 235 web passed
+check: PASS — 2394 core passed, 2 skipped; 243 web passed
 E2E: PASS — 26/26
 visual: PASS — 137 passed, 3 expected skips; no blind snapshot update
-packaging: PASS — 53 checks
+packaging: PASS
 
 ## Dogfood status
 
@@ -493,9 +508,9 @@ packaging: PASS — 53 checks
 
 ## Next action
 
-Implement M3-07 in reviewable Strict-TDD work units: effective UtilityModel usage/provenance, pure closed telemetry contract, event/read-model projection, then read-only Analytics UI.
+M3-08 — primary-runner context integration: consume validated advisory ContextPacket at a provider-neutral runner seam; primary runner retains raw follow-up context access; ContextPacket never becomes the only evidence source; UtilityModel failures degrade to bypass without disturbing the workflow. Assemble a ContextPacket from the retrieval/compression/triage producers and emit mechanical+adapter telemetry observations through ContextTelemetryRecorder during integration, wired into the primary workflow (this is where M3-07 projections become effective).
 
 ## Blockers
 
 - Local `moe` production wiring needs a secret-safe `apiKeyEnv` reference; never persist the value in YAML/state/logs.
-- UtilityModel has no production config/composition wiring yet.
+- UtilityModel has no production config/composition wiring yet (required for M3-09 real dogfood; tests must keep using the fake).
