@@ -22,6 +22,7 @@ export type {
   UtilityModelSuccess,
   UtilityModelFailure,
   UtilityModelUsage,
+  UtilityModelProvenance,
   UtilityModelErrorCode,
 } from './utility-model.js';
 export { UTILITY_MODEL_ERROR_CODES } from './utility-model.js';

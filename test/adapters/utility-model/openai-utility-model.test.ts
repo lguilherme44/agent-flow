@@ -3,7 +3,9 @@ import {
   OpenAiCompatibleUtilityModel,
   type OpenAiCompatibleUtilityModelConfig,
 } from '../../../src/adapters/utility-model/openai-utility-model.js';
+import { estimateInputTokens } from '../../../src/adapters/utility-model/token-estimator.js';
 import type { UtilityModelInput } from '../../../src/ports/utility-model.js';
+import { FixedClock } from '../../fakes/fixed-clock.js';
 
 function createMockFetch(
   handler: (req: {
@@ -241,7 +243,7 @@ describe('OpenAiCompatibleUtilityModel — Health Check (Tests 15-20)', () => {
     const adapter = new OpenAiCompatibleUtilityModel({ ...VALID_CONFIG, fetch: mockFetch });
     const health = await adapter.healthCheck();
     expect(health.status).toBe('unavailable');
-    expect(health.detail).toContain('ECONNREFUSED');
+    expect(health.detail).toBe('Health probe failed');
   });
 
   it('17. malformed health response -> unavailable', async () => {
@@ -282,7 +284,7 @@ describe('OpenAiCompatibleUtilityModel — Health Check (Tests 15-20)', () => {
     const health = await adapter.healthCheck();
     expect(health.status).toBe('unavailable');
     expect(health.detail).not.toContain(apiKey);
-    expect(health.detail).toContain('[REDACTED]');
+    expect(health.detail).toBe('Health probe failed');
   });
 
   it('20. health uses lightweight /models endpoint, not chat inference', async () => {
@@ -772,7 +774,7 @@ describe('OpenAiCompatibleUtilityModel — Failures & Security (Tests 45-53)', (
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errorCode).toBe('unavailable');
-      expect(result.message).toContain('Endpoint unreachable');
+      expect(result.message).toBe('Utility model endpoint unavailable');
     }
   });
 
@@ -893,7 +895,7 @@ describe('OpenAiCompatibleUtilityModel — Failures & Security (Tests 45-53)', (
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).not.toContain('Secret internal database string');
-      expect(result.message).toBe('HTTP 500: Internal Server Error');
+      expect(result.message).toBe('Inference execution failed (HTTP 500)');
     }
   });
 
@@ -913,7 +915,539 @@ describe('OpenAiCompatibleUtilityModel — Failures & Security (Tests 45-53)', (
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).not.toContain(apiKey);
-      expect(result.message).toContain('[REDACTED]');
+      expect(result.message).toBe('Utility model endpoint unavailable');
     }
+  });
+});
+
+describe('OpenAiCompatibleUtilityModel — effective telemetry provenance (M3-07)', () => {
+  it('reports estimates and only the provider/model actually established by the response', async () => {
+    const configuredModel = 'configured-intent-is-not-proof';
+    const mockFetch = createMockFetch(() =>
+      jsonResponse({
+        model: 'effective-model-from-response',
+        choices: [{ message: { content: 'bounded output' } }],
+      }),
+    );
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      model: configuredModel,
+      fetch: mockFetch,
+    });
+
+    const result = await adapter.run({ content: 'bounded input' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.usage?.estimatedInputTokens).toBeGreaterThan(0);
+      expect(result.usage?.estimatedOutputTokens).toBeGreaterThan(0);
+      expect(result.provenance).toEqual({
+        provider: 'openai-compatible',
+        model: 'effective-model-from-response',
+      });
+      expect(result.provenance?.model).not.toBe(configuredModel);
+    }
+  });
+
+  it('estimates the exact assembled structured prompt once rather than counting its schema twice', async () => {
+    const schema = { type: 'object', properties: { result: { type: 'string' } } };
+    const content = 'bounded input';
+    const systemInstruction = 'Return a concise result.';
+    let assembledSystemInstruction = '';
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      injectNoThink: false,
+      fetch: createMockFetch(({ body }) => {
+        const request = JSON.parse(body!) as CapturedRequestBody;
+        assembledSystemInstruction = request.messages?.find(({ role }) => role === 'system')?.content ?? '';
+        return jsonResponse({ choices: [{ message: { content: '{"result":"ok"}' } }] });
+      }),
+    });
+
+    const result = await adapter.run({ content, systemInstruction, desiredOutputSchema: schema });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.usage?.estimatedInputTokens).toBe(
+        estimateInputTokens({ content, systemInstruction: assembledSystemInstruction }),
+      );
+    }
+  });
+
+  it('never treats configured id, URL, or requested model as effective model proof', async () => {
+    const secretUrl = 'http://user:password@localhost:1234/v1?token=do-not-leak';
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      id: 'configured-id-do-not-report',
+      baseUrl: secretUrl,
+      model: 'requested-model-do-not-report',
+      fetch: createMockFetch(() =>
+        jsonResponse({ choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.provenance).toEqual({ provider: 'openai-compatible' });
+      expect(JSON.stringify({ usage: result.usage, provenance: result.provenance })).not.toMatch(
+        /password|token=|configured-id|requested-model/,
+      );
+    }
+  });
+
+  it.each([
+    ['blank', ''],
+    ['surrounding whitespace', ' served-model '],
+    ['control', 'served\nmodel'],
+    ['format control', 'served\u200Bmodel'],
+    ['lone surrogate', 'served\uD800model'],
+    ['overlong', 'm'.repeat(201)],
+    ['URL-shaped', 'http://localhost/private-model'],
+    ['authorization-shaped', 'Bearer sk-response-secret'],
+    ['credential-shaped', 'api_key=sk-response-secret'],
+    ['non-string', { id: 'served-model' }],
+  ])('omits unsafe response model identity: %s', async (_label, model) => {
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() =>
+        jsonResponse({ model, choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.provenance).toEqual({ provider: 'openai-compatible' });
+  });
+
+  it('omits a bounded but non-ASCII response model identity conservatively', async () => {
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() =>
+        jsonResponse({ model: 'moe-café/版本-1', choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.provenance).toEqual({ provider: 'openai-compatible' });
+  });
+
+  it('omits a response model that contains the configured API key', async () => {
+    const apiKey = 'sk-configured-secret-never-report';
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      apiKey,
+      fetch: createMockFetch(() =>
+        jsonResponse({ model: `model-${apiKey}`, choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.provenance).toEqual({ provider: 'openai-compatible' });
+      expect(JSON.stringify(result.provenance)).not.toContain(apiKey);
+    }
+  });
+
+  it.each([NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER, 100_000_001])(
+    'omits unsafe provider token usage %s while retaining estimates',
+    async (unsafeCount) => {
+      const adapter = new OpenAiCompatibleUtilityModel({
+        ...VALID_CONFIG,
+        fetch: createMockFetch(() =>
+          jsonResponse({
+            model: 'served-model',
+            choices: [{ message: { content: 'answer' } }],
+            usage: { prompt_tokens: unsafeCount, completion_tokens: unsafeCount },
+          }),
+        ),
+      });
+
+      const result = await adapter.run({ content: 'input' });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.usage?.inputTokens).toBeUndefined();
+        expect(result.usage?.outputTokens).toBeUndefined();
+        expect(result.usage?.estimatedInputTokens).toBeGreaterThan(0);
+        expect(result.usage?.estimatedOutputTokens).toBeGreaterThan(0);
+      }
+    },
+  );
+
+  it('preserves explicit provider zero counts rather than confusing them with absence', async () => {
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() =>
+        jsonResponse({
+          choices: [{ message: { content: '' } }],
+          usage: { prompt_tokens: 0, completion_tokens: 0 },
+        }),
+      ),
+    });
+
+    const result = await adapter.run({ content: '' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.usage?.inputTokens).toBe(0);
+      expect(result.usage?.outputTokens).toBe(0);
+      expect(result.usage?.estimatedOutputTokens).toBe(0);
+    }
+  });
+
+  it.each([
+    ['HTTP', () => textResponse('secret response', 500, 'secret status text')],
+    ['non-JSON', () => textResponse('secret response', 200)],
+    ['shape', () => jsonResponse({ model: 'served-model', choices: [] })],
+  ])('carries measured safe duration on %s failure without free-form details', async (_kind, response) => {
+    const clock = new FixedClock();
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      clock,
+      fetch: createMockFetch(() => {
+        clock.advance(37);
+        return response();
+      }),
+    });
+
+    const result = await adapter.run({ content: 'input containing secret-input-value' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.usage?.durationMs).toBe(37);
+      expect(result.usage?.estimatedInputTokens).toBeGreaterThan(0);
+      expect(result.message).not.toMatch(/secret|localhost|https?:\/\/|input-value/i);
+      expect(result.provenance?.provider).toBe('openai-compatible');
+    }
+  });
+
+  it('carries output estimate, safe response model, and latency on structured-output parse failure', async () => {
+    const clock = new FixedClock();
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      clock,
+      fetch: createMockFetch(() => {
+        clock.advance(41);
+        return jsonResponse({
+          model: 'served-model',
+          choices: [{ message: { content: 'not-json' } }],
+        });
+      }),
+    });
+
+    const result = await adapter.run({
+      content: 'input',
+      desiredOutputSchema: { type: 'object' },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorCode).toBe('invalid_response');
+      expect(result.usage?.estimatedOutputTokens).toBeGreaterThan(0);
+      expect(result.usage?.durationMs).toBe(41);
+      expect(result.provenance).toEqual({ provider: 'openai-compatible', model: 'served-model' });
+    }
+  });
+
+  it('carries measured duration on network and timeout failures without exception details', async () => {
+    for (const kind of ['network', 'timeout'] as const) {
+      const clock = new FixedClock();
+      const secret = 'sk-secret-in-exception-and-url';
+      const adapter = new OpenAiCompatibleUtilityModel({
+        ...VALID_CONFIG,
+        apiKey: secret,
+        timeoutSeconds: 0.01,
+        clock,
+        fetch: createMockFetch(({ signal }) => {
+          if (kind === 'network') {
+            clock.advance(23);
+            throw new Error(`Bearer ${secret} http://localhost/private response-body`);
+          }
+          return new Promise((_, reject) => {
+            signal?.addEventListener('abort', () => {
+              clock.advance(29);
+              const error = new Error(`Bearer ${secret} http://localhost/private response-body`);
+              error.name = 'AbortError';
+              reject(error);
+            });
+          });
+        }),
+      });
+
+      const result = await adapter.run({ content: 'input' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.usage?.durationMs).toBe(kind === 'network' ? 23 : 29);
+        expect(result.message).not.toMatch(/secret|Bearer|http|response-body/);
+        expect(result.provenance).toEqual({ provider: 'openai-compatible' });
+      }
+    }
+  });
+
+  it.each([
+    ['NaN clock', [NaN, NaN]],
+    ['infinite clock', [Infinity, Infinity]],
+    ['negative elapsed', [100, 99]],
+    ['huge elapsed', [0, 86_400_001]],
+  ])(
+    'omits unsafe measured duration: %s rather than coercing it to zero',
+    async (_label, clockValues) => {
+      let index = 0;
+      const clock = {
+        now: () => '2026-01-01T00:00:00.000Z',
+        monotonicMs: () => clockValues[Math.min(index++, clockValues.length - 1)]!,
+      };
+      const adapter = new OpenAiCompatibleUtilityModel({
+        ...VALID_CONFIG,
+        clock,
+        fetch: createMockFetch(() => jsonResponse({ choices: [{ message: { content: 'answer' } }] })),
+      });
+
+      const result = await adapter.run({ content: 'input' });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.usage?.durationMs).toBeUndefined();
+    },
+  );
+
+  it('preserves finite fractional monotonic latency from the production clock contract', async () => {
+    const values = [10.25, 12.75];
+    let index = 0;
+    const clock = {
+      now: () => '2026-01-01T00:00:00.000Z',
+      monotonicMs: () => values[Math.min(index++, values.length - 1)]!,
+    };
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      clock,
+      fetch: createMockFetch(() => jsonResponse({ choices: [{ message: { content: 'answer' } }] })),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.usage?.durationMs).toBe(2.5);
+  });
+
+  it('deep-freezes telemetry and provenance contracts', async () => {
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() =>
+        jsonResponse({ model: 'served-model', choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+    const result = await adapter.run({ content: 'input' });
+
+    expect(Object.isFrozen(adapter.capabilities())).toBe(true);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.usage)).toBe(true);
+    expect(Object.isFrozen(result.provenance)).toBe(true);
+  });
+});
+
+describe('OpenAiCompatibleUtilityModel — hostile DTO snapshots (M3-07 review)', () => {
+  it('rejects request accessors without reading changing content or maxOutputTokens', async () => {
+    let contentReads = 0;
+    let maxTokenReads = 0;
+    const input: Record<string, unknown> = {};
+    Object.defineProperties(input, {
+      content: {
+        enumerable: true,
+        get: () => (++contentReads === 1 ? 'nine tokens' : `secret-content ${'x'.repeat(20_000)}`),
+      },
+      maxOutputTokens: {
+        enumerable: true,
+        get: () => (++maxTokenReads === 1 ? 1 : 6_000),
+      },
+    });
+    const fetch = createMockFetch(() => jsonResponse({ choices: [{ message: { content: 'answer' } }] }));
+    const adapter = new OpenAiCompatibleUtilityModel({ ...VALID_CONFIG, fetch });
+
+    const result = await adapter.run(input as unknown as UtilityModelInput);
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'invalid_response',
+      message: 'Invalid utility model input',
+    });
+    expect(contentReads).toBe(0);
+    expect(maxTokenReads).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('secret-content');
+  });
+
+  it('rejects inherited input fields and proxies without invoking their traps', async () => {
+    const inherited = Object.create({ content: 'inherited secret' }) as UtilityModelInput;
+    const proxy = new Proxy({ content: 'safe' }, {
+      getPrototypeOf: () => {
+        throw new Error('secret proxy trap detail');
+      },
+    });
+    const fetch = createMockFetch(() => jsonResponse({ choices: [{ message: { content: 'answer' } }] }));
+    const adapter = new OpenAiCompatibleUtilityModel({ ...VALID_CONFIG, fetch });
+
+    for (const input of [inherited, proxy as UtilityModelInput]) {
+      const result = await adapter.run(input);
+      expect(result).toEqual({
+        ok: false,
+        errorCode: 'invalid_response',
+        message: 'Invalid utility model input',
+      });
+      expect(JSON.stringify(result)).not.toMatch(/secret|proxy|trap|inherited/i);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('closes schema serialization and proxy failures without invoking toJSON or leaking thrown detail', async () => {
+    let toJsonCalls = 0;
+    const schema = {
+      type: 'object',
+      toJSON: () => {
+        toJsonCalls += 1;
+        throw new Error('secret-schema-throw-detail');
+      },
+    };
+    const proxySchema = new Proxy({ type: 'object' }, {
+      getPrototypeOf: () => {
+        throw new Error('secret-schema-proxy-detail');
+      },
+    });
+    const fetch = createMockFetch(() => jsonResponse({ choices: [{ message: { content: '{}' } }] }));
+    const adapter = new OpenAiCompatibleUtilityModel({ ...VALID_CONFIG, fetch });
+
+    for (const desiredOutputSchema of [schema, proxySchema]) {
+      await expect(adapter.run({ content: 'input', desiredOutputSchema })).resolves.toEqual({
+        ok: false,
+        errorCode: 'invalid_response',
+        message: 'Invalid utility model input',
+      });
+    }
+    expect(toJsonCalls).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'X-Api-Key sk-response-secret',
+    'Cookie session=sk-response-secret',
+    'plain model identity prose',
+    'postgres://user:secret@localhost/database',
+    'model\\windows',
+    'model=value',
+    'moe-café',
+  ])('omits non-identifier response model provenance: %s', async (model) => {
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() =>
+        jsonResponse({ model, choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.provenance).toEqual({ provider: 'openai-compatible' });
+      expect(JSON.stringify(result.provenance)).not.toContain(model);
+    }
+  });
+
+  it('accepts a response-proven slash-delimited model alias with conservative identifier segments', async () => {
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() =>
+        jsonResponse({ model: 'Qwen/Qwen3.5-30B_A3B', choices: [{ message: { content: 'answer' } }] }),
+      ),
+    });
+    const result = await adapter.run({ content: 'input' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.provenance?.model).toBe('Qwen/Qwen3.5-30B_A3B');
+  });
+
+  it('rejects patched response methods and inherited/accessor completion properties without reading them', async () => {
+    let modelReads = 0;
+    let choicesReads = 0;
+    const maliciousData = Object.create({ model: 'inherited-secret-model' }) as Record<string, unknown>;
+    Object.defineProperties(maliciousData, {
+      model: {
+        enumerable: true,
+        get: () => {
+          modelReads += 1;
+          return 'accessor-secret-model';
+        },
+      },
+      choices: {
+        enumerable: true,
+        get: () => {
+          choicesReads += 1;
+          return [{ message: { content: 'secret response' } }];
+        },
+      },
+    });
+    const response = jsonResponse({ choices: [{ message: { content: 'safe body' } }] });
+    Object.defineProperty(response, 'json', { value: async () => maliciousData });
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() => response),
+    });
+
+    const result = await adapter.run({ content: 'input' });
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'invalid_response',
+      message: 'Invalid utility model response',
+      usage: expect.objectContaining({ estimatedInputTokens: expect.any(Number) }),
+      provenance: { provider: 'openai-compatible' },
+    });
+    expect(modelReads).toBe(0);
+    expect(choicesReads).toBe(0);
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it.each([
+    { ok: false, status: '599 X-Api-Key: secret-status', statusText: 'secret status text' },
+    Object.create({ ok: false, status: 599, statusText: 'inherited secret status' }),
+    Object.defineProperty({ ok: false }, 'status', {
+      get: () => {
+        throw new Error('secret status accessor');
+      },
+    }),
+    { ok: false, status: 99 },
+    { ok: false, status: 600 },
+  ])('rejects non-native or unsafe HTTP status without formatting its value: %#', async (response) => {
+    const fetch = createMockFetch(() => response as unknown as Response);
+    const adapter = new OpenAiCompatibleUtilityModel({ ...VALID_CONFIG, fetch });
+
+    const result = await adapter.run({ content: 'input' });
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'invalid_response',
+      message: 'Invalid utility model response',
+      usage: expect.objectContaining({ estimatedInputTokens: expect.any(Number) }),
+      provenance: { provider: 'openai-compatible' },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/secret-status|X-Api-Key|status accessor|inherited secret/);
+  });
+
+  it('does not inspect a hostile thrown value while normalizing fetch failure', async () => {
+    const hostile = new Proxy({}, {
+      getPrototypeOf: () => {
+        throw new Error('secret thrown proxy detail');
+      },
+      get: () => {
+        throw new Error('secret thrown getter detail');
+      },
+    });
+    const adapter = new OpenAiCompatibleUtilityModel({
+      ...VALID_CONFIG,
+      fetch: createMockFetch(() => {
+        throw hostile;
+      }),
+    });
+
+    await expect(adapter.run({ content: 'input' })).resolves.toEqual({
+      ok: false,
+      errorCode: 'unavailable',
+      message: 'Utility model endpoint unavailable',
+      usage: expect.objectContaining({ estimatedInputTokens: expect.any(Number) }),
+      provenance: { provider: 'openai-compatible' },
+    });
   });
 });

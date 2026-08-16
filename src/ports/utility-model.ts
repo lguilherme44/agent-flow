@@ -152,9 +152,29 @@ export interface UtilityModelInput {
  * usage fields across providers for billing — consult provider dashboards.
  */
 export interface UtilityModelUsage {
+  /** Provider-reported input count, when finite, integral, non-negative, and bounded. */
   readonly inputTokens?: number;
+  /** Provider-reported output count, when finite, integral, non-negative, and bounded. */
   readonly outputTokens?: number;
+  /** Adapter estimate for the request actually assembled on the wire. */
+  readonly estimatedInputTokens?: number;
+  /** Adapter estimate for the response text actually observed. */
+  readonly estimatedOutputTokens?: number;
+  /** Locally observed invocation latency. Missing means it could not be measured safely. */
   readonly durationMs?: number;
+}
+
+/**
+ * Effective execution provenance established by an adapter.
+ *
+ * This is deliberately separate from `UtilityModel.id`: configured identifiers,
+ * endpoints, and requested model names are intent, not proof of what served a
+ * request. Adapters may expose only closed, secret-safe provider vocabulary and
+ * response-established model identity. Missing fields must remain missing.
+ */
+export interface UtilityModelProvenance {
+  readonly provider: string;
+  readonly model?: string;
 }
 
 export interface UtilityModelSuccess {
@@ -169,6 +189,8 @@ export interface UtilityModelSuccess {
   readonly structured?: unknown;
   /** Advisory telemetry — optional and provider-neutral. */
   readonly usage?: UtilityModelUsage;
+  /** Safe effective execution identity, never configured intent. */
+  readonly provenance?: UtilityModelProvenance;
 }
 
 export interface UtilityModelFailure {
@@ -179,6 +201,10 @@ export interface UtilityModelFailure {
    * and operator review only.
    */
   readonly message: string;
+  /** Safe metrics observed before the failure; missing is not zero. */
+  readonly usage?: UtilityModelUsage;
+  /** Safe effective execution identity established before the failure. */
+  readonly provenance?: UtilityModelProvenance;
 }
 
 export type UtilityModelResult = UtilityModelSuccess | UtilityModelFailure;
@@ -278,9 +304,10 @@ export interface UtilityModel {
    *   the caller, not in run()).
    * - Treating the result as advisory data, never as trusted evidence.
    *
-   * run() always returns a UtilityModelResult. It does not throw for model
-   * failures — only for programming errors (e.g., null input). Infrastructure
-   * errors are wrapped in UtilityModelFailure with an appropriate errorCode.
+   * run() always returns a UtilityModelResult. Model, infrastructure, and
+   * runtime DTO-validation failures are wrapped in UtilityModelFailure with an
+   * appropriate errorCode and a closed, secret-safe diagnostic. It must not
+   * reject because an untrusted input/schema/response accessor or proxy throws.
    */
   run(input: UtilityModelInput): Promise<UtilityModelResult>;
 }

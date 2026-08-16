@@ -1,3 +1,4 @@
+import { types as nodeUtilTypes } from 'node:util';
 import type {
   UtilityModel,
   UtilityModelCapabilities,
@@ -7,7 +8,7 @@ import type {
   UtilityModelUsage,
 } from '../../ports/utility-model.js';
 import type { Clock } from '../../ports/clock.js';
-import { estimateInputTokens } from './token-estimator.js';
+import { estimateInputTokens, estimateTokens } from './token-estimator.js';
 
 /**
  * Configuration for the OpenAI-compatible UtilityModel adapter (M3-02).
@@ -99,6 +100,191 @@ const DEFAULT_TIMEOUT_SECONDS = 120;
 const DEFAULT_HEALTH_TIMEOUT_SECONDS = 5;
 const DEFAULT_INJECT_NO_THINK = false;
 const DEFAULT_STRUCTURED_OUTPUT = true;
+const EFFECTIVE_PROVIDER = 'openai-compatible';
+const MAX_SAFE_TELEMETRY_TOKENS = 100_000_000;
+const MAX_SAFE_TELEMETRY_DURATION_MS = 86_400_000;
+const MAX_SAFE_RESPONSE_MODEL_LENGTH = 200;
+const MAX_SNAPSHOT_NODES = 100_000;
+const MAX_SNAPSHOT_DEPTH = 64;
+const MAX_SNAPSHOT_CHARS = 1_000_000;
+const UTILITY_INPUT_KEYS = new Set([
+  'content',
+  'systemInstruction',
+  'desiredOutputSchema',
+  'maxOutputTokens',
+  'correlationId',
+]);
+const RESPONSE_PROTOTYPE = Response.prototype;
+const RESPONSE_STATUS_GETTER = Object.getOwnPropertyDescriptor(RESPONSE_PROTOTYPE, 'status')?.get;
+const RESPONSE_JSON_METHOD = Object.getOwnPropertyDescriptor(RESPONSE_PROTOTYPE, 'json')?.value as
+  | ((this: Response) => Promise<unknown>)
+  | undefined;
+
+type SnapshotResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false };
+
+interface UtilityModelInputSnapshot {
+  readonly content: string;
+  readonly systemInstruction?: string;
+  readonly desiredOutputSchema?: Readonly<Record<string, unknown>>;
+  readonly maxOutputTokens?: number;
+  readonly correlationId?: string;
+}
+
+interface SnapshotBudget {
+  nodes: number;
+  chars: number;
+}
+
+function failedSnapshot<T>(): SnapshotResult<T> {
+  return { ok: false };
+}
+
+function snapshotJsonValue(
+  value: unknown,
+  budget: SnapshotBudget = { nodes: 0, chars: 0 },
+  depth = 0,
+): SnapshotResult<unknown> {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_SNAPSHOT_NODES || depth > MAX_SNAPSHOT_DEPTH) return failedSnapshot();
+
+  if (value === null || typeof value === 'boolean') return { ok: true, value };
+  if (typeof value === 'string') {
+    budget.chars += value.length;
+    return budget.chars <= MAX_SNAPSHOT_CHARS ? { ok: true, value } : failedSnapshot();
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? { ok: true, value } : failedSnapshot();
+  }
+  if (typeof value !== 'object' || nodeUtilTypes.isProxy(value)) return failedSnapshot();
+
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+
+    if (Array.isArray(value)) {
+      if (prototype !== Array.prototype) return failedSnapshot();
+      const lengthDescriptor = descriptors.length;
+      if (
+        !lengthDescriptor ||
+        !('value' in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) ||
+        lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > MAX_SNAPSHOT_NODES
+      ) return failedSnapshot();
+
+      const length = lengthDescriptor.value as number;
+      if (keys.length !== length + 1) return failedSnapshot();
+      const clone: unknown[] = [];
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return failedSnapshot();
+        const nested = snapshotJsonValue(descriptor.value, budget, depth + 1);
+        if (!nested.ok) return failedSnapshot();
+        clone.push(nested.value);
+      }
+      return { ok: true, value: Object.freeze(clone) };
+    }
+
+    if (prototype !== Object.prototype && prototype !== null) return failedSnapshot();
+    const clone = Object.create(null) as Record<string, unknown>;
+    for (const key of keys) {
+      if (typeof key !== 'string') return failedSnapshot();
+      budget.chars += key.length;
+      if (budget.chars > MAX_SNAPSHOT_CHARS) return failedSnapshot();
+      const descriptor = descriptors[key];
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return failedSnapshot();
+      const nested = snapshotJsonValue(descriptor.value, budget, depth + 1);
+      if (!nested.ok) return failedSnapshot();
+      Object.defineProperty(clone, key, {
+        value: nested.value,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
+    }
+    return { ok: true, value: Object.freeze(clone) };
+  } catch {
+    return failedSnapshot();
+  }
+}
+
+function snapshotUtilityInput(input: unknown): SnapshotResult<UtilityModelInputSnapshot> {
+  if (!input || typeof input !== 'object' || nodeUtilTypes.isProxy(input)) return failedSnapshot();
+  try {
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return failedSnapshot();
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (typeof key !== 'string' || !UTILITY_INPUT_KEYS.has(key)) return failedSnapshot();
+      const descriptor = descriptors[key];
+      if (!descriptor || !('value' in descriptor)) return failedSnapshot();
+    }
+
+    const contentDescriptor = descriptors.content;
+    if (!contentDescriptor || !('value' in contentDescriptor) || typeof contentDescriptor.value !== 'string') {
+      return failedSnapshot();
+    }
+    const optionalValue = (key: string): unknown => {
+      const descriptor = descriptors[key];
+      return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+    };
+    const systemInstruction = optionalValue('systemInstruction');
+    const desiredOutputSchema = optionalValue('desiredOutputSchema');
+    const maxOutputTokens = optionalValue('maxOutputTokens');
+    const correlationId = optionalValue('correlationId');
+    if (systemInstruction !== undefined && typeof systemInstruction !== 'string') return failedSnapshot();
+    if (maxOutputTokens !== undefined && typeof maxOutputTokens !== 'number') return failedSnapshot();
+    if (correlationId !== undefined && typeof correlationId !== 'string') return failedSnapshot();
+
+    let safeSchema: Readonly<Record<string, unknown>> | undefined;
+    if (desiredOutputSchema !== undefined) {
+      const snapshot = snapshotJsonValue(desiredOutputSchema);
+      if (!snapshot.ok || !snapshot.value || typeof snapshot.value !== 'object' || Array.isArray(snapshot.value)) {
+        return failedSnapshot();
+      }
+      safeSchema = snapshot.value as Readonly<Record<string, unknown>>;
+    }
+
+    return {
+      ok: true,
+      value: Object.freeze({
+        content: contentDescriptor.value,
+        ...(systemInstruction === undefined ? {} : { systemInstruction }),
+        ...(safeSchema === undefined ? {} : { desiredOutputSchema: safeSchema }),
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+        ...(correlationId === undefined ? {} : { correlationId }),
+      }),
+    };
+  } catch {
+    return failedSnapshot();
+  }
+}
+
+function snapshotNativeResponse(value: unknown): SnapshotResult<{ readonly response: Response; readonly status: number }> {
+  if (!value || typeof value !== 'object' || nodeUtilTypes.isProxy(value)) return failedSnapshot();
+  try {
+    if (
+      RESPONSE_STATUS_GETTER === undefined ||
+      RESPONSE_JSON_METHOD === undefined ||
+      Object.getPrototypeOf(value) !== RESPONSE_PROTOTYPE ||
+      Reflect.ownKeys(Object.getOwnPropertyDescriptors(value)).length !== 0
+    ) return failedSnapshot();
+    const status = RESPONSE_STATUS_GETTER.call(value);
+    if (!Number.isSafeInteger(status) || status < 100 || status > 599) return failedSnapshot();
+    return { ok: true, value: Object.freeze({ response: value as Response, status }) };
+  } catch {
+    return failedSnapshot();
+  }
+}
+
+function asSnapshotRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : undefined;
+}
 
 /**
  * Normalizes an OpenAI-compatible base URL into exact endpoint URLs.
@@ -115,11 +301,11 @@ function normalizeEndpointUrls(rawBaseUrl: string): { chatCompletionsUrl: string
   try {
     parsed = new URL(rawBaseUrl);
   } catch {
-    throw new Error(`Invalid baseUrl: "${rawBaseUrl}" is not a valid URL`);
+    throw new Error('Invalid baseUrl: expected a valid http(s) URL');
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`Invalid baseUrl: protocol must be http: or https:, got "${parsed.protocol}"`);
+    throw new Error('Invalid baseUrl: protocol must be http: or https:');
   }
 
   const pathname = parsed.pathname.replace(/\/+$/, '');
@@ -241,12 +427,12 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
       clock: config.clock,
     };
 
-    this.caps = {
+    this.caps = Object.freeze({
       contextWindow: this.config.contextWindow,
       structuredOutput: this.config.structuredOutput,
       tools: false,
       streaming: false,
-    };
+    });
   }
 
   capabilities(): UtilityModelCapabilities {
@@ -270,33 +456,48 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
         headers,
         signal: controller.signal,
       });
+      const response = snapshotNativeResponse(res);
+      if (!response.ok) {
+        return { status: 'unavailable', detail: 'Invalid health response' };
+      }
 
-      if (!res.ok) {
+      if (response.value.status < 200 || response.value.status > 299) {
         return {
           status: 'unavailable',
-          detail: `Health check failed with HTTP ${res.status}`,
+          detail: `Health check failed with HTTP ${response.value.status}`,
         };
       }
 
-      const data = (await res.json()) as { data?: Array<{ id?: string }> };
+      if (RESPONSE_JSON_METHOD === undefined) {
+        return { status: 'unavailable', detail: 'Invalid health response' };
+      }
+      const rawData = await RESPONSE_JSON_METHOD.call(response.value.response);
+      const dataSnapshot = snapshotJsonValue(rawData);
+      if (!dataSnapshot.ok) {
+        return { status: 'unavailable', detail: 'Invalid health response' };
+      }
+      const data = asSnapshotRecord(dataSnapshot.value);
+      const models = data?.data;
 
-      if (Array.isArray(data?.data)) {
+      if (Array.isArray(models)) {
         const modelId = this.config.model;
-        const exists = data.data.some((m) => {
-          if (!m || typeof m.id !== 'string') return false;
-          return m.id === modelId || m.id.endsWith(`/${modelId}`) || m.id.includes(modelId);
+        const exists = models.some((candidate) => {
+          const model = asSnapshotRecord(candidate);
+          const id = model?.id;
+          if (typeof id !== 'string') return false;
+          return id === modelId || id.endsWith(`/${modelId}`) || id.includes(modelId);
         });
 
         if (!exists) {
           return {
             status: 'unavailable',
-            detail: `Configured model "${modelId}" was not found in endpoint models list`,
+            detail: 'Configured model was not found in endpoint models list',
           };
         }
 
         return {
           status: 'available',
-          detail: `Model "${modelId}" is available at endpoint`,
+          detail: 'Configured model is available at endpoint',
         };
       }
 
@@ -305,11 +506,10 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
         status: 'available',
         detail: 'Endpoint is reachable',
       };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+    } catch {
       return {
         status: 'unavailable',
-        detail: this.sanitizeMessage(`Health probe failed: ${msg}`),
+        detail: 'Health probe failed',
       };
     } finally {
       clearTimeout(timeoutId);
@@ -317,68 +517,70 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
   }
 
   async run(input: UtilityModelInput): Promise<UtilityModelResult> {
-    if (!input || typeof input !== 'object' || typeof input.content !== 'string') {
-      throw new TypeError('UtilityModelInput.content must be a string');
+    const inputSnapshot = snapshotUtilityInput(input);
+    if (!inputSnapshot.ok) return this.invalidInput();
+    const request = inputSnapshot.value;
+
+    if (
+      request.maxOutputTokens !== undefined &&
+      (!Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens <= 0)
+    ) {
+      return this.invalidInput();
     }
 
-    if (input.maxOutputTokens !== undefined) {
-      if (!Number.isInteger(input.maxOutputTokens) || input.maxOutputTokens <= 0 || !Number.isFinite(input.maxOutputTokens)) {
-        return {
-          ok: false,
-          errorCode: 'invalid_response',
-          message: `Invalid maxOutputTokens: must be a positive integer, got ${input.maxOutputTokens}`,
-        };
+    let systemInstruction: string;
+    let expectsStructured: boolean;
+    let estimatedTokens: number;
+    let serializedBody: string;
+    try {
+      // 1. Prepare system instruction & /no_think normalization
+      systemInstruction = request.systemInstruction?.trim() ?? '';
+
+      if (this.config.injectNoThink) {
+        const alreadyHasNoThink = /(?:^|\s)\/no_think(?:\s|$)/.test(systemInstruction);
+        if (!alreadyHasNoThink) {
+          systemInstruction = systemInstruction.length > 0 ? `/no_think\n${systemInstruction}` : '/no_think';
+        }
       }
-    }
 
-    // 1. Prepare system instruction & /no_think normalization
-    let systemInstruction = input.systemInstruction?.trim() ?? '';
-
-    if (this.config.injectNoThink) {
-      const alreadyHasNoThink = /(?:^|\s)\/no_think(?:\s|$)/.test(systemInstruction);
-      if (!alreadyHasNoThink) {
-        systemInstruction = systemInstruction.length > 0 ? `/no_think\n${systemInstruction}` : '/no_think';
+      expectsStructured = Boolean(request.desiredOutputSchema && this.caps.structuredOutput);
+      if (expectsStructured && request.desiredOutputSchema) {
+        const schemaPrompt = `\nYou must respond with a valid JSON object matching this schema:\n${JSON.stringify(request.desiredOutputSchema)}`;
+        systemInstruction = systemInstruction.length > 0 ? `${systemInstruction}${schemaPrompt}` : schemaPrompt.trim();
       }
-    }
 
-    const expectsStructured = Boolean(input.desiredOutputSchema && this.caps.structuredOutput);
-    if (expectsStructured && input.desiredOutputSchema) {
-      const schemaPrompt = `\nYou must respond with a valid JSON object matching this schema:\n${JSON.stringify(input.desiredOutputSchema)}`;
-      systemInstruction = systemInstruction.length > 0 ? `${systemInstruction}${schemaPrompt}` : schemaPrompt.trim();
-    }
+      // 2. Client-side conservative budget preflight check
+      estimatedTokens = estimateInputTokens({
+        content: request.content,
+        systemInstruction: systemInstruction.length > 0 ? systemInstruction : undefined,
+        // `systemInstruction` already contains the provider schema prompt above;
+        // passing the schema here too would count context that is sent only once.
+        injectNoThink: this.config.injectNoThink,
+      });
 
-    // 2. Client-side conservative budget preflight check
-    const estimatedTokens = estimateInputTokens({
-      content: input.content,
-      systemInstruction: systemInstruction.length > 0 ? systemInstruction : undefined,
-      desiredOutputSchema: input.desiredOutputSchema,
-      injectNoThink: this.config.injectNoThink,
-    });
+      // 3. Assemble OpenAI wire messages from the validated snapshot only.
+      const messages: Array<{ role: string; content: string }> = [];
+      if (systemInstruction.length > 0) messages.push({ role: 'system', content: systemInstruction });
+      messages.push({ role: 'user', content: request.content });
+
+      const body: Record<string, unknown> = {
+        model: this.config.model,
+        messages,
+        max_tokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
+      };
+      if (expectsStructured) body.response_format = { type: 'json_object' };
+      serializedBody = JSON.stringify(body);
+    } catch {
+      return this.invalidInput();
+    }
 
     if (estimatedTokens > this.config.targetInputTokens) {
-      return {
+      return Object.freeze({
         ok: false,
         errorCode: 'context_limit',
         message: `Estimated input tokens (${estimatedTokens}) exceeds target input budget (${this.config.targetInputTokens})`,
-      };
-    }
-
-    // 3. Assemble OpenAI wire messages
-    const messages: Array<{ role: string; content: string }> = [];
-    if (systemInstruction.length > 0) {
-      messages.push({ role: 'system', content: systemInstruction });
-    }
-    messages.push({ role: 'user', content: input.content });
-
-    const effectiveMaxOutputTokens = input.maxOutputTokens ?? this.config.maxOutputTokens;
-    const body: Record<string, unknown> = {
-      model: this.config.model,
-      messages,
-      max_tokens: effectiveMaxOutputTokens,
-    };
-
-    if (expectsStructured) {
-      body.response_format = { type: 'json_object' };
+        usage: this.makeUsage(estimatedTokens),
+      });
     }
 
     const headers: Record<string, string> = {
@@ -392,144 +594,260 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutSeconds * 1000);
-    const startTime = this.now();
+    const startTime = this.safeNow();
 
     try {
       const res = await this.config.fetch(this.chatCompletionsUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: serializedBody,
         signal: controller.signal,
       });
-
-      const durationMs = this.now() - startTime;
-
-      if (!res.ok) {
-        return this.normalizeHttpError(res.status, res.statusText);
+      const response = snapshotNativeResponse(res);
+      if (!response.ok) {
+        return this.invalidResponse(estimatedTokens, this.elapsedSince(startTime));
       }
 
-      let data: {
-        choices?: Array<{
-          message?: {
-            content?: unknown;
-          };
-        }>;
-        usage?: {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-        };
-      };
+      if (response.value.status < 200 || response.value.status > 299) {
+        return this.normalizeHttpError(
+          response.value.status,
+          this.makeUsage(estimatedTokens, this.elapsedSince(startTime)),
+        );
+      }
+
+      let rawData: unknown;
       try {
-        data = (await res.json()) as typeof data;
+        if (RESPONSE_JSON_METHOD === undefined) {
+          return this.invalidResponse(estimatedTokens, this.elapsedSince(startTime));
+        }
+        rawData = await RESPONSE_JSON_METHOD.call(response.value.response);
       } catch {
-        return {
+        return Object.freeze({
           ok: false,
           errorCode: 'invalid_response',
           message: 'Malformed JSON in HTTP 200 response from utility model',
-        };
+          usage: this.makeUsage(estimatedTokens, this.elapsedSince(startTime)),
+          provenance: this.makeProvenance(),
+        });
       }
 
-      const content = data?.choices?.[0]?.message?.content;
+      const dataSnapshot = snapshotJsonValue(rawData);
+      const data = dataSnapshot.ok ? asSnapshotRecord(dataSnapshot.value) : undefined;
+      if (!data) return this.invalidResponse(estimatedTokens, this.elapsedSince(startTime));
+      const choices = data.choices;
+      const firstChoice = Array.isArray(choices) ? asSnapshotRecord(choices[0]) : undefined;
+      const message = asSnapshotRecord(firstChoice?.message);
+      const content = message?.content;
+      const provenance = this.makeProvenance(data.model);
+      const providerUsage = asSnapshotRecord(data.usage);
       if (typeof content !== 'string') {
-        return {
+        return Object.freeze({
           ok: false,
           errorCode: 'invalid_response',
           message: 'Malformed OpenAI response shape (missing choices[0].message.content)',
-        };
+          usage: this.makeUsage(
+            estimatedTokens,
+            this.elapsedSince(startTime),
+            undefined,
+            providerUsage === undefined ? undefined : {
+              prompt_tokens: providerUsage.prompt_tokens as number | undefined,
+              completion_tokens: providerUsage.completion_tokens as number | undefined,
+            },
+          ),
+          provenance,
+        });
       }
 
-      const usage: UtilityModelUsage = {
-        inputTokens: typeof data?.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : undefined,
-        outputTokens: typeof data?.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : undefined,
-        durationMs,
-      };
+      const usage = this.makeUsage(
+        estimatedTokens,
+        this.elapsedSince(startTime),
+        content,
+        providerUsage === undefined ? undefined : {
+          prompt_tokens: providerUsage.prompt_tokens as number | undefined,
+          completion_tokens: providerUsage.completion_tokens as number | undefined,
+        },
+      );
 
       if (expectsStructured) {
         try {
           const parsed = JSON.parse(content.trim());
-          return {
+          return Object.freeze({
             ok: true,
             text: content,
             structured: parsed,
             usage,
-          };
+            provenance,
+          });
         } catch {
-          return {
+          return Object.freeze({
             ok: false,
             errorCode: 'invalid_response',
             message: 'Failed to parse structured JSON output from utility model response',
-          };
+            usage,
+            provenance,
+          });
         }
       }
 
-      return {
+      return Object.freeze({
         ok: true,
         text: content,
         usage,
-      };
-    } catch (err: unknown) {
-      const durationMs = this.now() - startTime;
-      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        return {
+        provenance,
+      });
+    } catch {
+      const usage = this.makeUsage(estimatedTokens, this.elapsedSince(startTime));
+      const provenance = this.makeProvenance();
+      if (controller.signal.aborted) {
+        return Object.freeze({
           ok: false,
           errorCode: 'timeout',
-          message: `Inference request timed out after ${this.config.timeoutSeconds}s (${durationMs}ms elapsed)`,
-        };
+          message: 'Inference request timed out',
+          usage,
+          provenance,
+        });
       }
 
-      const msg = err instanceof Error ? err.message : String(err);
-      return {
+      return Object.freeze({
         ok: false,
         errorCode: 'unavailable',
-        message: this.sanitizeMessage(`Endpoint unreachable: ${msg}`),
-      };
+        message: 'Utility model endpoint unavailable',
+        usage,
+        provenance,
+      });
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
-  private normalizeHttpError(status: number, statusText: string): UtilityModelResult {
+  private normalizeHttpError(status: number, usage: UtilityModelUsage): UtilityModelResult {
+    const provenance = this.makeProvenance();
     if (status === 401 || status === 403) {
-      return {
+      return Object.freeze({
         ok: false,
         errorCode: 'execution_failed',
         message: `Authentication failed (HTTP ${status})`,
-      };
+        usage,
+        provenance,
+      });
     }
 
     if (status === 413) {
-      return {
+      return Object.freeze({
         ok: false,
         errorCode: 'context_limit',
         message: `Context limit exceeded (HTTP ${status})`,
-      };
+        usage,
+        provenance,
+      });
     }
 
     if (status === 502 || status === 503 || status === 504) {
-      return {
+      return Object.freeze({
         ok: false,
         errorCode: 'unavailable',
-        message: `Endpoint unavailable (HTTP ${status}: ${statusText || 'Service Unavailable'})`,
-      };
+        message: `Endpoint unavailable (HTTP ${status})`,
+        usage,
+        provenance,
+      });
     }
 
-    return {
+    return Object.freeze({
       ok: false,
       errorCode: 'execution_failed',
-      message: `HTTP ${status}: ${statusText || 'Inference execution failed'}`,
-    };
+      message: `Inference execution failed (HTTP ${status})`,
+      usage,
+      provenance,
+    });
   }
 
-  private sanitizeMessage(msg: string): string {
-    let sanitized = msg;
-    if (this.config.apiKey) {
-      sanitized = sanitized.split(this.config.apiKey).join('[REDACTED]');
+  private invalidInput(): UtilityModelResult {
+    return Object.freeze({
+      ok: false,
+      errorCode: 'invalid_response',
+      message: 'Invalid utility model input',
+    });
+  }
+
+  private invalidResponse(estimatedInputTokens: number, durationMs?: number): UtilityModelResult {
+    return Object.freeze({
+      ok: false,
+      errorCode: 'invalid_response',
+      message: 'Invalid utility model response',
+      usage: this.makeUsage(estimatedInputTokens, durationMs),
+      provenance: this.makeProvenance(),
+    });
+  }
+
+  private makeUsage(
+    estimatedInputTokens: number,
+    durationMs?: number,
+    outputText?: string,
+    providerUsage?: { prompt_tokens?: number; completion_tokens?: number },
+  ): UtilityModelUsage {
+    const inputTokens = this.safeTokenCount(providerUsage?.prompt_tokens);
+    const outputTokens = this.safeTokenCount(providerUsage?.completion_tokens);
+    const safeEstimatedInput = this.safeTokenCount(estimatedInputTokens);
+    const estimatedOutputTokens =
+      outputText === undefined ? undefined : this.safeTokenCount(estimateTokens(outputText));
+
+    return Object.freeze({
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens }),
+      ...(safeEstimatedInput === undefined ? {} : { estimatedInputTokens: safeEstimatedInput }),
+      ...(estimatedOutputTokens === undefined ? {} : { estimatedOutputTokens }),
+      ...(durationMs === undefined ? {} : { durationMs }),
+    });
+  }
+
+  private safeTokenCount(value: unknown): number | undefined {
+    if (
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      value < 0 ||
+      value > MAX_SAFE_TELEMETRY_TOKENS
+    ) {
+      return undefined;
     }
-    sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9._~+/-]+/g, 'Bearer [REDACTED]');
-    return sanitized;
+    return value;
   }
 
-  private now(): number {
-    return this.config.clock ? this.config.clock.monotonicMs() : Date.now();
+  private makeProvenance(responseModel?: unknown): Readonly<{ provider: string; model?: string }> {
+    const model = this.safeResponseModel(responseModel);
+    return Object.freeze({
+      provider: EFFECTIVE_PROVIDER,
+      ...(model === undefined ? {} : { model }),
+    });
+  }
+
+  private safeResponseModel(value: unknown): string | undefined {
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SAFE_RESPONSE_MODEL_LENGTH) return undefined;
+    if (
+      (this.config.apiKey !== undefined && this.config.apiKey.length > 0 && value.includes(this.config.apiKey)) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(value)
+    ) {
+      return undefined;
+    }
+    return value;
+  }
+
+  private safeNow(): number | undefined {
+    try {
+      const value = this.config.clock ? this.config.clock.monotonicMs() : Date.now();
+      return Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private elapsedSince(startTime: number | undefined): number | undefined {
+    if (startTime === undefined) return undefined;
+    const endTime = this.safeNow();
+    if (endTime === undefined) return undefined;
+    const elapsed = endTime - startTime;
+    if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > MAX_SAFE_TELEMETRY_DURATION_MS) {
+      return undefined;
+    }
+    return elapsed;
   }
 }
