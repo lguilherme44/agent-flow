@@ -120,6 +120,12 @@ export interface StageRunnerOptions {
    */
   readonly getRunner: (resolved: ResolvedAgentConfig) => AgentRunner;
   readonly projectDir: string;
+  /**
+   * Optional advisory-context hook (§18, M3-08). When present, its block is
+   * appended to the prompt the primary runner receives — never replacing it.
+   * Offline, malformed, or throwing advisors leave the prompt untouched.
+   */
+  readonly advisor?: StageAdvisor;
 }
 
 /**
@@ -134,6 +140,38 @@ export interface StageRunnerOptions {
 export interface StageRunOptions {
   /** Absolute. Defaults to the project directory. */
   readonly workingDirectory?: string;
+}
+
+/**
+ * What a stage wants before it runs.
+ *
+ * The advisor receives everything a decision needs and nothing it doesn't: the
+ * stage declaration, the run, the rendered prompt and the resolved role. It
+ * must stay provider-neutral — it never sees runners or models, only the work.
+ */
+export interface StageAdvisoryRequest {
+  readonly stage: StageDefinition;
+  readonly runId: string;
+  /** The prompt the primary runner is about to receive, re-rendered. */
+  readonly renderedPrompt: string;
+  readonly objective: string;
+}
+
+/**
+ * A provider-neutral hook that may enrich a stage's prompt with advisory
+ * context before it reaches the primary runner (§18, M3-08).
+ *
+ * Deliberately void-shaped: the advisor contributes *context*, never workflow
+ * truth, and never succeeds or fails the stage. A thrown error, a missing
+ * utility model, or malformed output all mean "run the stage as if M3 did not
+ * exist" — silently, because advisory context is optional by contract.
+ */
+export interface StageAdvisor {
+  /**
+   * May return an advisory block appended to the prompt. Returning `undefined`
+   * leaves the prompt untouched. Throwing is treated the same way.
+   */
+  advise(request: StageAdvisoryRequest): Promise<string | undefined>;
 }
 
 export class StageRunner {
@@ -191,6 +229,31 @@ export class StageRunner {
       });
     }
 
+    // Advisory context is optional by contract (§18): offline, malformed or
+    // throwing advisors leave the prompt as-rendered, and the stage proceeds.
+    // The block is appended once, before the repair loop, so a re-prompt never
+    // re-runs the advisor — its answer does not depend on the earlier attempt.
+    // It is also part of the prompt's *base*, so a repair rebuilds from the
+    // same material the failed attempt saw — never dropping the advisory.
+    let basePrompt = rendered;
+    const advisor = this.options.advisor;
+    if (advisor !== undefined) {
+      try {
+        const advisory = await advisor.advise({
+          stage,
+          runId,
+          renderedPrompt: rendered,
+          objective: vars.objective ?? stage.name,
+        });
+        if (advisory !== undefined && advisory.length > 0) {
+          basePrompt = `${rendered}\n\n${advisory}`;
+        }
+      } catch {
+        // Best effort: advisory context never changes stage control (§14.3).
+      }
+    }
+    let promptText = basePrompt;
+
     const runner = getRunner(resolved);
     const startedAt = clock.now();
 
@@ -207,7 +270,6 @@ export class StageRunner {
     ];
 
     let attempt = 0;
-    let promptText = rendered;
     let lastProblems: string[] = [];
     // Who produced the answer we are about to reject. Repairs can straddle a
     // fallback, so this is not a constant — and when the repairs run out, it is
@@ -298,7 +360,7 @@ export class StageRunner {
       // The retry has to say what was wrong. Asking again without the reason is
       // a coin flip, and an expensive one.
       promptText =
-        `${rendered}\n\n---\n\n` +
+        `${basePrompt}\n\n---\n\n` +
         `Your previous response was rejected because it did not satisfy the required format:\n` +
         `${problems.map((problem) => `  - ${problem}`).join('\n')}\n\n` +
         `Return a corrected response. Output only the response itself.`;

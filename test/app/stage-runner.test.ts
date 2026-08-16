@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
-import { StageRunner, StageFailure } from '../../src/app/stage-runner.js';
+import { StageRunner, StageFailure, type StageAdvisor } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema } from '../../src/contracts/index.js';
@@ -353,5 +353,107 @@ describe('exhausted repairs still say who produced the output', () => {
 
     expect((error as StageFailure).execution?.runner).toBe('claude');
     expect((error as StageFailure).execution?.fallback).toBeUndefined();
+  });
+});
+
+describe('advisory context (M3-08)', () => {
+  const ADVISORY_STAGE: StageDefinition = {
+    name: 'sdd',
+    role: 'sdd',
+    prompt: 'sdd',
+    artifact: 'sdd',
+  };
+
+  async function advisorHarness(advisor: StageAdvisor) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude');
+    fs.seed(
+      `${PROMPTS}/sdd.md`,
+      '---\nrole: sdd\npermissions: read-only\nrequiredVars: [featureRequest]\n---\nWrite an SDD for {{featureRequest}}.\n',
+    );
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('recurring-bookings');
+    const stageRunner = new StageRunner({
+      fs,
+      clock,
+      store,
+      config,
+      capabilities: CAPABILITIES,
+      promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+      getRunner: () => runner,
+      projectDir: PROJECT,
+      advisor,
+    });
+    return { fs, clock, store, run, runner, stageRunner };
+  }
+
+  it('appends the advisory block to the prompt the primary runner receives', async () => {
+    const { stageRunner, run, runner } = await advisorHarness({
+      advise: async ({ renderedPrompt, objective }) =>
+        `[ADVISORY]\nObjective: ${objective}\nBase was: ${renderedPrompt.includes('recurring-bookings') ? 'ok' : 'missing'}`,
+    });
+    runner.pushText('fine');
+    await stageRunner.run(
+      { ...ADVISORY_STAGE, name: 'sdd' },
+      run.runId,
+      { featureRequest: 'x' },
+    );
+    expect(runner.lastCall?.prompt).toContain('[ADVISORY]');
+    expect(runner.lastCall?.prompt).toContain('Objective: sdd');
+  });
+
+  it('leaves the prompt untouched when the advisor returns undefined', async () => {
+    const { stageRunner, run, runner } = await advisorHarness({
+      advise: async () => undefined,
+    });
+    runner.pushText('fine');
+    await stageRunner.run({ ...ADVISORY_STAGE, name: 'sdd' }, run.runId, {
+      featureRequest: 'x',
+    });
+    expect(runner.lastCall?.prompt).not.toContain('[ADVISORY]');
+    expect(runner.lastCall?.prompt).toContain('Write an SDD for x.');
+  });
+
+  it('treats a throwing advisor as absent: the stage still runs', async () => {
+    const { stageRunner, run, runner } = await advisorHarness({
+      advise: async () => {
+        throw new Error('utility model offline');
+      },
+    });
+    runner.pushText('fine');
+    const result = await stageRunner.run(
+      { ...ADVISORY_STAGE, name: 'sdd' },
+      run.runId,
+      { featureRequest: 'x' },
+    );
+    expect(result.text).toBe('fine');
+    expect(runner.lastCall?.prompt).not.toContain('[ADVISORY]');
+  });
+
+  it('adds advisory context once, not again on a repaired re-prompt', async () => {
+    const { stageRunner, run, runner } = await advisorHarness({
+      advise: async () => '[ADVISORY]\nblock',
+    });
+    const schema = z.object({ feature: z.string(), tasks: z.array(z.string()) });
+    runner.pushJson({ feature: 'f' }); // tasks missing → repair
+    runner.pushJson({ feature: 'f', tasks: [] });
+    await stageRunner.run(
+      {
+        name: 'planning',
+        role: 'planner',
+        prompt: 'sdd',
+        artifact: 'plan',
+        outputSchema: schema,
+      },
+      run.runId,
+      { featureRequest: 'x' },
+    );
+    expect(runner.calls).toHaveLength(2);
+    // The advisory block appears exactly once in each call, and the repair is
+    // appended after it — never duplicated per attempt.
+    for (const call of runner.calls) {
+      expect((call.prompt.match(/\[ADVISORY\]/g) ?? []).length).toBe(1);
+    }
   });
 });
