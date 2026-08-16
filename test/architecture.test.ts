@@ -2512,3 +2512,57 @@ describe('Mechanical diff triage boundary (M3-06)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('Context telemetry contract and projection boundary (M3-07)', () => {
+  it('keeps the projection provider-neutral and without execution or workflow authority', () => {
+    const { text } = read(join(ROOT, 'src/core/context-telemetry.ts'));
+    const specifiers = importSpecifiers(text);
+    const code = codeOnly(text);
+
+    expect(
+      specifiers.filter((specifier) =>
+        [
+          'adapters/',
+          'agent-runner',
+          'process-runner',
+          'git-',
+          'adaptive-workflow',
+          'task-state',
+          'validation-',
+          'node:',
+          'http',
+        ].some((term) => specifier.includes(term)),
+      ),
+    ).toEqual([]);
+    expect(code).not.toMatch(
+      /\b(?:AgentRunner|AgentRunInput|ProcessRunner|GitClient|GitCommand|AdaptiveWorkflow|TaskState|ValidationJudgement|fetch|billing|price|cost)\b/i,
+    );
+  });
+
+  it('keeps the closed schema dependency-free except for Zod', () => {
+    const { text } = read(join(ROOT, 'src/contracts/context-telemetry.schema.ts'));
+    expect(importSpecifiers(text)).toEqual(['zod']);
+    expect(codeOnly(text)).not.toMatch(
+      /\b(?:AgentRunner|UtilityModel|RepositoryRetriever|ProcessRunner|GitClient|fetch|billing|price|cost)\b/i,
+    );
+  });
+
+  it('does not wire context telemetry into production workflow authority before M3-08', () => {
+    const offenders: string[] = [];
+    for (const dir of ['src/app', 'src/server', 'src/cli', 'src/adapters', 'src/config']) {
+      for (const file of sourceFiles(dir)) {
+        const { path, text } = read(file);
+        if (importSpecifiers(text).some((specifier) => specifier.includes('context-telemetry'))) {
+          offenders.push(path);
+        }
+      }
+    }
+
+    const adaptive = read(join(ROOT, 'src/core/adaptive-workflow.ts'));
+    if (importSpecifiers(adaptive.text).some((specifier) => specifier.includes('context-telemetry'))) {
+      offenders.push(adaptive.path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
