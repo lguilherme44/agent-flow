@@ -6,6 +6,7 @@ import {
   WORKFLOW_ROLES,
   type WorkflowRole,
 } from './common.schema.js';
+import { UtilityModelConfigSchema } from './utility-model-config.schema.js';
 
 /** Default per-role timeout. A hung CLI must not stall a run forever (R-11). */
 export const DEFAULT_TIMEOUT_SECONDS = 900;
@@ -107,6 +108,21 @@ export const GlobalConfigSchema = z.object({
   ui: z
     .object({ workspaceDepth: z.number().int().min(0).max(6).default(2) })
     .prefault({}),
+  /**
+   * The optional local UtilityModel that *advisory* context comes from (§18).
+   *
+   * Global only, and deliberately absent from `OVERRIDABLE_KEYS` for the same
+   * reason as `ui`: which local endpoint — and which environment variable holds
+   * its key — is a fact about the machine, and letting one discovered project
+   * change it would let a repository decide what secrets the machine reads.
+   *
+   * Disabled by default. When disabled, the workflow behaves exactly as before
+   * MVP3: no retrieval, no advisory blocks, no utility telemetry.
+   *
+   * `apiKeyEnv` names the environment variable to read at the composition
+   * boundary; the resolved value is never persisted, serialized or logged.
+   */
+  utilityModel: UtilityModelConfigSchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

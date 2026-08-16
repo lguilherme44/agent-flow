@@ -2137,15 +2137,25 @@ describe('UtilityModel adapter boundary (M3-02)', () => {
   });
 
   it('core and production workflows in src/core, src/app, src/server do not import utility-model adapters', () => {
+    // Engine code stays provider-neutral: an adapter is chosen exactly once,
+    // at the composition boundary. `resolve-utility-model` is that boundary —
+    // the single file allowed to construct a concrete OpenAiCompatibleUtilityModel
+    // from config (Gap 1). Everything else under src/app that wants a model must
+    // receive it already-built through BuildContextOptions.utilityModel.
     const workflowDirs = ['src/core', 'src/app', 'src/server', 'src/contracts', 'src/adapters/runners'];
+    const allowed = ['src/app/resolve-utility-model.ts'];
     const offenders: string[] = [];
 
     for (const dir of workflowDirs) {
       for (const file of sourceFiles(dir)) {
         const { path, text } = read(file);
-        if (importSpecifiers(text).some((s) => s.includes('adapters/utility-model'))) {
-          offenders.push(path);
+        if (
+          allowed.some((suffix) => path.endsWith(suffix)) ||
+          !importSpecifiers(text).some((s) => s.includes('adapters/utility-model'))
+        ) {
+          continue;
         }
+        offenders.push(path);
       }
     }
 

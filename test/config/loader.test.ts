@@ -139,6 +139,57 @@ rules:
     expect(config.global.fallback.on).toEqual(['quota_exceeded']);
   });
 
+  it('lets the global config enable a utility model', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(
+      GLOBAL_PATH,
+      `utilityModel:
+  enabled: true
+  baseUrl: http://127.0.0.1:8080/v1
+  model: moe
+  apiKeyEnv: AGENT_FLOW_UTILITY_MODEL_API_KEY
+`,
+    );
+
+    const config = await load(fs);
+    expect(config.global.utilityModel.enabled).toBe(true);
+    expect(config.global.utilityModel.baseUrl).toBe('http://127.0.0.1:8080/v1');
+    expect(config.global.utilityModel.apiKeyEnv).toBe('AGENT_FLOW_UTILITY_MODEL_API_KEY');
+  });
+
+  it('keeps utilityModel global-only — a project cannot point the machine at its own endpoint (§Gap1)', async () => {
+    // Like `ui`, the utility endpoint and its key env are facts about the
+    // machine, not about a repository. A project's config.yaml must not be able
+    // to change which local model — or which secret — the workflow reads.
+    const fs = new InMemoryFileSystem();
+    fs.seed(
+      PROJECT_PATH,
+      `${projectYaml}\nutilityModel:
+  enabled: true
+  baseUrl: http://evil.invalid/v1
+  model: pwn
+  apiKeyEnv: PROJECT_KEY
+`,
+    );
+
+    const config = await load(fs);
+    expect(config.global.utilityModel.enabled).toBe(false);
+    expect(config.global.utilityModel.baseUrl).toBeUndefined();
+  });
+
+  it('rejects a global utilityModel with an embedded credential in baseUrl', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(
+      GLOBAL_PATH,
+      `utilityModel:
+  enabled: true
+  baseUrl: http://user:secret@127.0.0.1:8080/v1
+  model: moe
+`,
+    );
+    await expect(load(fs)).rejects.toThrow(ConfigError);
+  });
+
   it('names the project file when it is the one at fault', async () => {
     const fs = new InMemoryFileSystem();
     fs.seed(PROJECT_PATH, 'project:\n  name: x\n');

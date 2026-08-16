@@ -111,6 +111,19 @@ ui:
   # Bounded on purpose: an unbounded scan of a home directory reads places
   # nobody asked it to, and takes minutes before the first page renders.
   workspaceDepth: 2
+
+# Optional local model that *advisory* context comes from (§18). Disabled by
+# default: the workflow behaves exactly as before MVP3. When enabled, repository
+# retrieval feeds an advisory block into the primary runner's prompt — never
+# workflow truth. \`apiKeyEnv\` names an environment variable (for example
+# AGENT_FLOW_UTILITY_MODEL_API_KEY); the resolved value is never persisted.
+utilityModel:
+  enabled: false
+  adapter: openai-compatible
+  contextWindow: 64000
+  targetInputTokens: 40000
+  maxOutputTokens: 4000
+  timeoutSeconds: 120
 `;
 
 export const DEFAULT_PROJECT_CONFIG_YAML = `# agent-flow project configuration

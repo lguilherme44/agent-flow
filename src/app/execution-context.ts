@@ -14,6 +14,7 @@ import { TaskExecutor } from './task-executor.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
 import { RepositoryContextAdvisor } from './repository-context-advisor.js';
+import { resolveUtilityModel } from './resolve-utility-model.js';
 import { ContextTelemetryRecorder } from './context-telemetry-recorder.js';
 import { RepositoryRetriever, FileSystemCandidateDiscovery } from '../core/repository-retriever.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
@@ -138,8 +139,17 @@ export interface BuildContextOptions {
    * advisory blocks, no telemetry. When present, repository retrieval and
    * ranking feed an advisory block into the primary runner's prompt — which the
    * runner is never forced to trust, and which never becomes workflow truth.
+   *
+   * Defaults to the config-driven adapter resolved from `config.global.utilityModel`
+   * (see `resolveUtilityModel`). Tests override it here with a fake so they never
+   * depend on the machine's environment.
    */
   readonly utilityModel?: UtilityModel;
+  /**
+   * Injectable env reader for config-driven resolution. Tests override it to
+   * avoid touching `process.env`; production callers leave it unset.
+   */
+  readonly env?: (name: string) => string | undefined;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
@@ -177,12 +187,21 @@ export async function buildExecutionContext(
   // earns the workflow an advisory block on primary-runner prompts; its absence
   // leaves every prompt exactly as-rendered (§14.3, §18). Telemetry flows
   // through the recorder whenever the advisor runs, at no cost when absent.
+  //
+  // The adapter is resolved here, at the composition boundary, from config —
+  // never earlier. `options.utilityModel` is an explicit override used by tests
+  // (a fake); production leaves it unset and pays for retrieval only when the
+  // global config enabled a local model whose apiKeyEnv variable is present.
+  // A missing or blank key resolves to no adapter, which is the pre-MVP3 path.
+  const utilityModel =
+    options.utilityModel ??
+    resolveUtilityModel({ config: config.global.utilityModel, env: options.env });
   const advisor =
-    options.utilityModel === undefined
+    utilityModel === undefined
       ? undefined
       : new RepositoryContextAdvisor({
           retriever: new RepositoryRetriever({
-            utilityModel: options.utilityModel,
+            utilityModel,
             candidateDiscovery: new FileSystemCandidateDiscovery(fs),
             projectDir: options.projectDir,
           }),

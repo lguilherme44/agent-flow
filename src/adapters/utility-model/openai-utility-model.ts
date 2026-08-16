@@ -358,7 +358,6 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
   private readonly config: {
     readonly baseUrl: string;
     readonly model: string;
-    readonly apiKey?: string;
     readonly contextWindow: number;
     readonly targetInputTokens: number;
     readonly maxOutputTokens: number;
@@ -369,6 +368,13 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
     readonly fetch: typeof fetch;
     readonly clock?: Clock;
   };
+  /**
+   * The API key lives here — a private field, NOT in the enumerable `config`
+   * object — so no `JSON.stringify(model)`, `Object.keys(model)`, spread or
+   * structuredClone can ever re-expose it. It is sent in the Authorization
+   * header and used for redaction, and discarded with the instance.
+   */
+  private readonly apiKey?: string;
 
   private readonly chatCompletionsUrl: string;
   private readonly modelsUrl: string;
@@ -422,10 +428,10 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
     const structuredOutput = config.structuredOutput ?? DEFAULT_STRUCTURED_OUTPUT;
 
     this.id = config.id ?? `openai-compatible:${config.model}`;
+    this.apiKey = config.apiKey;
     this.config = {
       baseUrl: config.baseUrl,
       model: config.model.trim(),
-      apiKey: config.apiKey,
       contextWindow,
       targetInputTokens,
       maxOutputTokens,
@@ -449,6 +455,26 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
     return this.caps;
   }
 
+  /**
+   * Defense-in-depth against `JSON.stringify` of the whole instance. The key is
+   * already out of the enumerable `config`; this makes sure even a hostile
+   * serialization of the adapter never emits credential material.
+   */
+  toJSON(): unknown {
+    return {
+      id: this.id,
+      baseUrl: this.config.baseUrl,
+      model: this.config.model,
+      contextWindow: this.config.contextWindow,
+      targetInputTokens: this.config.targetInputTokens,
+      maxOutputTokens: this.config.maxOutputTokens,
+      timeoutSeconds: this.config.timeoutSeconds,
+      healthTimeoutSeconds: this.config.healthTimeoutSeconds,
+      injectNoThink: this.config.injectNoThink,
+      structuredOutput: this.config.structuredOutput,
+    };
+  }
+
   async healthCheck(): Promise<UtilityModelHealth> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.config.healthTimeoutSeconds * 1000);
@@ -457,8 +483,8 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
       const headers: Record<string, string> = {
         Accept: 'application/json',
       };
-      if (this.config.apiKey) {
-        headers.Authorization = `Bearer ${this.config.apiKey}`;
+      if (this.apiKey) {
+        headers.Authorization = `Bearer ${this.apiKey}`;
       }
 
       const res = await this.config.fetch(this.modelsUrl, {
@@ -598,8 +624,8 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
       Accept: 'application/json',
     };
 
-    if (this.config.apiKey) {
-      headers.Authorization = `Bearer ${this.config.apiKey}`;
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
     }
 
     const controller = new AbortController();
@@ -833,7 +859,7 @@ export class OpenAiCompatibleUtilityModel implements UtilityModel {
   private safeResponseModel(value: unknown): string | undefined {
     if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SAFE_RESPONSE_MODEL_LENGTH) return undefined;
     if (
-      (this.config.apiKey !== undefined && this.config.apiKey.length > 0 && value.includes(this.config.apiKey)) ||
+      (this.apiKey !== undefined && this.apiKey.length > 0 && value.includes(this.apiKey)) ||
       !/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(value)
     ) {
       return undefined;
