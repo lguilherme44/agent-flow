@@ -1,4 +1,5 @@
 import type { TaskState } from '../contracts/task.schema.js';
+import type { TaskBlockReason } from '../contracts/state.schema.js';
 
 /**
  * Dependency graph over tasks. Pure — no I/O, no provider, no scheduling policy.
@@ -151,6 +152,31 @@ export function topologicalOrder(dag: Dag): string[] {
   }
 
   return order;
+}
+
+/**
+ * Dependency-derived blocks whose reason to exist is gone.
+ *
+ * `blockedByFailure` marks a dependent `blocked` because something upstream
+ * failed — the mark is a *condition over the graph*, not a fact about the task:
+ * the task never ran (§20). When every dependency is now `completed`, the
+ * condition has ended, so the task may return to the queue. Only
+ * dependency-derived blocks release this way; an agent-BLOCKED task (or a
+ * legacy `blocked` with no recorded reason) is a fact about the task itself and
+ * is never reopened by recovery (§23).
+ */
+export function unblockedByRecovery(
+  dag: Dag,
+  states: TaskStates,
+  reasons: Readonly<Partial<Record<string, TaskBlockReason>>>,
+): string[] {
+  return dag.ids
+    .filter((id) => {
+      if (stateOf(states, id) !== 'blocked') return false;
+      if (reasons[id] !== 'dependency') return false;
+      return dag.dependenciesOf(id).every((dep) => stateOf(states, dep) === 'completed');
+    })
+    .sort();
 }
 
 export type TaskStates = Readonly<Record<string, TaskState>>;

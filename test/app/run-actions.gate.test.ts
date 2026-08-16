@@ -500,3 +500,57 @@ describe('a retry names the states it cannot act on (§16, M2-08)', () => {
     expect((await store.loadRun(runId)).tasks[0]?.state).toBe('queued');
   });
 });
+
+describe('blocked retries split by provenance (dependency vs agent)', () => {
+  it('retries a dependency-blocked task without --force', async () => {
+    // A dependency block means the task *never ran* (§20) — it was held back by
+    // an upstream failure. Requiring `--force` for it granted the force the same
+    // gravity as overriding an agent's own BLOCKED answer, and with the reason
+    // persisted the two no longer need the same gravity.
+    const { store, deps, runId } = await project();
+    await store.updateRun(runId, (current) => ({
+      ...current,
+      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 0, blockReason: 'dependency' }],
+    }));
+
+    const retried = await retryTask(deps, runId, 'TASK-001');
+
+    expect(retried.ok).toBe(true);
+    const after = await store.loadRun(runId);
+    expect(after.tasks[0]?.state).toBe('queued');
+    // The reason is pinned to the blocked state; a queued task carries none.
+    expect(after.tasks[0]?.blockReason).toBeUndefined();
+  });
+
+  it('refuses an agent-blocked task without --force, and still opens it with it', async () => {
+    // The other half of the split: a task whose *own* agent answered BLOCKED is
+    // exactly what §23's force gate protects — the retry would repeat the answer
+    // the SDD is missing, or manufacture a guess. Force stays the deliberate act.
+    const { store, deps, runId } = await project();
+    await store.updateRun(runId, (current) => ({
+      ...current,
+      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 1, blockReason: 'agent' }],
+    }));
+
+    const refused = await retryTask(deps, runId, 'TASK-001');
+    expect(refusal(refused).code).toBe('task_blocked');
+
+    const forced = await retryTask(deps, runId, 'TASK-001', { force: true });
+    expect(forced.ok).toBe(true);
+    expect((await store.loadRun(runId)).tasks[0]?.state).toBe('queued');
+  });
+
+  it('treats a blocked task with no recorded reason as agent-blocked (fail-closed)', async () => {
+    // State written before this provenance existed has no `blockReason` on disk,
+    // and absence is evidence of nothing — so the retry gate holds it closed,
+    // matching the scheduler's conservative default.
+    const { store, deps, runId } = await project();
+    await store.updateRun(runId, (current) => ({
+      ...current,
+      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 1 }],
+    }));
+
+    const refused = await retryTask(deps, runId, 'TASK-001');
+    expect(refusal(refused).code).toBe('task_blocked');
+  });
+});

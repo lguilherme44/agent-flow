@@ -398,6 +398,12 @@ export class RunReader {
         risk: task?.risk ?? 'low',
         state: effective[id] ?? progress?.state ?? 'queued',
         attempts: progress?.attempts ?? 0,
+        // Provenance is pinned to the persisted `blocked` record: `effective`
+        // derives blocked over the graph, and the graph cannot tell a task its
+        // own agent blocked from one an upstream failure held back.
+        ...(progress?.blockReason === undefined
+          ? {}
+          : { blockReason: progress.blockReason as 'agent' | 'dependency' }),
         requirements: [...(task?.requirements ?? [])],
         dependencies: [...(task?.dependencies ?? [])],
         ...(task?.correctiveFor === undefined

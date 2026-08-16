@@ -6,6 +6,7 @@ import {
   type RunState,
   type TaskState,
 } from '../contracts/index.js';
+import type { TaskBlockReason } from '../contracts/state.schema.js';
 import {
   FORCIBLE_REFUSALS,
   approvalCoversPlan,
@@ -743,17 +744,20 @@ async function requeue(
     });
   }
 
-  if (entry.state === 'blocked' && options.force !== true) {
+  if (entry.state === 'blocked' && entry.blockReason !== 'dependency' && options.force !== true) {
     return failed({
       code: 'task_blocked',
       message:
-        `${taskId} is BLOCKED: it stopped because of something the SDD does not answer. ` +
-        'Retrying will not supply that answer, or it will produce a guess.',
+        `${taskId} is BLOCKED: its agent answered BLOCKED, so it stopped because of ` +
+        'something the SDD does not answer.',
       action: 'Fix the SDD or the plan — or force the retry deliberately.',
       forcible: true,
     });
   }
 
+  // A *dependency*-derived block took no answer (§20): the task never ran, so
+  // there is nothing §23 protects. It retries without force, and the scheduler
+  // also releases it on the next `run` the moment its dependency completes.
   const maxAttempts = context.config.global.retry.maxAttempts;
   if (entry.attempts >= maxAttempts && options.force !== true) {
     return failed({
@@ -770,7 +774,7 @@ async function requeue(
   await context.store.updateRun(runId, (current) => ({
     ...current,
     tasks: current.tasks.map((task) =>
-      task.id === taskId ? { ...task, state: 'queued' as const } : task,
+      task.id === taskId ? { ...task, state: 'queued' as const, blockReason: undefined } : task,
     ),
   }));
   await context.store.appendEvent(runId, 'task_requeued', {
@@ -913,6 +917,17 @@ async function execute(
     state.tasks.map((task) => [task.id, task.state as TaskState]),
   );
 
+  // Why each persisted task sits where it sits (§20, §23). A `blocked` task on
+  // disk records whether its own agent answered BLOCKED or an upstream failure
+  // held it back; passing it through keeps the scheduler's release rule honest
+  // across a resume.
+  const previousBlockReasons: Readonly<Partial<Record<string, TaskBlockReason>>> =
+    Object.fromEntries(
+      state.tasks
+        .filter((task) => task.blockReason !== undefined)
+        .map((task) => [task.id, task.blockReason as TaskBlockReason]),
+    );
+
   const target =
     options.taskId === undefined
       ? undefined
@@ -965,7 +980,7 @@ async function execute(
 
   const outcome = await context.scheduler.run(plan, runId, effectiveSdd, previous, {
     ...(target === undefined ? {} : { only: new Set([target.id]) }),
-  });
+  }, previousBlockReasons);
 
   // Only a complete plan may advance the stage. `complete` describes the
   // invocation; `planComplete` describes the run, and this is the run's record.

@@ -222,6 +222,235 @@ describe('stopping on failure', () => {
   });
 });
 
+describe('blocked dependency recovery (provenance)', () => {
+  it('releases a dependency-blocked dependent when its dependency recovers, without --force', async () => {
+    // The recovery defect being fixed: TASK-002 was marked blocked because its
+    // dependency failed, then stayed blocked across every later `run` even after
+    // TASK-001 completed — only `retry --force` reopened it. A dependency-block
+    // means the task *never ran* and *never ran for a reason that still
+    // applies*; when the dependency is complete, the holder is gone.
+    const { store, run } = await harness();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    // First pass: TASK-001 fails, so TASK-002 is marked blocked without running.
+    const failed = fakeExecutor({ 'TASK-001': 'failed' });
+    const first = await new Scheduler({ store, executor: failed.executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+    expect(first.blocked).toEqual(['TASK-002']);
+    await expect(store.loadRun(run.runId)).resolves.toMatchObject({
+      tasks: [
+        { id: 'TASK-001', state: 'failed' },
+        { id: 'TASK-002', state: 'blocked', blockReason: 'dependency' },
+      ],
+    });
+
+    // Resume exactly the way the CLI replays it: the operator retried TASK-001
+    // (now queued on disk), TASK-002 still blocked from the first pass.
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: state.tasks.map((task) =>
+        task.id === 'TASK-001' ? { ...task, state: 'queued', blockReason: undefined } : task,
+      ),
+    }));
+
+    const { executor, executed } = fakeExecutor();
+    const second = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'queued', 'TASK-002': 'blocked' },
+      {},
+      { 'TASK-002': 'dependency' },
+    );
+
+    expect(executed).toEqual(['TASK-001', 'TASK-002']);
+    expect(second.complete).toBe(true);
+    expect(second.released).toEqual(['TASK-002']);
+    const persisted = await store.loadRun(run.runId);
+    expect(persisted.tasks.find((entry) => entry.id === 'TASK-002')).toMatchObject({
+      state: 'completed',
+      attempts: 1,
+    });
+  });
+
+  it('recovers a multi-hop block in one invocation, holding C until B truly completes', async () => {
+    // A fails → B blocked (dependency) → C blocked (dependency). On resume B is
+    // released the moment A is done, and C the moment B is done. Releasing C at
+    // the same time as B would let it run against a queue that has not produced
+    // B's work yet.
+    const { store, run } = await harness();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        task('TASK-001'),
+        task('TASK-002', ['TASK-001']),
+        task('TASK-003', ['TASK-002']),
+      ],
+    });
+
+    const failed = fakeExecutor({ 'TASK-001': 'failed' });
+    await new Scheduler({ store, executor: failed.executor }).run(plan, run.runId, 'SDD');
+
+    // The CLI's `retry TASK-001` writes `queued` to disk before the next `run`.
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: state.tasks.map((task) =>
+        task.id === 'TASK-001' ? { ...task, state: 'queued', blockReason: undefined } : task,
+      ),
+    }));
+
+    const { executor, executed } = fakeExecutor();
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'queued', 'TASK-002': 'blocked', 'TASK-003': 'blocked' },
+      {},
+      { 'TASK-002': 'dependency', 'TASK-003': 'dependency' },
+    );
+
+    expect(executed).toEqual(['TASK-001', 'TASK-002', 'TASK-003']);
+    expect(outcome.complete).toBe(true);
+    expect(outcome.released).toEqual(['TASK-002', 'TASK-003']);
+    for (const entry of (await store.loadRun(run.runId)).tasks) {
+      if (entry.id === 'TASK-001') {
+        expect(entry.attempts).toBe(2);
+      } else {
+        expect(entry).toMatchObject({ state: 'completed', attempts: 1 });
+      }
+    }
+  });
+
+  it('does not release a dependent while its dependency is still failed', async () => {
+    const { store, run } = await harness();
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    const { executor, executed } = fakeExecutor();
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'failed', 'TASK-002': 'blocked' },
+      {},
+      { 'TASK-002': 'dependency' },
+    );
+
+    expect(executed).toEqual([]);
+    expect(outcome.states['TASK-002']).toBe('blocked');
+    expect(outcome.released).toEqual([]);
+  });
+
+  it('does not release a dependency-blocked task whose dependency fails again mid-recovery', async () => {
+    const { store, run } = await harness();
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        task('TASK-001'),
+        task('TASK-002', ['TASK-001']),
+        task('TASK-003', ['TASK-002']),
+      ],
+    });
+
+    const failed = fakeExecutor({ 'TASK-001': 'failed' });
+    await new Scheduler({ store, executor: failed.executor }).run(plan, run.runId, 'SDD');
+
+    // `retry TASK-001` before the resume, as the CLI would.
+    await store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: state.tasks.map((task) =>
+        task.id === 'TASK-001' ? { ...task, state: 'queued', blockReason: undefined } : task,
+      ),
+    }));
+
+    const { executor, executed } = fakeExecutor({ 'TASK-002': 'failed' });
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'queued', 'TASK-002': 'blocked', 'TASK-003': 'blocked' },
+      {},
+      { 'TASK-002': 'dependency', 'TASK-003': 'dependency' },
+    );
+
+    // TASK-002 releases after TASK-001, then fails again — so TASK-003 stays
+    // blocked behind a dependency that is failed, not completed.
+    expect(executed).toEqual(['TASK-001', 'TASK-002']);
+    expect(outcome.states['TASK-002']).toBe('failed');
+    expect(outcome.states['TASK-003']).toBe('blocked');
+    expect(outcome.released).toEqual(['TASK-002']);
+  });
+
+  it('never auto-releases an agent-BLOCKED task (§23)', async () => {
+    // The other half of the provenance split: a task whose *own* agent answered
+    // BLOCKED must not be reopened by the same recovery that releases a
+    // dependency-derived block — retrying it silently would retry the guess §23
+    // exists to prevent.
+    const { store, run } = await harness();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+
+    const blocked = fakeExecutor({ 'TASK-001': 'blocked' });
+    const first = await new Scheduler({ store, executor: blocked.executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+    expect(first.haltedBy).toContain('blocked');
+    await expect(store.loadRun(run.runId)).resolves.toMatchObject({
+      tasks: [{ id: 'TASK-001', state: 'blocked', blockReason: 'agent' }],
+    });
+
+    const { executor, executed } = fakeExecutor();
+    const second = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'blocked' },
+      {},
+      { 'TASK-001': 'agent' },
+    );
+
+    expect(executed).toEqual([]);
+    expect(second.states['TASK-001']).toBe('blocked');
+    expect(second.released).toEqual([]);
+  });
+
+  it('treats a blocked task with no recorded reason as agent-blocked (fail-closed)', async () => {
+    // State written before this provenance existed has no `blockReason` on disk.
+    // Absence is evidence of nothing, so such a task is held rather than guessed
+    // at — never auto-released, force-gated, exactly like an agent-BLOCKED one.
+    const { store, run } = await harness();
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002', ['TASK-001'])],
+    });
+
+    const { executor, executed } = fakeExecutor();
+    const outcome = await new Scheduler({ store, executor }).run(
+      plan,
+      run.runId,
+      'SDD',
+      { 'TASK-001': 'queued', 'TASK-002': 'blocked' },
+      {},
+      {},
+    );
+
+    expect(executed).toEqual(['TASK-001']);
+    expect(outcome.states['TASK-002']).toBe('blocked');
+    expect(outcome.released).toEqual([]);
+  });
+});
+
 describe('resume', () => {
   it('does not re-run tasks already completed', async () => {
     // Closing the terminal mid-run is normal; paying twice for finished work

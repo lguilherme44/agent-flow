@@ -1,10 +1,12 @@
 import type { Plan, RunState, TaskResult, TaskState } from '../contracts/index.js';
 import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
+import type { TaskBlockReason } from '../contracts/state.schema.js';
 import {
   blockedByFailure,
   buildDag,
   readyTasks,
   topologicalOrder,
+  unblockedByRecovery,
   type Dag,
 } from '../core/dag.js';
 import type { StateStore } from './state-store.js';
@@ -122,6 +124,8 @@ export interface SchedulerOutcome {
   readonly planComplete: boolean;
   /** Tasks that will never run because something upstream failed. */
   readonly blocked: string[];
+  /** Dependency-blocked tasks returned to the queue because the block ended. */
+  readonly released: string[];
   /** Tasks found orphaned in `running` and put back in the queue. */
   readonly recovered: string[];
   /** Set when the run stopped before finishing, with the reason. */
@@ -198,6 +202,7 @@ export class Scheduler {
     sdd: string,
     initialStates: Record<string, TaskState> = {},
     options: RunOptions = {},
+    initialBlockReasons: Readonly<Partial<Record<string, TaskBlockReason>>> = {},
   ): Promise<SchedulerOutcome> {
     const dag = buildDag(
       plan.tasks.map((task) => ({ id: task.id, dependencies: task.dependencies })),
@@ -207,7 +212,20 @@ export class Scheduler {
     const states: Record<string, TaskState> = {};
     for (const id of topologicalOrder(dag)) states[id] = initialStates[id] ?? 'queued';
 
+    // Why each task sits where it sits (§20, §23). Persisted so a resume knows
+    // a `blocked` task from its own answer apart from one held back the wave
+    // an upstream failure stopped — the first must never be released by
+    // recovery, the second is released the moment its dependency completes.
+    //
+    // Absent a recorded reason (a task already `blocked` when this provenance
+    // exists in the schema but not in the state), the fail-closed default is
+    // `agent`: no record is not a promise the task is releaseable.
+    const blockReasons: Record<string, TaskBlockReason> = {};
+    for (const id of topologicalOrder(dag)) blockReasons[id] = initialBlockReasons[id] ?? 'agent';
+
     const results: TaskResult[] = [];
+    // Tasks released back into the queue because their dependency block ended.
+    const released: string[] = [];
     // Resolved once, from the run, before anything is dispatched. Once per wave
     // would let a configuration edit mid-run change the width of the next wave,
     // which is the property I-13 exists to deny — and it would make "how many
@@ -259,6 +277,27 @@ export class Scheduler {
     if (haltedBy !== undefined) return this.stopped(states, recovered, dag, haltedBy);
 
     while (haltedBy === undefined) {
+      // A dependency block is a condition over the graph, not a fact about the
+      // task (§20): it means "a task this one depends on failed", never "this
+      // task answered BLOCKED". Once every dependency is `completed`, the
+      // condition has ended and the task may run again — no `--force`, no human
+      // noticing a dependent was left behind (§23 owns agent-blocks; nothing
+      // here touches those).
+      const releasable = unblockedByRecovery(dag, states, blockReasons);
+      for (const id of releasable) {
+        states[id] = 'queued';
+        delete blockReasons[id];
+        released.push(id);
+        await this.options.store.appendEvent(runId, 'task_unblocked', {
+          task: id,
+          reason: 'dependency',
+        });
+      }
+      // Persisted whether or not anything dispatches this pass. A released task
+      // excluded by `only` must still be `queued` on disk, or the next run
+      // re-derives a release it cannot see.
+      if (releasable.length > 0) await this.persist(runId, states, [], blockReasons);
+
       const ready = readyTasks(dag, states)
         .filter((id) => states[id] !== 'completed')
         // Dependency rules were already applied against the complete graph;
@@ -352,6 +391,11 @@ export class Scheduler {
 
           states[outcome.result.task] = outcome.result.status;
           results.push(outcome.result);
+          // The task's *own* agent answered — this is the §23 half of blocked,
+          // and recording it keeps recovery from ever reopening the task.
+          if (outcome.result.status === 'blocked') {
+            blockReasons[outcome.result.task] = 'agent';
+          }
 
           if (outcome.result.status !== 'completed' && haltedBy === undefined) {
             haltedBy = `${outcome.result.task} ended as ${outcome.result.status}`;
@@ -402,8 +446,13 @@ export class Scheduler {
     }
 
     const blocked = blockedByFailure(dag, states);
-    for (const id of blocked) states[id] = 'blocked';
-    if (blocked.length > 0) await this.persist(runId, states);
+    for (const id of blocked) {
+      states[id] = 'blocked';
+      // Every task this marks is a dependent of a failed/blocked task — none of
+      // them ran (§20), so this is dependency-derived by construction.
+      blockReasons[id] = 'dependency';
+    }
+    if (blocked.length > 0) await this.persist(runId, states, [], blockReasons);
 
     const inScope = (id: string): boolean => options.only?.has(id) ?? true;
 
@@ -415,6 +464,7 @@ export class Scheduler {
       ),
       planComplete: Object.values(states).every((state) => state === 'completed'),
       blocked,
+      released,
       recovered,
       ...(haltedBy === undefined ? {} : { haltedBy }),
     };
@@ -509,6 +559,7 @@ export class Scheduler {
       complete: false,
       planComplete: Object.values(states).every((state) => state === 'completed'),
       blocked: blockedByFailure(dag, states),
+      released: [],
       recovered,
       haltedBy: reason,
     };
@@ -684,17 +735,24 @@ export class Scheduler {
     runId: string,
     states: Record<string, TaskState>,
     dispatched: readonly string[] = [],
+    blockReasons: Readonly<Partial<Record<string, TaskBlockReason>>> = {},
   ): Promise<void> {
     const starting = new Set(dispatched);
 
     await this.options.store.updateRun(runId, (state) => ({
       ...state,
       tasks: Object.entries(states).map(([id, taskState]) => {
-        const attempts = state.tasks.find((entry) => entry.id === id)?.attempts ?? 0;
+        const entry = state.tasks.find((item) => item.id === id);
+        const attempts = entry?.attempts ?? 0;
         return {
           id,
           state: taskState,
           attempts: starting.has(id) ? attempts + 1 : attempts,
+          // Provenance travels with the block: a task leaving `blocked` drops
+          // its reason, and one that stays blocked keeps or learns its own.
+          ...(taskState === 'blocked'
+            ? { blockReason: blockReasons[id] ?? entry?.blockReason ?? 'agent' }
+            : {}),
         };
       }),
     }));

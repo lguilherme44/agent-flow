@@ -317,6 +317,15 @@ export interface TaskSummaryView {
   readonly risk: string;
   readonly state: TaskState;
   readonly attempts: number;
+  /**
+   * Why a `blocked` task is blocked (§20, §23).
+   *
+   * `agent` means the task's own runner answered BLOCKED (a decision the SDD
+   * is missing); `dependency` means an upstream failure held the task back and
+   * it never ran. Only the second is ever released by recovery. Absent on a
+   * blocked task, treat it as `agent` — absence is evidence of nothing.
+   */
+  readonly blockReason?: 'agent' | 'dependency';
   readonly requirements: string[];
   readonly dependencies: string[];
   /** Present on corrective tasks, which answer a finding rather than a requirement. */

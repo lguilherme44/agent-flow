@@ -104,10 +104,29 @@ export const DegradationSchema = z.object({
 });
 export type Degradation = z.infer<typeof DegradationSchema>;
 
+/**
+ * Why a task sits in `blocked` (§20, §23).
+ *
+ * Two very different reasons share the state, and conflating them is what made
+ * dependency-derived blocks unrecoverable: a task whose *own* agent answered
+ * BLOCKED is exactly what §23 says must not be retried automatically, while a
+ * task held back because an upstream task failed **never ran** and has no
+ * answer of its own to protect. `blockReason` records which one this is on the
+ * persisted task, so `blocked` stops meaning two things at once.
+ *
+ * Absent (legacy state written before this field existed) the conservative
+ * default is `agent`: "no reason recorded" is evidence of nothing, so the task
+ * stays force-gated rather than being guessed at.
+ */
+export const BLOCK_REASONS = ['agent', 'dependency'] as const;
+export const BlockReasonSchema = z.enum(BLOCK_REASONS);
+export type TaskBlockReason = z.infer<typeof BlockReasonSchema>;
+
 export const TaskProgressSchema = z.object({
   id: z.string().min(1),
   state: TaskStateSchema,
   attempts: z.number().int().min(0).default(0),
+  blockReason: BlockReasonSchema.optional(),
 });
 export type TaskProgress = z.infer<typeof TaskProgressSchema>;
 
