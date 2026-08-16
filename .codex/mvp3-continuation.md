@@ -4,8 +4,8 @@ Updated: 2026-08-16
 Published HEAD: 9df0029 (M3-08 advisory runtime)
 origin/master: 25182ca
 Local HEAD: 9df0029
-Current milestone: M3-08 — Primary-runner context integration
-Current status: M3-08 CLOSED / M3-09 DOGFOOD NEXT
+Current milestone: M3-09 — dogfood and benchmark
+Current status: M3-09 IN PROGRESS (wiring + A/B dogfood + blocked-recovery FIX COMPLETE; matrix + final audit NEXT)
 
 ## Completed milestones
 
@@ -492,28 +492,42 @@ commit: 620b5fe
 ## Last quality gates
 
 targeted: PASS — M3-07 telemetry/adapter/server suites green
+blocked-recovery (F03): PASS — scheduler + gate suites green, incl. single/multi-hop release, agent-blocked force-only, fail-closed legacy
 architecture: PASS
-check: PASS — 2394 core passed, 2 skipped; 243 web passed
+check: PASS — 2469 core passed, 2 skipped; 243 web passed
 E2E: PASS — 26/26
 visual: PASS — 137 passed, 3 expected skips; no blind snapshot update
 packaging: PASS
+diff --check: clean
 
 ## Dogfood status
 
-- Local OpenAI-compatible endpoint: `/models` HTTP 200 with `moe` and 64k context; `/chat/completions` currently returns HTTP 401 without the server API key.
-- Authenticated local `moe` inference was proven HTTP 200 without exposing the secret. The server receives it through `--api-key`; Agent Flow should reference dedicated env var `AGENT_FLOW_UTILITY_MODEL_API_KEY` at composition time.
+- Local OpenAI-compatible endpoint: `/models` HTTP 200 with `moe` and 64k context; `/chat/completions` returns HTTP 401 without the server API key.
+- Authenticated local `moe` inference was proven HTTP 200 without exposing the secret. The server receives it through `--api-key`; Agent Flow references dedicated env var `AGENT_FLOW_UTILITY_MODEL_API_KEY` at composition time (value `local`, referenced via env ONLY, never persisted).
 - AGY CLI 1.1.13: safe stdin smoke passed; Agent Flow deep doctor reports healthy.
-- Claude Code CLI 2.1.233: safe smoke passed; enabled but not currently assigned to a role.
-- Codex CLI: Agent Flow's configured `/Users/guilhermelellis/.local/bin/codex` 0.147.0 passed smoke and deep doctor. The unrelated NVM-first 0.130.0 wrapper on ambient PATH is broken.
+- Codex CLI: EXCLUDED for dogfood — first discovery hit `quota_exceeded` instantly. Use AGY + claude-free fallback only.
+
+## M3-09 findings so far
+
+- ID: M3-09-F01 (P3, dogfood finding): Claude Code drops `.atl/` droppings and uv/ruff/pytest leave cache dirs that polluted deterministic candidate discovery. FIXED: added `.atl`, `__pycache__`, `.pytest_cache`, `.ruff_cache` to `DEFAULT_EXCLUDED_SEGMENTS` + 5 regression tests. All gates green.
+- ID: M3-09-F02 (P3, M3-09-F01 variant): Only clearly tool-owned/generated dirs added; patterns like `.atl.tools.ts`, `atl/`, `__pycache` are NOT excluded (source-like content preserved). Locked by test.
+- ID: M3-09-F03 (P2, dogfood finding): Dependency-derived `blocked` was unrecoverable. In RUN A, TASK-010 stayed blocked across three subsequent `agent-flow run` calls (15:22:40/52/58, no dispatch) after TASK-008 recovered and completed (15:22:32); only `retry TASK-010 --force` (15:24:15) reopened it. Root cause: `blockedByFailure` treats persisted `blocked` as a poison root, and nothing distinguishes "the task's own agent answered BLOCKED" from "an upstream failure held a task that never ran". FIXED RED-first: `blockReason: 'agent' | 'dependency'` persisted on `TaskProgress` (fail-closed: absent → `agent`); `dag.unblockedByRecovery` releases a `dependency` block only when every dependency is `completed`; scheduler runs the release at the top of every wave (multi-hop works in one invocation, C only after B truly completes) and emits `task_unblocked`; agent-BLOCKED tasks still require `retry --force` (§23); `retryTask` accepts a dependency-blocked task without force. Read model exposes `blockReason`. LOCAL, not committed: checkpoint for review before commit.
+- ID: M3-09-F04 (P3, read-model clarity, record-only): the final-review artifact seen during A/B was written against `state.integrationHead` at judgeRun time and reflected intermediate diagnostic review, not the authoritative final review at the current integration HEAD; the artifact is replaced at final close and DoD is re-evaluated then. No control-plane impact. Future UI: distinguish intermediate diagnostic review from authoritative final review at integration HEAD.
+
+## A/B dogfood result (retrykit scratch repo, /tmp)
+
+- RUN A (Utility OFF, armA AF-2026-001): 10/10 tasks FEATURE COMPLETE, 25 integration commits, review PASS (1 low: pytest marker), 0 telemetry events, 4 requeues, 1 conflict, ~37 min wall (14:51:11Z → 15:28:07Z).
+- RUN B (Utility ON, armB, env AGENT_FLOW_UTILITY_MODEL_API_KEY=local): 10/10 tasks COMPLETE, 25 commits, review PASS, 18 context_telemetry_observed events (7 advisories delivered 3-10 files), 11 validation_failed bypasses, 1 requeue, 0 conflicts, ~50 min wall (15:29:16Z → 16:19:49Z).
+- Verdict: telemetry fires only with the key present (resolveUtilityModel wiring correct); advisory reduces detection/recovery churn (fewer requeues/conflicts) at the cost of latency; on a small repo both produce identical 10/10. Trust boundary (allowedEvidence:∅, requireTrustedPaths) fail-closes hallucinated/evidence-bearing output. Secret containment held under load (0 leaks in persisted state).
+- EXECUTION POLICY (user-set, mandatory): NO Claude Code / Anthropic runners for any role. OpenCode is driver. AGY is the allowed AgentRunner (record same-provider degradation). Local OpenAI-compatible model = UtilityModel ONLY, never review/verification authority. If a workflow role genuinely cannot proceed without Claude, stop that specific test and report the blocker.
 
 ## Next action
 
-M3-09 — dogfood and benchmark: run the MVP3 minimal matrix (small/medium/large cross-module task, large failing test log, large diff review, utility model offline, malformed output, context > 64k candidates) comparing without vs with local utility; measure correctness, primary context sent, latency, retries, review findings, bypass behavior. Requires wiring a real UtilityModel through config: secret-safe `apiKeyEnv` (dedicated `AGENT_FLOW_UTILITY_MODEL_API_KEY`), production config/composition wiring for `BuildContextOptions.utilityModel`.
+M3-09 — finish the MVP3 minimal matrix (small/medium/large cross-module task, large failing test log, large diff review, utility model offline, malformed output, context > 64k candidates) comparing OFF vs ON. Metric collection already demonstrated in RUN A/B: correctness, telemetry (context_telemetry_observed with candidatesBefore/After, filesAfter, bypassReason), latency, retries, review findings. The P2 blocked-recovery defect (F03) is FIXED locally with full gates green — checkpoint/commit the fix, then continue with the matrix, product readiness, M3-09 self-audit, all gates, safe publication, cumulative self-audit M3-04..M3-09 + final report.
 
 ## Blockers
 
-- Local `moe` production wiring needs a secret-safe `apiKeyEnv` reference; never persist the value in YAML/state/logs.
-- UtilityModel has no production config/composition wiring yet (required for M3-09 real dogfood; tests must keep using the fake).
+- NONE hard. Remaining risks: local `moe` endpoint could go offline (degrade ON arm to undefined-adapter → OFF-identical; record as such, never fabricate). Codex quota (routed around with AGY).
 
 ## M3-08 summary
 
