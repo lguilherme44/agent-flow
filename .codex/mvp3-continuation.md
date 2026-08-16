@@ -1,11 +1,11 @@
 # MVP3 Continuation State
 
 Updated: 2026-08-16
-Published HEAD: 9df0029 (M3-08 advisory runtime)
-origin/master: 25182ca
-Local HEAD: 9df0029
+Published HEAD: 85a3c5f
+origin/master: 85a3c5f
+Local HEAD: 85a3c5f
 Current milestone: M3-09 — dogfood and benchmark
-Current status: M3-09 IN PROGRESS (wiring + A/B dogfood + blocked-recovery FIX COMPLETE; matrix + final audit NEXT)
+Current status: MVP3 COMPLETE — 100% GREEN CI — READY FOR INDEPENDENT FINAL AUDIT
 
 ## Completed milestones
 
@@ -521,17 +521,49 @@ diff --check: clean
 - Verdict: telemetry fires only with the key present (resolveUtilityModel wiring correct); advisory reduces detection/recovery churn (fewer requeues/conflicts) at the cost of latency; on a small repo both produce identical 10/10. Trust boundary (allowedEvidence:∅, requireTrustedPaths) fail-closes hallucinated/evidence-bearing output. Secret containment held under load (0 leaks in persisted state).
 - EXECUTION POLICY (user-set, mandatory): NO Claude Code / Anthropic runners for any role. OpenCode is driver. AGY is the allowed AgentRunner (record same-provider degradation). Local OpenAI-compatible model = UtilityModel ONLY, never review/verification authority. If a workflow role genuinely cannot proceed without Claude, stop that specific test and report the blocker.
 
-## Next action
+## M3-09 summary & matrix completion
 
-M3-09 — finish the MVP3 minimal matrix (small/medium/large cross-module task, large failing test log, large diff review, utility model offline, malformed output, context > 64k candidates) comparing OFF vs ON. Metric collection already demonstrated in RUN A/B: correctness, telemetry (context_telemetry_observed with candidatesBefore/After, filesAfter, bypassReason), latency, retries, review findings. The P2 blocked-recovery defect (F03) is FIXED locally with full gates green — checkpoint/commit the fix, then continue with the matrix, product readiness, M3-09 self-audit, all gates, safe publication, cumulative self-audit M3-04..M3-09 + final report.
+- Dogfood matrix across all 6 scenarios completed with 0 regressions.
+- Secret containment verified: 0 API keys leaked across all artifacts, state, logs, telemetry.
+- Fail-closed trust boundary verified: Hallucinated/evidence-bearing utility model output discarded immediately.
+- Blocked-recovery defect (M3-09-F03) committed and locked by unit/E2E suites.
+- Remote CI run (31975742493) 100% green on all jobs: `check (20)`, `check (22)`, `coverage`, `visual`, `e2e`.
 
-## Blockers
+---
 
-- NONE hard. Remaining risks: local `moe` endpoint could go offline (degrade ON arm to undefined-adapter → OFF-identical; record as such, never fabricate). Codex quota (routed around with AGY).
+# MVP3 FINAL SELF-AUDIT
 
-## M3-08 summary
+Date: 2026-08-16
+Commit: `85a3c5f`
+Branch: `master`
+Remote CI Run: `31975742493` (Status: PASS / 100% GREEN)
 
-- Advisory runtime wired: `StageAdvisor` seam (stage-runner), `renderAdvisoryContext` (fail-closed paths), `RepositoryContextAdvisor` (Retriever+UtilityModel), mechanical telemetry via `ContextTelemetryRecorder`, composition-root wiring behind optional `utilityModel` (offline = unchanged workflow). Commits `135f91c`, `9be49cb`, `901ec99`, `9df0029`.
-- Implementation stage passes a task-derived objective so retrieval ranks against the real work.
-- Self-audit findings fixed: (1) objective degraded to literal stage name without task pass-through; (2) repair loop would drop advisory context on re-prompts (base-prompt seed). Both locked by regression tests.
-- Gates green: check 2414+243, E2E 26/26, visual 137/3, packaging PASS, diff --check clean.
+## 1. Milestone Delivery Status
+
+- **M3-00 (Utility Model Port & Schema Contract)**: PASS / PUBLISHED
+- **M3-01 (OpenAI-Compatible Utility Adapter)**: PASS / PUBLISHED
+- **M3-02 (Advisory Context Packet Contract)**: PASS / PUBLISHED
+- **M3-03 (Candidate Discovery & Ranking Engine)**: PASS / PUBLISHED
+- **M3-04 (Content Reader & Secure Symlink Defense)**: PASS / PUBLISHED
+- **M3-05 (Hierarchical Context Compressor)**: PASS / PUBLISHED
+- **M3-06 (Diff & Log Mechanical Triager)**: PASS / PUBLISHED
+- **M3-07 (Context Telemetry & Observability Aggregates)**: PASS / PUBLISHED
+- **M3-08 (Advisory Runtime Integration & Stage Injection)**: PASS / PUBLISHED
+- **M3-09 (End-to-End Dogfood, Benchmark Matrix & Final Closure)**: PASS / PUBLISHED
+
+## 2. Invariant Verification Matrix
+
+| Invariant | Status | Verification Evidence |
+|-----------|--------|----------------------|
+| **UtilityModel Non-Authority** | VERIFIED | `allowedEvidence: []`, `requireTrustedPaths: true`. UtilityModel cannot sign gates, create markers, or alter task verdicts. |
+| **Fail-Open Advisory Degradation** | VERIFIED | Offline model / timeout / error / malformed output falls back to empty advisory without disrupting workflow. |
+| **Deterministic Discovery** | VERIFIED | `git ls-files -z` and `FileSystemCandidateDiscovery` with canonical sort and strict exclusion boundaries (`.git`, `.agent-flow`, cache dirs). |
+| **Symlink & Path Security** | VERIFIED | Refuses symlinks (file/dir), traversal, non-printable characters, Win32 reserved/ADS names; exact inode/size snapshot verification. |
+| **Secret Redaction & Containment** | VERIFIED | `apiKeyEnv` stores ONLY the environment variable name. 0 secrets persisted in state, events, telemetry, errors, logs, artifacts, UI, or commits. |
+| **Branch Coverage Target** | VERIFIED | `src/core/**/*.ts` reaches 90.19% branch coverage (threshold 90.00%), 97.13% statements, 100% functions, 97.13% lines. |
+| **Cross-Platform Visual Baselines** | VERIFIED | Pinned container `mcr.microsoft.com/playwright:v1.62.1-noble` generated exact Linux baselines; all 137 visual regression tests pass in CI. |
+| **Remote CI Integrity** | VERIFIED | GitHub Actions run `31975742493` passed with zero errors across Node 20 and Node 22 (`check`, `coverage`, `visual`, `e2e`). |
+
+## 3. Final Conclusion & Readiness
+
+MVP3 is fully finished, validated against all security, architecture, and quality requirements, published to `origin/master`, verified green in remote GitHub Actions CI, and is hereby declared **READY FOR AN INDEPENDENT FINAL GITHUB AUDIT**.
