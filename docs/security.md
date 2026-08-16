@@ -79,20 +79,28 @@ exactly as the CLI spawns them. No write body names a binary.
 
 ---
 
-## Credentials are never read
+## Credentials and the UtilityModel trust boundary
 
-Agent Flow invokes CLIs you have already authenticated. It does not read, store or
-transmit credentials, and the server does not either:
+Agent Flow executes coding workflows through local CLI runners you have already authenticated.
+With MVP 3, an optional, provider-neutral **UtilityModel** port is available for advisory context ranking, compression, and log/diff triage.
 
-- Runner health reports `installed`, `executable` and whether auth is *configured* —
-  the same shallow answer the adapters give `doctor`. No handler opens an auth file.
+### AgentRunner Credentials
+- Runner health reports `installed`, `executable`, and whether auth is *configured* — the same shallow check the adapters provide to `doctor`. No handler opens an auth file.
+- Agent Flow does not read, store, or transmit CLI credentials.
 - No endpoint returns environment variables.
-- An architecture test asserts that no module under `src/server/` names an auth file or
-  reads the environment.
+- An architecture test asserts that no module under `src/server/` names an auth file or reads the environment.
 
-`doctor --deep` probes each runner for real, which spends quota. It is an explicit,
-one-off command and the dashboard never triggers it — a page that polled it would spend
-quota repeatedly without anybody asking.
+### UtilityModel Credential Containment & Network Policy
+- **Zero ambient network calls**: Agent Flow performs zero network calls by default. Outbound HTTP requests occur only if the operator explicitly configures `utilityModel` pointing to a local or remote OpenAI-compatible endpoint.
+- **`apiKeyEnv` pattern**: Configuration files store only the *name* of the environment variable (e.g., `"apiKeyEnv": "AGENT_FLOW_UTILITY_MODEL_API_KEY"`). The secret key is never written to disk or persisted in config files.
+- **In-memory lookup**: The key is resolved in process memory at composition time and is never echoed in events, logs, telemetry observations, errors, or UI payloads.
+- **Secret redaction**: Mechanical log and diff triagers strip authorization tokens, Bearer tokens, Basic/Digest headers, and sensitive environment variable patterns before context generation.
+
+### Strict Advisory Authority Boundaries
+- **Zero Workflow Authority**: The UtilityModel is strictly advisory. It cannot approve plans, bypass gates, create markers, sign receipts, alter task dependencies, or determine task completion.
+- **Zero Evidence Authority**: `allowedEvidence` is strictly empty (`new Set()`) for retrieval prompts. The model cannot manufacture evidence references.
+- **Zero Path Discovery Authority**: The repository candidate universe is discovered deterministically via canonical Git (`git ls-files -z`) and filesystem boundaries. Model-suggested paths outside the discovered candidate set are rejected immediately by `validateContextPacket`.
+- **Fail-Open Degradation**: If the UtilityModel is absent, offline, timed out, or returns malformed/schema-violating output, the system logs a deterministic telemetry bypass and continues stage execution with zero disruption.
 
 ---
 

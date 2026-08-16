@@ -10,6 +10,8 @@ import type { FileSystem } from '../ports/file-system.js';
 import type {
   UtilityModel,
   UtilityModelErrorCode,
+  UtilityModelUsage,
+  UtilityModelProvenance,
 } from '../ports/utility-model.js';
 
 // ─── Candidate Discovery Types & Constants ───────────────────────────────────
@@ -335,6 +337,8 @@ export type RepositoryRetrievalResult =
       readonly bypass: false;
       readonly packet: ContextPacket;
       readonly candidateCount: number;
+      readonly usage?: UtilityModelUsage;
+      readonly provenance?: UtilityModelProvenance;
     }
   | {
       readonly ok: false;
@@ -343,6 +347,8 @@ export type RepositoryRetrievalResult =
       readonly errorCode?: RepositoryRetrievalErrorCode;
       readonly validationIssues?: readonly ContextPacketValidationIssue[];
       readonly candidateCount: number;
+      readonly usage?: UtilityModelUsage;
+      readonly provenance?: UtilityModelProvenance;
     };
 
 export interface RepositoryRetrieverOptions {
@@ -494,6 +500,8 @@ export class RepositoryRetriever {
         reason: `UtilityModel inference failed: ${modelResult.message}`,
         errorCode: modelResult.errorCode,
         candidateCount: candidates.length,
+        ...(modelResult.usage === undefined ? {} : { usage: modelResult.usage }),
+        ...(modelResult.provenance === undefined ? {} : { provenance: modelResult.provenance }),
       };
     }
 
@@ -509,6 +517,8 @@ export class RepositoryRetriever {
           reason: 'Model returned unstructured text that could not be parsed as JSON',
           errorCode: 'invalid_response',
           candidateCount: candidates.length,
+          ...(modelResult.usage === undefined ? {} : { usage: modelResult.usage }),
+          ...(modelResult.provenance === undefined ? {} : { provenance: modelResult.provenance }),
         };
       }
     }
@@ -520,6 +530,8 @@ export class RepositoryRetriever {
         reason: 'Model returned empty or non-object structured output',
         errorCode: 'invalid_response',
         candidateCount: candidates.length,
+        ...(modelResult.usage === undefined ? {} : { usage: modelResult.usage }),
+        ...(modelResult.provenance === undefined ? {} : { provenance: modelResult.provenance }),
       };
     }
 
@@ -549,6 +561,8 @@ export class RepositoryRetriever {
         errorCode: 'validation_failed',
         validationIssues: validation.issues,
         candidateCount: candidates.length,
+        ...(modelResult.usage === undefined ? {} : { usage: modelResult.usage }),
+        ...(modelResult.provenance === undefined ? {} : { provenance: modelResult.provenance }),
       };
     }
 
@@ -557,6 +571,8 @@ export class RepositoryRetriever {
       bypass: false,
       packet: validation.packet,
       candidateCount: candidates.length,
+      ...(modelResult.usage === undefined ? {} : { usage: modelResult.usage }),
+      ...(modelResult.provenance === undefined ? {} : { provenance: modelResult.provenance }),
     };
   }
 

@@ -1,7 +1,10 @@
 import type { StageAdvisor, StageAdvisoryRequest } from './stage-runner.js';
 import { renderAdvisoryContext } from '../core/advisory-context.js';
 import type { RepositoryRetriever } from '../core/repository-retriever.js';
-import { projectRepositoryRetrievalTelemetry } from '../core/context-telemetry.js';
+import {
+  projectRepositoryRetrievalTelemetry,
+  type ContextTelemetryProjectionTrust,
+} from '../core/context-telemetry.js';
 import type { ContextTelemetryRecorder } from './context-telemetry-recorder.js';
 
 /**
@@ -25,15 +28,18 @@ import type { ContextTelemetryRecorder } from './context-telemetry-recorder.js';
 export interface RepositoryContextAdvisorOptions {
   readonly retriever: RepositoryRetriever;
   readonly telemetry?: Pick<ContextTelemetryRecorder, 'record'>;
+  readonly trust?: ContextTelemetryProjectionTrust;
 }
 
 export class RepositoryContextAdvisor implements StageAdvisor {
   private readonly retriever: RepositoryRetriever;
   private readonly telemetry?: Pick<ContextTelemetryRecorder, 'record'>;
+  private readonly trust?: ContextTelemetryProjectionTrust;
 
   constructor(options: RepositoryContextAdvisorOptions) {
     this.retriever = options.retriever;
     this.telemetry = options.telemetry;
+    this.trust = options.trust;
   }
 
   async advise(request: StageAdvisoryRequest): Promise<string | undefined> {
@@ -53,7 +59,7 @@ export class RepositoryContextAdvisor implements StageAdvisor {
 
   private emit(result: unknown, runId: string): void {
     if (this.telemetry === undefined) return;
-    const observation = projectRepositoryRetrievalTelemetry(result);
+    const observation = projectRepositoryRetrievalTelemetry(result, this.trust);
     if (observation !== undefined) this.telemetry.record(runId, observation);
   }
 }

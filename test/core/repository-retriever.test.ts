@@ -883,5 +883,79 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
       expect(candidates).toContain('src/ok.ts');
       expect(candidates).not.toContain('custom_excluded/file.ts');
     });
+
+    it('preserves safe usage and provenance through retrieve() results on success and bypasses', async () => {
+      const mockUsage = {
+        estimatedInputTokens: 250,
+        estimatedOutputTokens: 40,
+        inputTokens: 240,
+        outputTokens: 38,
+        durationMs: 150,
+      };
+      const mockProvenance = {
+        provider: 'openai-compatible',
+        model: 'qwen2.5-coder',
+      };
+
+      // 1. Success case
+      const successModel = new FakeUtilityModel().push(() => ({
+        ok: true,
+        text: JSON.stringify({
+          relevantFiles: [{ path: 'src/ok.ts', reason: 'Matches objective' }],
+          relevantSymbols: [],
+          constraints: [],
+          architectureNotes: [],
+          risks: [],
+          evidence: [],
+        }),
+        usage: mockUsage,
+        provenance: mockProvenance,
+      }));
+      const retriever1 = new RepositoryRetriever({
+        candidateDiscovery: new StaticCandidateDiscovery(['src/ok.ts']),
+        utilityModel: successModel,
+      });
+      const res1 = await retriever1.retrieve({ objective: 'Test success' });
+      expect(res1.ok).toBe(true);
+      if (!res1.ok) return;
+      expect(res1.usage).toEqual(mockUsage);
+      expect(res1.provenance).toEqual(mockProvenance);
+
+      // 2. Model failure case
+      const failModel = new FakeUtilityModel().push(() => ({
+        ok: false,
+        errorCode: 'timeout',
+        message: 'Timeout exceeded',
+        usage: mockUsage,
+        provenance: mockProvenance,
+      }));
+      const retriever2 = new RepositoryRetriever({
+        candidateDiscovery: new StaticCandidateDiscovery(['src/ok.ts']),
+        utilityModel: failModel,
+      });
+      const res2 = await retriever2.retrieve({ objective: 'Test failure' });
+      expect(res2.ok).toBe(false);
+      if (res2.ok) return;
+      expect(res2.usage).toEqual(mockUsage);
+      expect(res2.provenance).toEqual(mockProvenance);
+
+      // 3. Validation failure case
+      const invalidModel = new FakeUtilityModel().push(() => ({
+        ok: true,
+        text: JSON.stringify({ relevantFiles: [{ path: 'untrusted/invented.ts', reason: 'Invented' }] }),
+        usage: mockUsage,
+        provenance: mockProvenance,
+      }));
+      const retriever3 = new RepositoryRetriever({
+        candidateDiscovery: new StaticCandidateDiscovery(['src/ok.ts']),
+        utilityModel: invalidModel,
+      });
+      const res3 = await retriever3.retrieve({ objective: 'Test validation fail' });
+      expect(res3.ok).toBe(false);
+      if (res3.ok) return;
+      expect(res3.errorCode).toBe('validation_failed');
+      expect(res3.usage).toEqual(mockUsage);
+      expect(res3.provenance).toEqual(mockProvenance);
+    });
   });
 });

@@ -196,6 +196,10 @@ export async function buildExecutionContext(
   const utilityModel =
     options.utilityModel ??
     resolveUtilityModel({ config: config.global.utilityModel, env: options.env });
+  const allowedEffectiveModels =
+    config.global.utilityModel?.model !== undefined
+      ? [config.global.utilityModel.model]
+      : undefined;
   const advisor =
     utilityModel === undefined
       ? undefined
@@ -206,6 +210,7 @@ export async function buildExecutionContext(
             projectDir: options.projectDir,
           }),
           telemetry: new ContextTelemetryRecorder(store),
+          trust: { allowedEffectiveModels },
         });
 
   const stageRunner = new StageRunner({

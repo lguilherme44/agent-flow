@@ -318,7 +318,9 @@ export const ContextTelemetryObservationSchema = z
     }
 
     const mayCarryEffectiveIdentity =
-      observation.source === 'utility_model' || observation.source === 'aggregate';
+      observation.source === 'utility_model' ||
+      observation.source === 'aggregate' ||
+      observation.source === 'repository_retrieval';
     if (
       !mayCarryEffectiveIdentity &&
       (observation.effectiveProvider !== undefined || observation.effectiveModel !== undefined)

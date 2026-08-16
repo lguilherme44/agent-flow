@@ -8,8 +8,9 @@
 
 O Agent Flow coordena planejamento, execução, validação, workspaces de task isolados
 por Git, integração determinística e revisão — mantendo cada passo inspecionável e sob
-o seu controle. Ele dirige as CLIs de código que você já tem instaladas e autenticadas.
-Nada aqui conversa com uma API de modelo, e nada sai da sua máquina.
+o seu controle. Ele dirige as CLIs de código que você já tem instaladas e autenticadas, com um
+modelo utilitário local opcional (UtilityModel) estritamente consultivo para ranqueamento de contexto e triagem.
+Tudo permanece sob o controle do operador na sua máquina.
 
 ```text
 pedido de feature
@@ -26,8 +27,7 @@ pedido de feature
   → Definition of Done
 ```
 
-**Estado:** `v0.1.0` · MVP 1 completo · MVP 2 completo · não publicado no npm.
-Execução paralela está disponível **no modo worktree** — veja [Estado atual](#estado-atual).
+**Estado:** `v0.1.0` · MVP 1, MVP 2 e MVP 3 completos · pronto para auditoria final independente.
 
 ---
 
@@ -37,13 +37,15 @@ Uma camada de orquestração que fica acima das CLIs de código e transforma "im
 esta feature" em um fluxo com forma: estágios separados, contextos separados, um gate
 humano, e resultados decididos por código em vez de por um agente dizendo que terminou.
 
-O core não sabe que Claude Code ou Codex existem, e não sabe qual framework você usa.
+O core não depende de APIs proprietárias específicas e não sabe qual framework você usa.
 Os papéis são lógicos (`architect`, `sdd`, `planner`, `planReviewer`, três `executors`,
 `verification`, `finalReviewer`); a configuração decide qual runner e qual nível de
-effort atende cada um. Claude Code e Codex são os dois adapters que existem hoje.
+effort atende cada um.
 
-Tudo é local: o estado do run, os artefatos, a trilha de auditoria e o dashboard. Não
-existe control plane em cloud, não existe envio de telemetria e não existe API key.
+Tudo é local-first: o estado do run, os artefatos, a trilha de auditoria e o dashboard. Não
+existe control plane em cloud e não existe envio de telemetria. A execução principal não requer API keys
+(usando as sessões das suas CLIs já autenticadas), enquanto o modelo utilitário consultivo opcional pode se conectar
+a um endpoint local/remoto compatível com OpenAI usando credenciais vinculadas ao ambiente (`apiKeyEnv`).
 
 ## Por que o Agent Flow?
 
@@ -279,11 +281,13 @@ Detalhes, incluindo o que não ter autenticação significa e não significa:
 - **git** — qualquer versão para o modo sequencial; **2.33.0 ou mais novo** para o
   isolamento por worktree, que precisa de `git worktree add --lock --reason`. O
   `agent-flow doctor` reporta sua versão contra esse piso.
-- Pelo menos uma CLI de agente, instalada e autenticada:
-  [Claude Code](https://claude.com/claude-code) · [Codex CLI](https://github.com/openai/codex)
+- Pelo menos uma CLI de agente, instalada e autenticada (ex.: AGY, OpenCode, Claude Code, Codex CLI).
+- *(Opcional)* Um endpoint local ou remoto de modelo compatível com OpenAI (ex.: Ollama, llama.cpp, vLLM) para inteligência de contexto consultiva e triagem mecânica.
 
-**Sem API keys.** O Agent Flow invoca as CLIs que você já autenticou. Ele nunca lê,
-armazena ou transmite credenciais. Se uma CLI funciona no seu terminal, funciona aqui.
+**Credenciais e Privacidade:**
+- **Runners de CLI Locais:** O Agent Flow invoca as CLIs que você já autenticou no seu ambiente. Ele nunca lê, armazena ou transmite credenciais dos runners.
+- **UtilityModel:** Quando configurado, a API key é referenciada estritamente pelo nome da variável de ambiente (`apiKeyEnv`) e resolvida na memória no momento da composição. Arquivos de configuração e telemetria nunca armazenam chaves brutas.
+- **Zero Envio de Telemetria:** Toda a telemetria, trilha de auditoria e estado de execução permanecem estritamente na sua máquina local.
 
 ---
 

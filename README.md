@@ -8,8 +8,9 @@
 
 Agent Flow coordinates planning, execution, validation, Git-isolated task workspaces,
 deterministic integration and review — while keeping every step inspectable and under
-your control. It drives the coding CLIs you already have installed and logged into.
-Nothing here talks to a model API, and nothing leaves your machine.
+your control. It drives the coding CLIs you already have installed and logged into, with an
+optional local-first advisory UtilityModel for context ranking and triage. Everything stays
+under operator control on your machine.
 
 ```text
 feature request
@@ -26,8 +27,7 @@ feature request
   → Definition of Done
 ```
 
-**Status:** `v0.1.0` · MVP 1 complete · MVP 2 in progress at **M2-06** · not published to npm.
-Parallel execution is **not enabled yet** — see [Current status](#current-status).
+**Status:** `v0.1.0` · MVP 1, MVP 2, and MVP 3 complete · ready for independent final audit.
 
 ---
 
@@ -37,13 +37,15 @@ An orchestration layer that sits above coding CLIs and turns "implement this fea
 into a workflow with a shape: separate stages, separate contexts, a human gate, and
 outcomes decided by code rather than by an agent saying it finished.
 
-The core knows nothing about Claude Code or Codex, and nothing about your framework.
+The core knows nothing about specific vendor APIs and nothing about your framework.
 Roles are logical (`architect`, `sdd`, `planner`, `planReviewer`, three `executors`,
 `verification`, `finalReviewer`); configuration decides which runner and which effort
-level serves each one. Claude Code and Codex are the two adapters that exist today.
+level serves each one.
 
-Everything is local: run state, artifacts, the audit trail and the dashboard. There is
-no cloud control plane, no telemetry upload and no API key.
+Everything is local-first: run state, artifacts, the audit trail and the dashboard. There is
+no cloud control plane and no telemetry upload. Core execution requires no API keys (using
+your authenticated CLI sessions), while optional advisory context ranking and triage can connect
+to an operator-configured local/remote OpenAI-compatible endpoint using environment-bound credentials (`apiKeyEnv`).
 
 ## Why Agent Flow?
 
@@ -277,11 +279,13 @@ Details, including what having no authentication does and does not mean:
 - **git** — any version for sequential mode; **2.33.0 or newer** for worktree
   isolation, which needs `git worktree add --lock --reason`. `agent-flow doctor`
   reports your version against that floor.
-- At least one agent CLI, installed and logged in:
-  [Claude Code](https://claude.com/claude-code) · [Codex CLI](https://github.com/openai/codex)
+- At least one agent CLI, installed and logged in (e.g. AGY, OpenCode, Claude Code, Codex CLI).
+- *(Optional)* A local or remote OpenAI-compatible model endpoint (e.g. Ollama, llama.cpp, vLLM) for advisory context intelligence and mechanical triage.
 
-**No API keys.** Agent Flow invokes the CLIs you have already authenticated. It never
-reads, stores or transmits credentials. If a CLI works in your terminal, it works here.
+**Credentials & Privacy:**
+- **Local CLI Runners:** Agent Flow invokes the CLIs you have already authenticated in your environment. It never reads, stores, or transmits runner credentials.
+- **UtilityModel:** If configured, the API key is referenced strictly by environment variable name (`apiKeyEnv`) and resolved in memory at composition time. Config files and telemetry never store or persist raw API keys.
+- **Zero Telemetry Uploads:** All telemetry, audit trails, and execution states remain strictly on your local machine.
 
 ---
 

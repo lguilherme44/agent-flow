@@ -118,18 +118,40 @@ describe('RepositoryContextAdvisor', () => {
     expect(result).toBeUndefined();
   });
 
-  it('records a mechanical projection observation for an advisory success', async () => {
+  it('records a mechanical projection observation for an advisory success with safe usage and provenance', async () => {
     const { recorder, store, runId } = await recorderHarness();
-    const model = new FakeUtilityModel().pushStructured('{}', {
-      objective: 'Fix the retry budget bug',
-      relevantFiles: [{ path: 'src/app/task-executor.ts', reason: 'holds the repair loop' }],
-      relevantSymbols: [],
-      constraints: [],
-      architectureNotes: [],
-      risks: [],
-      evidence: [],
+    const model = new FakeUtilityModel().push(() => ({
+      ok: true,
+      text: JSON.stringify({
+        objective: 'Fix the retry budget bug',
+        relevantFiles: [{ path: 'src/app/task-executor.ts', reason: 'holds the repair loop' }],
+        relevantSymbols: [],
+        constraints: [],
+        architectureNotes: [],
+        risks: [],
+        evidence: [],
+      }),
+      usage: {
+        estimatedInputTokens: 120,
+        estimatedOutputTokens: 25,
+        durationMs: 340,
+      },
+      provenance: {
+        provider: 'openai-compatible',
+        model: 'qwen2.5-coder',
+      },
+    }));
+    const retriever = new RepositoryRetriever({
+      utilityModel: model,
+      candidateDiscovery: new StaticCandidateDiscovery(['src/app/task-executor.ts', 'src/app/stage-runner.ts']),
+      projectDir: '/repo',
     });
-    await advisor(model, recorder).advise(request({ runId }));
+    const adv = new RepositoryContextAdvisor({
+      retriever,
+      telemetry: recorder,
+      trust: { allowedEffectiveModels: ['qwen2.5-coder'] },
+    });
+    await adv.advise(request({ runId }));
 
     const observed = (await store.readEvents(runId)).filter(
       (event) => event.type === 'context_telemetry_observed',
@@ -146,6 +168,11 @@ describe('RepositoryContextAdvisor', () => {
       utilityCalls: 1,
       utilityFailures: 0,
       structuredOutputFailures: 0,
+      estimatedInputTokens: 120,
+      estimatedOutputTokens: 25,
+      utilityLatencyMs: 340,
+      effectiveProvider: 'openai-compatible',
+      effectiveModel: 'qwen2.5-coder',
     });
   });
 

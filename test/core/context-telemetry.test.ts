@@ -251,6 +251,165 @@ describe('artifact projections', () => {
     });
   });
 
+  it('AUD-M3-07-01: projects safe usage metrics and effective identity through repository retrieval telemetry', () => {
+    const successInput = {
+      ok: true,
+      bypass: false,
+      candidateCount: 15,
+      packet: {
+        relevantFiles: [{ path: 'src/a.ts' }, { path: 'src/b.ts' }],
+      },
+      usage: {
+        estimatedInputTokens: 320,
+        estimatedOutputTokens: 45,
+        durationMs: 420,
+      },
+      provenance: {
+        provider: 'openai-compatible',
+        model: 'qwen2.5-coder',
+      },
+    };
+
+    // 1. Full propagation with trust
+    const resWithTrust = projectRepositoryRetrievalTelemetry(successInput, {
+      allowedEffectiveModels: ['qwen2.5-coder'],
+    });
+    expect(resWithTrust).toEqual({
+      stage: 'retrieval',
+      source: 'repository_retrieval',
+      provenance: 'mechanical_projection',
+      candidatesBefore: 15,
+      candidatesAfter: 2,
+      filesAfter: 2,
+      utilityCalls: 1,
+      utilityFailures: 0,
+      structuredOutputFailures: 0,
+      estimatedInputTokens: 320,
+      estimatedOutputTokens: 45,
+      utilityLatencyMs: 420,
+      effectiveProvider: 'openai-compatible',
+      effectiveModel: 'qwen2.5-coder',
+    });
+
+    // 2. Absent effectiveModel when model not allowed or not configured
+    const resWithoutTrust = projectRepositoryRetrievalTelemetry(successInput);
+    expect(resWithoutTrust).toEqual({
+      stage: 'retrieval',
+      source: 'repository_retrieval',
+      provenance: 'mechanical_projection',
+      candidatesBefore: 15,
+      candidatesAfter: 2,
+      filesAfter: 2,
+      utilityCalls: 1,
+      utilityFailures: 0,
+      structuredOutputFailures: 0,
+      estimatedInputTokens: 320,
+      estimatedOutputTokens: 45,
+      utilityLatencyMs: 420,
+      effectiveProvider: 'openai-compatible',
+    });
+    expect(resWithoutTrust).not.toHaveProperty('effectiveModel');
+
+    // 3. Bypass / failure case retains safe usage/latency/provenance
+    const failureInput = {
+      ok: false,
+      bypass: true,
+      errorCode: 'validation_failed',
+      candidateCount: 8,
+      usage: {
+        estimatedInputTokens: 180,
+        estimatedOutputTokens: 25,
+        durationMs: 210,
+      },
+      provenance: {
+        provider: 'openai-compatible',
+        model: 'qwen2.5-coder',
+      },
+    };
+    const failureRes = projectRepositoryRetrievalTelemetry(failureInput, {
+      allowedEffectiveModels: ['qwen2.5-coder'],
+    });
+    expect(failureRes).toEqual({
+      stage: 'retrieval',
+      source: 'repository_retrieval',
+      provenance: 'mechanical_projection',
+      bypassReason: 'validation_failed',
+      candidatesBefore: 8,
+      candidatesAfter: 0,
+      filesAfter: 0,
+      utilityCalls: 1,
+      utilityFailures: 0,
+      structuredOutputFailures: 1,
+      estimatedInputTokens: 180,
+      estimatedOutputTokens: 25,
+      utilityLatencyMs: 210,
+      effectiveProvider: 'openai-compatible',
+      effectiveModel: 'qwen2.5-coder',
+    });
+
+    // 4. Secret-like model identity is rejected (remains absent)
+    const secretModelInput = {
+      ...successInput,
+      provenance: {
+        provider: 'openai-compatible',
+        model: 'sk-live-1234567890abcdef',
+      },
+    };
+    const secretModelRes = projectRepositoryRetrievalTelemetry(secretModelInput, {
+      allowedEffectiveModels: ['sk-live-1234567890abcdef'],
+    });
+    expect(secretModelRes).toBeUndefined(); // fails closed because allowedEffectiveModels validator rejects credential material
+
+    // 5. Hostile getter on usage / provenance fails closed
+    const hostileUsage = {
+      ...successInput,
+      get usage() {
+        throw new Error('Hostile usage getter');
+      },
+    };
+    expect(projectRepositoryRetrievalTelemetry(hostileUsage)).toBeUndefined();
+
+    // 6. Malformed usage metrics (negative, Infinity, NaN, non-integer) fail closed
+    expect(
+      projectRepositoryRetrievalTelemetry({
+        ...successInput,
+        usage: { estimatedInputTokens: -10 },
+      }),
+    ).toBeUndefined();
+    expect(
+      projectRepositoryRetrievalTelemetry({
+        ...successInput,
+        usage: { estimatedInputTokens: Infinity },
+      }),
+    ).toBeUndefined();
+    expect(
+      projectRepositoryRetrievalTelemetry({
+        ...successInput,
+        usage: { durationMs: 'not a number' },
+      }),
+    ).toBeUndefined();
+    expect(
+      projectRepositoryRetrievalTelemetry({
+        ...successInput,
+        usage: { durationMs: -50 },
+      }),
+    ).toBeUndefined();
+
+    // 7. Leak check: secrets/keys/headers/urls never present in projected JSON
+    const secretBearingInput = {
+      ...successInput,
+      apiKey: 'sk-test-secret',
+      headers: { Authorization: 'Bearer token' },
+      baseUrl: 'https://api.openai.com/v1',
+    };
+    const cleanRes = projectRepositoryRetrievalTelemetry(secretBearingInput);
+    expect(cleanRes).toBeDefined();
+    const serialized = JSON.stringify(cleanRes);
+    expect(serialized).not.toContain('sk-test-secret');
+    expect(serialized).not.toContain('Bearer');
+    expect(serialized).not.toContain('api.openai.com');
+  });
+
   it('projects compression volumes and counts without retaining raw/final content', () => {
     const result = projectCompressionTelemetry({
       ok: true,

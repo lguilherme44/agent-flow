@@ -10,8 +10,9 @@ specification and the code disagree, **the code is the current truth**.
 ```text
 MVP 1  ─────────────────────────────────►  the execution foundation, complete
 MVP 2  ─────────────────────────────────►  safe parallel execution, complete
+MVP 3  ─────────────────────────────────►  context intelligence & advisory local model, complete
                                         ▲
-                                        you are here: M2-12 done
+                                        you are here: MVP3 corrective audit closure complete
 ```
 
 ---
@@ -40,155 +41,41 @@ unbuilt, and both have their own document:
 
 ## MVP 2 — Safe Parallel Execution · complete
 
-**The order mattered and was not negotiable: isolation first, parallelism last.** The
-milestone raised the concurrency ceiling in its *eleventh* item, after every guarantee
-that makes raising it safe was in place. `effectiveConcurrency` is above 1 only for a
-run born in worktree mode; a sequential run still resolves to 1 however
-`parallelism.maxTasks` is written.
+Specified in [`specs/mvp2-safe-parallel-execution.md`](specs/mvp2-safe-parallel-execution.md).
+Delivered Git worktree isolation, receipt-first marker verification, deterministic integration,
+crash recovery, and parallel scheduler activation across M2-00 through M2-12.
+
+---
+
+## MVP 3 — Context Intelligence & Advisory Local Model · complete
+
+Specified in [`specs/mvp3-context-intelligence.md`](specs/mvp3-context-intelligence.md).
+Introduces an optional, provider-neutral, strictly advisory local UtilityModel layer that reduces
+context bloat and accelerates stage execution while preserving all security invariants.
 
 | | Milestone | Status |
 |---|---|---|
-| M2-00 | Current concurrency safety (baseline, landed before the milestone) | **done** |
-| M2-01 | Pure worktree policies and naming | **done** |
-| M2-02 | `GitCommand` and `GitWorkspaces` | **done** |
-| M2-03 | Run identity capture and `planningBase` gates | **done** |
-| M2-04 | Workspace lifecycle and setup cleanliness | **done** |
-| M2-05 | `TaskAttemptResult`, trusted receipt, marker | **done** |
-| M2-06 | Deterministic Integrator and integration-tree verification | **done** |
-| M2-07 | Crash recovery | **done** |
-| M2-08 | Retry semantics and attempt retention | **done** |
-| M2-09 | Git-aware cleanup | **done** |
-| M2-10 | Read models, CLI and Web observability | **done** |
-| M2-11 | Parallel scheduler activation | **done** |
-| M2-12 | E2E, dogfood and documentation | **done** |
+| M3-00 | UtilityModel Port & Capabilities Contract | **done** |
+| M3-01 | OpenAI-Compatible Utility Adapter | **done** |
+| M3-02 | Advisory Context Packet Contract & Trust Boundary (`ContextPacket` Schema) | **done** |
+| M3-03 | Context Compressor & Multi-Level Budgeting | **done** |
+| M3-04 | Repository Retriever & Lexical Candidate Discovery | **done** |
+| M3-05 | Secure Content Reader & Symlink Defense | **done** |
+| M3-06 | Log & Diff Mechanical Triager | **done** |
+| M3-07 | Context Telemetry & Observability Aggregates | **done** |
+| M3-08 | Runtime Stage Advisor & Advisory Context Injection | **done** |
+| M3-09 | Empirical Dogfooding & Empirical Validation Matrix | **done** |
 
-### What each of the completed items actually delivered
+### Core Invariants Guaranteed by MVP 3
 
-**M2-00 — the baseline.** `StateStore.updateRun` serialised per state file so two
-read-modify-writes cannot lose an update; an attempt spent by explicit dispatch rather
-than by observing `running`; and `parallelism.maxTasks` separated into *intent* and
-*instruction*, with the reduction recorded on the run as a `parallelism_clamped`
-degradation instead of happening quietly.
-
-**M2-01 — the naming, as pure functions.** `repoKey`, `gitRunKey`, ref names and
-workspace-relative paths all decided in `src/core/worktree-policy.ts`, with no
-filesystem and no Git, so they can be tested exhaustively against traversal and
-injection payloads. The new state fields are additive and optional, so a run written
-before MVP 2 still loads.
-
-**M2-02 — one Git spawner.** Every internal Git invocation goes through
-`GitCommand`, which takes its subcommand from a closed list and injects an owned,
-empty `core.hooksPath` *before* the subcommand — so no caller argument can override
-it. No user Git hook fires inside an Agent Flow operation. The Git floor was
-determined empirically rather than assumed: **2.33.0**, the release where
-`git worktree add --lock` learned `--reason`.
-
-**M2-03 — a run is born with its identity.** `gitRunKey`, `planningBase` and
-`isolationMode` are captured by `createRun`, together, and never rewritten.
-`git.useWorktrees` is read in exactly one module at exactly one moment; every later
-reader takes `state.isolationMode`. Execution preconditions are a check that writes
-nothing, so a refusal costs a run nothing and the next attempt is free.
-
-**M2-04 — a prepared workspace, or no run.** Each dispatched attempt gets its own
-locked worktree, asserted clean on checkout, set up with the project's install
-command, and asserted clean again. A failed preparation refuses the task without
-invoking the agent. `doctor` gained an install-cleanliness probe, because the default
-`npm install` rewrites `package-lock.json` and would otherwise make worktree mode look
-broken on first contact.
-
-**M2-05 — the trust root.** Validation runs, the expectation is judged, *then* the
-tree is captured and a 128-bit nonce is minted — so the nonce does not exist while the
-agent is alive. The attempt artifact is written once, atomically, outside every
-worktree. The marker commit is built with `commit-tree` from that artifact, which
-makes it a deterministic function of persisted state rather than of whatever an index
-happened to hold.
-
-**M2-06 — deterministic integration.** Integration is serial, in the plan's stable
-topological order, in a dedicated integration worktree — never the user's working
-tree. The Integrator is the **only** writer of `completed`: a task is complete when
-its work is on the integration branch, not when its agent exited. Final verification
-and final review both run against that one tree, under the run execution lock, and the
-commit they describe is recorded on the run as `integrationHead`.
-
-**M2-07 — crash recovery.** Every crash window enumerated in §17.3 of the
-specification has a defined, tested resolution, driven by a deterministic injected
-fault against real Git. The rule is receipt-first: recovery reads the attempt artifact
-and uses the repository only to confirm what the artifact already claims. A ref, a
-trailer or a commit message is never sufficient on its own. Recovery runs no agent and
-no validation, and it never writes `completed`.
-
-**M2-08 — retry is a fresh attempt.** New branch, new worktree, new evidence, cut from
-the integration head as it stands now — and the previous attempt's artifact and ref are
-retained, because they are the only record of what went wrong. Recovering an interrupted
-attempt does not spend one.
-
-**M2-09 — `clean` became Git-aware.** It reclaims the worktrees and attempt refs of the
-runs it removes, touches nothing foreign, and keeps an integration branch that is merged
-nowhere — that branch is the run's product rather than its debris, and `--branches` is
-the only flag that deletes it.
-
-**M2-10 — the isolated run became readable.** Mode, requested and effective concurrency,
-which task holds a live workspace, what is awaiting integration, which paths conflicted
-and where the integration head is — in the CLI, in the read model and in the dashboard.
-A parallel run whose state cannot be read is a parallel run nobody can debug, which is
-why this landed *before* parallelism rather than after it.
-
-**M2-11 — `effectiveConcurrency > 1`.** The ceiling is raised only for a run in worktree
-mode, up to 8. Landing it earlier would have been the M2-00 defect with extra steps.
-
-### M2-12 — what closing the milestone actually closed
-
-The last item was not paperwork. It proved the composition rather than the parts, and
-in doing so found three things the unit suites structurally could not:
-
-- **A repository gate reported itself as a model failure.** A dirty working tree at
-  planning start reached the user as "the runner produced output that never satisfied
-  the contract" — a sentence about a model, printed when no model had run. The gate now
-  raises Appendix A's own code with the action that resolves it. Found by dogfood, on
-  the first real run.
-- **Two specified events were emitted by nothing.** `run_git_identity_assigned` and
-  `namespace_reclaimed` were in Appendix B from the start of the milestone and in no
-  module, so a run's history recorded neither the mode it was born in nor what `clean`
-  later removed. Both are emitted now, and Appendix B is pinned to the code by a test
-  in the same way Appendix A already was.
-- **The attempt ref reached the Integrator from the artifact.** Not a vulnerability —
-  the adapter re-validates every ref, and §11.3 already states that forging the artifact
-  and forging the ref need the same capability — but the authoritative ref is now
-  *derived* from the run's identity, with the recorded one required to agree.
-
-Plus what it was asked for: an end-to-end suite over a two-wave graph, a real crash, a
-retry and a cleanup; dogfood on Node and Flutter against live CLIs; and the
-documentation the milestone owed — every refusal code with its fix in
-[`troubleshooting.md`](troubleshooting.md), the new test layers in
-[`testing.md`](testing.md), and what dogfooding revealed in
-[`engineering/findings.md`](engineering/findings.md).
+- **Zero Workflow Authority**: The UtilityModel is strictly advisory. It cannot sign gates, create markers, modify DAGs, alter verdicts, or execute commands.
+- **Fail-Open Advisory Degradation**: An offline, unconfigured, failing, or timed-out utility model degrades cleanly to an empty advisory context; stage execution continues unaffected.
+- **Deterministic Candidate Discovery**: The repository file universe is discovered via canonical Git/filesystem methods; model-invented paths are rejected by strict trust boundaries.
+- **Symlink & Inode Security**: The secure content reader rejects all symlinks, checks exact file bounds, and snapshots file handles against TOCTOU manipulation.
+- **Credential Containment**: Configuration stores only the environment variable name (`apiKeyEnv`), never secrets. Telemetry, logs, and artifacts are strictly sanitized.
 
 ---
 
-## Explicitly out of scope for MVP 2
+## Beyond MVP 3
 
-Named because they were considered and decided, not because they were forgotten.
-
-```text
-automatic conflict resolution          model escalation after repeated failure
-cloud / remote workers                 distributed scheduler
-GitHub PR automation                   monorepo-aware scheduler
-cross-machine execution                remote auth
-automatic config writes                npm publishing
-pause / resume / cancel                per-wave verification as a gate
-```
-
-`cancel` was examined against this milestone's safety requirements and found not to be
-required by it: a killed coordinator is already a first-class case, so the failure mode
-`cancel` would introduce is one recovery already has to handle. §30 of the
-specification lists the rejected designs and the evidence behind each rejection.
-
----
-
-## Beyond MVP 2
-
-Not specified, not committed to, listed so the boundary is visible:
-
-- model escalation after repeated failure
-- monorepo workspaces
-- publishing to npm, and a tagged release
+See [`docs/post-mvp3-backlog.md`](post-mvp3-backlog.md) for non-normative enhancement ideas and future backlog items.

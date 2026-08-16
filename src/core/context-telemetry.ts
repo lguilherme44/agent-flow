@@ -4,6 +4,7 @@ import {
   ContextTelemetryEffectiveModelSchema,
   ContextTelemetryObservationSchema,
   MAX_CONTEXT_TELEMETRY_INTEGER,
+  MAX_CONTEXT_TELEMETRY_LATENCY_MS,
   MAX_CONTEXT_TELEMETRY_OBSERVATIONS,
   type ContextTelemetryBypassReason,
   type ContextTelemetryObservation,
@@ -117,9 +118,19 @@ export function normalizeContextTelemetryObservation(
 
 export function projectRepositoryRetrievalTelemetry(
   input: unknown,
+  trust?: ContextTelemetryProjectionTrust,
 ): ContextTelemetryObservation | undefined {
   try {
-    const snapshot = snapshotFields(input, ['ok', 'bypass', 'candidateCount', 'packet', 'errorCode']);
+    const allowedEffectiveModels = snapshotAllowedEffectiveModels(trust);
+    const snapshot = snapshotFields(input, [
+      'ok',
+      'bypass',
+      'candidateCount',
+      'packet',
+      'errorCode',
+      'usage',
+      'provenance',
+    ]);
     const candidateCount = integer(snapshot.candidateCount);
     if (candidateCount === undefined || typeof snapshot.ok !== 'boolean') return undefined;
 
@@ -150,6 +161,38 @@ export function projectRepositoryRetrievalTelemetry(
     } else {
       return undefined;
     }
+
+    if (snapshot.usage !== undefined) {
+      const usage = snapshotFields(snapshot.usage, [
+        'estimatedInputTokens',
+        'estimatedOutputTokens',
+        'durationMs',
+      ]);
+      addIntegerIfObserved(observation, 'estimatedInputTokens', usage.estimatedInputTokens);
+      addIntegerIfObserved(observation, 'estimatedOutputTokens', usage.estimatedOutputTokens);
+      if (usage.durationMs !== undefined) {
+        const latency = integer(usage.durationMs);
+        if (latency !== undefined && latency <= MAX_CONTEXT_TELEMETRY_LATENCY_MS) {
+          observation.utilityLatencyMs = latency;
+        } else {
+          throw new Error('invalid telemetry latency');
+        }
+      }
+    }
+
+    if (snapshot.provenance !== undefined) {
+      const provenance = snapshotFields(snapshot.provenance, ['provider', 'model']);
+      if (safeProviderIdentity(provenance.provider)) {
+        observation.effectiveProvider = provenance.provider;
+        if (
+          safeModelIdentity(provenance.model) &&
+          allowedEffectiveModels.has(provenance.model)
+        ) {
+          observation.effectiveModel = provenance.model;
+        }
+      }
+    }
+
     return normalizeContextTelemetryObservation(observation);
   } catch {
     return undefined;
