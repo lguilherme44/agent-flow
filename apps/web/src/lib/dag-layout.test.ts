@@ -155,6 +155,47 @@ describe('layoutGraph', () => {
     }
   });
 
+  it('guarantees strict left-to-right progression for complex multi-level DAG with fan-outs and fan-ins', () => {
+    // Ancestor X MUST strictly be less than descendant X
+    const dag = graph(
+      [
+        ['TASK-001', 0],
+        ['TASK-002', 1],
+        ['TASK-003', 1],
+        ['TASK-004', 2],
+        ['TASK-005', 2],
+        ['TASK-006', 3],
+        ['TASK-007', 4],
+      ],
+      [
+        ['TASK-001', 'TASK-002'],
+        ['TASK-001', 'TASK-003'],
+        ['TASK-002', 'TASK-004'],
+        ['TASK-003', 'TASK-005'],
+        ['TASK-004', 'TASK-006'],
+        ['TASK-005', 'TASK-006'],
+        ['TASK-006', 'TASK-007'],
+      ],
+    );
+
+    const layout = layoutGraph(dag);
+    const x001 = layout.positions.get('TASK-001')!.x;
+    const x002 = layout.positions.get('TASK-002')!.x;
+    const x003 = layout.positions.get('TASK-003')!.x;
+    const x004 = layout.positions.get('TASK-004')!.x;
+    const x005 = layout.positions.get('TASK-005')!.x;
+    const x006 = layout.positions.get('TASK-006')!.x;
+    const x007 = layout.positions.get('TASK-007')!.x;
+
+    expect(x001).toBeLessThan(x002);
+    expect(x001).toBeLessThan(x003);
+    expect(x002).toBeLessThan(x004);
+    expect(x003).toBeLessThan(x005);
+    expect(x004).toBeLessThan(x006);
+    expect(x005).toBeLessThan(x006);
+    expect(x006).toBeLessThan(x007);
+  });
+
   it('orders a column by what it hangs from', () => {
     // The barycentre pass. Without it the second column keeps the server's order
     // and the two branches cross for no reason.

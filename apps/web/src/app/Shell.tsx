@@ -374,12 +374,9 @@ function SidebarFooter(): JSX.Element {
 /**
  * A context bar, not a page title (§69).
  *
- * The breadcrumb is real: it reads workspace / project / section / run, and each
- * segment is the actual thing rather than a hardcoded string. It used to hardcode
- * "Runs" as the third segment, which was true of the two pages that existed and
- * became a lie the moment there were seven — the Projects page announced itself as
- * Runs. The section now comes from the same `NAV` table the sidebar highlights, so
- * a destination cannot be lit in one place and named something else in the other.
+ * The breadcrumb is semantic and interactive: it reads workspace / project / section / run / task,
+ * with previous levels clickable, the current page marked with aria-current="page", and
+ * responsive collapse for narrow viewports.
  */
 function Topbar(): JSX.Element {
   const { projectId } = useProjectSelection();
@@ -390,14 +387,9 @@ function Topbar(): JSX.Element {
   const onDashboard = useMatch('/dashboard') !== null;
   const { runId } = useParams<{ runId: string }>();
   const section = useSectionLabel();
+  const sectionTo = useSectionTo();
 
-  // The dashboard resolves a run rather than naming one in the URL, and the
-  // breadcrumb has to say which — "workspace / all projects / Runs" describes
-  // no particular thing, which is the opposite of what a breadcrumb is for.
   const shownRun = onRunRoute ? runId : onDashboard ? pickRun(runs.data ?? []) : undefined;
-
-  // With no project selected the crumb would read "all projects" even while
-  // looking at one project's run. The run knows which project it belongs to.
   const runProject = runs.data?.find((entry) => entry.runId === shownRun)?.projectId;
   const projectName =
     projects.data?.find((project) => project.id === (projectId ?? runProject))?.name ??
@@ -406,11 +398,13 @@ function Topbar(): JSX.Element {
   return (
     <header className="flex h-topbar shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-page">
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-body-lg">
-        <Crumb>{workspaceName()}</Crumb>
+        <Crumb to="/dashboard">workspace</Crumb>
         <Separator />
-        <Crumb>{projectName}</Crumb>
+        <Crumb to="/projects">{projectName}</Crumb>
         <Separator />
-        <Crumb current={shownRun === undefined}>{section}</Crumb>
+        <Crumb to={shownRun === undefined ? undefined : sectionTo} current={shownRun === undefined}>
+          {section}
+        </Crumb>
         {shownRun === undefined ? null : (
           <>
             <Separator />
@@ -456,18 +450,6 @@ function Topbar(): JSX.Element {
   );
 }
 
-/** The directory the server was started in, as far as the browser can tell. */
-function workspaceName(): string {
-  return 'workspace';
-}
-
-/**
- * The section the current route belongs to, named exactly as the sidebar names it.
- *
- * The run detail lives under Runs even though its path is `/runs/:runId`, and the
- * dashboard resolves a run without naming one — both read "Runs", because that is
- * the section a reader is in.
- */
 function useSectionLabel(): string {
   const { t } = useI18n();
   const navEntries = useNavEntries();
@@ -477,24 +459,44 @@ function useSectionLabel(): string {
     (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
   );
 
-  // The dashboard shows a run, so its section is Runs rather than "Dashboard":
-  // the crumb after it is a run id, and "Dashboard / AF-2026-104" describes a
-  // relationship that does not exist.
   if (entry === undefined || entry.to === '/dashboard') return t.nav.runs;
   return entry.label;
 }
 
-function Crumb(props: { children: ReactNode; current?: boolean }): JSX.Element {
+function useSectionTo(): string {
+  const navEntries = useNavEntries();
+  const { pathname } = useLocation();
+
+  const entry = navEntries.find(
+    (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
+  );
+
+  if (entry === undefined || entry.to === '/dashboard') return '/runs';
+  return entry.to;
+}
+
+function Crumb(props: { children: ReactNode; current?: boolean | undefined; to?: string | undefined }): JSX.Element {
+  if (props.current || !props.to) {
+    return (
+      <span
+        aria-current={props.current === true ? 'page' : undefined}
+        className={cx(
+          'truncate',
+          props.current === true ? 'font-medium text-text' : 'text-faint',
+        )}
+      >
+        {props.children}
+      </span>
+    );
+  }
+
   return (
-    <span
-      aria-current={props.current === true ? 'page' : undefined}
-      className={cx(
-        'truncate',
-        props.current === true ? 'font-medium text-text' : 'text-faint',
-      )}
+    <NavLink
+      to={props.to}
+      className="truncate text-faint transition-colors hover:text-text"
     >
       {props.children}
-    </span>
+    </NavLink>
   );
 }
 

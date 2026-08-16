@@ -11,27 +11,12 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertTriangle, Wrench } from 'lucide-react';
+import { AlertTriangle, Maximize2, Minimize2, Wrench } from 'lucide-react';
 import type { RunDagView, TaskSummaryView } from '@contracts/index.js';
 import { Empty, StatusDot, cx } from '../components/ui';
 import { formatDuration } from '../lib/format';
 import { taskLabel, taskTone, TONE_BG, TONE_BORDER, TONE_TEXT } from '../lib/status';
 import { NODE_HEIGHT, NODE_WIDTH, layoutGraph, selectedPath } from '../lib/dag-layout';
-
-/**
- * The dependency graph (§92, UI-28).
- *
- * Two inputs, and keeping them apart is the whole design. `dag` is structure —
- * ids, edges, a column rank — and changes only when the plan does. `tasks` is the
- * same list the table renders and changes every few seconds. The layout is
- * memoised on the structure alone, so a task finishing repaints a node and does
- * not move a single one of the other four hundred and ninety-nine (§96).
- *
- * Nothing here works out what depends on what. The edges come from the server,
- * which derives them from the plan through the same `core/dag` the scheduler runs
- * on. A component that inferred an edge — or decided a task was ready — would be
- * a second scheduler, and it would be the one nobody notices going wrong.
- */
 
 export interface DagViewProps {
   readonly dag: RunDagView | undefined;
@@ -41,6 +26,8 @@ export interface DagViewProps {
   readonly selectedId: string | undefined;
   readonly onSelect: (taskId: string | undefined) => void;
   readonly isLoading?: boolean;
+  readonly isDagFullscreen?: boolean;
+  readonly onToggleFullscreen?: () => void;
 }
 
 interface TaskNodeData extends Record<string, unknown> {
@@ -197,6 +184,31 @@ export function DagView(props: DagViewProps): JSX.Element {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <GraphProblems dag={dag} />
+
+      {props.onToggleFullscreen ? (
+        <div className="absolute right-3 top-3 z-20">
+          <button
+            type="button"
+            aria-label={props.isDagFullscreen ? 'Exit fullscreen graph' : 'Expand graph to fullscreen'}
+            aria-pressed={props.isDagFullscreen}
+            title={props.isDagFullscreen ? 'Exit fullscreen (Esc)' : 'Expand graph to fullscreen'}
+            onClick={props.onToggleFullscreen}
+            className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 text-micro text-muted shadow-sm hover:border-border-strong hover:text-text"
+          >
+            {props.isDagFullscreen ? (
+              <>
+                <Minimize2 className="h-3.5 w-3.5" aria-hidden />
+                <span>Exit Fullscreen</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="h-3.5 w-3.5" aria-hidden />
+                <span>Fullscreen DAG</span>
+              </>
+            )}
+          </button>
+        </div>
+      ) : null}
 
       <div className="min-h-0 flex-1">
         <ReactFlow<TaskNode>

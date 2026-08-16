@@ -539,4 +539,74 @@ describe('live updates', () => {
       expect(screen.getByTestId('connection')).toHaveTextContent('polling');
     });
   });
+
+  it('toggles Focus Mode and collapses secondary cards inline', async () => {
+    renderPage();
+    await screen.findByText('Add weekly recurrence');
+    expect(screen.getByText('Artifacts')).toBeInTheDocument();
+
+    const focusBtn = screen.getByRole('button', { name: /expand workspace/i });
+    expect(focusBtn).toBeInTheDocument();
+
+    // Enter Focus Mode
+    await userEvent.click(focusBtn);
+
+    // Bottom cards are collapsed/hidden
+    await waitFor(() => {
+      expect(screen.queryByText('Artifacts')).toBeNull();
+    });
+
+    // Task table and search remain fully visible and usable
+    expect(screen.getByPlaceholderText('id, title or requirement')).toBeInTheDocument();
+    expect(screen.getByText('TASK-001')).toBeInTheDocument();
+
+    // Exit Focus Mode by clicking Restore
+    const restoreBtn = screen.getByRole('button', { name: /exit focus mode/i });
+    await userEvent.click(restoreBtn);
+
+    // Bottom cards reappear
+    await waitFor(() => {
+      expect(screen.getByText('Artifacts')).toBeInTheDocument();
+    });
+  });
+
+  it('exits Focus Mode when Escape key is pressed', async () => {
+    renderPage();
+    await screen.findByText('Add weekly recurrence');
+
+    const focusBtn = screen.getByRole('button', { name: /expand workspace/i });
+    await userEvent.click(focusBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Artifacts')).toBeNull();
+    });
+
+    // Press Escape
+    await userEvent.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifacts')).toBeInTheDocument();
+    });
+  });
+
+  it('opens and reads markdown artifacts using ArtifactReader', async () => {
+    ROUTES['/api/v1/runs/AF-2026-001/artifacts/sdd'] = {
+      name: 'sdd',
+      label: 'SDD',
+      available: true,
+      sizeBytes: 1024,
+      content: '# Spec Document\n\n## Architecture Impact\nDetails here.',
+      truncated: false,
+    };
+
+    renderPage();
+    await screen.findByText('Add weekly recurrence');
+
+    const sddButton = await screen.findByRole('button', { name: /sdd/i });
+    await userEvent.click(sddButton);
+
+    expect(await screen.findByText('Spec Document')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /rendered/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /raw/i })).toBeInTheDocument();
+  });
 });

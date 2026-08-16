@@ -1,41 +1,13 @@
 import { useMemo, type ReactNode } from 'react';
-import { MoreVertical, Search, Wrench } from 'lucide-react';
+import { Maximize2, Minimize2, MoreVertical, Search, Wrench } from 'lucide-react';
 import type { TaskSummaryView } from '@contracts/index.js';
 import { Empty, Panel, SectionHeader, StatusDot, StripItem, cx } from '../components/ui';
 import { formatDuration } from '../lib/format';
 import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
 import { countTasks } from './run-overview';
 
-/**
- * The main surface of the screen (§72).
- *
- * Three things changed from the first pass, all of them about weight.
- *
- * The metric row moved *into* this panel's header as a hairline-separated strip.
- * Five bordered cards were the same five numbers at four times the height, and
- * the height they took came out of the table.
- *
- * The model is visible. It was in a `title` attribute — which is to say, it was
- * not visible — and "which model did this task run on" is among the first
- * questions anybody asks of a run. Runner and model stack in one column, effort
- * beside them, exactly as the reference does it.
- *
- * And nothing here is a card. Rows are separated by hairlines, the selected row
- * carries a purple accent, and the surface is one continuous table — because a
- * table whose rows are boxes stops being scannable, which is the only thing a
- * table is for.
- */
-
 export type StatusFilter = 'all' | 'completed' | 'running' | 'waiting' | 'failed';
 
-/**
- * What the reader has narrowed the tasks down to.
- *
- * Owned by the page rather than by this panel, because the graph shows the same
- * tasks and filtering one view while the other kept everything would be two
- * answers to one question. The *state* is lifted; the *rule* never moved — both
- * views run `filterTasks` below.
- */
 export interface TaskFilter {
   readonly query: string;
   readonly status: StatusFilter;
@@ -49,6 +21,10 @@ export interface TaskTableProps {
   readonly onSelect: (taskId: string) => void;
   readonly filter: TaskFilter;
   readonly onFilterChange: (filter: TaskFilter) => void;
+  /** If true, the workspace is in expanded focus mode */
+  readonly isFocusMode?: boolean;
+  /** Action to toggle inline workspace focus mode */
+  readonly onToggleFocusMode?: () => void;
   /**
    * Rendered in place of the table when the reader asked for the graph (§92).
    *
@@ -111,6 +87,34 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                   </button>
                 ))}
               </div>
+
+              {props.onToggleFocusMode ? (
+                <button
+                  type="button"
+                  aria-label={props.isFocusMode ? 'Exit focus mode' : 'Expand workspace (Focus mode)'}
+                  aria-pressed={props.isFocusMode}
+                  title={props.isFocusMode ? 'Exit focus mode (Esc)' : 'Expand workspace (Focus mode)'}
+                  onClick={props.onToggleFocusMode}
+                  className={cx(
+                    'flex h-7 items-center gap-1.5 rounded-sm border px-2 text-micro transition-colors',
+                    props.isFocusMode
+                      ? 'border-primary-border bg-primary-soft font-medium text-text'
+                      : 'border-border bg-surface-2 text-muted hover:border-border-strong hover:text-text',
+                  )}
+                >
+                  {props.isFocusMode ? (
+                    <>
+                      <Minimize2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      <span>Restore</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      <span>Focus</span>
+                    </>
+                  )}
+                </button>
+              ) : null}
             </div>
           </SectionHeader>
 

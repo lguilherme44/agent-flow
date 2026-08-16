@@ -277,4 +277,28 @@ describe('the routing table', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('no routing table')).toBeInTheDocument();
   });
+
+  it('renders Context Intelligence section with strict zero-authority boundary', async () => {
+    renderPage();
+    await screen.findByText('Workflow Agents');
+
+    expect(screen.getByText('Context Intelligence & Advisory')).toBeInTheDocument();
+    expect(screen.getByText('Strict Authority Boundary')).toBeInTheDocument();
+    expect(screen.getByText(/Safe Bypass/i)).toBeInTheDocument();
+  });
+
+  it('displays Model: Unobservable for AGY runner', async () => {
+    routes['/api/v1/agents'] = AGENTS.map((route) =>
+      route.role === 'executor.complex'
+        ? {
+            ...route,
+            configured: { ...route.configured, runner: 'agy' },
+            resolved: { ...route.resolved!, runner: 'agy' },
+          }
+        : route,
+    );
+
+    renderPage();
+    expect(await screen.findByText('Unobservable')).toBeInTheDocument();
+  });
 });

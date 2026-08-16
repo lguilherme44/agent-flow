@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
+import { Minimize2, X } from 'lucide-react';
 import { useProjectSelection } from '../app/project-context';
 import {
   useArtifact,
@@ -22,8 +22,9 @@ import {
   ExecutionSummaryCard,
   ModelUsageCard,
 } from '../features/bottom-cards';
-import { Empty, Notice } from '../components/ui';
+import { Empty, Notice, cx } from '../components/ui';
 import { StructuredPlanView } from '../components/StructuredPlanView';
+import { ArtifactReader } from '../components/ArtifactReader';
 import { ApiError } from '../lib/api';
 import { INSPECTOR_PANE, useMediaQuery } from '../hooks/use-media-query';
 import type { TaskDetailView } from '@contracts/index.js';
@@ -71,6 +72,28 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   // between them must not feel like navigating away (§88 — local UI state).
   const [search, setSearch] = useSearchParams();
   const asGraph = search.get('view') === 'dag';
+
+  // Focus Mode (Phase C): in-place expanded workspace mode that collapses secondary cards
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  // DAG Fullscreen (Phase D): true fullscreen overlay for graph navigation
+  const [isDagFullscreen, setIsDagFullscreen] = useState(false);
+
+  // Esc key exits Focus Mode or Fullscreen DAG
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isDagFullscreen) {
+          setIsDagFullscreen(false);
+        } else if (isFocusMode) {
+          setIsFocusMode(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isFocusMode, isDagFullscreen]);
 
   const run = useRun(projectId, runId);
   const stages = useStages(projectId, runId);
@@ -168,6 +191,10 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
           onSelect={setSelectedTask}
           filter={filter}
           onFilterChange={setFilter}
+          isFocusMode={isFocusMode}
+          onToggleFocusMode={() => {
+            setIsFocusMode((prev) => !prev);
+          }}
           {...(asGraph
             ? {
                 graph: (
@@ -179,6 +206,10 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                       selectedId={selectedTask}
                       onSelect={setSelectedTask}
                       isLoading={dag.isLoading}
+                      isDagFullscreen={isDagFullscreen}
+                      onToggleFullscreen={() => {
+                        setIsDagFullscreen((prev) => !prev);
+                      }}
                     />
                   </Suspense>
                 ),
@@ -213,14 +244,66 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         />
       )}
 
-      {/* Token-driven, because height is the scarce axis at 1280×800 and this
-          row is the part of the screen that can afford to give some back.
+      {/* True Fullscreen DAG Overlay (Phase D) */}
+      {isDagFullscreen && asGraph ? (
+        <div
+          role="dialog"
+          aria-label="Expanded DAG Workspace"
+          className="fixed inset-0 z-50 flex flex-col bg-bg p-4 gap-3"
+        >
+          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4 rounded-md">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="font-bold text-title tabular text-text">{run.data.runId}</span>
+              <span className="text-body-lg text-muted truncate max-w-lg">{run.data.feature}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-micro text-faint">Press Esc to exit</span>
+              <button
+                type="button"
+                onClick={() => setIsDagFullscreen(false)}
+                aria-label="Exit fullscreen DAG"
+                className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2.5 text-body-lg text-muted hover:border-border-strong hover:text-text"
+              >
+                <Minimize2 className="h-3.5 w-3.5" aria-hidden />
+                <span>Exit Fullscreen</span>
+              </button>
+            </div>
+          </div>
+          <div
+            className={
+              asPane && selectedTask !== undefined
+                ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
+                : 'flex min-h-0 flex-1'
+            }
+          >
+            <div className="min-w-0 flex-1 flex flex-col rounded-lg border border-border bg-surface overflow-hidden">
+              <Suspense fallback={<Empty title="Loading the graph…" />}>
+                <DagView
+                  dag={dag.data}
+                  tasks={tasks.data ?? []}
+                  visible={visible}
+                  selectedId={selectedTask}
+                  onSelect={setSelectedTask}
+                  isLoading={dag.isLoading}
+                  isDagFullscreen={true}
+                  onToggleFullscreen={() => setIsDagFullscreen(false)}
+                />
+              </Suspense>
+            </div>
+            {asPane && selectedTask !== undefined ? (
+              <TaskInspector
+                task={task.data}
+                projectId={projectId}
+                runId={runId}
+                onClose={() => setSelectedTask(undefined)}
+              />
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
-          Hidden while the graph is open, and that is the whole reason the graph
-          is a view rather than a panel: 164px is a quarter of the canvas at
-          1280×800, and a graph squeezed into what is left is one nobody can
-          follow. The four summaries are one click away, on the same page. */}
-      {asGraph ? null : (
+      {/* Bottom cards: hidden when in DAG view OR in Focus Mode */}
+      {asGraph || isFocusMode ? null : (
         <div className="grid h-bottom shrink-0 grid-cols-4 gap-3">
           <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
           <ApprovalCard run={run.data} projectId={projectId} />
@@ -334,18 +417,27 @@ function ArtifactDialog(props: {
   name: string | undefined;
   onClose: () => void;
 }): JSX.Element {
+  const [isExpanded, setIsExpanded] = useState(false);
   const artifact = useArtifact(props.projectId, props.runId, props.name);
 
   return (
     <DialogPrimitive.Root
       open={props.name !== undefined}
       onOpenChange={(open) => {
-        if (!open) props.onClose();
+        if (!open) {
+          setIsExpanded(false);
+          props.onClose();
+        }
       }}
     >
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/70" />
-        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 flex h-[80vh] w-[min(900px,90vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border-strong bg-surface shadow-2xl">
+        <DialogPrimitive.Content
+          className={cx(
+            'fixed left-1/2 top-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border-strong bg-surface shadow-2xl transition-all duration-150',
+            isExpanded ? 'h-[94vh] w-[95vw]' : 'h-[80vh] w-[min(920px,90vw)]',
+          )}
+        >
           <header className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
             <DialogPrimitive.Title className="text-body-lg font-semibold">
               {artifact.data?.label ?? props.name ?? 'Artifact'}
@@ -355,33 +447,41 @@ function ArtifactDialog(props: {
             </DialogPrimitive.Close>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-auto bg-sunken p-3">
+          <div className="min-h-0 flex-1 overflow-hidden">
             {artifact.isError ? (
-              // An artifact the run never produced and one the server could not
-              // read are different facts, and only one of them is a problem.
-              <Notice
-                tone={
-                  artifact.error instanceof ApiError && artifact.error.status === 404
-                    ? 'info'
-                    : 'danger'
-                }
-                title={
-                  artifact.error instanceof ApiError && artifact.error.status === 404
-                    ? 'This run has not produced that artifact.'
-                    : 'That artifact could not be read.'
-                }
-                detail={artifact.error instanceof Error ? artifact.error.message : undefined}
-                consequence="The run is unaffected either way — artifacts are written as stages finish."
-              />
+              <div className="p-4">
+                <Notice
+                  tone={
+                    artifact.error instanceof ApiError && artifact.error.status === 404
+                      ? 'info'
+                      : 'danger'
+                  }
+                  title={
+                    artifact.error instanceof ApiError && artifact.error.status === 404
+                      ? 'This run has not produced that artifact.'
+                      : 'That artifact could not be read.'
+                  }
+                  detail={artifact.error instanceof Error ? artifact.error.message : undefined}
+                  consequence="The run is unaffected either way — artifacts are written as stages finish."
+                />
+              </div>
             ) : artifact.data === undefined ? (
-              <Empty title={artifact.isLoading ? 'Loading…' : 'Not available.'} />
-            ) : props.name === 'plan' ? (
-              <StructuredPlanView rawContent={artifact.data.content} />
+              <div className="p-4">
+                <Empty title={artifact.isLoading ? 'Loading…' : 'Not available.'} />
+              </div>
+            ) : props.name === 'plan' && artifact.data.content.trim().startsWith('{') ? (
+              <div className="min-h-0 h-full overflow-auto p-3 bg-sunken">
+                <StructuredPlanView rawContent={artifact.data.content} />
+              </div>
             ) : (
-              <pre className="whitespace-pre-wrap break-words font-mono text-micro leading-relaxed text-muted">
-                {artifact.data.content}
-                {artifact.data.truncated ? '\n\n… truncated' : ''}
-              </pre>
+              <ArtifactReader
+                content={artifact.data.content}
+                name={props.name}
+                label={artifact.data.label}
+                isExpanded={isExpanded}
+                onToggleExpand={() => setIsExpanded((prev) => !prev)}
+                truncated={artifact.data.truncated}
+              />
             )}
           </div>
         </DialogPrimitive.Content>

@@ -253,4 +253,24 @@ describe('isolated task states in the table', () => {
     expect(text).not.toMatch(/\/(Users|home|tmp|var)\//);
     expect(text).not.toMatch(/\.agent-flow\/worktrees/);
   });
+
+  it('renders Focus mode toggle button when onToggleFocusMode is provided', async () => {
+    const onToggle = vi.fn();
+    render(
+      <TaskTable
+        tasks={TASKS}
+        selectedId={undefined}
+        onSelect={() => {}}
+        filter={NO_FILTER}
+        onFilterChange={() => {}}
+        isFocusMode={false}
+        onToggleFocusMode={onToggle}
+      />,
+    );
+
+    const focusBtn = screen.getByRole('button', { name: /expand workspace/i });
+    expect(focusBtn).toBeInTheDocument();
+    await userEvent.click(focusBtn);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
 });
