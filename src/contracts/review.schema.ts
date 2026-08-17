@@ -101,10 +101,23 @@ export const ReviewResultSchema = z
      */
     planHash: z.string().min(1).optional(),
     summary: z.string().optional(),
+    /**
+     * The integration HEAD the reviewer read the code against (§19.2).
+     *
+     * Absent for reviews written before this field was added, or for plan-only
+     * reviews where no integration tree exists yet. When present, enables
+     * mechanical freshness assessment: a review is CURRENT only if this matches
+     * the run's current `integrationHead`.
+     */
+    integrationHead: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .optional(),
   })
   .refine((review) => review.verdict === 'PASS' || review.findings.length > 0, {
     message: 'a FAIL verdict must be accompanied by structured findings',
     path: ['findings'],
   });
+
 
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;

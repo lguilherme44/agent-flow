@@ -344,6 +344,73 @@ describe('the approval gate', () => {
   });
 });
 
+describe('the review freshness of the gate (§19.2)', () => {
+  const HEAD = 'c06e3e7d73f7ca33986f539c01855aee039e37e4';
+
+  const ISOLATED_RUN: RunDetailView = {
+    ...RUN,
+    isolation: {
+      mode: 'worktree',
+      parallelism: { requested: 1, effective: 1, clamped: false },
+      integrationBranch: 'agent-flow/AF-2026-001/integration',
+      integrationHead: HEAD,
+      planningBase: '1111111111111111111111111111111111111111',
+      tasksIntegrated: 2,
+    },
+  };
+
+  function gateWith(review: Partial<NonNullable<ApprovalGateView['review']>>): ApprovalGateView {
+    return {
+      ...PASSING_GATE,
+      review: { ...PASSING_GATE.review!, ...review },
+    };
+  }
+
+  it('marks the review CURRENT when the reviewed head is the current head', async () => {
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith({ integrationHead: HEAD });
+    renderActions(ISOLATED_RUN);
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Current')).toBeInTheDocument();
+  });
+
+  it('marks the review STALE when the code changed after the review', async () => {
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith({
+      integrationHead: '9999999999999999999999999999999999999999',
+    });
+    renderActions(ISOLATED_RUN);
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Stale (Code Changed)')).toBeInTheDocument();
+  });
+
+  it('marks a legacy review without a recorded head UNVERIFIABLE', async () => {
+    // A review written before `integrationHead` existed can never prove it read
+    // the code that is there now — and the gate says so instead of guessing.
+    const { integrationHead: _legacyHead, ...legacyReview } = PASSING_GATE.review!;
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith(legacyReview);
+    renderActions(ISOLATED_RUN);
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Unverifiable / Pending')).toBeInTheDocument();
+  });
+
+  it('marks the review CURRENT from an identical head even when the plan hash matches', async () => {
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith({
+      integrationHead: HEAD,
+      planHash: PASSING_GATE.planHash,
+    });
+    renderActions(ISOLATED_RUN);
+    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Current')).toBeInTheDocument();
+  });
+});
+
 describe('revision', () => {
   it('will not send an empty instruction', async () => {
     renderActions();

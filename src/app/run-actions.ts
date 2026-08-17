@@ -436,6 +436,11 @@ export async function describeApprovalGate(
             findings: review.findings,
             adjudications: review.adjudications,
             residualRisks: review.residualRisks,
+            // The commit the reviewer read the code against (§19.2). Absent for
+            // legacy reviews written before this field existed.
+            ...(review.integrationHead === undefined
+              ? {}
+              : { integrationHead: review.integrationHead }),
           },
         }),
     degradations: state.degradations,
@@ -1307,6 +1312,7 @@ async function judgeRun(
     });
   }
 
+  const reviewedIntegrationHead = tree.value.integration?.head;
   const finalReview = buildReview(
     finalResponse,
     {
@@ -1315,6 +1321,7 @@ async function judgeRun(
       reasoning: finalResult.execution.reasoning,
     },
     independence,
+    reviewedIntegrationHead,
   );
 
   await context.store.writeArtifact(

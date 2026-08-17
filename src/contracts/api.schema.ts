@@ -630,6 +630,8 @@ export interface ApprovalGateView {
     readonly findings: Finding[];
     readonly adjudications?: FindingAdjudication[];
     readonly residualRisks?: readonly string[];
+    /** The integration HEAD the reviewer read the code against (§19.2). Absent for legacy reviews. */
+    readonly integrationHead?: string;
   };
   readonly degradations: Degradation[];
 }

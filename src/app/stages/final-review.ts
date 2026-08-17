@@ -66,6 +66,7 @@ export function buildReview(
   response: z.infer<typeof ReviewResponseSchema>,
   provenance: { runner: string; model?: string; reasoning: ReviewResult['reviewer']['reasoning'] },
   independence: Independence,
+  integrationHead?: string | undefined,
 ): ReviewResult {
   return ReviewResultSchema.parse({
     verdict: response.verdict,
@@ -73,5 +74,6 @@ export function buildReview(
     reviewer: provenance,
     findings: response.findings,
     ...(response.summary === undefined ? {} : { summary: response.summary }),
+    ...(integrationHead === undefined ? {} : { integrationHead }),
   });
 }

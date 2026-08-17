@@ -28,6 +28,7 @@ import {
 import { useArtifact } from '../lib/queries';
 import { formatWhen, humanise } from '../lib/format';
 import { formatPlanReviewVerdict } from '../lib/status';
+import { assessReviewFreshness } from '../lib/review-freshness';
 import { StructuredPlanView } from '../components/StructuredPlanView';
 import { useI18n } from '../lib/i18n/i18n-context';
 
@@ -383,6 +384,30 @@ function GateBody(props: {
   const forcible = gate.refusal?.forcible === true;
   const verdictInfo = formatPlanReviewVerdict(review);
 
+  // §19.2 — is the review still about the code that is there? The reviewer read
+  // the integration tree at `review.integrationHead`; the run's current head is
+  // `run.isolation.integrationHead`. Equal is CURRENT, differing is STALE, and
+  // a review that never recorded its head cannot be verified at all.
+  //
+  // The badge exists only where an integration head does: a plan-only run has no
+  // code for a review to have gone stale against, so its currency is carried by
+  // `coversThisPlan` rather than by a freshness guess.
+  const currentIntegrationHead = run.isolation?.integrationHead;
+  const freshness =
+    currentIntegrationHead === undefined
+      ? undefined
+      : assessReviewFreshness({
+          review:
+            review === undefined
+              ? undefined
+              : {
+                  planHash: review.planHash,
+                  integrationHead: review.integrationHead,
+                },
+          currentPlanHash: gate.planHash,
+          currentIntegrationHead,
+        });
+
   return (
     <div className="flex flex-col gap-3.5">
       {/* 1. Feature Context */}
@@ -410,6 +435,25 @@ function GateBody(props: {
           <Badge tone="warning" caps>
             same provider
           </Badge>
+        ) : null}
+        {freshness?.status === 'current' ? (
+          <Tooltip content={<span>{freshness.explanation}</span>}>
+            <Badge tone="success" caps>
+              {freshness.label}
+            </Badge>
+          </Tooltip>
+        ) : freshness?.status === 'stale' ? (
+          <Tooltip content={<span>{freshness.explanation}</span>}>
+            <Badge tone="warning" caps>
+              {freshness.label}
+            </Badge>
+          </Tooltip>
+        ) : freshness?.status === 'unverifiable' ? (
+          <Tooltip content={<span>{freshness.explanation}</span>}>
+            <Badge tone="muted" caps>
+              {freshness.label}
+            </Badge>
+          </Tooltip>
         ) : null}
       </div>
 

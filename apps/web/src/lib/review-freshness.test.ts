@@ -5,7 +5,6 @@ describe('assessReviewFreshness', () => {
   it('returns Current when reviewed integration head matches current integration head', () => {
     const res = assessReviewFreshness({
       review: {
-        verdict: 'PASS',
         integrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
       },
       currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
@@ -18,7 +17,6 @@ describe('assessReviewFreshness', () => {
   it('returns Stale when integration head has changed', () => {
     const res = assessReviewFreshness({
       review: {
-        verdict: 'PASS',
         integrationHead: '1111111111111111111111111111111111111111',
       },
       currentIntegrationHead: '2222222222222222222222222222222222222222',
@@ -31,7 +29,6 @@ describe('assessReviewFreshness', () => {
   it('returns Unverifiable / Pending when current integration head exists but review lacks reviewed head', () => {
     const res = assessReviewFreshness({
       review: {
-        verdict: 'PASS',
       },
       currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
     });
@@ -43,7 +40,6 @@ describe('assessReviewFreshness', () => {
   it('returns Stale when plan hash is the same but integration head changed', () => {
     const res = assessReviewFreshness({
       review: {
-        verdict: 'PASS',
         planHash: 'planhash123456',
         integrationHead: '1111111111111111111111111111111111111111',
       },
@@ -57,7 +53,6 @@ describe('assessReviewFreshness', () => {
   it('never marks Current from stage name alone when head evidence is absent', () => {
     const res = assessReviewFreshness({
       review: {
-        verdict: 'PASS',
       },
       stage: 'final-review',
       currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
@@ -69,7 +64,6 @@ describe('assessReviewFreshness', () => {
   it('marks intermediate review as Diagnostic', () => {
     const res = assessReviewFreshness({
       review: {
-        verdict: 'PASS',
         isIntermediate: true,
       },
       currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',

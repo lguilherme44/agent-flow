@@ -1,5 +1,3 @@
-import type { ReviewResult } from '@contracts/index.js';
-
 export type ReviewFreshnessStatus =
   | 'current'
   | 'stale'
@@ -16,12 +14,18 @@ export interface ReviewFreshnessAssessment {
 }
 
 export interface AssessReviewFreshnessParams {
+  /**
+   * The review artifact, or what a read model knows of it. Structural on
+   * purpose: a gate view carries `planHash` and `integrationHead` without being
+   * a full `ReviewResult`, and freshness is a fact about those two fields.
+   */
   readonly review:
-    | (Partial<ReviewResult> & {
+    | {
+        readonly planHash?: string | undefined;
         readonly integrationHead?: string | undefined;
         readonly reviewedHead?: string | undefined;
         readonly isIntermediate?: boolean | undefined;
-      })
+      }
     | undefined;
   readonly currentPlanHash?: string | undefined;
   /** Legacy alias for currentPlanHash */
