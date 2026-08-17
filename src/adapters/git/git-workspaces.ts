@@ -1461,6 +1461,44 @@ export class GitWorkspaces {
   }
 
   /**
+   * `git diff --name-only <from> <to>` — what actually changed (AD-39).
+   *
+   * **The answer `filesChanged` should always have come from.** That field was taken from
+   * `parseResultBlock` — the model's own prose — while Git held the mechanical answer and
+   * was never asked. A run cannot claim "mechanical evidence over model claims" while its
+   * record of what changed is a model claim.
+   *
+   * Takes two tree-ish arguments rather than a working directory, so it compares two
+   * *objects*: the base a workspace was cut from and the tree its validation was run
+   * against. Neither depends on what the worktree happens to contain when this is called,
+   * which is what makes the comparison replayable.
+   *
+   * `-z` because a path may contain anything a filesystem allows, newlines included, and
+   * the default quoting would need un-quoting to be trusted.
+   */
+  async diffNames(
+    options: RepoContext & { readonly from: string; readonly to: string },
+  ): Promise<GitResult<readonly string[]>> {
+    const from = validOid(options.from, 'the base tree to compare from');
+    if (!from.ok) return from;
+    const to = validOid(options.to, 'the tree to compare to');
+    if (!to.ok) return to;
+
+    const outcome = await this.run({
+      subcommand: 'diff',
+      cwd: options.cwd,
+      timeout: 'read',
+      args: ['--name-only', '-z', from.value, to.value],
+    });
+    if (!outcome.ok) return outcome;
+
+    const failed = expectParsableSuccess(outcome.value, 'git diff --name-only');
+    if (failed !== null) return failed;
+
+    return gitOk(outcome.value.stdout.split('\0').filter((path) => path.length > 0));
+  }
+
+  /**
    * `git merge --abort` — back to the last consistent state (§17.4).
    *
    * Exits non-zero when there is no merge to abort, which is passed through

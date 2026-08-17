@@ -953,7 +953,7 @@ describe('worktree mode records an attempt, not a result (M2-05 §10.1)', () => 
     expect(JSON.stringify([validated, marker])).not.toContain(WORKSPACE);
   });
 
-  it('gives an unsatisfied attempt no receipt, no marker and no Git at all', async () => {
+  it('gives an unsatisfied attempt no receipt and no marker', async () => {
     const world = await isolated({ validation: { exitCode: 1 } });
     world.runner.pushText(COMPLETED);
 
@@ -971,7 +971,23 @@ describe('worktree mode records an attempt, not a result (M2-05 §10.1)', () => 
     const persisted = await attemptOf(world.fs, world.run.runId);
     expect(persisted.validationJudgement).toBe('unsatisfied');
     expect(persisted.receipt).toBeUndefined();
-    expect(world.processRunner.calls.filter((call) => call.command === 'git')).toEqual([]);
+
+    // **This used to assert "no Git at all", and AR-05a made that impossible on purpose.**
+    // AD-38 decides whether a task did anything by comparing its base tree with its
+    // validated tree, so the measurement has to happen *before* the judgement rather than
+    // inside the receipt that follows it. Reading two trees is not the thing the old
+    // assertion was protecting.
+    //
+    // What it was protecting survives intact, and is asserted directly: nothing was
+    // *written*. No nonce exists, no marker commit was made, and no ref was moved — §11.2's
+    // rule that a value which exists while the agent is alive is a value the agent may
+    // have, and I-3's rule that only a satisfied attempt can ever be integrated.
+    const written = world.processRunner.calls
+      .filter((call) => call.command === 'git')
+      .map((call) => call.args.filter((arg) => arg !== '-c').find((arg) => !arg.includes('=')));
+
+    expect(written).not.toContain('commit-tree');
+    expect(written).not.toContain('update-ref');
   });
 
   it('completes a RED task and gives it a receipt, because its expectation was met', async () => {
@@ -1397,5 +1413,293 @@ describe('a failed attempt is recorded, under its own name (AD-34)', () => {
   it('names the failure class on the result, so a reader never sees only a code', async () => {
     const { result } = await failedInWorktree(DENIAL);
     expect(result.failureClass).toBe('runner_permission_required');
+  });
+});
+
+/**
+ * AR-05a — the milestone that stops false-positive acceptance.
+ *
+ * The evidence run's decisive finding, reproduced against the executor: three of six tasks
+ * produced a Git tree identical to their base, were recorded `completed`, and were
+ * integrated. The run's final FAIL was caused by that rather than by anything the
+ * corrective path could have fixed. Both tree hashes were already on disk in
+ * `attempt-<n>.json`, and nothing compared them.
+ */
+describe('a task must prove it did its work (AD-38, AD-39, C-12, C-13, C-14)', () => {
+  const BASE_COMMIT = 'c'.repeat(40);
+  const BASE_TREE = 'd'.repeat(40);
+  const CHANGED_TREE = 'e'.repeat(40);
+  const KEY = 'AF-2026-001-0f3a91c4bd27e615';
+  const WORKSPACE = '/home/.agent-flow/worktrees/repo-0f3a91c4bd27/AF-2026-001/TASK-001/attempt-1';
+
+  function subcommandOf(args: readonly string[]): string {
+    let index = 0;
+    while (args[index] === '-c') index += 2;
+    return args[index] ?? '';
+  }
+
+  async function isolatedWorld(options: {
+    /** What `write-tree` reports — the validated tree. */
+    readonly validatedTree: string;
+    /** What `git diff --name-only` reports, NUL-separated as the adapter reads it. */
+    readonly changedFiles: readonly string[];
+    readonly validationExit?: number;
+    readonly taskOverrides?: Record<string, unknown>;
+  }) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude', CAPS);
+    const host = new FakeHost();
+
+    const processRunner = new FakeProcessRunner().always((spawn) => {
+      if (spawn.command !== 'git') return { exitCode: options.validationExit ?? 0 };
+      const subcommand = subcommandOf(spawn.args);
+      if (subcommand === 'write-tree') return { stdout: `${options.validatedTree}\n` };
+      if (subcommand === 'rev-parse') return { stdout: `${BASE_TREE}\n` };
+      if (subcommand === 'diff') return { stdout: options.changedFiles.join('\0') };
+      if (subcommand === 'commit-tree') return { stdout: `${'f'.repeat(40)}\n` };
+      return {};
+    });
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f', () => ({
+      isolationMode: 'worktree',
+      planningBase: BASE_COMMIT,
+      gitRunKey: KEY,
+    }));
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: globalConfig,
+        capabilities: { claude: CAPS },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner,
+      config: {
+        global: globalConfig,
+        project: ProjectConfigSchema.parse({
+          project: { name: 'x', type: 'node' },
+          commands: { test: 'npm test' },
+          validationCommands: { recurrence: 'npm test -- recurrence' },
+        }),
+      },
+      projectDir: PROJECT,
+      workspaces: new GitWorkspaces({
+        git: testGitCommand(processRunner),
+        fs,
+        worktreeRoot: '/home/.agent-flow/worktrees',
+      }),
+      host,
+    });
+
+    runner.pushText(COMPLETED);
+
+    const result = await executor.execute(
+      task({ files: { likely: ['src/recurrence.ts'] }, ...options.taskOverrides }),
+      run.runId,
+      'SDD',
+      {
+        path: WORKSPACE,
+        attempt: 1,
+        isolation: {
+          base: BASE_COMMIT,
+          branch: `agent-flow/${KEY}/TASK-001/attempt-1`,
+          relativePath: `repo-0f3a91c4bd27/${KEY}/TASK-001/attempt-1`,
+        },
+      },
+    );
+
+    return { fs, store, run, result };
+  }
+
+  describe('assertion 1 — observable change (C-12)', () => {
+    it('refuses a task whose validated tree equals its base', async () => {
+      // TASK-002, TASK-005 and TASK-006.
+      const { result } = await isolatedWorld({
+        validatedTree: BASE_TREE,
+        changedFiles: [],
+      });
+
+      expect(result.status).toBe('review_required');
+      expect(result.failureClass).toBe('acceptance_evidence_missing');
+    });
+
+    it('records both tree hashes, so the refusal is checkable', async () => {
+      const { fs, run } = await isolatedWorld({ validatedTree: BASE_TREE, changedFiles: [] });
+
+      const attempt = TaskAttemptResultSchema.parse(
+        JSON.parse(await fs.readFile(runPaths(PROJECT, run.runId).taskAttempt('TASK-001', 1))),
+      );
+
+      expect(attempt.treeComparison).toEqual({
+        baseTree: BASE_TREE,
+        validatedTree: BASE_TREE,
+        identical: true,
+      });
+    });
+
+    it('does not mint a receipt for an empty-diff task, so nothing can integrate it', async () => {
+      // The load-bearing half. Without a receipt there is no marker, and without a marker
+      // the Integrator has nothing to merge — which is what makes I-23 hold end to end
+      // rather than only in the status field.
+      const { fs, run } = await isolatedWorld({ validatedTree: BASE_TREE, changedFiles: [] });
+
+      const attempt = TaskAttemptResultSchema.parse(
+        JSON.parse(await fs.readFile(runPaths(PROJECT, run.runId).taskAttempt('TASK-001', 1))),
+      );
+
+      expect(attempt.validationJudgement).not.toBe('satisfied');
+      expect(attempt.receipt).toBeUndefined();
+    });
+
+    it('completes a task that actually changed something', async () => {
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts'],
+      });
+
+      expect(result.status).toBe('completed');
+    });
+
+    it('completes an empty-diff task that declared it would be empty', async () => {
+      // TASK-006 was a legitimate verification task. Intent belongs in the plan.
+      const { result } = await isolatedWorld({
+        validatedTree: BASE_TREE,
+        changedFiles: [],
+        taskOverrides: { expectsNoChange: true },
+      });
+
+      expect(result.status).toBe('completed');
+    });
+  });
+
+  describe('assertion 2 — scope containment (C-13)', () => {
+    it('refuses a diff that reaches outside the declared files', async () => {
+      // TASK-003 wrote four files belonging to three other tasks, which then "passed" on
+      // work they had not done.
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts', 'src/cli/index.ts'],
+      });
+
+      expect(result.status).toBe('review_required');
+      expect(result.failureClass).toBe('scope_violation');
+    });
+
+    it('names the offending paths in the notes', async () => {
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts', 'src/cli/index.ts'],
+      });
+
+      expect(result.notes.join('\n')).toContain('src/cli/index.ts');
+    });
+
+    it('allows anything when the plan declared an open scope', async () => {
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['anywhere.ts'],
+        taskOverrides: { scopeMode: 'open' },
+      });
+
+      expect(result.status).toBe('completed');
+    });
+  });
+
+  describe('filesChanged comes from Git (AD-39)', () => {
+    it('reports what Git says, not what the agent said', async () => {
+      // The agent's report claims `src/recurrence.ts`; Git says two other files. A run
+      // cannot claim "mechanical evidence over model claims" while its record of what
+      // changed is a model claim.
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts', 'src/other.ts'],
+        taskOverrides: { scopeMode: 'open' },
+      });
+
+      expect(result.filesChanged).toEqual(['src/recurrence.ts', 'src/other.ts']);
+    });
+
+    it('keeps the agent’s list as a claim, beside the mechanical one', async () => {
+      const { fs, run } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts', 'src/other.ts'],
+        taskOverrides: { scopeMode: 'open' },
+      });
+
+      const attempt = TaskAttemptResultSchema.parse(
+        JSON.parse(await fs.readFile(runPaths(PROJECT, run.runId).taskAttempt('TASK-001', 1))),
+      );
+
+      expect(attempt.filesChanged).toEqual(['src/recurrence.ts', 'src/other.ts']);
+      expect(attempt.agentReport.claimedFilesChanged).toEqual(['src/recurrence.ts']);
+    });
+
+    it('notes the divergence without blocking on it', async () => {
+      // Informative, never blocking (AD-39). The two agreed in the evidence run, which is
+      // a fact about that agent on that day rather than a guarantee.
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts', 'src/other.ts'],
+        taskOverrides: { scopeMode: 'open' },
+      });
+
+      expect(result.status).toBe('completed');
+      expect(result.notes.join('\n')).toMatch(/report_divergence/);
+    });
+  });
+
+  describe('per-AC evidence (C-15)', () => {
+    it('records an acceptance map on the attempt', async () => {
+      const { fs, run } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts'],
+      });
+
+      const attempt = TaskAttemptResultSchema.parse(
+        JSON.parse(await fs.readFile(runPaths(PROJECT, run.runId).taskAttempt('TASK-001', 1))),
+      );
+
+      expect(attempt.acceptance).toHaveLength(1);
+      expect(attempt.acceptance[0]?.criterion).toBe('Types compile.');
+    });
+  });
+
+  describe('a RED task proves it wrote something (C-14)', () => {
+    it('is not satisfied by a suite somebody else reddened', async () => {
+      const { result } = await isolatedWorld({
+        validatedTree: BASE_TREE,
+        changedFiles: [],
+        validationExit: 1,
+        taskOverrides: { validationExpectation: 'fail', validation: ['recurrence'] },
+      });
+
+      expect(result.status).toBe('review_required');
+    });
+
+    it('is satisfied when it failed the suite and wrote something', async () => {
+      const { result } = await isolatedWorld({
+        validatedTree: CHANGED_TREE,
+        changedFiles: ['src/recurrence.ts'],
+        validationExit: 1,
+        taskOverrides: { validationExpectation: 'fail', validation: ['recurrence'] },
+      });
+
+      expect(result.status).toBe('completed');
+    });
   });
 });

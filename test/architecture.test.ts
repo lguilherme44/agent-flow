@@ -609,6 +609,41 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     expect(offenders).toEqual([]);
   });
 
+  it('decides acceptance from Git, never from the agent’s prose (AR-05a, AD-39)', () => {
+    // The security model, as a location rule. `filesChanged` used to be taken from
+    // `parseResultBlock` — the model's own summary of its work — while Git held the
+    // mechanical answer and was never asked. A run cannot claim "mechanical evidence over
+    // model claims" while its record of what changed is a model claim.
+    //
+    // So the two decisions that gate completion are made in a pure module handed hashes and
+    // paths, and the only place the agent's list may still be read is the field that
+    // records it *as a claim*.
+    const core = read(join(ROOT, 'src/core/acceptance.ts'));
+    expect(core.text, 'the acceptance module reads the agent report').not.toMatch(
+      /parseResultBlock|agentReport|claimedFilesChanged/,
+    );
+
+    const executor = codeOnly(read(join(ROOT, 'src/app/task-executor.ts')).text);
+
+    // `report.filesChanged` survives in exactly three roles, and each one is a use of the
+    // claim *as a claim* rather than as evidence:
+    //
+    //   1. the sequential fallback, where no workspace was cut and there is no tree to
+    //      measure — the reported list is all that exists, and its status is legible from
+    //      the absence of a `treeComparison` on the artifact;
+    //   2. the divergence comparison, which is *about* the claim by definition;
+    //   3. `claimedFilesChanged`, the field that records it.
+    //
+    // Named so a fourth use has to come and argue for itself. The number is the point: it
+    // was five before the early-exit paths started asking Git too.
+    const claimUses = [...executor.matchAll(/report\.filesChanged/g)].length;
+    expect(claimUses, 'the agent’s file list is read in more places than AD-39 allows')
+      .toBeLessThanOrEqual(3);
+
+    // And the assertions themselves are not reimplemented at the call site.
+    expect(executor).toMatch(/assertObservableChange|assertAcceptance/);
+  });
+
   it('writes a task result from the executor and the Integrator only (M2-04, M2-06)', () => {
     // `TaskResult` is the record of *what ran*: a runner id, a model, a reasoning
     // level, the validation it went through. Only the module that actually ran

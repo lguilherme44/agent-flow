@@ -124,3 +124,67 @@ describe('a contradictory expectation is rejected by the contract', () => {
     expect(TaskSchema.parse({ ...base, validation: [] }).validationExpectation).toBe('pass');
   });
 });
+
+/**
+ * C-14 (AR-05a) — a RED task must prove it wrote something.
+ *
+ * D-2 from the evidence run. `judgeValidation` saw only `{passed, ran}`, so a task whose
+ * expectation was `fail` was credited the moment the suite failed — and the suite was
+ * already failing, reddened by the task before it. TASK-002 changed nothing, ran a suite
+ * somebody else had broken, and was recorded satisfied.
+ *
+ * "The suite is red" is a fact about the repository. "This task made it red" is the claim
+ * being judged, and only a non-empty diff can support it.
+ */
+describe('a RED task is not satisfied by inaction (C-14)', () => {
+  it('is satisfied when the suite fails and the task wrote something', () => {
+    expect(
+      judgeValidation('fail', { passed: false, ran: 1, changed: true }).state,
+    ).toBe('completed');
+  });
+
+  it('is not satisfied when the suite fails and the task wrote nothing', () => {
+    const judgement = judgeValidation('fail', { passed: false, ran: 1, changed: false });
+
+    expect(judgement.state).toBe('review_required');
+    expect(judgement.note).toMatch(/nothing|no change|empty/i);
+  });
+
+  it('names the failure class the taxonomy has for it', () => {
+    expect(judgeValidation('fail', { passed: false, ran: 1, changed: false }).failureClass).toBe(
+      'acceptance_evidence_missing',
+    );
+  });
+
+  it('still refuses a RED task whose suite went green, whatever it wrote', () => {
+    // The pre-existing asymmetry, untouched: a RED task that passes means the test
+    // asserts nothing or the behaviour already existed.
+    expect(judgeValidation('fail', { passed: true, ran: 1, changed: true }).state).toBe(
+      'review_required',
+    );
+  });
+
+  it('leaves a GREEN task’s judgement exactly as it was', () => {
+    // AR-05a sharpens the `fail` branch. The `pass` branch is about whether commands
+    // passed, and an empty diff there is caught by AD-38's assertion instead — one rule,
+    // one place.
+    expect(judgeValidation('pass', { passed: true, ran: 1, changed: false }).state).toBe(
+      'completed',
+    );
+    expect(judgeValidation('pass', { passed: false, ran: 1, changed: true }).state).toBe(
+      'review_required',
+    );
+  });
+
+  it('treats an unknown diff as no evidence against the task', () => {
+    // A sequential run captures no tree, so `changed` is unknowable. Refusing there would
+    // fail every RED task on the strength of a measurement nobody took.
+    expect(judgeValidation('fail', { passed: false, ran: 1 }).state).toBe('completed');
+  });
+
+  it('says nothing about a task that ran no validation', () => {
+    expect(judgeValidation('fail', { passed: false, ran: 0, changed: false }).state).toBe(
+      'completed',
+    );
+  });
+});

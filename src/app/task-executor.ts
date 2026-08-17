@@ -9,6 +9,66 @@ import {
 } from '../contracts/index.js';
 import { consumesAttempt } from '../core/failure-classification.js';
 import { redactAndTruncate } from '../core/evidence-redaction.js';
+import {
+  assertObservableChange,
+  assertScopeContainment,
+  buildAcceptanceMap,
+  type AcceptanceAssertion,
+  type AcceptanceEntry,
+} from '../core/acceptance.js';
+
+/** What Git observed about one attempt. Owned by `attempt-receipt.ts`; named here for use. */
+type ObservedChange = AttemptChange;
+
+/**
+ * AD-38's two assertions, in order, most disabling first.
+ *
+ * "Did it do anything" precedes "did it stay in bounds" because a task that changed
+ * nothing cannot have left its scope, and reporting the second would describe a diff that
+ * does not exist.
+ */
+function assertAcceptance(task: Task, observed: ObservedChange): AcceptanceAssertion {
+  const effect = assertObservableChange({
+    ...(observed.baseTree === undefined ? {} : { baseTree: observed.baseTree }),
+    ...(observed.validatedTree === undefined ? {} : { validatedTree: observed.validatedTree }),
+    ...(task.expectsNoChange === undefined ? {} : { expectsNoChange: task.expectsNoChange }),
+  });
+  if (!effect.satisfied) return effect;
+
+  if (observed.changedFiles === undefined) return effect;
+
+  return assertScopeContainment({
+    changedFiles: observed.changedFiles,
+    filesLikely: task.files.likely,
+    ...(task.scopeMode === undefined ? {} : { scopeMode: task.scopeMode }),
+  });
+}
+
+/**
+ * A note when Git and the agent disagree about what changed (AD-39).
+ *
+ * Informative, never blocking. The two agreed in the evidence run, which is a fact about
+ * that agent on that day rather than a guarantee — and a divergence is worth a reviewer's
+ * eye even when the mechanical list is the one that counts.
+ */
+function divergenceNote(
+  mechanical: readonly string[] | undefined,
+  claimed: readonly string[],
+): string[] {
+  if (mechanical === undefined) return [];
+
+  const actual = new Set(mechanical);
+  const said = new Set(claimed);
+  const unclaimed = [...actual].filter((path) => !said.has(path));
+  const unmade = [...said].filter((path) => !actual.has(path));
+  if (unclaimed.length === 0 && unmade.length === 0) return [];
+
+  const parts: string[] = [];
+  if (unclaimed.length > 0) parts.push(`changed but not reported: ${unclaimed.join(', ')}`);
+  if (unmade.length > 0) parts.push(`reported but not changed: ${unmade.join(', ')}`);
+
+  return [`report_divergence: ${parts.join('; ')}`];
+}
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
@@ -19,7 +79,12 @@ import { runCommands } from './verification-commands.js';
 import type { TaskWorkspace } from './task-workspaces.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { judgeValidation } from '../core/validation-outcome.js';
-import { recordAttempt, type AttemptDraft } from './attempt-receipt.js';
+import {
+  captureAttemptChange,
+  recordAttempt,
+  type AttemptChange,
+  type AttemptDraft,
+} from './attempt-receipt.js';
 
 /** Marker the implementation prompt asks the agent to end with. */
 const RESULT_BLOCK = /##\s*RESULT\s*([\s\S]*)$/i;
@@ -58,6 +123,10 @@ interface AttemptEvidenceInput {
   readonly judgement: ValidationJudgement;
   readonly report: ParsedReport;
   readonly validationIds: readonly string[];
+  /** What Git observed, so the artifact records the same tree the decision used (AD-38). */
+  readonly observed?: ObservedChange;
+  /** Every acceptance criterion and what demonstrates it (C-15). */
+  readonly acceptance?: readonly AcceptanceEntry[];
 }
 
 /**
@@ -186,6 +255,14 @@ export class TaskExecutor {
 
     const report = parseResultBlock(text);
 
+    // **What Git says this attempt did** (AD-38, AD-39). Captured once, as soon as the
+    // agent has exited, and handed to every path below — the judgement, the assertions,
+    // the receipt and the two early exits. An agent that stopped at BLOCKED may still have
+    // written files before it stopped, and the record of which ones should be Git's answer
+    // there too.
+    const observed = await this.observeChange(workspace);
+    const filesChanged = observed.changedFiles ?? report.filesChanged;
+
     if (report.status === 'BLOCKED') {
       // Not retried, by design (§23). BLOCKED means a decision is missing, and
       // running the same prompt again produces the same gap — or worse, a guess.
@@ -197,7 +274,7 @@ export class TaskExecutor {
           ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
           startedAt,
           finishedAt: clock.now(),
-          filesChanged: report.filesChanged,
+          filesChanged,
           validation: { passed: false, commands: [] },
           notes: report.notes,
           errorCode: 'blocked',
@@ -232,7 +309,7 @@ export class TaskExecutor {
           ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
           startedAt,
           finishedAt: clock.now(),
-          filesChanged: report.filesChanged,
+          filesChanged,
           validation: { passed: false, commands: [] },
           notes: [
             ...report.notes,
@@ -265,20 +342,32 @@ export class TaskExecutor {
     // review rather than to another model (§55): a failure is information about
     // the work, and rerouting it would replace a visible problem with a quiet
     // one.
+    //
+    // `changed` is what C-14 adds: a red suite is a fact about the repository, and
+    // "this task reddened it" is the claim being judged.
     const judgement = judgeValidation(task.validationExpectation, {
       passed: verification.passed,
       ran: verification.results.length,
+      ...(observed.changed === undefined ? {} : { changed: observed.changed }),
     });
+
+    // AD-38's two assertions, evaluated only where the judgement would otherwise let the
+    // task through. A task already heading for review does not need a second reason, and
+    // stacking them would replace the specific note with a less specific one.
+    const acceptance =
+      judgement.state === 'completed' ? assertAcceptance(task, observed) : undefined;
+
+    const state = acceptance?.satisfied === false ? 'review_required' : judgement.state;
 
     return this.finish(
       runId,
       {
         task: task.id,
-        status: judgement.state,
+        status: state,
         ...provenanceOf(execution ?? stageRunner.plannedExecution(role)),
         startedAt,
         finishedAt: clock.now(),
-        filesChanged: report.filesChanged,
+        filesChanged,
         validation: {
           passed: verification.passed,
           expectation: task.validationExpectation,
@@ -288,18 +377,64 @@ export class TaskExecutor {
           ...report.notes,
           ...report.deviations.map((d) => `deviation: ${d}`),
           ...(judgement.note === undefined ? [] : [judgement.note]),
+          ...(acceptance?.satisfied === false ? [acceptance.detail] : []),
+          ...divergenceNote(observed.changedFiles, report.filesChanged),
         ],
+        ...(judgement.failureClass === undefined
+          ? {}
+          : { failureClass: judgement.failureClass }),
+        // The assertion's class wins where it fired: it is the more specific statement,
+        // and it is the one that names what a person has to look at.
+        ...(acceptance?.satisfied === false ? { failureClass: acceptance.failureClass } : {}),
       },
       workspace,
       {
         // The same decision, in the attempt's vocabulary. `judgeValidation` is
-        // unchanged and is still the only thing that decides it (I-4): the
-        // expectation is evaluated once, here, and never re-evaluated later.
-        judgement: judgement.state === 'completed' ? 'satisfied' : 'unsatisfied',
+        // still the only thing that decides the *validation* question (I-4); AD-38's
+        // assertions are a separate question about the diff, asked once, here.
+        judgement: state === 'completed' ? 'satisfied' : 'unsatisfied',
         report,
         validationIds: task.validation,
+        observed,
+        acceptance: buildAcceptanceMap({
+          criteria: task.acceptanceCriteria,
+          validation: verification.results.map((command, index) => ({
+            id: task.validation[index] ?? command.command,
+            exitCode: command.exitCode,
+          })),
+          changedFiles: observed.changedFiles ?? [],
+        }),
       },
     );
+  }
+
+  /**
+   * What Git says this attempt changed (AD-38, AD-39).
+   *
+   * **One capture, handed to everyone.** The validated tree used to be written inside
+   * `recordAttempt`, after the judgement had already been made — so the decision "is this
+   * task done" was taken without the one measurement that could answer it. Capturing here
+   * and passing the result down means the judgement, the assertions and the receipt all
+   * describe the same tree, and a second `write-tree` cannot disagree with the first.
+   *
+   * Every field is absent in sequential mode. That is not a degraded answer, it is the
+   * true one: no workspace was cut, so there is no base to compare against.
+   */
+  private async observeChange(workspace: TaskWorkspace | undefined): Promise<ObservedChange> {
+    const isolation = workspace?.isolation;
+    const { workspaces } = this.options;
+    if (workspace === undefined || isolation === undefined || workspaces === undefined) {
+      return {};
+    }
+
+    // Asked of the module that owns the §11.2 Git operations rather than performed here.
+    // One module answers "which tree was validated", and an architecture test keeps it
+    // that way — splitting it would give two answers, and only one of them would be the
+    // tree a receipt is bound to.
+    return captureAttemptChange({ workspaces }, {
+      workspacePath: workspace.path,
+      base: isolation.base,
+    });
   }
 
   /**
@@ -495,6 +630,19 @@ export class TaskExecutor {
       },
       validationJudgement: evidence.judgement,
       ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+      // AD-38's evidence, on the artifact that has to be able to explain the decision
+      // afterwards. Both hashes were already computable and were never written down.
+      ...(evidence.observed?.baseTree === undefined ||
+      evidence.observed.validatedTree === undefined
+        ? {}
+        : {
+            treeComparison: {
+              baseTree: evidence.observed.baseTree,
+              validatedTree: evidence.observed.validatedTree,
+              identical: evidence.observed.baseTree === evidence.observed.validatedTree,
+            },
+          }),
+      ...(evidence.acceptance === undefined ? {} : { acceptance: [...evidence.acceptance] }),
     };
 
     const outcome = await recordAttempt(
@@ -505,7 +653,17 @@ export class TaskExecutor {
         host,
         projectDir: this.options.projectDir,
       },
-      { draft, workspacePath: workspace.path, gitRunKey: state.gitRunKey },
+      {
+        draft,
+        workspacePath: workspace.path,
+        gitRunKey: state.gitRunKey,
+        // The tree this task's decision was actually made against. Recapturing it here
+        // would be a second measurement of the same thing, and two measurements are two
+        // chances to disagree about what the receipt attests to.
+        ...(evidence.observed?.validatedTree === undefined
+          ? {}
+          : { capturedTree: evidence.observed.validatedTree }),
+      },
     );
 
     if (!outcome.ok) return `${outcome.failure.code}: ${outcome.failure.detail}`;

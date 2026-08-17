@@ -136,6 +136,20 @@ export type AttemptEvidenceOutcome =
   | { readonly ok: true; readonly value: AttemptEvidence }
   | { readonly ok: false; readonly failure: AttemptEvidenceFailure };
 
+/**
+ * What Git observed about one attempt, or nothing when there was no tree to observe.
+ *
+ * `changed` is tri-state on purpose — `true`, `false`, and absent for "unknowable". A rule
+ * that read absence as `false` would refuse every sequential task, where no workspace was
+ * cut and there is nothing to compare.
+ */
+export interface AttemptChange {
+  readonly baseTree?: string;
+  readonly validatedTree?: string;
+  readonly changed?: boolean;
+  readonly changedFiles?: readonly string[];
+}
+
 export interface AttemptEvidenceDeps {
   readonly workspaces: GitWorkspaces;
   readonly fs: FileSystem;
@@ -164,6 +178,67 @@ export interface RecordAttemptRequest {
    * later reconstruction of the same marker.
    */
   readonly gitRunKey: string;
+  /**
+   * The validated tree, when the caller already captured it (AR-05a).
+   *
+   * AD-38 moved the capture upstream: the executor needs the tree *before* it can decide
+   * whether the task did anything, and that decision now precedes the receipt. Passing the
+   * captured value down keeps one measurement of one tree — a second `write-tree` here
+   * would be a second chance to disagree about what the receipt attests to.
+   *
+   * Absent for a caller that has not captured one, in which case the sequence below
+   * captures it exactly as it always did.
+   */
+  readonly capturedTree?: string;
+}
+
+/**
+ * What Git says one attempt changed (AD-38, AD-39).
+ *
+ * **Here rather than in the executor, and that placement is the rule working.** One module
+ * owns `stageAll` and `writeTree`, because splitting them would give two answers to "which
+ * tree was validated" and only one of them would be the tree a receipt is bound to. AR-05a
+ * needs that answer *before* the judgement — a task cannot be judged done without knowing
+ * whether it did anything — so the capture moved earlier in the sequence, not into a
+ * second module.
+ *
+ * Staging is part of the capture. A newly created file is invisible to `write-tree` until
+ * it is staged, and a task that created every file it was asked to would otherwise report
+ * an unchanged tree — failing AD-38 for having done its job.
+ *
+ * Every field is absent on failure rather than defaulted. "Git could not answer" and "the
+ * tree did not change" are different facts, and a caller that received `changed: false` for
+ * the first would refuse a task for a measurement nobody took.
+ */
+export async function captureAttemptChange(
+  deps: Pick<AttemptEvidenceDeps, 'workspaces'>,
+  request: { readonly workspacePath: string; readonly base: string },
+): Promise<AttemptChange> {
+  const cwd = request.workspacePath;
+
+  const staged = await deps.workspaces.stageAll({ cwd });
+  if (!staged.ok) return {};
+
+  const validatedTree = await deps.workspaces.writeTree({ cwd });
+  if (!validatedTree.ok) return {};
+
+  // `base` is a **commit** and `validatedTree` is a **tree**; comparing them directly would
+  // always report "changed", which is the bug this resolution exists to avoid.
+  const baseTree = await deps.workspaces.revParseTree({ cwd, commit: request.base });
+  if (!baseTree.ok) return { validatedTree: validatedTree.value };
+
+  const diff = await deps.workspaces.diffNames({
+    cwd,
+    from: baseTree.value,
+    to: validatedTree.value,
+  });
+
+  return {
+    baseTree: baseTree.value,
+    validatedTree: validatedTree.value,
+    changed: baseTree.value !== validatedTree.value,
+    ...(diff.ok ? { changedFiles: diff.value } : {}),
+  };
 }
 
 /**
@@ -188,21 +263,13 @@ export async function recordAttempt(
   // §11.2, in order. `stageAll` and `writeTree` are two calls rather than one
   // convenience method because they have different failure modes, and hiding the
   // mutation inside the read would make only one of them reportable.
-  const staged = await deps.workspaces.stageAll({ cwd: request.workspacePath });
-  if (!staged.ok) {
-    return failure(
-      'validated_tree_uncapturable',
-      `the attempt's changes could not be staged (${staged.failure.code})`,
-    );
-  }
-
-  const tree = await deps.workspaces.writeTree({ cwd: request.workspacePath });
-  if (!tree.ok) {
-    return failure(
-      'validated_tree_uncapturable',
-      `the validated tree could not be written (${tree.failure.code})`,
-    );
-  }
+  //
+  // Skipped entirely when the caller already captured the tree (AR-05a): the executor has
+  // to know what changed *before* it can decide whether the task did anything, so the
+  // capture moved upstream of the decision. Repeating it would produce a second answer to
+  // a question that must have one.
+  const tree = await captureValidatedTree(deps, request);
+  if (!tree.ok) return tree;
 
   // The nonce first exists here: after the agent exited, after validation ran,
   // after the tree was captured. Generating it any earlier — even one line up,
@@ -368,6 +435,41 @@ export function markerMessage(attempt: TaskAttemptResult, gitRunKey: string): st
  * half-written artifact read back later would be evidence of something that did
  * not happen — which is exactly what temp-file-and-rename prevents.
  */
+/**
+ * The tree a receipt attests to — captured, or taken from the caller that already did.
+ *
+ * Two paths, one guarantee: whichever produced it, the value is the tree the task's
+ * judgement was made against. Staging is part of the capture rather than a precondition of
+ * it, because a newly created file is invisible to `write-tree` until it is staged, and a
+ * task that created every file it was asked to would otherwise report an unchanged tree.
+ */
+async function captureValidatedTree(
+  deps: AttemptEvidenceDeps,
+  request: RecordAttemptRequest,
+): Promise<{ ok: true; value: string } | { ok: false; failure: AttemptEvidenceFailure }> {
+  if (request.capturedTree !== undefined) {
+    return { ok: true, value: request.capturedTree };
+  }
+
+  const staged = await deps.workspaces.stageAll({ cwd: request.workspacePath });
+  if (!staged.ok) {
+    return failure(
+      'validated_tree_uncapturable',
+      `the attempt's changes could not be staged (${staged.failure.code})`,
+    );
+  }
+
+  const tree = await deps.workspaces.writeTree({ cwd: request.workspacePath });
+  if (!tree.ok) {
+    return failure(
+      'validated_tree_uncapturable',
+      `the validated tree could not be written (${tree.failure.code})`,
+    );
+  }
+
+  return { ok: true, value: tree.value };
+}
+
 async function writeAttemptArtifact(
   deps: AttemptEvidenceDeps,
   // The schema's *input* shape, not its output: this function's first act is to parse,
