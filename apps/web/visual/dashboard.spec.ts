@@ -58,8 +58,12 @@ test.describe('run detail', () => {
       await expect(drawer).toHaveCount(0);
     }
 
-    // Either way, one panel describing this task. Never two.
-    await expect(page.getByText('Recurrence Repository')).toHaveCount(width >= 1200 ? 2 : 1);
+    // Either way, one panel describing this task. Never two. Scoped to the
+    // content area: the breadcrumb in the header legitimately names the same
+    // task, but it is navigation, not a second description of the task.
+    await expect(page.locator('main').getByText('Recurrence Repository')).toHaveCount(
+      width >= 1200 ? 2 : 1,
+    );
   });
 
   test('the drawer traps focus, closes on the overlay, and hands focus back', async ({

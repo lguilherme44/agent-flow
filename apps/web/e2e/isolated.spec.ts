@@ -72,12 +72,15 @@ test.describe('an isolated run, from the browser', () => {
     expect(state.integrationHead, 'nothing recorded an integration head').toMatch(/^[0-9a-f]{40}$/);
 
     // §21.2 on screen. The branch is derived from `gitRunKey` by the server, and
-    // the browser is shown the name rather than asked for it.
+    // the browser is shown the name rather than asked for it. The head is scoped
+    // to the isolation strip's `dl`: the ApprovalCard also carries the head under
+    // "Integration Head", so a bare `getByTitle` would match two elements.
     const branch = `agent-flow/${planned.gitRunKey ?? ''}/integration`;
     await expect(page.getByText('Isolation')).toBeVisible();
     await expect(page.getByText('worktree', { exact: true })).toBeVisible();
     await expect(page.getByText(branch)).toBeVisible();
-    await expect(page.getByTitle(state.integrationHead as string)).toBeVisible();
+    const isolationStrip = page.locator('dl').filter({ has: page.getByText('Head', { exact: true }) });
+    await expect(isolationStrip.getByTitle(state.integrationHead as string)).toBeVisible();
 
     // The branch the server named is the branch Git actually has, and its tip is
     // the head the run recorded. Asserted against the repository rather than
