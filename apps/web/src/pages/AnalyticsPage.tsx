@@ -160,21 +160,29 @@ function ExecutionInsightsPanel(props: { data: AnalyticsView }): JSX.Element {
     );
   }
 
-  if (data.context?.aggregate) {
-    const agg = data.context.aggregate;
-    if (agg.utilityCalls !== undefined) {
-      const calls = agg.utilityCalls;
-      const failures = (agg.utilityFailures ?? 0) + (agg.structuredOutputFailures ?? 0);
-      const bypassed = agg.bypassReason !== undefined;
-      insights.push(
-        `${calls} Utility model invocation${calls === 1 ? '' : 's'} recorded (${failures} degraded, ${bypassed ? '1 bypassed' : '0 bypassed'}).`,
-      );
+  if (data.context?.outcomes) {
+    const outcomes = data.context.outcomes;
+    const bypassed = outcomes.bypassedObservations;
+    const delivered = outcomes.deliveredAdvisories;
+    insights.push(
+      `${outcomes.utilityCalls} Utility model invocation${outcomes.utilityCalls === 1 ? '' : 's'} recorded — ${delivered} delivered, ${bypassed} bypassed of ${outcomes.observations} observations.`,
+    );
+    if (bypassed > 0) {
+      const [top] = outcomes.bypassReasons;
+      if (top !== undefined) {
+        insights.push(
+          `${top.count} of ${bypassed} bypass${bypassed === 1 ? '' : 'es'} were ${humanise(top.reason).toLowerCase()}.`,
+        );
+      }
     }
-    if (agg.utilityLatencyMs !== undefined && agg.utilityLatencyMs > 0) {
-      insights.push(
-        `Utility inference contributed ${formatDuration(agg.utilityLatencyMs)} of observed latency.`,
-      );
-    }
+  }
+  if (
+    data.context?.aggregate?.utilityLatencyMs !== undefined &&
+    data.context.aggregate.utilityLatencyMs > 0
+  ) {
+    insights.push(
+      `Utility inference contributed ${formatDuration(data.context.aggregate.utilityLatencyMs)} of observed latency.`,
+    );
   }
 
   return (
@@ -213,17 +221,19 @@ function ExecutionInsightsPanel(props: { data: AnalyticsView }): JSX.Element {
 function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }): JSX.Element {
   const { data } = props;
   const aggregate = data.aggregate;
+  const outcomes = data.outcomes;
   const scope = data.scope;
 
-  const totalCalls = aggregate?.utilityCalls ?? 0;
-  const failures = (aggregate?.utilityFailures ?? 0) + (aggregate?.structuredOutputFailures ?? 0);
-  const isBypassed = aggregate?.bypassReason !== undefined;
+  // Delivery is counted per observation from closed facts, never derived from
+  // overlapping aggregate counters. `(utilityCalls - failures) / utilityCalls`
+  // was the old math: a single failed call that recorded both utilityFailures
+  // and structuredOutputFailures looked like two, and a bypass that never called
+  // the model looked like one that had.
   const deliveryRate =
-    totalCalls > 0
-      ? `${Math.round(((totalCalls - failures) / totalCalls) * 100)}%`
-      : isBypassed
-        ? '0%'
-        : '100%';
+    outcomes !== undefined && outcomes.observations > 0
+      ? `${Math.round((outcomes.deliveredAdvisories / outcomes.observations) * 100)}%`
+      : 'Delivery rate unavailable';
+  const utilityCalls = outcomes?.utilityCalls ?? aggregate?.utilityCalls;
 
   return (
     <Panel
@@ -239,7 +249,7 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
         </SectionHeader>
       }
     >
-      {aggregate === undefined ? (
+      {aggregate === undefined && outcomes === undefined ? (
         <Empty
           title="Telemetry recorded, none aggregated."
           hint="Adaptive run telemetry could not be summed — check the run audit trail."
@@ -248,56 +258,79 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
         <div className="flex flex-col gap-3 pb-3">
           {/* Funnel & Outcome Summary */}
           <div className="flex flex-wrap items-stretch divide-x divide-border px-4 pt-1">
-            {aggregate.candidatesBefore !== undefined ? (
+            {aggregate?.candidatesBefore !== undefined ? (
               <StripItem label="Candidates Before" value={String(aggregate.candidatesBefore)} />
             ) : null}
-            {aggregate.candidatesAfter !== undefined ? (
+            {aggregate?.candidatesAfter !== undefined ? (
               <StripItem label="Candidates Selected" value={String(aggregate.candidatesAfter)} />
             ) : null}
-            {aggregate.filesBefore !== undefined ? (
+            {aggregate?.filesBefore !== undefined ? (
               <StripItem label="Files Before" value={String(aggregate.filesBefore)} />
             ) : null}
-            {aggregate.filesAfter !== undefined ? (
+            {aggregate?.filesAfter !== undefined ? (
               <StripItem label="Files Selected" value={String(aggregate.filesAfter)} />
             ) : null}
-            <StripItem label="Utility calls" value={countLabel(aggregate.utilityCalls)} />
-            <StripItem label="Delivery Rate" value={deliveryRate} />
+            <StripItem label="Utility calls" value={countLabel(utilityCalls)} />
+            {outcomes === undefined ? null : (
+              <>
+                <StripItem
+                  label="Delivered advisories"
+                  value={String(outcomes.deliveredAdvisories)}
+                />
+                <StripItem
+                  label="Bypassed"
+                  value={String(outcomes.bypassedObservations)}
+                  {...(outcomes.bypassedObservations > 0
+                    ? { tone: 'warning' as const }
+                    : {})}
+                />
+              </>
+            )}
             <StripItem
-              label="Utility latency"
-              value={formatDuration(aggregate.utilityLatencyMs)}
+              label="Delivery Rate"
+              value={deliveryRate}
+              {...(deliveryRate === 'Delivery rate unavailable' ? { tone: 'muted' as const } : {})}
             />
-            {failures > 0 ? (
-              <StripItem label="Degraded" tone="warning" value={String(failures)} />
+            {aggregate?.utilityLatencyMs !== undefined ? (
+              <StripItem label="Utility latency" value={formatDuration(aggregate.utilityLatencyMs)} />
             ) : null}
           </div>
 
           {/* Token Estimates Strip */}
-          <div className="flex flex-wrap items-stretch divide-x divide-border border-t border-border px-4 pt-2">
-            <StripItem
-              label="Estimated input"
-              value={tokenLabel(aggregate.estimatedInputTokens)}
-            />
-            <StripItem
-              label="Primary context"
-              value={tokenLabel(
-                aggregate.estimatedPrimaryContextTokens ?? aggregate.estimatedCompressedTokens,
-              )}
-            />
-            <StripItem
-              label="Estimated avoided"
-              value={tokenLabel(aggregate.estimatedAvoidedTokens)}
-            />
-          </div>
+          {aggregate === undefined ? null : (
+            <div className="flex flex-wrap items-stretch divide-x divide-border border-t border-border px-4 pt-2">
+              <StripItem
+                label="Estimated input"
+                value={tokenLabel(aggregate.estimatedInputTokens)}
+              />
+              <StripItem
+                label="Primary context"
+                value={tokenLabel(
+                  aggregate.estimatedPrimaryContextTokens ?? aggregate.estimatedCompressedTokens,
+                )}
+              />
+              <StripItem
+                label="Estimated avoided"
+                value={tokenLabel(aggregate.estimatedAvoidedTokens)}
+              />
+            </div>
+          )}
 
-          {/* Bypass / Degradation Breakdown */}
-          {aggregate.bypassReason !== undefined ? (
+          {/* Bypass / Degradation Breakdown — from the outcomes histogram, which
+              preserves duplicates, never from the aggregate's single bypassReason
+              ("1 occurrence" was a number with a denominator of one). */}
+          {outcomes !== undefined && outcomes.bypassedObservations > 0 ? (
             <div className="mx-4 rounded-md border border-warning/30 bg-warning-soft/40 p-3 text-label text-text">
               <span className="font-medium text-warning mb-1 block">Bypass Reason Breakdown</span>
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-micro">
-                <div className="flex items-center justify-between">
-                  <dt className="text-muted">{humanise(aggregate.bypassReason)}</dt>
-                  <dd className="font-mono font-semibold text-text">1 occurrence</dd>
-                </div>
+                {outcomes.bypassReasons.map((entry) => (
+                  <div key={entry.reason} className="flex items-center justify-between">
+                    <dt className="text-muted">{humanise(entry.reason)}</dt>
+                    <dd className="font-mono font-semibold text-text">
+                      {entry.count} occurrence{entry.count === 1 ? '' : 's'}
+                    </dd>
+                  </div>
+                ))}
               </dl>
             </div>
           ) : null}
@@ -308,7 +341,7 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
               {scope.runsObserved} run{scope.runsObserved === 1 ? '' : 's'} observed ·{' '}
               {scope.observations} of {scope.observationLimit} observations
             </span>
-            {effectiveIdentity(aggregate) === undefined ? null : (
+            {aggregate === undefined || effectiveIdentity(aggregate) === undefined ? null : (
               <span>
                 effective {aggregate.effectiveProvider} · {aggregate.effectiveModel}
               </span>

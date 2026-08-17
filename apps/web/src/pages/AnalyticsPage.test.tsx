@@ -273,7 +273,10 @@ describe('analytics', () => {
     expect(within(panelRoot).getByText(/openai-compatible · Qwen\/Qwen3.5-30B_A3B/)).toBeInTheDocument();
   });
 
-  it('reports Context Intelligence degradation when utility calls failed', async () => {
+  it('reports Context Intelligence bypasses from outcome counts, not overlapping counters', async () => {
+    // utilityFailures=1 + structuredOutputFailures=1 on ONE observation is ONE
+    // failed call, not two. The outcomes read model counts the observation once;
+    // the old (calls - failures) math would have read 2 failures from 2 calls.
     routes['/api/v1/analytics'] = {
       ...ANALYTICS,
       context: {
@@ -296,14 +299,22 @@ describe('analytics', () => {
           utilityFailures: 1,
           structuredOutputFailures: 1,
         },
+        outcomes: {
+          observations: 2,
+          utilityCalls: 2,
+          deliveredAdvisories: 1,
+          bypassedObservations: 1,
+          bypassReasons: [{ reason: 'structured_output_failure', count: 1 }],
+        },
       },
     };
     renderPage();
     await screen.findByRole('heading', { name: 'Context intelligence' });
 
     const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
-    const degradedStrip = within(panelRoot).getByText('Degraded').closest('div') as HTMLElement;
-    expect(within(degradedStrip).getByText('2')).toBeInTheDocument();
+    const bypassedStrip = within(panelRoot).getByText('Bypassed').closest('div') as HTMLElement;
+    expect(within(bypassedStrip).getByText('1')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('50%')).toBeInTheDocument();
     expect(within(panelRoot).getByText(/older observations excluded; some event logs cut/)).toBeInTheDocument();
   });
 
@@ -361,7 +372,7 @@ describe('analytics', () => {
     expect(screen.getByText(/3 fallbacks were triggered due to primary runner errors/)).toBeInTheDocument();
   });
 
-  it('renders full context telemetry funnel, bypass breakdown, and delivery rate', async () => {
+  it('renders full context telemetry funnel, bypass breakdown, and delivery rate from outcomes', async () => {
     routes['/api/v1/analytics'] = {
       ...ANALYTICS,
       context: {
@@ -382,15 +393,19 @@ describe('analytics', () => {
           filesBefore: 20,
           filesAfter: 8,
           utilityCalls: 4,
-          utilityFailures: 0,
-          structuredOutputFailures: 0,
           utilityLatencyMs: 3500,
-          bypassReason: 'validation_failed',
           estimatedInputTokens: 5000,
           estimatedPrimaryContextTokens: 1200,
           estimatedAvoidedTokens: 3800,
           effectiveProvider: 'openai-compatible',
           effectiveModel: 'qwen2.5-coder:14b',
+        },
+        outcomes: {
+          observations: 4,
+          utilityCalls: 4,
+          deliveredAdvisories: 3,
+          bypassedObservations: 1,
+          bypassReasons: [{ reason: 'validation_failed', count: 1 }],
         },
       },
     };
@@ -404,9 +419,44 @@ describe('analytics', () => {
     expect(within(panelRoot).getByText('Candidates Selected')).toBeInTheDocument();
     expect(within(panelRoot).getByText('12')).toBeInTheDocument();
     expect(within(panelRoot).getByText('Delivery Rate')).toBeInTheDocument();
-    expect(within(panelRoot).getByText('100%')).toBeInTheDocument();
+    // 3 delivered of 4 observations — never (calls - failures) / calls, which
+    // would have reported 100% from two overlapping counters.
+    expect(within(panelRoot).getByText('75%')).toBeInTheDocument();
     expect(within(panelRoot).getByText('Bypass Reason Breakdown')).toBeInTheDocument();
     expect(within(panelRoot).getByText('Validation Failed')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('Delivered advisories')).toBeInTheDocument();
+  });
+
+  it('never invents a delivery rate when outcome counts are absent', async () => {
+    routes['/api/v1/analytics'] = {
+      ...ANALYTICS,
+      context: {
+        basis: 'estimated_operational_not_billing' as const,
+        scope: {
+          runsObserved: 2,
+          observations: 4,
+          observationLimit: 256,
+          eventLogsTruncated: 0,
+          truncated: false,
+        },
+        aggregate: {
+          stage: 'aggregate',
+          source: 'aggregate',
+          provenance: 'aggregate',
+          utilityCalls: 4,
+          utilityFailures: 0,
+          structuredOutputFailures: 0,
+        },
+      },
+    };
+    renderPage();
+    await screen.findByRole('heading', { name: 'Context intelligence' });
+
+    const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
+    // Without per-observation outcomes the rate cannot be proven, so the page
+    // says so instead of inventing 100% from (4 - 0) / 4.
+    expect(within(panelRoot).getByText('Delivery rate unavailable')).toBeInTheDocument();
+    expect(within(panelRoot).queryByText('Bypass Reason Breakdown')).not.toBeInTheDocument();
   });
 
   it('says analytics could not be read rather than drawing empty charts', async () => {
