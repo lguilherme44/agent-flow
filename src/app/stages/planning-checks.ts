@@ -1,6 +1,7 @@
 import type { Plan } from '../../contracts/index.js';
 import { buildDag, DagError } from '../../core/dag.js';
 import { checkCoverage } from '../../core/coverage.js';
+import { unsafeConcurrentPairs } from '../../core/file-overlap.js';
 import { extractRequirementIds } from '../../core/sdd-validator.js';
 import { unknownValidationIds, type ValidationRegistry } from '../../core/validation-registry.js';
 
@@ -56,6 +57,29 @@ export function checkPlan(
   } catch (error) {
     problems.push(
       error instanceof DagError ? error.message : `invalid dependency graph: ${String(error)}`,
+    );
+  }
+
+  // **File contention, reported before a reviewer is called** (AD-43 layer 1, C-17). Two
+  // mutually-independent tasks declaring the same file will be dispatched together and
+  // fight over it. The evidence run's corrective round produced exactly that pair, and it
+  // was caught by a model call and then by a human writing a revision — for what is an
+  // intersection of two string sets.
+  //
+  // A *report*, never an edit. Injecting the dependency here would silently rewrite the
+  // plan a human is about to read and approve, which is the one thing the approval gate
+  // exists to prevent.
+  for (const pair of unsafeConcurrentPairs(
+    plan.tasks.map((task) => ({
+      id: task.id,
+      dependencies: task.dependencies,
+      files: task.files.likely,
+    })),
+  )) {
+    problems.push(
+      `tasks ${pair.a} and ${pair.b} are independent of each other and both declare ` +
+        `${pair.paths.join(', ')} — they would run at the same time and contend for it. ` +
+        `Make one depend on the other, or split the file between them.`,
     );
   }
 

@@ -186,3 +186,116 @@ describe('a corrective task traces to its finding, not to an invented requiremen
     ).toThrow(/requirement/i);
   });
 });
+
+/**
+ * AD-42 (AR-06) — the two defects the evidence run's corrective round produced.
+ *
+ * `applyFixes` hardcoded `dependencies: []` and mapped `severity: high|critical` to
+ * `complexity: complex`. FIX-001 and FIX-002 both targeted `test/cli/cli.test.ts` with no
+ * dependency between them — same wave, same file, guaranteed conflict — and all three
+ * fixes were classified `complex` because all three findings were `high`.
+ */
+describe('corrective tasks are ordered and sized from the work (AD-42, C-16)', () => {
+  const finding = (overrides: Record<string, unknown> = {}) => ({
+    type: 'correctness' as const,
+    severity: 'high' as const,
+    description: 'A defect worth fixing.',
+    suggestedAction: 'Fix it.',
+    ...overrides,
+  });
+
+  const planOf = () =>
+    PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        {
+          id: 'TASK-001',
+          title: 'One',
+          description: 'Do one.',
+          complexity: 'trivial',
+          risk: 'low',
+          dependencies: [],
+          requirements: ['FR-001'],
+          acceptanceCriteria: ['Done.'],
+          validation: [],
+        },
+      ],
+    });
+
+  const fixesOf = (review: Parameters<typeof applyFixes>[1]) =>
+    applyFixes(planOf(), review, { origin: 'final-review', validation: ['test'] }).tasks.filter(
+      (task) => task.id.startsWith('FIX-'),
+    );
+
+  it('orders two fixes that target the same file', () => {
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [
+        finding({ file: 'test/cli/cli.test.ts', description: 'first' }),
+        finding({ file: 'test/cli/cli.test.ts', description: 'second' }),
+      ],
+    } as never);
+
+    expect(fixes[0]?.dependencies).toEqual([]);
+    expect(fixes[1]?.dependencies).toEqual([fixes[0]?.id]);
+  });
+
+  it('leaves fixes on different files parallel', () => {
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [finding({ file: 'src/a.ts' }), finding({ file: 'src/b.ts' })],
+    } as never);
+
+    expect(fixes.every((fix) => fix.dependencies.length === 0)).toBe(true);
+  });
+
+  it('sizes a one-file test fix as trivial, whatever the severity', () => {
+    // The category error: severity measures how much a defect matters, complexity how
+    // much work it is. Using one for the other put the highest-effort model on a one-line
+    // test edit.
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [finding({ severity: 'critical', file: 'test/cli/cli.test.ts' })],
+    } as never);
+
+    expect(fixes[0]?.complexity).toBe('trivial');
+    // Risk still follows severity, and correctly: a critical defect is risky to touch
+    // however small the edit.
+    expect(fixes[0]?.risk).toBe('high');
+  });
+
+  it('sizes an unlocated finding as complex, because it has to be found first', () => {
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [finding({ severity: 'medium' })],
+    } as never);
+
+    expect(fixes[0]?.complexity).toBe('complex');
+  });
+
+  it('sizes an ordinary source fix as normal', () => {
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [finding({ file: 'src/app/thing.ts' })],
+    } as never);
+
+    expect(fixes[0]?.complexity).toBe('normal');
+  });
+
+  it('never orders a new fix against a task that already ran', () => {
+    // An existing task's result is on disk and describes work that happened. Adding an
+    // edge to it would reorder something finished.
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [finding({ file: 'src/a.ts' })],
+    } as never);
+
+    expect(fixes[0]?.dependencies).not.toContain('TASK-001');
+  });
+});

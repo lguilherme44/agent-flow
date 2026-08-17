@@ -4,6 +4,7 @@ import {
   type Plan,
   type ReviewResult,
 } from '../contracts/index.js';
+import { deriveOverlapDependencies } from './file-overlap.js';
 
 /** Severity at or above which a finding becomes work rather than a note. */
 const ORDER = ['low', 'medium', 'high', 'critical'] as const;
@@ -61,9 +62,18 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
     id: `FIX-${String(existing + index + 1).padStart(3, '0')}`,
     title: finding.description.slice(0, 80),
     description: `${finding.description}\n\nSuggested action: ${finding.suggestedAction}`,
-    complexity:
-      finding.severity === 'critical' || finding.severity === 'high' ? 'complex' : 'normal',
+    // **Complexity is the shape of the work, not the weight of the finding** (AD-42).
+    // Severity measures how much a defect *matters*; complexity measures how much work it
+    // *is*. Mapping one to the other is a category error, and in the evidence run it put
+    // the highest-effort model on a one-line test fix — all three corrections classified
+    // `complex` because all three findings were `high`.
+    //
+    // Risk still follows severity, and correctly: a critical defect is a risky thing to
+    // touch however small the edit.
+    complexity: complexityOf(finding),
     risk: finding.severity === 'critical' ? 'high' : finding.severity === 'high' ? 'medium' : 'low',
+    // Filled in below, from declared file overlap. Left empty here so the derivation has
+    // one home rather than being half-computed in this literal.
     dependencies: [],
     // Exactly what the finding said, and nothing more. The generator this
     // replaces wrote `FR-001` whenever a finding named no requirement, which
@@ -86,5 +96,36 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
     validation: [...options.validation],
   }));
 
-  return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...fixes] });
+  // **Ordered by the files they share** (AD-42, C-16). The generator this replaces
+  // hardcoded `dependencies: []`, and the evidence run's FIX-001 and FIX-002 both targeted
+  // `test/cli/cli.test.ts` with nothing between them — same wave, same file, guaranteed
+  // conflict, caught by a model call and then by a human writing a revision.
+  //
+  // Derived only among the *new* tasks: an existing task has already run, and adding an
+  // edge to it would reorder work that is finished.
+  const ordered = deriveOverlapDependencies(
+    fixes.map((fix) => ({ ...fix, files: fix.files.likely })),
+  ).map(({ files: _files, ...fix }) => fix);
+
+  return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...ordered] });
+}
+
+/**
+ * How much work a correction is, from its shape (AD-42).
+ *
+ * A finding naming one file with one suggested action is a small edit; one naming no file
+ * is a cross-cutting change nobody has localised yet, which is the harder case rather than
+ * the easier one.
+ */
+function complexityOf(finding: ReviewResult['findings'][number]): 'trivial' | 'normal' | 'complex' {
+  // No file named: the correction has to be located before it can be made.
+  if (finding.file === undefined) return 'complex';
+
+  // A test or documentation file with one action is the one-line fix that used to be
+  // classified `complex` because the finding was `high`.
+  if (/(^|\/)(test|tests|spec|docs)\//.test(finding.file) || /\.(md|txt)$/.test(finding.file)) {
+    return 'trivial';
+  }
+
+  return 'normal';
 }

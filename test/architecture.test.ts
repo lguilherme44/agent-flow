@@ -305,6 +305,40 @@ describe('nothing a model wrote reaches a shell (V-01)', () => {
     }
   });
 
+  it('keeps file overlap out of the graph (AD-43, AR-06)', () => {
+    // Overlap is planning and scheduling *policy*; topology is what the DAG is. Teaching
+    // the graph about files would couple the two, and the rule that keeps ordering in one
+    // module would have to loosen to allow it.
+    //
+    // AD-43 names this rule: "`core/dag.ts` stays file-agnostic and `DagNode` remains
+    // `{ id, dependencies }`".
+    const dag = codeOnly(read(join(ROOT, 'src/core/dag.ts')).text);
+
+    expect(dag, 'the DAG learned about files').not.toMatch(/\bfiles\b|filesLikely|files\.likely/);
+
+    const node = dag.slice(dag.indexOf('interface DagNode'));
+    const body = node.slice(node.indexOf('{'), node.indexOf('\n}') + 2);
+    expect(body, 'DagNode was not found').toContain('dependencies');
+    expect(body, 'DagNode gained a file-shaped field').not.toMatch(/file|path|glob/i);
+
+    // And the overlap policy has one home. Two implementations of "do these tasks
+    // contend" would eventually disagree, and the one that drifted would be the one
+    // deciding whether two agents write the same file at the same time.
+    const OWNS_OVERLAP = ['src/core/file-overlap.ts'];
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path, text }) => {
+        if (OWNS_OVERLAP.includes(path)) return false;
+        const code = codeOnly(text);
+        // The shape of a hand-rolled intersection over declared files.
+        return /files\.likely[\s\S]{0,200}?\.(?:includes|some|filter)\s*\(/.test(code) &&
+          /overlap|contend|intersect/i.test(code);
+      })
+      .map(({ path }) => path);
+
+    expect(offenders, 'a second overlap implementation exists').toEqual([]);
+  });
+
   it('prepares a workspace from one sequence only (AD-44, AR-04)', () => {
     // The rule AD-44 asks for by name: "an architecture test forbids a second
     // implementation". The sequence existed, was correct, and had one caller — so the

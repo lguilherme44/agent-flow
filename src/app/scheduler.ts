@@ -1,4 +1,4 @@
-import type { Plan, RunState, TaskResult, TaskState } from '../contracts/index.js';
+import type { Plan, RunState, Task, TaskResult, TaskState } from '../contracts/index.js';
 import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
 import type { TaskBlockReason } from '../contracts/state.schema.js';
 import {
@@ -17,6 +17,7 @@ import type {
   WaveIntegrator,
 } from './integrator.js';
 import type { RunRecovery, RunRecoveryOutcome } from './worktree-recovery.js';
+import { overlappingPaths } from '../core/file-overlap.js';
 
 export interface SchedulerOptions {
   readonly store: StateStore;
@@ -319,7 +320,31 @@ export class Scheduler {
         );
       }
 
-      const batch = ready.slice(0, concurrency);
+      // **No two tasks in one wave may contend for a file** (AD-43 layer 2, C-17).
+      //
+      // `checkPlan` reports the hazard at planning time; this is the enforcement, and the
+      // two answer different questions. Layer 1 rejects a plan that is wrong on paper.
+      // This protects a plan that is right on paper but whose tasks became ready together
+      // anyway — a retry reorders readiness, and two tasks the plan kept apart can arrive
+      // in one pass.
+      //
+      // The later task simply waits for the next wave. No dependency edge is injected: the
+      // approved plan is a document a human read, and rewriting it here would change what
+      // they approved.
+      const batch = admitWithoutOverlap(ready.slice(0, concurrency), byId);
+      const deferred = ready.slice(0, concurrency).filter((id) => !batch.includes(id));
+
+      for (const held of deferred) {
+        const against = batch.find(
+          (id) => filesOverlap(byId.get(id), byId.get(held)).length > 0,
+        );
+        await this.options.store.appendEvent(runId, 'wave_serialised_for_overlap', {
+          task: held,
+          waitsFor: against ?? null,
+          paths: filesOverlap(byId.get(against ?? ''), byId.get(held)),
+        });
+      }
+
       for (const id of batch) states[id] = 'running';
 
       // Persisted before the work starts, not only after it. Two reasons: the
@@ -764,4 +789,37 @@ export class Scheduler {
       }),
     }));
   }
+}
+
+/**
+ * The largest prefix of a ready batch whose tasks do not contend for a file (AD-43).
+ *
+ * Greedy and order-preserving: the batch is already in the DAG's topological order, and a
+ * task that loses its place simply waits for the next wave. Deterministic, so two runs of
+ * one plan schedule identically.
+ *
+ * A task with no declared files is admitted. An empty `files.likely` is "the plan did not
+ * say", not "this task touches everything" — treating it as the latter would serialise
+ * every plan that omits the field.
+ */
+function admitWithoutOverlap(
+  ready: readonly string[],
+  byId: ReadonlyMap<string, Task>,
+): string[] {
+  const admitted: string[] = [];
+
+  for (const id of ready) {
+    const contends = admitted.some(
+      (accepted) => filesOverlap(byId.get(accepted), byId.get(id)).length > 0,
+    );
+    if (!contends) admitted.push(id);
+  }
+
+  return admitted;
+}
+
+/** What two tasks both declare, or nothing. Absent tasks contend with no one. */
+function filesOverlap(a: Task | undefined, b: Task | undefined): string[] {
+  if (a === undefined || b === undefined) return [];
+  return overlappingPaths(a.files.likely, b.files.likely);
 }

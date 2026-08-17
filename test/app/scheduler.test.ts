@@ -1605,3 +1605,112 @@ describe('what a refused workspace writes to disk (§7.2, §21.3)', () => {
     expect(repo.worktreeRoot.startsWith('/')).toBe(true);
   });
 });
+
+/**
+ * AD-43 layer 2 and C-17 (AR-06) — no wave contains two tasks that fight over a file.
+ *
+ * `checkPlan` reports the hazard at planning time; this is the enforcement, and the two
+ * answer different questions. Layer 1 rejects a plan that is wrong on paper. This protects
+ * a plan that is *right* on paper but whose tasks became ready together anyway — a retry
+ * reorders readiness, and two tasks the plan kept apart can arrive in one pass.
+ */
+describe('a wave never contends for a file (AD-43, C-17)', () => {
+  const withFiles = (id: string, files: string[], dependencies: string[] = []) => ({
+    ...task(id, dependencies),
+    files: { likely: files },
+  });
+
+  it('serialises two overlapping tasks that are ready together', async () => {
+    const { store, run } = await harness();
+    const { executor, peak } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        withFiles('TASK-001', ['test/cli/cli.test.ts']),
+        withFiles('TASK-002', ['test/cli/cli.test.ts']),
+      ],
+    });
+
+    await new Scheduler({ store, executor, maxConcurrency: 3 }).run(plan, run.runId, 'SDD');
+
+    // Both ran — serialisation delays, it never drops work.
+    expect((await store.loadRun(run.runId)).tasks.map((entry) => entry.state)).toEqual([
+      'completed',
+      'completed',
+    ]);
+    expect(peak()).toBe(1);
+  });
+
+  it('records why, naming both tasks and the shared path', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        withFiles('TASK-001', ['src/shared.ts']),
+        withFiles('TASK-002', ['src/shared.ts']),
+      ],
+    });
+
+    await new Scheduler({ store, executor, maxConcurrency: 3 }).run(plan, run.runId, 'SDD');
+
+    const events = await store.readEvents(run.runId);
+    const serialised = events.find((event) => event.type === 'wave_serialised_for_overlap');
+
+    expect(serialised?.detail).toMatchObject({ task: 'TASK-002', waitsFor: 'TASK-001' });
+    expect(serialised?.detail?.['paths']).toEqual(['src/shared.ts']);
+  });
+
+  it('still parallelises tasks that declare different files', async () => {
+    // The control. A guard that serialised everything would be indistinguishable from
+    // having no parallelism at all, and would pass the test above.
+    const { store, run } = await harness();
+    const { executor, peak } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        withFiles('TASK-001', ['src/a.ts']),
+        withFiles('TASK-002', ['src/b.ts']),
+        withFiles('TASK-003', ['src/c.ts']),
+      ],
+    });
+
+    await new Scheduler({ store, executor, maxConcurrency: 3 }).run(plan, run.runId, 'SDD');
+    expect(peak()).toBeGreaterThan(1);
+  });
+
+  it('still parallelises tasks that declare no files at all', async () => {
+    // An empty `files.likely` is "the plan did not say", not "this task touches
+    // everything". Reading it as the latter would serialise every plan that omits the
+    // field — which is most of them.
+    const { store, run } = await harness();
+    const { executor, peak } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [task('TASK-001'), task('TASK-002'), task('TASK-003')],
+    });
+
+    await new Scheduler({ store, executor, maxConcurrency: 3 }).run(plan, run.runId, 'SDD');
+    expect(peak()).toBeGreaterThan(1);
+  });
+
+  it('injects no dependency into the plan it was given', async () => {
+    // The approved plan is a document a human read. Serialisation is a scheduling
+    // decision; rewriting the plan would change what they approved.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [withFiles('TASK-001', ['src/x.ts']), withFiles('TASK-002', ['src/x.ts'])],
+    });
+
+    await new Scheduler({ store, executor, maxConcurrency: 3 }).run(plan, run.runId, 'SDD');
+
+    expect(plan.tasks[1]?.dependencies).toEqual([]);
+  });
+});
