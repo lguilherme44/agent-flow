@@ -49,6 +49,8 @@ const REVIEW_RESPONSE = { verdict: 'PASS', summary: 'Looks right.', findings: []
 class RecordingProcessRunner implements ProcessRunner {
   readonly agentCwds: string[] = [];
   readonly shellCwds: string[] = [];
+  /** What each shell was asked to run, in order — AR-04 asserts on the ordering. */
+  readonly shellCommands: string[] = [];
   private readonly real = new NodeProcessRunner();
 
   async run(options: ProcessSpawnOptions): Promise<ProcessResult> {
@@ -56,6 +58,7 @@ class RecordingProcessRunner implements ProcessRunner {
 
     if (options.command === '/bin/sh') {
       this.shellCwds.push(options.cwd);
+      this.shellCommands.push(options.args.join(' '));
       return this.real.run(options);
     }
 
@@ -243,5 +246,136 @@ describe('review runs over the integration tree (§19.1, §19.2)', () => {
     expect(current.repo.userGit(['status', '--porcelain=v1', '--untracked-files=all'])).toBe(
       before.status,
     );
+  });
+});
+
+/**
+ * AR-04 — the environment answers, or it says it could not (C-10, C-11, AD-44, AD-45).
+ *
+ * The evidence run's `review` produced four `exit 127`s — lint, typecheck, test and build,
+ * each reporting a missing binary — beneath a headline reading `Verification: PASS`. Every
+ * *task* worktree had been through assert-clean → install → assert-clean; the integration
+ * worktree had not, because the sequence had one caller and nobody had given it a second.
+ *
+ * Those exit codes described the environment. They were read as a verdict on the code.
+ */
+describe('the verification workspace is prepared first (AR-04)', () => {
+  it('runs the configured install in the integration tree before any command', async () => {
+    const { current, deps, runner } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: printf ok\n  test: cat one.txt\n',
+    );
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    // The install ran, and it ran before the verification command.
+    const installIndex = runner.shellCommands.findIndex((line) => line.includes('printf ok'));
+    const testIndex = runner.shellCommands.findIndex((line) => line.includes('cat one.txt'));
+
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(testIndex).toBeGreaterThan(installIndex);
+  });
+
+  it('records the install command and its exit code (C-10)', async () => {
+    const { current, deps } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: printf ok\n  test: cat one.txt\n',
+    );
+
+    await review(deps, current.runId);
+
+    const events = await current.store.readEvents(current.runId);
+    const prepared = events.find((event) => event.type === 'workspace_prepared');
+
+    expect(prepared?.detail).toMatchObject({ install: 'printf ok', exitCode: 0 });
+  });
+
+  it('reports NOT_RUN rather than FAIL when the install fails', async () => {
+    // The heart of it. A failing install is not a failing codebase, and the difference
+    // decides where a person looks next.
+    const { current, deps } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: exit 127\n  test: cat one.txt\n',
+    );
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.mechanicalVerification).toBe('NOT_RUN');
+    expect(outcome.value.done.done).toBe(false);
+  });
+
+  it('never runs a verification command in an unprepared tree', async () => {
+    const { current, deps, runner } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: exit 127\n  test: cat one.txt\n',
+    );
+
+    await review(deps, current.runId);
+
+    // The four exit 127s the evidence run produced. None of them happens now, because the
+    // commands that would have produced them are not reached.
+    expect(runner.shellCommands.some((line) => line.includes('cat one.txt'))).toBe(false);
+  });
+
+  it('names the environment as the reason, not a regression (C-10)', async () => {
+    const { current, deps } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: exit 127\n  test: cat one.txt\n',
+    );
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.environmentFailure?.detail).toContain('127');
+
+    const condition = outcome.value.done.conditions.find((entry) => entry.name.includes('lint'));
+    expect(condition?.detail).toMatch(/environment/i);
+  });
+
+  it('records the preparation failure as an event', async () => {
+    const { current, deps } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: exit 127\n  test: cat one.txt\n',
+    );
+
+    await review(deps, current.runId);
+
+    const events = await current.store.readEvents(current.runId);
+    const failed = events.find((event) => event.type === 'workspace_preparation_failed');
+
+    expect(failed?.detail).toMatchObject({ phase: 'setup' });
+    // §21.3: path-free by construction, on the way to disk and to an HTTP response.
+    expect(JSON.stringify(failed?.detail)).not.toContain(current.repo.home);
+  });
+
+  it('leaves a project with no install command exactly as it was', async () => {
+    // "A project that declares no install command is not a project that failed to
+    // install." Preparation is a no-op and verification runs as it always did.
+    const { current, deps } = await reviewable();
+    run = current;
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.mechanicalVerification).toBe('PASS');
+    expect(outcome.value.environmentFailure).toBeUndefined();
   });
 });

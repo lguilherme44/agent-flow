@@ -4,7 +4,7 @@ import { checkDefinitionOfDone } from '../../src/core/definition-of-done.js';
 const done = {
   approved: true,
   taskStates: ['completed', 'completed'] as const,
-  verificationPassed: true,
+  mechanicalVerification: 'PASS' as const,
   finalReviewVerdict: 'PASS' as const,
 };
 
@@ -35,7 +35,7 @@ describe('checkDefinitionOfDone (§42)', () => {
     const result = checkDefinitionOfDone({
       ...done,
       taskStates: [...done.taskStates],
-      verificationPassed: false,
+      mechanicalVerification: 'FAIL',
     });
     expect(result.missing).toContain('lint, tests and build passing');
   });
@@ -78,7 +78,7 @@ describe('checkDefinitionOfDone (§42)', () => {
     const result = checkDefinitionOfDone({
       approved: false,
       taskStates: ['failed'],
-      verificationPassed: false,
+      mechanicalVerification: 'FAIL',
       finalReviewVerdict: 'FAIL',
     });
 
@@ -101,5 +101,71 @@ describe('checkDefinitionOfDone (§42)', () => {
       taskStates: ['completed', 'failed', 'blocked'],
     });
     expect(result.conditions[1]?.detail).toContain('2');
+  });
+});
+
+/**
+ * AD-45 and C-11 (AR-04) — `NOT_RUN` is the third value the model lacked.
+ *
+ * The evidence run's `review` printed `Verification: PASS` directly beneath four
+ * mechanical `✗` marks. Two different questions — "did the project's own commands pass"
+ * and "does the implementation look right to a reviewer" — rendered under one label, with
+ * opposite answers, and the operator reasonably concluded the tool was lying.
+ *
+ * The Definition of Done was in fact correct. The rendering was not, and the missing value
+ * was `NOT_RUN`: an environment that could not answer the question is not a codebase that
+ * answered "no".
+ */
+describe('mechanical verification is three-valued (AD-45, C-11)', () => {
+  const base = {
+    approved: true,
+    taskStates: ['completed'] as const,
+    finalReviewVerdict: 'PASS' as const,
+  };
+
+  it('is done when the commands passed', () => {
+    expect(checkDefinitionOfDone({ ...base, mechanicalVerification: 'PASS' }).done).toBe(true);
+  });
+
+  it('is not done when the commands failed', () => {
+    expect(checkDefinitionOfDone({ ...base, mechanicalVerification: 'FAIL' }).done).toBe(false);
+  });
+
+  it('is not done when the commands never ran', () => {
+    expect(checkDefinitionOfDone({ ...base, mechanicalVerification: 'NOT_RUN' }).done).toBe(false);
+  });
+
+  it('cites environment readiness for NOT_RUN, not a regression', () => {
+    // The distinction the evidence run collapsed. "Your build is broken" and "we could not
+    // run your build" send a person to two different places.
+    const check = checkDefinitionOfDone({ ...base, mechanicalVerification: 'NOT_RUN' });
+    const condition = check.conditions.find((entry) => entry.name.includes('lint'));
+
+    expect(condition?.detail).toMatch(/environment|not run|prepared/i);
+  });
+
+  it('does not cite the environment when the commands genuinely failed', () => {
+    const check = checkDefinitionOfDone({ ...base, mechanicalVerification: 'FAIL' });
+    const condition = check.conditions.find((entry) => entry.name.includes('lint'));
+
+    expect(condition?.detail ?? '').not.toMatch(/environment/i);
+  });
+
+  it('suppresses the model verdict as a conclusion about the code when NOT_RUN', () => {
+    // AD-45: both model verdicts were formed against an environment that could not answer,
+    // so they are not conclusions about the code. The Definition of Done stops treating a
+    // final-review PASS as evidence.
+    const check = checkDefinitionOfDone({ ...base, mechanicalVerification: 'NOT_RUN' });
+    const review = check.conditions.find((entry) => entry.name.includes('final review'));
+
+    expect(review?.met).toBe(false);
+    expect(review?.detail).toMatch(/environment|could not/i);
+  });
+
+  it('keeps the model verdict meaningful when the commands did run', () => {
+    const check = checkDefinitionOfDone({ ...base, mechanicalVerification: 'FAIL' });
+    const review = check.conditions.find((entry) => entry.name.includes('final review'));
+
+    expect(review?.met).toBe(true);
   });
 });

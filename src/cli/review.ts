@@ -1,7 +1,10 @@
 import { ReviewResultSchema, type ReviewResult } from '../contracts/index.js';
 import { review, type ReviewOutcome } from '../app/run-actions.js';
 import type { CorrectiveRound } from '../app/corrective-round.js';
-import type { checkDefinitionOfDone } from '../core/definition-of-done.js';
+import type {
+  checkDefinitionOfDone,
+  MechanicalVerification,
+} from '../core/definition-of-done.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { actionDeps, currentRunId, exitCodeFor, printWarnings, render } from './approve.js';
@@ -98,7 +101,19 @@ function renderOutcome(outcome: ReviewOutcome): string {
     lines.push('');
   }
 
-  lines.push(renderReview(outcome.verificationReview, outcome.finalReview, outcome.done));
+  lines.push(
+    renderReview(
+      {
+        verdict: outcome.mechanicalVerification,
+        ...(outcome.environmentFailure === undefined
+          ? {}
+          : { environmentFailure: outcome.environmentFailure }),
+      },
+      outcome.verificationReview,
+      outcome.finalReview,
+      outcome.done,
+    ),
+  );
 
   // §19.3: the product of an isolated run is a branch, and the last thing the
   // command prints has to say where the code is. The user's working tree was not
@@ -170,19 +185,50 @@ function renderCorrectiveRound(round: CorrectiveRound): string {
   return lines.join('\n');
 }
 
+/**
+ * Four verdicts, four labels (AD-45, C-11, I-24).
+ *
+ * The line this replaces read `Verification: ${verification.verdict}` — **the model's**
+ * verdict — printed directly beneath four mechanical `✗` marks from `onVerificationStep`.
+ * Two different questions with two different authorities, rendered under one label with
+ * opposite answers. The Definition of Done was correct; the rendering was not, and the
+ * operator reasonably concluded the tool was lying.
+ */
 function renderReview(
+  mechanical: {
+    verdict: MechanicalVerification;
+    environmentFailure?: { phase: string; detail: string };
+  },
   verification: { verdict: string; findings: ReviewResult['findings'] },
   finalReview: ReviewResult,
   done: ReturnType<typeof checkDefinitionOfDone>,
 ): string {
   const lines: string[] = [];
 
-  lines.push(`Verification: ${verification.verdict}`);
+  // Exit codes, and it says so. `NOT_RUN` is visually distinct from `FAIL` because they
+  // send a person to two different places.
+  lines.push(`Mechanical verification (exit codes): ${mechanical.verdict}`);
+  if (mechanical.verdict === 'NOT_RUN') {
+    lines.push(
+      '  ⚠ the commands never ran — this is environment readiness, not a regression',
+      ...(mechanical.environmentFailure === undefined
+        ? []
+        : [`  ${mechanical.environmentFailure.phase}: ${mechanical.environmentFailure.detail}`]),
+      '  Check `commands.install` in .agent-flow/config.yaml, then run `agent-flow doctor`.',
+    );
+  }
+
+  lines.push('', `Semantic review (model, advisory): ${verification.verdict}`);
+  if (mechanical.verdict === 'NOT_RUN') {
+    // Suppressed as a conclusion rather than hidden: it was formed against an environment
+    // that could not answer, and saying so is more useful than deleting it.
+    lines.push('  ⚠ not a conclusion about the code: the commands could not run');
+  }
   for (const finding of verification.findings) {
     lines.push(`  [${finding.severity}] ${finding.description}`);
   }
 
-  lines.push('', `Final review: ${finalReview.verdict}`);
+  lines.push('', `Final review (model, advisory): ${finalReview.verdict}`);
   lines.push(
     finalReview.independence === 'cross-provider'
       ? '  reviewed by a different provider from the implementer'

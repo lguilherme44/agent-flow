@@ -1,7 +1,7 @@
 import { CommitOidSchema, type EffectiveConfig, type RunState } from '../contracts/index.js';
 import type { ProcessRunner } from '../ports/process-runner.js';
 import type { Clock } from '../ports/clock.js';
-import { runCommands } from './verification-commands.js';
+import { prepareWorkspace } from './workspace-preparation.js';
 import { attemptRef, attemptWorkspace } from '../core/worktree-policy.js';
 import { deriveRepoKey, type RepositoryDeps } from './run-git-identity.js';
 
@@ -92,9 +92,6 @@ export interface WorkspacePreparationFailure {
 export type WorkspaceOutcome =
   | { readonly ok: true; readonly workspace: TaskWorkspace }
   | { readonly ok: false; readonly failure: WorkspacePreparationFailure };
-
-/** At most this many paths reach an event, so the audit trail stays readable. */
-const MAX_REPORTED_CHANGES = 10;
 
 export interface TaskWorkspacesDeps extends RepositoryDeps {
   readonly processRunner: ProcessRunner;
@@ -207,96 +204,31 @@ export class TaskWorkspaces {
       },
     };
 
-    // §8.1, first assertion. A checkout can be born dirty — `core.autocrlf` and
-    // `.gitattributes` filters both do it — and catching that here, separately
-    // from the post-setup assertion, is why the two phases exist.
-    const checkout = await this.assertClean(workspace.path, 'checkout');
-    if (checkout !== null) return { ok: false, failure: checkout };
-
+    // §8.1's sequence, from the module that owns it (AD-44). It lived here and had one
+    // caller, which is why the integration worktree never got it — and why `review`
+    // produced four `exit 127`s in a tree nobody had installed into. An architecture test
+    // now forbids a second implementation.
     const install = this.deps.config.project?.commands?.install;
-    if (install === undefined || install.trim().length === 0) {
-      return { ok: true, workspace };
+    const prepared = await prepareWorkspace(
+      { workspaces: this.deps.workspaces, processRunner: this.deps.processRunner },
+      {
+        path: workspace.path,
+        ...(install === undefined ? {} : { install }),
+      },
+    );
+
+    if (!prepared.ok) {
+      return {
+        ok: false,
+        failure: this.failure(
+          prepared.failure.phase,
+          prepared.failure.changes,
+          prepared.failure.detail,
+        ),
+      };
     }
-
-    const ran = await this.runInstall(install, workspace.path);
-    if (ran !== null) return { ok: false, failure: ran };
-
-    // §8.1, second assertion. Ignored files do not count — `node_modules/` is
-    // exactly what setup is supposed to produce (§8.2).
-    const setup = await this.assertClean(workspace.path, 'setup');
-    if (setup !== null) return { ok: false, failure: setup };
 
     return { ok: true, workspace };
-  }
-
-  /**
-   * The cleanliness authority, asked the same way both times (§8.2).
-   *
-   * **A status that cannot be read fails closed.** "I could not measure it" is
-   * not "it is clean": treating an unreadable repository as clean would invoke an
-   * agent in a workspace nobody verified, which is precisely what this gate
-   * exists to prevent.
-   */
-  private async assertClean(
-    path: string,
-    phase: 'checkout' | 'setup',
-  ): Promise<WorkspacePreparationFailure | null> {
-    const status = await this.deps.workspaces.status({ cwd: path });
-    if (!status.ok) {
-      return this.failure(
-        phase,
-        [],
-        `the workspace could not be inspected (${status.failure.code})`,
-      );
-    }
-    if (status.value.clean) return null;
-
-    const changes = status.value.entries.slice(0, MAX_REPORTED_CHANGES).map((entry) => entry.path);
-    return this.failure(
-      phase,
-      changes,
-      phase === 'checkout'
-        ? 'the fresh checkout was not clean'
-        : 'the install command changed files that are tracked or not ignored',
-    );
-  }
-
-  /**
-   * `project.commands.install`, in the workspace.
-   *
-   * A command a human wrote in a configuration file, run through the same
-   * `ProcessRunner` and the same timeout policy as the validation commands
-   * (S-11, V-01 unchanged). Nothing model-authored reaches a shell here — the
-   * plan cannot supply this string.
-   */
-  private async runInstall(
-    command: string,
-    cwd: string,
-  ): Promise<WorkspacePreparationFailure | null> {
-    // Through `runCommands`, which is the one module allowed to name a shell
-    // (V-01). Reusing it also means the install inherits the same timeout policy
-    // and the same output handling the validation commands already have, rather
-    // than growing a second answer to both.
-    const outcome = await runCommands({
-      processRunner: this.deps.processRunner,
-      commands: [command],
-      cwd,
-    });
-
-    if (outcome.passed) return null;
-
-    // The exit status, never the output. `npm` writes the absolute path of the
-    // directory it ran in on almost every failure, and this sentence is
-    // persisted — see the note on `detail`. `doctor` is where the output goes
-    // (§8.4), and the refused worktree keeps the real thing (§7.4).
-    const exitCode = outcome.results.find((result) => result.exitCode !== 0)?.exitCode;
-    return this.failure(
-      'setup',
-      [],
-      exitCode === undefined || exitCode === null
-        ? 'the install command did not complete'
-        : `the install command exited ${String(exitCode)}`,
-    );
   }
 
   private failure(

@@ -44,8 +44,10 @@ import {
   failureDetail,
   runVerification,
   summariseVerification,
+  VERIFICATION_ORDER,
   type VerificationOutcome,
 } from './verification-commands.js';
+import { prepareWorkspace } from './workspace-preparation.js';
 import {
   FINAL_REVIEW_STAGE,
   ReviewResponseSchema,
@@ -56,7 +58,11 @@ import {
 import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js';
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
-import { checkDefinitionOfDone, type DoneCheck } from '../core/definition-of-done.js';
+import {
+  checkDefinitionOfDone,
+  type DoneCheck,
+  type MechanicalVerification,
+} from '../core/definition-of-done.js';
 import { getCeremonyBudget } from '../core/adaptive-workflow.js';
 
 /**
@@ -1135,6 +1141,21 @@ export interface ReviewOptions {
 export interface ReviewOutcome {
   readonly runId: string;
   readonly verification: VerificationOutcome;
+  /**
+   * What the project's own commands said — three-valued (AD-45, C-11).
+   *
+   * Separate from `verificationReview` below, and that separation is the milestone. Those
+   * are two different questions with two different authorities: exit codes answer "did the
+   * commands pass", a model answers "does this look right". The evidence run rendered them
+   * under one label with opposite answers, and the operator reasonably concluded the tool
+   * was lying.
+   *
+   * `NOT_RUN` is the value that was missing. An environment that could not answer is not a
+   * codebase that answered "no".
+   */
+  readonly mechanicalVerification: MechanicalVerification;
+  /** Why the commands did not run, when they did not. Names the install and its exit code. */
+  readonly environmentFailure?: { readonly phase: string; readonly detail: string };
   readonly verificationReview: { verdict: 'PASS' | 'FAIL'; findings: ReviewResult['findings'] };
   readonly finalReview: ReviewResult;
   readonly done: DoneCheck;
@@ -1233,14 +1254,59 @@ async function judgeRun(
       : await git.changedFilesBetween(tree.value.base, tree.value.integration.head);
   const changedFiles = renderChanges(changes);
 
-  // ---- Commands first: deterministic, free, and often decisive.
+  // ---- The workspace first, then the commands (AD-44, C-10).
+  //
+  // **The integration worktree was the one tree nobody prepared.** Every task worktree
+  // went through assert-clean → install → assert-clean; this one did not, so the evidence
+  // run's `review` produced four `exit 127`s — lint, typecheck, test and build, each
+  // reporting a missing binary — and those exit codes, which described the environment,
+  // were read as a verdict on the code.
+  //
+  // `install` is not a verification step and is not in `VERIFICATION_ORDER`: it has to run
+  // *before* the step whose failure it would otherwise be blamed for.
+  const install = context.config.project?.commands?.install;
+  const prepared = await prepareWorkspace(
+    { workspaces: context.workspaces, processRunner: context.processRunner },
+    {
+      path: tree.value.cwd,
+      ...(install === undefined ? {} : { install }),
+    },
+  );
+
+  if (prepared.ok) {
+    await context.store.appendEvent(runId, 'workspace_prepared', {
+      phase: 'verification',
+      ...(prepared.install === undefined
+        ? { install: 'none configured' }
+        : { install: prepared.install.command, exitCode: prepared.install.exitCode }),
+    });
+  } else {
+    await context.store.appendEvent(runId, 'workspace_preparation_failed', {
+      phase: prepared.failure.phase,
+      detail: prepared.failure.detail,
+      changes: prepared.failure.changes,
+    });
+  }
+
+  // ---- Commands second: deterministic, free, and often decisive — but only meaningful in
+  // a tree that can run them. An unprepared workspace produces `NOT_RUN`, never `FAIL`:
+  // "we could not run your build" and "your build is broken" send a person to two
+  // different places, and only one of them is a statement about the code (AD-45).
   options.onStage?.('verification');
-  const verification = await runVerification({
-    processRunner: context.processRunner,
-    project: context.config.project,
-    cwd: tree.value.cwd,
-    onStep: (step, result) => options.onVerificationStep?.(step, result.exitCode === 0),
-  });
+  const verification = prepared.ok
+    ? await runVerification({
+        processRunner: context.processRunner,
+        project: context.config.project,
+        cwd: tree.value.cwd,
+        onStep: (step, result) => options.onVerificationStep?.(step, result.exitCode === 0),
+      })
+    : { passed: false, results: [], skipped: [...VERIFICATION_ORDER] };
+
+  const mechanicalVerification: MechanicalVerification = !prepared.ok
+    ? 'NOT_RUN'
+    : verification.passed
+      ? 'PASS'
+      : 'FAIL';
 
   const commandResults = [summariseVerification(verification), failureDetail(verification)]
     .filter((part) => part.length > 0)
@@ -1334,7 +1400,7 @@ async function judgeRun(
   const doneCheck = checkDefinitionOfDone({
     approved: state.approved,
     taskStates: state.tasks.map((task) => task.state),
-    verificationPassed: verification.passed,
+    mechanicalVerification,
     finalReviewVerdict: finalReview.verdict,
   });
 
@@ -1354,6 +1420,15 @@ async function judgeRun(
   return done({
     runId,
     verification,
+    mechanicalVerification,
+    ...(prepared.ok
+      ? {}
+      : {
+          environmentFailure: {
+            phase: prepared.failure.phase,
+            detail: prepared.failure.detail,
+          },
+        }),
     verificationReview: {
       verdict: verificationResponse.verdict,
       findings: verificationResponse.findings,

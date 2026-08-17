@@ -261,11 +261,35 @@ describe('nothing a model wrote reaches a shell (V-01)', () => {
     // So: the preparation service reads it from the effective config, routes it
     // through the one module allowed to name a shell, and its request type — the
     // part a caller fills in per task — carries no command at all.
-    const { text } = read(join(ROOT, 'src/app/task-workspaces.ts'));
-    const code = codeOnly(text);
+    // AR-04 split the sequence out of `task-workspaces.ts` so the integration worktree
+    // could use the same one (AD-44), which moves *where* each half of this rule lives
+    // without changing the rule: the config read stays with the caller that owns the
+    // project config, and the shell stays in the module that owns the sequence.
+    const code = codeOnly(read(join(ROOT, 'src/app/task-workspaces.ts')).text);
+    const preparation = codeOnly(read(join(ROOT, 'src/app/workspace-preparation.ts')).text);
 
     expect(code).toContain('config.project?.commands?.install');
-    expect(code).toContain('runCommands');
+    expect(preparation).toContain('runCommands');
+
+    // And nothing else may run the install. Every caller of the sequence has to take the
+    // string from configuration, which is what makes "a human wrote it" checkable rather
+    // than asserted.
+    // Matched on the *import* rather than on a call by name. The scheduler has a private
+    // method of the same name — it asks `TaskWorkspaces` for a workspace, which is a
+    // different thing at a different layer — and a rule that cannot tell them apart is a
+    // rule that fails on correct code.
+    const PREPARES = ['src/app/task-workspaces.ts', 'src/app/run-actions.ts'];
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(
+        ({ path, text }) =>
+          !PREPARES.includes(path) &&
+          path !== 'src/app/workspace-preparation.ts' &&
+          importSpecifiers(text).some((specifier) => specifier.includes('workspace-preparation')),
+      )
+      .map(({ path }) => path);
+
+    expect(offenders, 'a module outside the preparation callers runs the install').toEqual([]);
 
     // A per-attempt command would be a second, caller-supplied answer to "what
     // should run here" — and the caller is the scheduler, holding a plan. Read as
@@ -279,6 +303,49 @@ describe('nothing a model wrote reaches a shell (V-01)', () => {
     for (const field of ['command', 'install', 'setup', 'script']) {
       expect(body, `PrepareRequest carries a ${field}`).not.toContain(field);
     }
+  });
+
+  it('prepares a workspace from one sequence only (AD-44, AR-04)', () => {
+    // The rule AD-44 asks for by name: "an architecture test forbids a second
+    // implementation". The sequence existed, was correct, and had one caller — so the
+    // integration worktree simply never got it, and `review` ran lint, typecheck, test and
+    // build in a tree with no `node_modules`, producing four `exit 127`s that described
+    // the environment and were read as a verdict on the code.
+    //
+    // A second copy would not be a duplicate so much as a divergence waiting to happen:
+    // the two would drift, and the one that drifted would be the one nobody was looking at.
+    // `doctor`'s §8.4 probe is the one exemption, and it is not a preparation: it creates a
+    // *throwaway* checkout to find out whether the configured install leaves a fresh tree
+    // clean, reports what it saw, and removes the worktree in a `finally`. It prepares
+    // nothing anybody will run work in — the question it answers is about the command
+    // itself, which is why it has to run it outside the sequence that trusts it.
+    const OWNS_SEQUENCE = ['src/app/workspace-preparation.ts', 'src/cli/doctor.ts'];
+
+    const offenders: string[] = [];
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (OWNS_SEQUENCE.includes(path)) continue;
+      const code = codeOnly(text);
+
+      // The shape of the sequence, not its words: a module that both asserts cleanliness
+      // and runs an install is reimplementing it, whatever it calls the steps.
+      const assertsClean = /status\s*\(\s*\{\s*cwd/.test(code) && /\.clean\b/.test(code);
+      const runsInstall = /commands\?\.install|commands\.install/.test(code) && /runCommands\s*\(/.test(code);
+
+      if (assertsClean && runsInstall) offenders.push(path);
+    }
+
+    expect(offenders, 'a second preparation sequence exists').toEqual([]);
+
+    // And `install` is not a verification step. It has to run *before* the step whose
+    // failure it would otherwise be blamed for, and a project that declares no install
+    // command is not a project that failed to install.
+    const verification = codeOnly(read(join(ROOT, 'src/app/verification-commands.ts')).text);
+    const order = verification.slice(
+      verification.indexOf('VERIFICATION_ORDER'),
+      verification.indexOf(';', verification.indexOf('VERIFICATION_ORDER')),
+    );
+    expect(order, 'install became a verification step').not.toContain('install');
   });
 
   it('resolves validation ids through the registry, never straight from a task', () => {

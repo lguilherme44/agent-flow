@@ -241,7 +241,7 @@ describe('the happy path, from an empty repository to a finished feature', () =>
     const done = checkDefinitionOfDone({
       approved: true,
       taskStates: outcome.results.map((r) => r.status),
-      verificationPassed: verification.passed,
+      mechanicalVerification: verification.passed ? 'PASS' : 'FAIL',
       finalReviewVerdict: 'PASS',
     });
 
@@ -613,7 +613,7 @@ describe('the corrective loop, end to end, without --force (AF-H01)', () => {
     const done = checkDefinitionOfDone({
       approved: true,
       taskStates: Object.values(outcome.states),
-      verificationPassed: true,
+      mechanicalVerification: 'PASS',
       finalReviewVerdict: 'PASS',
     });
     expect(done.done).toBe(true);

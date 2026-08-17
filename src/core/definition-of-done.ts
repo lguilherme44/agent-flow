@@ -9,10 +9,21 @@ import type { TaskState } from '../contracts/index.js';
  * cannot be declared finished because the last thing to speak was confident.
  */
 
+/**
+ * What the project's own commands said (AD-45).
+ *
+ * **Three values, and the third is the one that was missing.** `NOT_RUN` means the
+ * commands could not be run at all — an unprepared workspace, a failed install — and it is
+ * not the same news as `FAIL`. The evidence run collapsed them: four `exit 127`s from a
+ * tree nobody had installed into were read as a verdict on the code, and rendered beneath
+ * a headline saying `PASS`.
+ */
+export type MechanicalVerification = 'PASS' | 'FAIL' | 'NOT_RUN';
+
 export interface DoneInput {
   readonly approved: boolean;
   readonly taskStates: readonly TaskState[];
-  readonly verificationPassed: boolean;
+  readonly mechanicalVerification: MechanicalVerification;
   readonly finalReviewVerdict: 'PASS' | 'FAIL' | null;
 }
 
@@ -43,12 +54,30 @@ export function checkDefinitionOfDone(input: DoneInput): DoneCheck {
     },
     {
       name: 'lint, tests and build passing',
-      met: input.verificationPassed,
+      met: input.mechanicalVerification === 'PASS',
+      // The distinction the evidence run collapsed. "Your build is broken" and "we could
+      // not run your build" send a person to two different places, and only one of them is
+      // a statement about the code.
+      ...(input.mechanicalVerification === 'NOT_RUN'
+        ? {
+            detail:
+              'the verification commands did not run — the workspace was not prepared, ' +
+              'so this is environment readiness rather than a regression',
+          }
+        : {}),
     },
     {
       name: 'final review PASS',
-      met: input.finalReviewVerdict === 'PASS',
-      ...(input.finalReviewVerdict === null ? { detail: 'no final review has run' } : {}),
+      // **Suppressed when the commands could not run** (AD-45). Both model verdicts were
+      // formed against an environment that could not answer the question, so neither is a
+      // conclusion about the code — and letting a PASS here stand would be exactly the
+      // "degraded reads as passing" path the security model forbids.
+      met: input.mechanicalVerification !== 'NOT_RUN' && input.finalReviewVerdict === 'PASS',
+      ...(input.mechanicalVerification === 'NOT_RUN'
+        ? { detail: 'not counted: the review could not have been a conclusion about the code' }
+        : input.finalReviewVerdict === null
+          ? { detail: 'no final review has run' }
+          : {}),
     },
   ];
 
