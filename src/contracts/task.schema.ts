@@ -50,9 +50,59 @@ export const TaskSchema = z
     id: AnyTaskIdSchema,
     title: z.string().min(1),
     description: z.string().min(1),
+    /**
+     * A free-form module label the planner writes — `"backend"`, `"docs"`, `"infra"`.
+     *
+     * Nothing reads it, and nothing decides anything from it. Kept because plans on
+     * disk carry it, and called out here because AR §8.3 wanted this name for the
+     * file-containment mode: that one is {@link TaskSchema.shape.scopeMode}, and the
+     * two must not be conflated — a task legitimately labelled `"open"` would
+     * otherwise silently acquire an unbounded diff.
+     */
     scope: z.string().optional(),
     /** Present for monorepos (§39); ignored until MVP 3. */
     workspace: z.string().optional(),
+
+    /**
+     * Whether an empty diff is the intended outcome (AD-38, I-23).
+     *
+     * Declared rather than inferred, and the reason is a real task: TASK-006 of the
+     * evidence run was a legitimate verification task whose correct result was to
+     * change nothing. The difference between "correctly changed nothing" and "did
+     * nothing" is *intent*, and intent belongs in the plan, before the fact.
+     *
+     * Inferring it from an empty `files.likely` would be exactly backwards — that
+     * task declared three files it was meant to leave untouched.
+     */
+    expectsNoChange: z.boolean().optional(),
+
+    /**
+     * How strictly the task's diff must stay inside `files.likely` (AD-38).
+     *
+     * **Named `scopeMode` and not `scope`, deliberately.** AR §8.3 spells this field
+     * `scope`, and that name is already taken by the free-form module label above —
+     * every task in the AF-2026-002 plan carries `scope: "backend" | "docs" |
+     * "infra"`. Redefining it as a two-value enum would make that plan, which is one
+     * of the fixtures AR-00 is required to keep parsing, fail to parse. §8's own
+     * preamble and AD-38's compatibility clause both say every change here is
+     * additive and defaulted, so the additive reading wins over the spelling.
+     *
+     * The *values* are the spec's, verbatim. Absent means `declared`: containment is
+     * the default, and a plan that predates the field is not thereby granted an open
+     * scope.
+     */
+    scopeMode: z.enum(['declared', 'open']).optional(),
+
+    /**
+     * Evidence this task's acceptance criteria require, by validation id (C-15).
+     *
+     * Absent means "whatever the criteria happen to produce"; present means the
+     * attempt's acceptance map must show each of these, and an absent one yields
+     * `acceptance_evidence_unsatisfied` rather than passing quietly. Ids rather than
+     * free text, so the requirement resolves against human-authored configuration
+     * exactly as `validation` does.
+     */
+    requiredEvidence: z.array(ValidationIdSchema).optional(),
 
     complexity: ComplexitySchema,
     risk: RiskSchema,

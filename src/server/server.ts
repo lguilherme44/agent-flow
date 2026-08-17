@@ -47,6 +47,7 @@ import {
 import { loadConfig } from '../config/loader.js';
 import { buildRegistry } from '../adapters/runners/registry.js';
 import { referencedRunners } from '../core/health.js';
+import { capabilitiesOf } from '../core/role.js';
 import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
@@ -355,8 +356,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       // The adapter type, which is what independence is judged on. Never a
       // command line, a config path or anything holding a credential.
       provider: registry.providerOf(id) ?? 'unknown',
-      reasoningLevels: [...(capabilities[id]?.supportedReasoningLevels ?? [])],
-      structuredOutput: capabilities[id]?.structuredOutputStrategy ?? 'prompted',
+      // Resolved with no model: this endpoint describes the *runner*, on a page about
+      // configuration, and there is no role in hand whose model would narrow it. AD-30's
+      // per-pair answer belongs where a role is being resolved.
+      reasoningLevels: [...(capabilitiesOf(capabilities, id)?.supportedReasoningLevels ?? [])],
+      structuredOutput: capabilitiesOf(capabilities, id)?.structuredOutputStrategy ?? 'prompted',
     }));
   });
 

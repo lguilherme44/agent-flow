@@ -4,7 +4,11 @@ import {
   type GlobalConfig,
   type RunnerConfig,
 } from '../../contracts/index.js';
-import type { AgentRunner, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
+import type {
+  AgentRunner,
+  RunnerCapabilityEntry,
+  RunnerHealth,
+} from '../../ports/agent-runner.js';
 import type { ProcessRunner } from '../../ports/process-runner.js';
 import type { FileSystem } from '../../ports/file-system.js';
 import { ClaudeCodeRunner } from './claude-code-runner.js';
@@ -66,7 +70,16 @@ export interface RunnerRegistry {
   ids(): string[];
   get(id: string): AgentRunner;
   has(id: string): boolean;
-  capabilities(): Readonly<Record<string, RunnerCapabilities>>;
+  /**
+   * What each registered runner can do, per runner id (AD-30).
+   *
+   * This implementation returns **resolvers**, because a runner's supported reasoning
+   * levels can depend on the model and this is the layer allowed to know that. The
+   * declared type is the union so a fake registry may answer with plain records; every
+   * consumer reads through `capabilitiesOf`, passing the configured model as an opaque
+   * string, and so never learns which form it was given.
+   */
+  capabilities(): Readonly<Record<string, RunnerCapabilityEntry>>;
   /**
    * The adapter type behind a runner id.
    *
@@ -126,7 +139,9 @@ export function buildRegistry(
     has: (id) => runners.has(id),
 
     capabilities: () =>
-      Object.fromEntries([...runners].map(([id, runner]) => [id, runner.capabilities()])),
+      Object.fromEntries(
+        [...runners].map(([id, runner]) => [id, (model?: string) => runner.capabilities(model)]),
+      ),
 
     providerOf: (id) => providers.get(id),
 

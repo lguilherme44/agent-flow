@@ -11,6 +11,8 @@ const secondaryConfig: ResolvedAgentConfig = {
   runner: 'codex',
   reasoning: 'very_high',
   reasoningClamped: false,
+  requestedReasoning: 'very_high',
+  supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],
   timeoutSeconds: 900,
   structuredOutputStrategy: 'native',
 };
@@ -191,6 +193,7 @@ describe('reasoning clamping on the replacement (R-15)', () => {
       supportsNonInteractive: true,
       supportsWorkingDirectory: true,
       structuredOutputStrategy: 'native',
+      nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
     });
 
     const events: FallbackEvent[] = [];

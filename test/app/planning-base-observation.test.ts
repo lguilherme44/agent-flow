@@ -157,7 +157,7 @@ async function sequentialProject() {
     ...state,
     stage: 'plan-review' as const,
     status: 'waiting_for_approval' as const,
-    tasks: [{ id: 'TASK-001', state: 'queued' as const, attempts: 0 }],
+    tasks: [{ id: 'TASK-001', state: 'queued' as const, attempts: 0, infrastructureFailures: 0 }],
   }));
 
   const deps: RunActionDeps = {

@@ -105,6 +105,14 @@ export class CodexRunner extends BaseRunner {
        * exactly the compensation `structuredOutputStrategy` exists to describe.
        */
       structuredOutputStrategy: 'prompted',
+      // AD-32, from what the probe established. `-s workspace-write` is the sandbox the
+      // adapter selects for a write stage, and it grants edits inside the working
+      // directory without a confirmation prompt.
+      //
+      // `commandExecution` false for the same reason as the other adapters: the probe
+      // did not exercise a shell tool call under that sandbox, and an unmeasured grant
+      // must read as unknown rather than as granted. It costs a warning, not a run.
+      nonInteractiveToolGrants: { fileEdit: true, commandExecution: false },
     };
   }
 

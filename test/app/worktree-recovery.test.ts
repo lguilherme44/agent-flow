@@ -50,6 +50,9 @@ async function isolatedRun(tasks: readonly { id: string; state: string; attempts
       id: entry.id,
       state: entry.state as 'running',
       attempts: entry.attempts,
+      // AD-37's second counter. Supplied here rather than by every caller: this helper
+      // owns the shape, and a test about recovery has nothing to say about it.
+      infrastructureFailures: 0,
     })),
   }));
 
@@ -268,7 +271,7 @@ describe('which tasks recovery looks at', () => {
     const run = await store.createRun('f');
     await store.updateRun(run.runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const integrator = fakeIntegrator(() => ({ outcomes: [] }));
@@ -323,7 +326,7 @@ describe('the scheduler runs the Git half before the state half', () => {
     const run = await store.createRun('f');
     await store.updateRun(run.runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const observed: string[][] = [];
@@ -389,7 +392,7 @@ describe('the scheduler runs the Git half before the state half', () => {
     const run = await store.createRun('f');
     await store.updateRun(run.runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'completed' as const, attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'completed' as const, attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const before = JSON.stringify(await store.loadRun(run.runId));
@@ -437,7 +440,7 @@ describe('the scheduler runs the Git half before the state half', () => {
     const run = await store.createRun('f');
     await store.updateRun(run.runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const executed: string[] = [];

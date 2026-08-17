@@ -1,0 +1,65 @@
+{
+  "run": "AF-2026-002",
+  "task": "TASK-003",
+  "attempt": 1,
+  "base": "4f2025f5fc3ea626eb7e41511e0358172f22114b",
+  "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-1",
+  "workspace": "agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-1",
+  "runner": "agy",
+  "reasoning": "high",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T15:02:13.923Z",
+  "finishedAt": "2026-08-17T15:04:33.303Z",
+  "filesChanged": [
+    "src/cli/index.ts",
+    "README.md",
+    "README.pt-BR.md",
+    "scripts/packaging-smoke.mjs",
+    "test/cli/cli.test.ts"
+  ],
+  "agentReport": {
+    "status": "COMPLETED",
+    "notes": [
+      "The tests for CLI routing and behavior on missing arguments were successfully added, alongside the smoke test check for packaging.",
+      "The `bug` command delegates directly to `runFeatureCommand`, maintaining full backward compatibility with the existing planning features and producing the same artifact structure, exactly as outlined in the SDD.",
+      "```"
+    ],
+    "deviations": []
+  },
+  "validation": {
+    "expectation": "pass",
+    "passed": false,
+    "ids": [
+      "test",
+      "typecheck",
+      "lint"
+    ],
+    "commands": [
+      {
+        "command": "npm run test",
+        "exitCode": 1,
+        "durationMs": 29213,
+        "stdout": "\n> agent-flow@0.1.0 test\n> vitest run\n\n\n RUN  v2.1.9 <home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-1\n\n \u2713 test/adapters/utility-model/openai-utility-model.test.ts (101 tests) 106ms\n \u2713 test/app/task-executor.test.ts (56 tests) 124ms\n \u2713 test/architecture.test.ts (136 tests) 593ms\n \u2713 test/core/context-telemetry.test.ts (44 tests) 19ms\n \u2713 test/app/sc\n<truncated for fixture>",
+        "stderr": "fatal: Needed a single revision\ngit: 'sentinel' is not a git command. See 'git --help'.\nfatal: Needed a single revision\nAutomatic merge went well; stopped before committing as requested\nAutomatic merge went well; stopped before committing as requested\nPreparing worktree (checking out 'my-own-work')\nInvalid workflow class \"banana\". Supported classes: trivial, simple, standard, high-risk\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Fai\n<truncated for fixture>",
+        "truncated": false
+      },
+      {
+        "command": "npm run typecheck",
+        "exitCode": 0,
+        "durationMs": 2633,
+        "stdout": "\n> agent-flow@0.1.0 typecheck\n> tsc --noEmit\n\n",
+        "stderr": "",
+        "truncated": false
+      },
+      {
+        "command": "npm run lint",
+        "exitCode": 0,
+        "durationMs": 4043,
+        "stdout": "\n> agent-flow@0.1.0 lint\n> eslint src test bin apps/web/src\n\n\n<home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-1/test/core/repository-retriever.test.ts\n  824:11  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/only-throw-error')\n  838:9   warning  Unused eslint-disable directive (no problems were reporte\n<truncated for fixture>",
+        "stderr": "",
+        "truncated": false
+      }
+    ]
+  },
+  "validationJudgement": "unsatisfied"
+}

@@ -1,0 +1,81 @@
+{
+  "verdict": "FAIL",
+  "independence": "same-provider-fresh-context",
+  "reviewer": {
+    "runner": "claude",
+    "reasoning": "high"
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "type": "wrong_order",
+      "requirement": "NFR-004",
+      "description": "FIX-003 declares `dependencies: []`, but it is the global verification gate: its acceptance criterion is that `npm run check` and `npm run test:packaging` were executed and PASSED, standing in for AC-013 and AC-010. With no dependency on FIX-001 and FIX-002, it can run before (or concurrently with) the two tasks that write the missing FR-006 dry-run test and repair the FR-005 missing-argument test\n<truncated for fixture>",
+      "suggestedAction": "Set FIX-003 `dependencies: [\"FIX-001\", \"FIX-002\"]`, and add an acceptance criterion that the passing test output includes the new `bug --dry-run` case and the repaired missing-argument case by name, so the gate cannot be satisfied by a tree that lacks them.",
+      "file": "scripts/packaging-smoke.mjs"
+    },
+    {
+      "severity": "medium",
+      "type": "wrong_order",
+      "requirement": "FR-006",
+      "description": "FIX-001 and FIX-002 both declare `files.likely: [test/cli/cli.test.ts]` and both declare `dependencies: []`. Nothing serialises them, so a scheduler that groups independent tasks into a wave will have two agents editing the same test file in separate worktrees, producing a merge conflict on the exact file the whole corrective round depends on. TASK-001 and TASK-002 \u2014 which touch the same file \u2014 we\n<truncated for fixture>",
+      "suggestedAction": "Give FIX-002 `dependencies: [\"FIX-001\"]` (or merge the two into a single task, since both are edits to the same describe block in test/cli/cli.test.ts), mirroring the TASK-001 \u2192 TASK-002 chaining already used for that file.",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "medium",
+      "type": "missing_test",
+      "requirement": "FR-007",
+      "description": "TASK-006 acceptance criterion (1) requires creating two runs with the same description \u2014 one via `feature`, one via `bug` \u2014 and diffing state.json and events.jsonl. That is not executable under this repository's constraints: `runFeatureCommand` calls `buildExecutionContext({...nodeAdapters(), ...})` with hardcoded node adapters (src/cli/feature.ts:45-49), so there is no seam to inject the existing\n<truncated for fixture>",
+      "suggestedAction": "Replace criterion (1) with the structural proof that is actually checkable and already listed in TASK-006 (2) and (3): `git diff --stat -- src/contracts/` empty, no new field/enum/event type, a single `createRun` call site in src/cli/feature.ts, and `bug` reaching that call site via the dispatch test. If a data-level parity assertion is genuinely wanted, put it at the app layer with the existing f\n<truncated for fixture>",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "low",
+      "type": "missing_test",
+      "requirement": "FR-001",
+      "description": "No task owns AC-001 (a `bug` run produces request.md, architecture-impact.md, sdd.md, plan.json and reviews/plan-review.json and stops at the approval gate). TASK-003 cites FR-001 but none of its acceptance criteria touch artifact production, and the two proxies that exist \u2014 the CONFIG_ERROR dispatch test and the `--dry-run` test \u2014 both return before `pipeline.run` is ever called. FR-001 is in fac\n<truncated for fixture>",
+      "suggestedAction": "Add an explicit statement to TASK-006 that FR-001/AC-001 are discharged by the delegation proof (dispatch test lands in runFeatureCommand + src/cli/feature.ts byte-unchanged), and record the absence of an end-to-end artifact test as a declared residual risk instead of an unstated gap.",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "low",
+      "type": "risk_misjudged",
+      "requirement": "NFR-004",
+      "description": "FIX-001, FIX-002 and FIX-003 are all marked `complexity: \"complex\"` and `risk: \"medium\"`. FIX-001 adds one test case using a fixture already written in the same file; FIX-002 tightens three assertions on an existing case; FIX-003 runs `npm install` plus two npm scripts and reports the output. None of the three is complex, and mis-rating them inflates the model tier and wave budget the corrective r\n<truncated for fixture>",
+      "suggestedAction": "Re-rate FIX-001 and FIX-002 as `trivial`/`low` and FIX-003 as `trivial`/`low`; the only genuine risk in the round is the ordering gap in the first finding, not the size of any individual edit.",
+      "file": "test/cli/cli.test.ts"
+    }
+  ],
+  "adjudications": [
+    {
+      "findingIndex": 0,
+      "decision": "ACCEPTED",
+      "reason": "Verified against the plan: no task modifies prompts/, TASK-003 forbids it explicitly, and TASK-006 asserts `git diff --stat -- prompts/` is empty. Prompt work is genuinely out of scope, consistent with the SDD's R-2 which accepts the consequence rather than hiding it. The resulting quality gap is carried forward as a residual risk."
+    },
+    {
+      "findingIndex": 1,
+      "decision": "ACCEPTED",
+      "reason": "TASK-002 case (3) does specify the dry-run case, and FIX-001 reinstates it after implementation dropped it. One caveat worth recording: printExecutionPlan (src/cli/feature.ts:212-224) renders only the global config, capabilities and cwd \u2014 it never reads the description or the verb \u2014 so plan equality between `feature` and `bug` proves both verbs reach the same dry-run branch, not that they share an\n<truncated for fixture>"
+    },
+    {
+      "findingIndex": 2,
+      "decision": "ACCEPTED",
+      "reason": "Each named correction is present in the plan text: TASK-005 requires `npm run test:packaging` to be executed and PASS (and the smoke does print a `--help lists bug` check line, scripts/packaging-smoke.mjs:128-130), TASK-002 uses --cwd <tempDir>, distinguishes missing-argument from unknown-command and asserts no runs directory, and TASK-006 covers contracts, call sites and signature. The proposal i\n<truncated for fixture>"
+    },
+    {
+      "findingIndex": 3,
+      "decision": "ACCEPTED",
+      "reason": "The touched file set is exactly the SDD's in-scope list: src/cli/index.ts, README.md, README.pt-BR.md, test/cli/cli.test.ts, scripts/packaging-smoke.mjs. Nothing the SDD placed out of scope is modified, no new requirement or file is introduced, and the architecture rules at test/architecture.test.ts:1183 and :1207 stay green untouched \u2014 confirmed against the repository, where `.createRun(` still h\n<truncated for fixture>"
+    }
+  ],
+  "residualRisks": [
+    "R-2 stands unmitigated: a `bug` run executes prompts/architecture-impact.md, sdd.md and planning*.md, all of which frame the input as a feature to build. The output is a worse plan, not an error, and no test in this repository detects it. This is the difference between a useful command and a synonym, and it is deferred to separate work.",
+    "A run created by `bug` is indistinguishable from one created by `feature` in state.json, events.jsonl, request.md, `status` and the dashboard. If the intent behind the request was to see or filter bug runs in the UI, this plan does not deliver it and a persisted field (SDD A-4) plus its own SDD would be required.",
+    "FR-001/AC-001 is never exercised end to end: no test drives a `bug` run through the planning pipeline to artifacts, because the CLI hardcodes nodeAdapters() and the only alternative is spending real agent quota. Artifact parity rests entirely on the delegation argument.",
+    "The packaged-binary check for `bug` lives in scripts/packaging-smoke.mjs, which .github/workflows/ci.yml does not run (CI runs check, e2e, visual and coverage only). FR-011 therefore holds only for as long as someone keeps running `npm run test:packaging` locally.",
+    "Inherited workflow classification: a typical bug description matches none of the signal lists in src/core/adaptive-workflow.ts, so it takes the most expensive `standard` path, and an auth- or payment-flavoured description is classified high-risk and hard-refuses planning when planner and planReviewer resolve to the same provider \u2014 likely on the very first real `bug` invocation with the shipped def\n<truncated for fixture>"
+  ],
+  "planHash": "749ab527b9254e1a",
+  "summary": "The core plan (TASK-001\u2026006) is well-scoped and faithful to the SDD: one CLI seam, delegation to runFeatureCommand, architecture rules left untouched, and the one test that actually proves behaviour (dispatch \u2192 CONFIG_ERROR) is correctly identified. The corrective FIX tasks, however, are wired with no dependencies at all: FIX-003 is the global green gate yet can run before FIX-001/FIX-002 write th\n<truncated for fixture>"
+}

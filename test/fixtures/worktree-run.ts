@@ -133,7 +133,7 @@ export async function makeWorktreeRun(): Promise<WorktreeRun> {
     async seed(tasks, state: TaskState = 'running'): Promise<void> {
       await store.updateRun(run.runId, (current) => ({
         ...current,
-        tasks: tasks.map((id) => ({ id, state, attempts: 1 })),
+        tasks: tasks.map((id) => ({ id, state, attempts: 1, infrastructureFailures: 0 })),
       }));
     },
 
@@ -172,7 +172,7 @@ export async function makeWorktreeRun(): Promise<WorktreeRun> {
         startedAt: '2026-08-09T19:59:00.000Z',
         finishedAt: '2026-08-09T20:00:00.000Z',
         filesChanged: Object.keys(options.write ?? {}),
-        agentReport: { status: options.reported ?? 'COMPLETED', notes: [], deviations: [] },
+        agentReport: { status: options.reported ?? 'COMPLETED', notes: [], deviations: [], claimedFilesChanged: [] },
         validation: {
           expectation: options.expectation ?? 'pass',
           passed: judgement === 'satisfied',

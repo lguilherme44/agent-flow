@@ -113,9 +113,9 @@ describe('renderIsolatedProgress (§21.4)', () => {
     const rendered = renderIsolatedProgress(
       isolated({
         tasks: [
-          { id: 'TASK-001', state: 'completed', attempts: 1 },
-          { id: 'TASK-002', state: 'running', attempts: 1 },
-          { id: 'TASK-003', state: 'review_required', attempts: 1 },
+          { id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 },
+          { id: 'TASK-002', state: 'running', attempts: 1, infrastructureFailures: 0 },
+          { id: 'TASK-003', state: 'review_required', attempts: 1, infrastructureFailures: 0 },
         ],
         integrationHead: 'b'.repeat(40),
       }),
@@ -131,8 +131,8 @@ describe('renderIsolatedProgress (§21.4)', () => {
     const rendered = renderIsolatedProgress(
       isolated({
         tasks: [
-          { id: 'TASK-001', state: 'completed', attempts: 1 },
-          { id: 'TASK-002', state: 'running', attempts: 3 },
+          { id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 },
+          { id: 'TASK-002', state: 'running', attempts: 3, infrastructureFailures: 0 },
         ],
       }),
       [],

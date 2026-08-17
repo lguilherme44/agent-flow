@@ -36,7 +36,7 @@ function isolatedRun(base: string): RunState {
     status: 'running',
     approved: true,
     degradations: [],
-    tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+    tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
     isolationMode: 'worktree',
     planningBase: base,
     gitRunKey: RUN_KEY,

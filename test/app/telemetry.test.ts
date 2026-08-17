@@ -36,6 +36,7 @@ const CAPS = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
 const PROMPTS = '/pkg/prompts';
@@ -205,6 +206,8 @@ describe('telemetry is derived from what the run already recorded', () => {
             runner: 'codex',
             reasoning: 'high',
             reasoningClamped: false,
+            requestedReasoning: 'high',
+            supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],
             timeoutSeconds: 900,
             structuredOutputStrategy: 'native',
           },
@@ -257,7 +260,7 @@ describe('telemetry is derived from what the run already recorded', () => {
 
     await w.store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
@@ -281,7 +284,7 @@ describe('telemetry is derived from what the run already recorded', () => {
 
     await w.store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 3 }],
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 3, infrastructureFailures: 0 }],
     }));
 
     const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));

@@ -1,0 +1,36 @@
+{
+  "run": "AF-2026-002",
+  "task": "TASK-004",
+  "attempt": 1,
+  "base": "49b827b572eb6b4b7446ff03d70cfaae74cacc90",
+  "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/TASK-004/attempt-1",
+  "workspace": "agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-004/attempt-1",
+  "runner": "agy",
+  "reasoning": "low",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T16:39:21.799Z",
+  "finishedAt": "2026-08-17T16:39:54.915Z",
+  "filesChanged": [
+    "README.md",
+    "README.pt-BR.md"
+  ],
+  "agentReport": {
+    "status": "COMPLETED",
+    "notes": [
+      "The `bug` rows were already present from a previous change but were identical to the `feature` description. They have now been updated to explicitly mention \"Defect correction\" and \"Corre\u00e7\u00e3o de defeito\" respectively, meeting the specification."
+    ],
+    "deviations": []
+  },
+  "validation": {
+    "expectation": "none",
+    "passed": true,
+    "ids": [],
+    "commands": []
+  },
+  "validationJudgement": "satisfied",
+  "receipt": {
+    "nonce": "1ef450a3edfcf59a9291aa8433bf9def",
+    "validatedTree": "7f4b57801c163bd1ccd0a38dbdc90a5ab2a33fea",
+    "issuedAt": "2026-08-17T16:39:54.962Z"
+  }
+}

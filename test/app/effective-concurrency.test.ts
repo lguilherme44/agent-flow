@@ -160,7 +160,7 @@ async function approvedRun(projectConfig: string, isolationMode?: 'none') {
   await store.writeArtifact(run.runId, 'sdd', '# SDD\n\nFR-001 — the thing.\n');
   await store.updateRun(run.runId, (state) => ({
     ...state,
-    tasks: plan.tasks.map((task) => ({ id: task.id, state: 'queued' as const, attempts: 0 })),
+    tasks: plan.tasks.map((task) => ({ id: task.id, state: 'queued' as const, attempts: 0, infrastructureFailures: 0 })),
   }));
   await approveRun(store, run.runId, plan);
 

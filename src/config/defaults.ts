@@ -86,7 +86,37 @@ parallelism:
   maxTasks: 1
 
 retry:
+  # Work attempts per task. An attempt is one agent invocation whose work was
+  # observed and judged — a preflight or environment fault does not spend one.
   maxAttempts: 2
+
+recovery:
+  # Bounds on autonomous recovery. Every budget here ends its loop when exhausted,
+  # and says which one ran out, what was tried, and the one action that clears it.
+  #
+  # Off by default: nothing reads these yet, and a budget nothing enforces must not
+  # read as a feature that is on. Turning it on is a later milestone's decision.
+  enabled: false
+
+  # Per task.
+  maxEnvironmentRepairs: 2
+  # An automatic loop that produces the same failure twice has learned nothing.
+  maxIdenticalFailures: 2
+  maxModelCallsPerTask: 4
+
+  # Per run.
+  maxCorrectiveRounds: 2
+  maxCorrectivePlanRepairs: 2
+  maxVerificationCycles: 3
+  # The global stop: agent calls made with no human action in between.
+  maxAutonomousModelCalls: 24
+
+  # How much recovery context may be added to a prompt, in bytes. Recovery context
+  # lands on a prompt that is already large, so a packet carries a diff *stat* and
+  # never a patch, and anything cut is marked rather than dropped quietly.
+  maxPacketBytes: 8192
+  maxRawExcerptBytes: 2048
+  maxDiffStatLines: 40
 
 git:
   # Task isolation: each attempt runs in its own Git worktree on its own branch,

@@ -11,6 +11,8 @@ import {
   projectWorstCaseWorktreePath,
   describeIsolation,
   observePlanningBaseDrift,
+  planningPreflightAction,
+  renderPlanningRefusal,
   resolveRunGitIdentity,
 } from '../../src/app/run-git-identity.js';
 import {
@@ -215,6 +217,7 @@ describe('what a new run is born with (§6.1)', () => {
 describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
   it('passes on a clean repository with ignored agent-flow paths', async () => {
     repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
     repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
     repo.commitAll('ignore agent-flow');
 
@@ -224,6 +227,7 @@ describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
 
   it('refuses before run creation when the working tree is dirty', async () => {
     repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
     repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
     repo.commitAll('ignore agent-flow');
     repo.write('dirty.txt', 'uncommitted changes\n');
@@ -237,7 +241,9 @@ describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
 
   it('refuses before run creation when agent-flow state paths are not ignored', async () => {
     repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
     // No .gitignore committed
+    repo.commitAll('commit the configuration only');
 
     const result = await checkPlanningPreflight(depsFor(repo, true));
     expect(result.satisfied).toBe(false);
@@ -247,6 +253,7 @@ describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
 
   it('passes when worktrees are disabled even if the tree is dirty', async () => {
     repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
     repo.write('dirty.txt', 'uncommitted changes\n');
 
     const result = await checkPlanningPreflight(depsFor(repo, false));
@@ -255,6 +262,7 @@ describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
 
   it('refuses before run creation in a directory that is not a repository', async () => {
     repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
     const result = await checkPlanningPreflight({
       ...depsFor(repo, true),
       projectDir: repo.home,
@@ -262,7 +270,122 @@ describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
 
     expect(result.satisfied).toBe(false);
     if (result.satisfied) return;
-    expect(result.code).toBe('not_a_git_repository');
+    // The home directory is not a repository *and* holds no configuration. The
+    // initialisation check runs first by design (AR-01 C-01), so that is the code.
+    expect(result.code).toBe('project_not_initialized');
+  });
+});
+
+/**
+ * C-01, at the level the decision is actually made (AR-01).
+ *
+ * The evidence run's very first intervention: `agent-flow feature` started Discovery in a
+ * repository that had never been initialised, and the `init` that followed moved HEAD and
+ * invalidated the planningBase the run had already captured. Nothing about that sequence
+ * needed a model to notice — a file was absent.
+ *
+ * Placed **before** the `useWorktrees` branch on purpose: today the function returns
+ * `SATISFIED` immediately when worktrees are off, so a sequential run got no preflight at
+ * all, and the uninitialised project is exactly as fatal in either mode.
+ */
+describe('project initialisation is a preflight decision (AR-01, C-01)', () => {
+  it('refuses when the project holds no .agent-flow/config.yaml', async () => {
+    repo = await makeTempRepoWithCommit();
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('project_not_initialized');
+  });
+
+  it('names the absent path, because that is what the person has to create', async () => {
+    repo = await makeTempRepoWithCommit();
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.detail).toContain('.agent-flow/config.yaml');
+    expect(result.detail).toContain(repo.dir);
+  });
+
+  it('offers exactly one action, and it is `agent-flow init`', () => {
+    const action = planningPreflightAction('project_not_initialized');
+    expect(action).toContain('agent-flow init');
+  });
+
+  it('also refuses in sequential mode, where preflight used to return early', async () => {
+    // The gap this criterion names: `useWorktrees: false` returned SATISFIED before any
+    // check ran, so a sequential run in an uninitialised project proceeded to spend tokens.
+    repo = await makeTempRepoWithCommit();
+
+    const result = await checkPlanningPreflight(depsFor(repo, false));
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('project_not_initialized');
+  });
+
+  it('is decided before any repository question is asked', async () => {
+    // Ordering, asserted mechanically rather than by reading the function. An
+    // uninitialised *and* dirty repository must report the initialisation, because that is
+    // the one the user has to fix first — and because reaching Git at all is work this
+    // refusal exists to avoid.
+    repo = await makeTempRepoWithCommit();
+    repo.write('dirty.txt', 'uncommitted\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('project_not_initialized');
+  });
+
+  it('passes once the file exists, without it having to be committed', async () => {
+    // Initialisation is a fact about the working tree, not about history. `init` writes
+    // the file and *tells* the user to commit it; refusing until they had would make the
+    // documented next step impossible.
+    repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.commitAll('ignore agent-flow');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+    expect(result.satisfied).toBe(true);
+  });
+
+  it('renders a sentence that does not blame worktree mode', async () => {
+    // The caller wrapped every refusal in "Worktree mode was requested and this repository
+    // is not ready", which is false for this code and false in sequential mode generally.
+    repo = await makeTempRepoWithCommit();
+
+    const result = await checkPlanningPreflight(depsFor(repo, false));
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+
+    const rendered = renderPlanningRefusal(result);
+    expect(rendered.message).not.toMatch(/worktree/i);
+    expect(rendered.message).toContain('.agent-flow/config.yaml');
+    expect(rendered.action).toContain('agent-flow init');
+    // A configuration fault, so the CLI can reach CONFIG_ERROR without matching on a code.
+    expect(rendered.kind).toBe('configuration');
+  });
+
+  it('still renders repository refusals as repository refusals', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.commitAll('ignore agent-flow');
+    repo.write('dirty.txt', 'uncommitted\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+
+    const rendered = renderPlanningRefusal(result);
+    expect(rendered.kind).toBe('repository');
+    expect(rendered.action).toMatch(/Commit or stash/);
   });
 });
 

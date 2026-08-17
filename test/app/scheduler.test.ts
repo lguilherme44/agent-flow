@@ -324,7 +324,7 @@ describe('blocked dependency recovery (provenance)', () => {
       if (entry.id === 'TASK-001') {
         expect(entry.attempts).toBe(2);
       } else {
-        expect(entry).toMatchObject({ state: 'completed', attempts: 1 });
+        expect(entry).toMatchObject({ state: 'completed', attempts: 1, infrastructureFailures: 0 });
       }
     }
   });
@@ -561,7 +561,7 @@ describe('an attempt is counted when the task is dispatched', () => {
 
     await store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     let persistedMidFlight = 0;
@@ -631,7 +631,7 @@ describe('an attempt is counted when the task is dispatched', () => {
 
     await store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
@@ -768,7 +768,7 @@ describe('an interrupted task is recoverable (V-03 regression)', () => {
 
     await store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 2 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 2, infrastructureFailures: 0 }],
     }));
 
     const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
@@ -790,7 +790,7 @@ describe('an interrupted task is recoverable (V-03 regression)', () => {
 
     await store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 5 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 5, infrastructureFailures: 0 }],
     }));
 
     const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
@@ -939,7 +939,7 @@ describe('recovery obeys the state machine on a persisted run', () => {
     // What a killed process leaves behind: persisted, not merely passed in.
     await store.updateRun(run.runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const outcome = await new Scheduler({ store, executor }).run(plan, run.runId, 'SDD', {
@@ -959,7 +959,7 @@ describe('recovery obeys the state machine on a persisted run', () => {
 
     await store.updateRun(run.runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 3 }],
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 3, infrastructureFailures: 0 }],
     }));
 
     const outcome = await new Scheduler({ store, executor, maxAttempts: 3 }).run(

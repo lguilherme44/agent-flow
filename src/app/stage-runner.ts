@@ -92,7 +92,16 @@ export interface StageResult {
   readonly text: string;
   readonly data?: unknown;
   readonly runner: string;
-  readonly attempts: number;
+  /**
+   * How many times the stage had to re-prompt for a well-formed answer (AR §4.4).
+   *
+   * **Named `repairs` and not `attempts`.** One word, one meaning: an *attempt* is one
+   * agent invocation for one task in one prepared workspace whose work was observed and
+   * judged, and that number lives on `TaskProgress`. This one counts re-prompts inside a
+   * single stage call, and the two were both called `attempt` — which is how a log line
+   * reading `attempt=1 failed` ended up inside a file named `…-attempt-2.log`.
+   */
+  readonly repairs: number;
   /**
    * What actually ran.
    *
@@ -222,10 +231,19 @@ export class StageRunner {
     if (resolved.reasoningClamped) {
       // Never only in a log line: a run that quietly ran below its configured
       // level should be able to explain itself later (R-16).
+      //
+      // **Naming the pair, and all four facts** (AR-01, C-03). The old sentence blamed the
+      // *runner*, which was true of a CLI-level gap and false of the one that actually
+      // happened: the AGY CLI accepts `medium` and the model behind it does not. A person
+      // reading "runner agy does not support medium" would have gone looking in the wrong
+      // place — and did.
       await store.recordDegradation(runId, {
         kind: 'reasoning_clamped',
-        reason: `runner "${resolved.runner}" does not support the configured effort for role "${stage.role}"`,
-        impact: `stage "${stage.name}" ran at ${resolved.reasoning}`,
+        reason:
+          `role "${stage.role}" requested effort ${resolved.requestedReasoning}, which ` +
+          `runner "${resolved.runner}"${describeModel(resolved.model)} does not offer ` +
+          `(supported: ${resolved.supportedReasoningLevels.join(', ')})`,
+        impact: `stage "${stage.name}" ran at ${resolved.reasoning} instead of ${resolved.requestedReasoning}`,
       });
     }
 
@@ -257,11 +275,19 @@ export class StageRunner {
     const runner = getRunner(resolved);
     const startedAt = clock.now();
 
+    // The same facts the degradation carries, structurally (AR-01, C-03). The degradation
+    // is prose, for a person; this is for the read model, which must never have to parse
+    // one. §8 keeps `RunEvent.detail` an open record precisely so evidence can be enriched
+    // without a migration, and these fields are additive.
     await store.appendEvent(runId, 'stage_started', {
       stage: stage.name,
       role: stage.role,
       runner: resolved.runner,
+      ...(resolved.model === undefined ? {} : { model: resolved.model }),
       reasoning: resolved.reasoning,
+      reasoningRequested: resolved.requestedReasoning,
+      reasoningSupported: resolved.supportedReasoningLevels,
+      reasoningClamped: resolved.reasoningClamped,
     });
 
     const logLines: string[] = [
@@ -269,15 +295,21 @@ export class StageRunner {
         `reasoning=${resolved.reasoning} startedAt=${startedAt}`,
     ];
 
-    let attempt = 0;
+    // **`repair`, not `attempt` (AR §4.4).** This counts re-prompts for a
+    // well-formed answer inside one invocation of this stage; an *attempt* is one
+    // agent invocation for one task in one prepared workspace, and the task's own
+    // counter owns that word. Sharing it produced a log line reading
+    // `attempt=1 failed` inside a file named `…-attempt-2.log`, which is two
+    // different numbers under one name in one sentence.
+    let repair = 0;
     let lastProblems: string[] = [];
     // Who produced the answer we are about to reject. Repairs can straddle a
     // fallback, so this is not a constant — and when the repairs run out, it is
     // the only record of who actually wrote the output that failed.
     let lastExecution = executionOf(undefined, resolved);
 
-    while (attempt < MAX_REPAIR_ATTEMPTS + 1) {
-      attempt += 1;
+    while (repair < MAX_REPAIR_ATTEMPTS + 1) {
+      repair += 1;
 
       const result = await runner.run({
         prompt: promptText,
@@ -297,7 +329,7 @@ export class StageRunner {
         // Infrastructure failures are not retried here: re-running immediately
         // would hit the same wall. Deciding whether to fall back belongs to the
         // caller, which is why the code travels with the error.
-        logLines.push(`attempt=${attempt} failed errorCode=${result.errorCode}`);
+        logLines.push(`repair=${repair} failed errorCode=${result.errorCode}`);
         await this.writeLog(runId, stage, logLines);
         await store.appendEvent(runId, 'stage_failed', {
           stage: stage.name,
@@ -306,7 +338,7 @@ export class StageRunner {
           // A failure is provenance too: it ran somewhere, at some effort, and
           // possibly after a substitution that also failed.
           ...executionDetail(lastExecution),
-          attempts: attempt,
+          repairs: repair,
           startedAt,
           finishedAt: clock.now(),
         });
@@ -320,7 +352,7 @@ export class StageRunner {
         );
       }
 
-      logLines.push(`attempt=${attempt} ok durationMs=${result.durationMs}`);
+      logLines.push(`repair=${repair} ok durationMs=${result.durationMs}`);
 
       const problems = this.validate(stage, result.text, result.json);
       if (problems.length === 0) {
@@ -338,7 +370,7 @@ export class StageRunner {
           // inherited configured intent where the invariant is that actual
           // execution wins. The two agree except in the one case worth seeing.
           ...executionDetail(execution),
-          attempts: attempt,
+          repairs: repair,
           startedAt,
           finishedAt: clock.now(),
         });
@@ -349,13 +381,13 @@ export class StageRunner {
             ? {}
             : { data: stage.outputSchema.parse(result.json ?? safeJson(result.text)) }),
           runner: execution.runner,
-          attempts: attempt,
+          repairs: repair,
           execution,
         };
       }
 
       lastProblems = problems;
-      logLines.push(`attempt=${attempt} invalid: ${problems.join('; ')}`);
+      logLines.push(`repair=${repair} invalid: ${problems.join('; ')}`);
 
       // The retry has to say what was wrong. Asking again without the reason is
       // a coin flip, and an expensive one.
@@ -372,7 +404,7 @@ export class StageRunner {
       role: stage.role,
       errorCode: 'invalid_output',
       ...executionDetail(lastExecution),
-      attempts: attempt,
+      repairs: repair,
       startedAt,
       finishedAt: clock.now(),
       problems: lastProblems,
@@ -382,7 +414,7 @@ export class StageRunner {
       stage.name,
       'invalid_output',
       `Stage "${stage.name}" produced output that never satisfied its contract ` +
-        `after ${String(attempt)} attempts:\n${lastProblems.map((p) => `  - ${p}`).join('\n')}`,
+        `after ${String(repair)} attempts:\n${lastProblems.map((p) => `  - ${p}`).join('\n')}`,
       undefined,
       lastExecution,
     );
@@ -442,6 +474,17 @@ export function executionDetail(execution: StageExecution): Record<string, unkno
     reasoningClamped: execution.reasoningClamped,
     ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
   };
+}
+
+/**
+ * The model, in a sentence, or nothing.
+ *
+ * A separate function because the alternative is a ternary inside a template literal that
+ * produces `runner "agy" ` with a trailing space when no model is configured — and a
+ * degradation message is read by people.
+ */
+function describeModel(model: string | undefined): string {
+  return model === undefined ? '' : ` on model "${model}"`;
 }
 
 function safeJson(text: string): unknown {

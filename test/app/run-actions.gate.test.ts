@@ -153,7 +153,7 @@ async function project(options: { runner?: ProcessRunner } = {}) {
   await store.updateRun(run.runId, (state) => ({
     ...state,
     status: 'waiting_for_approval',
-    tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0 }],
+    tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0, infrastructureFailures: 0 }],
   }));
 
   const deps: RunActionDeps = {
@@ -426,7 +426,7 @@ async function putTaskIn(
   for (const step of walk) {
     await store.updateRun(runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: step, attempts }],
+      tasks: [{ id: 'TASK-001', state: step, attempts, infrastructureFailures: 0 }],
     }));
   }
 }
@@ -510,7 +510,7 @@ describe('blocked retries split by provenance (dependency vs agent)', () => {
     const { store, deps, runId } = await project();
     await store.updateRun(runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 0, blockReason: 'dependency' }],
+      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 0, infrastructureFailures: 0, blockReason: 'dependency' }],
     }));
 
     const retried = await retryTask(deps, runId, 'TASK-001');
@@ -529,7 +529,7 @@ describe('blocked retries split by provenance (dependency vs agent)', () => {
     const { store, deps, runId } = await project();
     await store.updateRun(runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 1, blockReason: 'agent' }],
+      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 1, infrastructureFailures: 0, blockReason: 'agent' }],
     }));
 
     const refused = await retryTask(deps, runId, 'TASK-001');
@@ -547,7 +547,7 @@ describe('blocked retries split by provenance (dependency vs agent)', () => {
     const { store, deps, runId } = await project();
     await store.updateRun(runId, (current) => ({
       ...current,
-      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'blocked', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const refused = await retryTask(deps, runId, 'TASK-001');

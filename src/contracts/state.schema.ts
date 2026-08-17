@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   CommitOidSchema,
+  FailureClassSchema,
   GitRunKeySchema,
   IsolationModeSchema,
   IsoTimestampSchema,
@@ -125,7 +126,37 @@ export type TaskBlockReason = z.infer<typeof BlockReasonSchema>;
 export const TaskProgressSchema = z.object({
   id: z.string().min(1),
   state: TaskStateSchema,
+  /**
+   * **Work** attempts, and only those (AR §4.4, AD-37).
+   *
+   * The field is unchanged and so is its default; what narrows is its *meaning*.
+   * An attempt is one invocation of an AgentRunner for one task, in one prepared
+   * workspace, whose work was observed and judged — so everything the run knew, or
+   * could have known, before invoking the agent belongs in
+   * {@link TaskProgressSchema.shape.infrastructureFailures} instead.
+   *
+   * This is the counter `retry` gates on, which is why the split matters: one task
+   * in the evidence run spent its second attempt on a denied `grep` — an
+   * environment fact with nothing to say about the quality of the work — and the
+   * single counter then forced `retry --force`, a mechanism for deliberately
+   * overruling a gate, spent to work around miscounting.
+   */
   attempts: z.number().int().min(0).default(0),
+  /**
+   * Preflight and environment failures, gated by their own budget (AD-37, I-22).
+   *
+   * Bounded rather than uncounted: a permanently misconfigured environment would
+   * otherwise retry forever. Counted rather than decremented from `attempts`,
+   * because arithmetic that hides history is not an audit trail.
+   *
+   * Defaults to `0`, so every state file written before this field existed parses
+   * unchanged and reads as "no infrastructure failure recorded" — which is exactly
+   * what those runs could observe.
+   */
+  infrastructureFailures: z.number().int().min(0).default(0),
+  /** The class of the most recent failure (AD-36). Absent until one is classified. */
+  failureClass: FailureClassSchema.optional(),
+  lastFailureAt: IsoTimestampSchema.optional(),
   blockReason: BlockReasonSchema.optional(),
 });
 export type TaskProgress = z.infer<typeof TaskProgressSchema>;
@@ -181,6 +212,24 @@ export const RunStateSchema = z.object({
    */
   integrationHead: CommitOidSchema.optional(),
 
+  /**
+   * What this run's approval has already authorised, and what it has spent (AD-46).
+   *
+   * Absent on every run created before this field existed, and absent is not
+   * `{ correctiveRoundsUsed: 0 }`: a run that predates bounded corrective autonomy
+   * never had the grant, and nothing may read one into it. The counters exist so a
+   * budget can be enforced without recomputing it from the event log, and
+   * `grantedAt` records when the envelope was first evaluated for this run.
+   */
+  autonomy: z
+    .object({
+      correctiveRoundsUsed: z.number().int().min(0).default(0),
+      /** AgentRunner calls made with no intervening human action (AR §6.2). */
+      autonomousModelCalls: z.number().int().min(0).default(0),
+      grantedAt: IsoTimestampSchema.optional(),
+    })
+    .optional(),
+
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,
 });
@@ -193,3 +242,34 @@ export const RunEventSchema = z.object({
   detail: z.record(z.string(), z.unknown()).default({}),
 });
 export type RunEvent = z.infer<typeof RunEventSchema>;
+
+/**
+ * The event names recovery is allowed to emit (AR §8.8).
+ *
+ * `RunEventSchema.type` is an open string and stays open — enriching or adding an
+ * event has never been a breaking change, and that is load-bearing for the
+ * milestones above this one. So this list is not a validator; it is the *spelling*,
+ * declared once, in the layer that owns vocabulary.
+ *
+ * It exists because the alternative is each milestone inventing its own name at the
+ * call site, and two spellings of one event is a read model that silently reports
+ * half of what happened. Declared here in full, ahead of the code that emits them,
+ * for the same reason the failure taxonomy is: so the next milestone reaches for a
+ * name rather than coining one.
+ */
+export const RECOVERY_EVENT_TYPES = [
+  'workspace_prepared',
+  'workspace_preparation_failed',
+  'task_failure_classified',
+  'recovery_started',
+  'recovery_step_completed',
+  'recovery_exhausted',
+  'environment_repaired',
+  'failure_context_built',
+  'wave_serialised_for_overlap',
+  'corrective_plan_repaired',
+  'corrective_envelope_evaluated',
+  'init_during_active_run',
+] as const;
+
+export type RecoveryEventType = (typeof RECOVERY_EVENT_TYPES)[number];

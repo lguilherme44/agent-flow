@@ -87,11 +87,25 @@ export interface PlanningRefusalFacts {
   readonly action: string;
 }
 
+/**
+ * Whose mistake this is, and therefore which exit code it deserves.
+ *
+ * `configuration` means the project is not set up — the user edits a file. `repository`
+ * means the working tree or history is in a state a Git command resolves. The CLI maps
+ * these to `CONFIG_ERROR` and `EXECUTION_ERROR`, so the decision is made once, here, by
+ * the layer that knows what went wrong — rather than by the renderer matching on a code
+ * string it would have to be kept in step with.
+ *
+ * Defaults to `repository`, which is what every refusal predating AR-01 was.
+ */
+export type PlanningRefusalKind = 'configuration' | 'repository';
+
 export class PlanningRefusal extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly action: string,
+    readonly kind: PlanningRefusalKind = 'repository',
   ) {
     super(message);
     this.name = 'PlanningRefusal';

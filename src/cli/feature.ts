@@ -17,6 +17,7 @@ import {
   composeRunIdentity,
   resolveRunGitIdentity,
   checkPlanningPreflight,
+  renderPlanningRefusal,
   worktreeRefusalAction,
 } from '../app/run-git-identity.js';
 import { PlanningRefusal } from '../app/planning-pipeline.js';
@@ -271,18 +272,20 @@ async function createRunWithIdentity(
 
   const preflight = await checkPlanningPreflight(deps);
   if (!preflight.satisfied) {
-    throw new PlanningRefusal(
-      preflight.code,
-      `Worktree mode was requested and this repository is not ready (${preflight.code}): ${preflight.detail}`,
-      worktreeRefusalAction(preflight.code),
-    );
+    // Rendered by the module that owns the codes, so `bug` and every future verb say the
+    // same thing — and so the sentence stays true. It used to blame worktree mode for
+    // every refusal, including refusals that have nothing to do with it and refusals a
+    // sequential run can now reach (AR-01).
+    const rendered = renderPlanningRefusal(preflight);
+    throw new PlanningRefusal(rendered.code, rendered.message, rendered.action, rendered.kind);
   }
 
   const identity = await resolveRunGitIdentity(deps);
   if (!identity.ok) {
     throw new PlanningRefusal(
       identity.refusal.code,
-      `Worktree mode was requested and this repository cannot support it (${identity.refusal.code}): ${identity.refusal.detail}`,
+      `Worktree mode was requested and this repository cannot support it ` +
+        `(${identity.refusal.code}): ${identity.refusal.detail}`,
       worktreeRefusalAction(identity.refusal.code),
     );
   }

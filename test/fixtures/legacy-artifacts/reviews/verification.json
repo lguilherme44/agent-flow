@@ -1,0 +1,30 @@
+{
+  "verdict": "PASS",
+  "summary": "A implementa\u00e7\u00e3o faz exatamente o que o SDD projetou: `bug` \u00e9 registrado em `src/cli/index.ts` logo depois de `feature`, delega a `runFeatureCommand` atribuindo a `exitCode` (nunca retornando), n\u00e3o cria arquivo novo em `src/cli/`, n\u00e3o toca `src/cli/feature.ts` nem `test/architecture.test.ts`, e as duas tabelas de README mais o packaging-smoke foram atualizados. O teste central (despacho + propaga\u00e7\u00e3\n<truncated for fixture>",
+  "findings": [
+    {
+      "severity": "medium",
+      "type": "weak_test",
+      "requirement": "FR-002",
+      "description": "No teste 'registers bug with options parity but distinct wording', duas das tr\u00eas asser\u00e7\u00f5es de 'distinct wording' s\u00e3o tautol\u00f3gicas e n\u00e3o podem falhar em nenhuma implementa\u00e7\u00e3o. (a) `expect(stdout).not.toMatch(/Plan a feature/i)`: o help de subcomando do commander imprime s\u00f3 usage, description, arguments e options do pr\u00f3prio `bug` \u2014 a description do comando `feature` nunca aparece ali, mesmo que a de\n<truncated for fixture>",
+      "suggestedAction": "Asseverar sobre a linha de description de forma positiva e espec\u00edfica \u2014 por exemplo extrair a linha que come\u00e7a com a description e exigir que ela case /bug fix|defect/i \u2014 ou remover as duas asser\u00e7\u00f5es tautol\u00f3gicas para o teste n\u00e3o sugerir cobertura que n\u00e3o existe. As quatro asser\u00e7\u00f5es de op\u00e7\u00f5es e a do texto do argumento devem ficar como est\u00e3o: essas s\u00e3o reais.",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "low",
+      "type": "inconsistent_pattern",
+      "requirement": "NFR-004",
+      "description": "O teste 'dispatches to runFeatureCommand and propagates its exit code' cria um diret\u00f3rio com `mkdtempSync` (linha 72) e nunca o remove. Todos os outros testes de CLI do reposit\u00f3rio que criam temp dir o limpam em `afterEach` com `rm(tempDir, { recursive: true, force: true })` \u2014 `test/cli/feature-workflow.test.ts:23-25` e `test/cli/config.test.ts:27`, sendo que o primeiro \u00e9 o fixture que o pr\u00f3prio S\n<truncated for fixture>",
+      "suggestedAction": "Limpar o diret\u00f3rio ap\u00f3s o teste, seguindo o padr\u00e3o de `test/cli/feature-workflow.test.ts:23-25`: guardar o caminho e remover em `afterEach` (ou em `try/finally` dentro do pr\u00f3prio `it`, j\u00e1 que o `afterEach` do describe hoje s\u00f3 faz `vi.restoreAllMocks()`).",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "low",
+      "type": "missing_test",
+      "requirement": "FR-005",
+      "description": "O teste 'fails if the description argument is missing' cobre apenas metade de FR-005/AC-005: assever\u0430 `code !== ExitCode.OK`, mas n\u00e3o assever\u0430 a segunda cl\u00e1usula \u2014 'sem criar run nenhum' / 'n\u00e3o cria diret\u00f3rio algum em .agent-flow/runs/'. Agravante: a chamada \u00e9 `main(['node','agent-flow','bug'])` sem `--cwd`, ent\u00e3o o cwd efetivo \u00e9 o pr\u00f3prio reposit\u00f3rio; se algum dia a valida\u00e7\u00e3o de argumento deixar \n<truncated for fixture>",
+      "suggestedAction": "Passar um `--cwd` para um temp dir isolado e acrescentar a asser\u00e7\u00e3o que falta \u2014 que `.agent-flow/runs/` n\u00e3o existe (ou est\u00e1 vazio) depois da chamada. Isso fecha AC-005 e tira o teste do cwd do reposit\u00f3rio.",
+      "file": "test/cli/cli.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "run": "AF-2026-002",
+  "task": "TASK-002",
+  "attempt": 2,
+  "base": "c011c67a478096377360f34bbcf39c6e2a92facc",
+  "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/TASK-002/attempt-2",
+  "workspace": "agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-002/attempt-2",
+  "runner": "agy",
+  "reasoning": "high",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T15:01:08.256Z",
+  "finishedAt": "2026-08-17T15:02:09.728Z",
+  "filesChanged": [],
+  "agentReport": {
+    "status": "COMPLETED",
+    "notes": [],
+    "deviations": []
+  },
+  "validation": {
+    "expectation": "fail",
+    "passed": false,
+    "ids": [
+      "test"
+    ],
+    "commands": [
+      {
+        "command": "npm run test",
+        "exitCode": 1,
+        "durationMs": 30435,
+        "stdout": "\n> agent-flow@0.1.0 test\n> vitest run\n\n\n RUN  v2.1.9 <home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-002/attempt-2\n\n \u2713 test/adapters/utility-model/openai-utility-model.test.ts (101 tests) 200ms\n \u2713 test/app/task-executor.test.ts (56 tests) 132ms\n \u2713 test/core/diff-triager.test.ts (58 tests) 522ms\n   \u2713 DiffTriager mechanical truth > consumes a real GitClient Git\n<truncated for fixture>",
+        "stderr": "fatal: Needed a single revision\ngit: 'sentinel' is not a git command. See 'git --help'.\nfatal: Needed a single revision\nAutomatic merge went well; stopped before committing as requested\nAutomatic merge went well; stopped before committing as requested\nPreparing worktree (checking out 'my-own-work')\nInvalid workflow class \"banana\". Supported classes: trivial, simple, standard, high-risk\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Fai\n<truncated for fixture>",
+        "truncated": false
+      }
+    ]
+  },
+  "validationJudgement": "satisfied",
+  "receipt": {
+    "nonce": "b500283d167442b5608558abebf06897",
+    "validatedTree": "1f7b90da51afb881b1a50946e3df81b938e641c5",
+    "issuedAt": "2026-08-17T15:02:09.755Z"
+  }
+}

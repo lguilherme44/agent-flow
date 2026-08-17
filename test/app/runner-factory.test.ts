@@ -27,6 +27,7 @@ const CAPS = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
 const NARROW_CAPS = { ...CAPS, supportedReasoningLevels: ['low', 'medium', 'high'] } as const;

@@ -1,0 +1,30 @@
+{
+  "task": "TASK-004",
+  "status": "completed",
+  "runner": "agy",
+  "reasoning": "low",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T16:39:21.799Z",
+  "finishedAt": "2026-08-17T16:39:54.915Z",
+  "filesChanged": [
+    "README.md",
+    "README.pt-BR.md"
+  ],
+  "validation": {
+    "passed": true,
+    "expectation": "none",
+    "commands": []
+  },
+  "notes": [
+    "The `bug` rows were already present from a previous change but were identical to the `feature` description. They have now been updated to explicitly mention \"Defect correction\" and \"Corre\u00e7\u00e3o de defeito\" respectively, meeting the specification."
+  ],
+  "integration": {
+    "attempt": 1,
+    "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/integration",
+    "marker": "c5b4ea84413533c5301f2ce3ba8eca01e8c60b71",
+    "mergeCommit": "d33fa29ad8d9c7a1f3ad0264b656b44331f903d1",
+    "base": "49b827b572eb6b4b7446ff03d70cfaae74cacc90",
+    "validatedTree": "7f4b57801c163bd1ccd0a38dbdc90a5ab2a33fea",
+    "integratedAt": "2026-08-17T16:39:55.031Z"
+  }
+}

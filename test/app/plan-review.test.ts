@@ -24,6 +24,7 @@ const CAPS = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
 function config(reviewerRunner: string, plannerRunner = 'claude') {

@@ -1,0 +1,34 @@
+{
+  "task": "TASK-005",
+  "status": "completed",
+  "runner": "agy",
+  "reasoning": "low",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T16:39:22.255Z",
+  "finishedAt": "2026-08-17T16:39:42.718Z",
+  "filesChanged": [],
+  "validation": {
+    "passed": true,
+    "expectation": "pass",
+    "commands": [
+      {
+        "command": "npm run build",
+        "exitCode": 0,
+        "durationMs": 688,
+        "stdout": "\n> agent-flow@0.1.0 build\n> tsup\n\nCLI Building entry: bin/agent-flow.ts\nCLI Using tsconfig: tsconfig.json\nCLI tsup v8.5.1\nCLI Using tsup config: <home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-005/attempt-1/tsup.config.ts\nCLI Target: node20\nCLI Cleaning output folder\nESM Build start\nESM dist/bin/agent-flow.js     627.36 KB\nESM dist/bin/agent-flow.js.map 1.54 \n<truncated for fixture>",
+        "stderr": "",
+        "truncated": false
+      }
+    ]
+  },
+  "notes": [],
+  "integration": {
+    "attempt": 1,
+    "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/integration",
+    "marker": "8fff922f477f622c88258a3d9c3bff3beb06bb2a",
+    "mergeCommit": "fede07d11751c77d0b3806585e483147d8c6b333",
+    "base": "49b827b572eb6b4b7446ff03d70cfaae74cacc90",
+    "validatedTree": "00b7b161656c5836b084f0b533c39234b192b778",
+    "integratedAt": "2026-08-17T16:39:55.133Z"
+  }
+}

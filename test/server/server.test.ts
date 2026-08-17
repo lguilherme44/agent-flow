@@ -142,8 +142,8 @@ async function serve(
     ...state,
     status: 'waiting_for_approval',
     tasks: [
-      { id: 'TASK-001', state: 'completed', attempts: 1 },
-      { id: 'FIX-001', state: 'queued', attempts: 0 },
+      { id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 },
+      { id: 'FIX-001', state: 'queued', attempts: 0, infrastructureFailures: 0 },
     ],
   }));
 
@@ -607,10 +607,10 @@ describe('UI-28 — the dependency graph', () => {
     await store.updateRun(run.runId, (state) => ({
       ...state,
       tasks: [
-        { id: 'TASK-001', state: 'completed', attempts: 1 },
-        { id: 'TASK-002', state: 'failed', attempts: 1 },
-        { id: 'TASK-003', state: 'queued', attempts: 0 },
-        { id: 'TASK-004', state: 'queued', attempts: 0 },
+        { id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 },
+        { id: 'TASK-002', state: 'failed', attempts: 1, infrastructureFailures: 0 },
+        { id: 'TASK-003', state: 'queued', attempts: 0, infrastructureFailures: 0 },
+        { id: 'TASK-004', state: 'queued', attempts: 0, infrastructureFailures: 0 },
       ],
     }));
 

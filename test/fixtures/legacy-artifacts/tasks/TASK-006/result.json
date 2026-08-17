@@ -1,0 +1,50 @@
+{
+  "task": "TASK-006",
+  "status": "completed",
+  "runner": "agy",
+  "reasoning": "high",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T16:39:58.873Z",
+  "finishedAt": "2026-08-17T16:40:48.662Z",
+  "filesChanged": [],
+  "validation": {
+    "passed": true,
+    "expectation": "pass",
+    "commands": [
+      {
+        "command": "npm run typecheck",
+        "exitCode": 0,
+        "durationMs": 2478,
+        "stdout": "\n> agent-flow@0.1.0 typecheck\n> tsc --noEmit\n\n",
+        "stderr": "",
+        "truncated": false
+      },
+      {
+        "command": "npm run lint",
+        "exitCode": 0,
+        "durationMs": 3523,
+        "stdout": "\n> agent-flow@0.1.0 lint\n> eslint src test bin apps/web/src\n\n\n<home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-006/attempt-1/test/core/repository-retriever.test.ts\n  824:11  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/only-throw-error')\n  838:9   warning  Unused eslint-disable directive (no problems were reporte\n<truncated for fixture>",
+        "stderr": "",
+        "truncated": false
+      },
+      {
+        "command": "npm run test",
+        "exitCode": 0,
+        "durationMs": 28306,
+        "stdout": "\n> agent-flow@0.1.0 test\n> vitest run\n\n\n RUN  v2.1.9 <home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-006/attempt-1\n\n \u2713 test/adapters/utility-model/openai-utility-model.test.ts (101 tests) 93ms\n \u2713 test/app/task-executor.test.ts (56 tests) 154ms\n \u2713 test/architecture.test.ts (136 tests) 617ms\n \u2713 test/app/scheduler.test.ts (57 tests) 434ms\n   \u2713 what a refused wor\n<truncated for fixture>",
+        "stderr": "fatal: Needed a single revision\ngit: 'sentinel' is not a git command. See 'git --help'.\nfatal: Needed a single revision\nAutomatic merge went well; stopped before committing as requested\nAutomatic merge went well; stopped before committing as requested\nPreparing worktree (checking out 'my-own-work')\nInvalid workflow class \"banana\". Supported classes: trivial, simple, standard, high-risk\n",
+        "truncated": false
+      }
+    ]
+  },
+  "notes": [],
+  "integration": {
+    "attempt": 1,
+    "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/integration",
+    "marker": "aebd1b7f713d0226a31a993f2eebea8c5fa2c307",
+    "mergeCommit": "6e804263e613d167b338345d80feacc070fd81df",
+    "base": "fede07d11751c77d0b3806585e483147d8c6b333",
+    "validatedTree": "7f4b57801c163bd1ccd0a38dbdc90a5ab2a33fea",
+    "integratedAt": "2026-08-17T16:40:48.741Z"
+  }
+}

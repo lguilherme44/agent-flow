@@ -62,6 +62,105 @@ export const FALLBACK_TRIGGERS = ['quota_exceeded', 'auth_required', 'runner_una
 export const FallbackTriggerSchema = z.enum(FALLBACK_TRIGGERS);
 export type FallbackTrigger = z.infer<typeof FallbackTriggerSchema>;
 
+/**
+ * What kind of failure this was, one level above the runner transport (AR §3, AD-36).
+ *
+ * **A refinement of {@link RUNNER_ERROR_CODES}, never a replacement for it.**
+ * That list is the *adapter translation* contract — deliberately small, and
+ * `FALLBACK_TRIGGERS` is defined as a subset of it at the schema level, so growing
+ * it would change fallback reasoning as a side effect. What was missing is the
+ * level above: `execution_failed` covered an unsupported effort, a denied command
+ * and a genuine implementation failure, which are three failures with three
+ * different correct responses.
+ *
+ * So this enum sits on top, and every class declares which runner code it refines
+ * — see `core/failure-classification.ts`, which owns that table. Nothing branches
+ * on both: a module reads the class or it reads the code, and the class is the one
+ * that carries a recovery disposition.
+ *
+ * Grouped by the four detection points of AR §3.1–§3.5, in that order, because the
+ * group decides whether an attempt was ever spent (I-22).
+ */
+export const FAILURE_CLASSES = [
+  // §3.1 PRE_EXECUTION — knowable before the agent is invoked.
+  'project_not_initialized',
+  'runner_unavailable',
+  'runner_not_authenticated',
+  'model_capability_mismatch',
+  'permission_not_ready',
+  'workspace_not_ready',
+  'dependency_environment_not_ready',
+  'validation_registry_incomplete',
+  // §3.2 RUNNER — the agent was invoked and the process failed.
+  'runner_execution_failed',
+  'runner_timeout',
+  'runner_quota_exhausted',
+  'runner_permission_required',
+  'malformed_runner_output',
+  // §3.3 TASK — the agent produced work and it was judged.
+  'implementation_completed',
+  'validation_unsatisfied',
+  'acceptance_evidence_missing',
+  'acceptance_evidence_unsatisfied',
+  'scope_violation',
+  'agent_blocked',
+  // §3.4 INTEGRATION.
+  'merge_conflict',
+  'integration_validation_failed',
+  'integration_history_invalid',
+  // §3.5 REVIEW.
+  'semantic_review_failed',
+  'final_review_failed',
+  'corrective_plan_invalid',
+  'corrective_plan_rejected',
+] as const;
+
+export const FailureClassSchema = z.enum(FAILURE_CLASSES);
+export type FailureClass = z.infer<typeof FailureClassSchema>;
+
+/**
+ * Where a failure sits relative to the moment an agent was invoked (AR §3).
+ *
+ * Load-bearing rather than descriptive: `PRE_EXECUTION` is exactly the set whose
+ * `consumesAttempt` is `no`, which is I-22 — and I-22 is what makes
+ * `retry --force` unnecessary for an environment fault.
+ */
+export const FAILURE_GROUPS = [
+  'PRE_EXECUTION',
+  'RUNNER',
+  'TASK',
+  'INTEGRATION',
+  'REVIEW',
+] as const;
+
+export const FailureGroupSchema = z.enum(FAILURE_GROUPS);
+export type FailureGroup = z.infer<typeof FailureGroupSchema>;
+
+/**
+ * The disposition of a failure — what may happen next (AR §3.6).
+ *
+ * Not a failure kind of its own. Every {@link FAILURE_CLASSES} entry maps to
+ * exactly one of these, by table rather than by judgement, and
+ * `recovery_exhausted` is the one that must always arrive with the AR §3.6
+ * escalation contract attached.
+ */
+export const RECOVERY_DISPOSITIONS = ['recoverable', 'requires_human', 'recovery_exhausted'] as const;
+
+export const RecoveryDispositionSchema = z.enum(RECOVERY_DISPOSITIONS);
+export type RecoveryDisposition = z.infer<typeof RecoveryDispositionSchema>;
+
+/**
+ * Who is entitled to decide a given failure's response (AR §5).
+ *
+ * `mechanical` is 20 of AR §5's 22 rows, and the two exceptions are review
+ * verdicts — advisory, whose findings re-enter as ordinary tasks through ordinary
+ * gates. A row that is `mechanical` spends zero model calls, by contract.
+ */
+export const FAILURE_AUTHORITIES = ['mechanical', 'llm_advisory', 'human'] as const;
+
+export const FailureAuthoritySchema = z.enum(FAILURE_AUTHORITIES);
+export type FailureAuthority = z.infer<typeof FailureAuthoritySchema>;
+
 /** Requirement ids carried by the SDD (§40) and referenced by tasks (§41). */
 export const RequirementIdSchema = z
   .string()

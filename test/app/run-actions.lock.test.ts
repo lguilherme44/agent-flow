@@ -64,7 +64,7 @@ async function project() {
   // work run?" becomes an observable question rather than an assumption.
   await store.updateRun(run.runId, (state) => ({
     ...state,
-    tasks: [{ id: 'FIX-001', state: 'failed', attempts: 1 }],
+    tasks: [{ id: 'FIX-001', state: 'failed', attempts: 1, infrastructureFailures: 0 }],
   }));
 
   const deps: RunActionDeps = {

@@ -84,6 +84,53 @@ export const GlobalConfigSchema = z.object({
     .prefault({}),
   retry: z.object({ maxAttempts: z.number().int().min(1).default(2) }).prefault({}),
   /**
+   * The budgets that bound autonomous recovery (AR §6).
+   *
+   * Every one is configurable, every one has a default, and exhausting any of them
+   * produces `AUTO_RECOVERY_EXHAUSTED` with the AR §3.6 escalation contract — never a
+   * loop that keeps going because a different budget still had room.
+   *
+   * `retry.maxAttempts` above is unchanged and stays where it is: it counts *work*
+   * attempts, it is what `retry` already gates on, and moving it would migrate every
+   * config file for no gain. What is new is everything beside it.
+   *
+   * `enabled` is the kill switch AR-03 requires: `false` restores today's behaviour
+   * exactly, because the scheduler's standing rule that it never retries on its own has
+   * to remain available as configuration. Default `false` in AR-00 — this milestone
+   * lands contracts and changes no behaviour, so a budget that nothing reads must not
+   * read as a feature that is on.
+   */
+  recovery: z
+    .object({
+      enabled: z.boolean().default(false),
+      // Per task (AR §6.1).
+      maxEnvironmentRepairs: z.number().int().min(0).default(2),
+      /**
+       * Consecutive failures with an identical `(class, command, exit)`.
+       *
+       * The anti-thrash rule: an automatic loop that produces the same failure twice
+       * has learned nothing and must stop, whatever the other budgets allow.
+       */
+      maxIdenticalFailures: z.number().int().min(1).default(2),
+      maxModelCallsPerTask: z.number().int().min(1).default(4),
+      // Per run (AR §6.2).
+      maxCorrectiveRounds: z.number().int().min(0).default(2),
+      maxCorrectivePlanRepairs: z.number().int().min(0).default(2),
+      maxVerificationCycles: z.number().int().min(1).default(3),
+      /**
+       * AgentRunner calls made with no intervening human action. The global stop.
+       *
+       * The evidence run used 21 calls *with* a human in the loop; an autonomous run
+       * that exceeds this without one has stopped converging.
+       */
+      maxAutonomousModelCalls: z.number().int().min(1).default(24),
+      // Context growth (AR §6.5). Bytes, because the budget is a byte budget.
+      maxPacketBytes: z.number().int().min(1).default(8 * 1024),
+      maxRawExcerptBytes: z.number().int().min(1).default(2 * 1024),
+      maxDiffStatLines: z.number().int().min(1).default(40),
+    })
+    .prefault({}),
+  /**
    * Reserved for task isolation (MVP 2), and inert.
    *
    * Kept because it is part of a design that is coming and removing it would
@@ -125,6 +172,15 @@ export const GlobalConfigSchema = z.object({
   utilityModel: UtilityModelConfigSchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
+
+/**
+ * The recovery budgets, on their own.
+ *
+ * Extracted so `core/recovery-policy.ts` takes only what it reasons about. Handing it
+ * the whole `GlobalConfig` would give a pure policy module access to runners, roles and
+ * the utility model — none of which a budget decision may consult.
+ */
+export type RecoveryConfig = GlobalConfig['recovery'];
 
 export const ProjectConfigSchema = z.object({
   project: z.object({

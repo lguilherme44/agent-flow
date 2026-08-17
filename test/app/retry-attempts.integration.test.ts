@@ -124,7 +124,7 @@ function attemptAwareExecutor(
             startedAt: result.startedAt,
             finishedAt: result.finishedAt,
             filesChanged: ['shared.txt'],
-            agentReport: { status: 'COMPLETED', notes: [], deviations: [] },
+            agentReport: { status: 'COMPLETED', notes: [], deviations: [], claimedFilesChanged: [] },
             validation: {
               expectation: 'pass',
               passed: judgement === 'satisfied',

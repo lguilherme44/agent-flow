@@ -117,7 +117,7 @@ function plantingExecutor(current: WorktreeRun, workspaces: GitWorkspaces): Task
             startedAt: result.startedAt,
             finishedAt: result.finishedAt,
             filesChanged: [`${task.id}.txt`],
-            agentReport: { status: 'COMPLETED', notes: [], deviations: [] },
+            agentReport: { status: 'COMPLETED', notes: [], deviations: [], claimedFilesChanged: [] },
             validation: { expectation: 'pass', passed: true, ids: [], commands: [] },
             validationJudgement: 'satisfied',
           },

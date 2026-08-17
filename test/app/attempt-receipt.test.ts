@@ -123,7 +123,7 @@ function draft(overrides: Partial<AttemptDraft> = {}): AttemptDraft {
     startedAt: '2026-08-09T19:59:00.000Z',
     finishedAt: '2026-08-09T20:00:00.000Z',
     filesChanged: ['src/a.ts'],
-    agentReport: { status: 'COMPLETED', notes: [], deviations: [] },
+    agentReport: { status: 'COMPLETED', notes: [], deviations: [], claimedFilesChanged: [] },
     validation: { expectation: 'pass', passed: true, ids: ['lint', 'test'], commands: [] },
     validationJudgement: 'satisfied',
     ...overrides,

@@ -115,7 +115,7 @@ function plantingExecutor(current: WorktreeRun) {
             startedAt: result.startedAt,
             finishedAt: result.finishedAt,
             filesChanged: [],
-            agentReport: { status: 'COMPLETED', notes: [], deviations: [] },
+            agentReport: { status: 'COMPLETED', notes: [], deviations: [], claimedFilesChanged: [] },
             validation: { expectation: 'pass', passed: true, ids: [], commands: [] },
             validationJudgement: 'satisfied',
           },

@@ -1,10 +1,44 @@
 # Runner capabilities — empirical probe
 
-> Produced by AF-10 (Claude Code) and AF-11 (Codex).
+> Produced by AF-10 (Claude Code), AF-11 (Codex) and AR-00 (AGY).
 > Every claim below was executed, not inferred from documentation.
 > **Re-run this probe when a CLI changes version.** The fixtures under
 > `test/fixtures/responses/` are what let the adapters be tested offline, and
 > they are only as accurate as the version they were captured from.
+
+---
+
+## Two different questions, and the page used to answer only one
+
+**CLI surface capability** — what the command-line tool *accepts*. Read off `--help`,
+verifiable in a second, and the same for every model the CLI can point at.
+
+**Effective (runner, model) capability** — what the model *behind* that flag actually
+offers. A property of the pair, and the only one that predicts whether an invocation will
+do what was asked.
+
+Until AR-00 the adapters reported the first and the core believed it was the second, because
+`AgentRunner.capabilities()` took no argument (AD-30) — so the question could not even be
+asked. AR-00 makes it askable and records the answers below; **AR-01 is the milestone that
+acts on them** (see the AGY section's boundary note).
+
+The two coincide for Claude Code and Codex, whose effort surface is a property of the CLI.
+They do **not** coincide for AGY, and the gap cost the AF-2026-002 dogfood a task attempt on
+its first executor call:
+
+```
+agy --help          →  --effort  low | medium | high        ← CLI surface
+Gemini 3.1 Pro      →            low |        | high        ← effective pair
+role executor.normal configured effort: medium              ← neither refused nor honoured
+```
+
+The invocation was accepted, the effort was not the one requested, and nothing said so.
+`clampReasoning`, the `reasoningClamped` field and the `reasoning_clamped` degradation all
+already existed and had never fired — they were being fed the CLI's answer.
+
+**So a section below may only narrow a capability where the narrowing was measured.** An
+unmeasured model falls back to the CLI surface: claiming a narrower set for a model nobody
+probed would clamp work for no evidence, and claiming a wider one is the defect above.
 
 ---
 
@@ -266,3 +300,199 @@ matching on wording:
 
 No synthetic auth or quota fixtures here: normalisation keys on the `status`
 field above, so a 401 or 429 is recognised structurally rather than by phrasing.
+
+---
+
+## AGY (Antigravity CLI)
+
+**Version probed:** `1.1.13`
+**Probed on:** 2026-08-17, macOS (darwin 25.6.0)
+**Auth:** local CLI session
+**Binary:** installed outside `PATH`, so `runners.agy.command` names it explicitly
+
+> This section exists because its absence caused the AF-2026-002 dogfood's first failure.
+> The adapter had been written from the CLI's `--help` output, which is a true description
+> of the flag and a false description of the pair behind it.
+
+### Capability summary
+
+| Capability | Verdict | Proven by |
+|---|---|---|
+| Non-interactive | ✅ | `--print` / `-p` with `--output-format json` |
+| Model selection | ✅ | `--model <id>`, ids from `agy models` |
+| Reasoning level | ⚠️ **CLI accepts three; a model may offer fewer** | see the table below — encoded in the adapter since AR-01 |
+| Structured output | ⚠️ `prompted` | `--json-schema` exists; enforcement in headless mode needs permission configuration the adapter does not assume |
+| Read-only mode | ❌ **declared false** | `--mode plan` exists, but the probe observed writes to `~/.gemini/antigravity-cli/`, so strict containment is not guaranteed by flags alone |
+| Working directory | ✅ | `--add-dir <path>` |
+| Non-interactive **file edits** | ✅ | `--mode accept-edits` |
+| Non-interactive **command execution** | ❌ **not granted** | the dogfood's own failure — see below |
+
+### Invocation shape used by the adapter
+
+```
+agy --output-format json
+    [--model <model>]                 # omitted when config sets none (AD-13)
+    --effort <low|medium|high>
+    --mode <plan|accept-edits>
+    --add-dir <workingDirectory>
+    [--add-dir <path> ...]
+    [--json-schema <json>]
+```
+
+Prompt on stdin, as with the other two runners. `--dangerously-skip-permissions` exists and
+is **never** passed: it removes the containment AD-14 assigns to the runner.
+
+### Reasoning level — CLI surface
+
+```
+$ agy --help
+  --effort   Reasoning effort for the current CLI session (low|medium|high)
+```
+
+| agent-flow (logical) | AGY CLI (physical) |
+|---|---|
+| `low` | `low` |
+| `medium` | `medium` |
+| `high` | `high` |
+| `very_high` | `high` — the CLI offers nothing above it |
+
+This is what `capabilities()` returns when **no model is configured**, what it returns for a
+family nobody has measured, and what the adapter returned unconditionally before AR-01.
+
+### Reasoning level — effective per model
+
+`agy models` enumerates one model id **per offered effort**, which makes the effective set
+directly observable rather than inferred:
+
+```
+$ agy models
+gemini-3.7-flash-high      Gemini 3.7 Flash (High)
+gemini-3.7-flash-medium    Gemini 3.7 Flash (Medium)
+gemini-3.7-flash-low       Gemini 3.7 Flash (Low)
+…
+gemini-3.1-pro-high        Gemini 3.1 Pro (High)
+gemini-3.1-pro-low         Gemini 3.1 Pro (Low)     ← no -medium id exists
+claude-sonnet-4-6          Claude Sonnet 4.6 (Thinking)
+gpt-oss-120b-medium        GPT-OSS 120B (Medium)
+```
+
+| Model family | Effective efforts | How it was measured |
+|---|---|---|
+| `gemini-3.1-pro-*` | **`low`, `high`** | enumeration lists `-high` and `-low` and no `-medium` |
+| everything else | *not measured* | no probe was run; see the rule below |
+
+Only that one row is a measurement. The other families show a `-medium` id and would
+plausibly offer all three, and *plausibly* is not a measurement — so they have no entry, and
+adding one requires probing them first.
+
+The effort suffix is a **setting, not a distinct model**: `gemini-3.1-pro-low` and
+`gemini-3.1-pro-high` are one model at two settings, so a table encoding this must match on
+the family prefix and answer identically for both. Otherwise the clamp would depend on which
+id somebody typed.
+
+### ✅ This measurement is acted on — AR-01 activated it
+
+**AR-00 landed the seam and this table; AR-01 encoded it in the adapter.** The boundary was
+drawn in the specification rather than by preference:
+
+| | AR-00 | AR-01 |
+|---|---|---|
+| `capabilities(model?)` in the port | ✅ landed | — |
+| `nonInteractiveToolGrants` on all adapters | ✅ landed | — |
+| this measured table, as documentation | ✅ landed | — |
+| the table **encoded in the adapter** | ✖ non-goal | ✅ landed (C-03, I-20) |
+| the clamp firing, degradation recorded, 0 attempts consumed | ✖ non-goal | ✅ landed |
+| `doctor` reporting the pair mechanically, and probing **each configured effort** | ✖ non-goal | ✅ landed |
+
+AR-00's non-goal was "no behaviour change" and its migration was "none — additive and
+defaulted". AR-01 owns `core/role.ts` and all four adapters, carries C-03 and I-20, and its
+migration note is *"a previously-fatal configuration now clamps"*. An adapter narrowing its
+answer is precisely that clamp, which is why it belongs there and not in AR-00.
+
+The table lives in `MEASURED_MODEL_REASONING` in `src/adapters/runners/agy-runner.ts`, keyed
+by family prefix. An architecture test confines it to `src/adapters/runners/` — the core
+receives the model as an opaque string and a table keyed by model name may never live there
+(AD-13, AD-30).
+
+What AR-01 produces, for the exact configuration that failed:
+
+```
+role executor.normal   runner: agy   model: gemini-3.1-pro-high   effort: medium
+                    →  effective effort: low
+                    →  reasoningClamped: true
+                    →  degradation: reasoning_clamped (requested medium, effective low,
+                                    supported [low, high], runner agy, model
+                                    gemini-3.1-pro-high)
+                    →  stage_started detail: reasoningRequested / reasoningSupported /
+                                    reasoningClamped, structurally
+                    →  attempts consumed: 0        (AD-31, I-20, I-22)
+```
+
+The clamp *mechanism* already existed and was already wired: `clampReasoning`,
+`ResolvedAgentConfig.reasoningClamped`, and the `reasoning_clamped` degradation recorded at
+`app/stage-runner.ts`. It had never fired, because it was being fed the CLI's answer. AR-01
+changed what it is fed; the only new machinery is the evidence the degradation now carries.
+
+#### The model id and the effective effort disagree, and that is correct
+
+`gemini-3.1-pro-high` says `-high`; the effective effort above is `low`. Nothing reconciles
+them, and nothing should:
+
+- the model is an **opaque string** to the core (AD-13) — the core is not permitted to know
+  that this vendor encodes an effort in an id, and a layer that took the id apart would be
+  applying a heuristic nobody measured;
+- the effective effort is decided by `clampReasoning` against what `capabilities(model)`
+  declared;
+- the adapter forwards **both verbatim**: `--model gemini-3.1-pro-high --effort low`.
+
+This is what the specification prescribes, and it is pinned by a test on the arguments the
+adapter actually builds. If the CLI is ever observed to *reject* that combination, that is a
+contract conflict to report — not a licence to invent a reconciliation rule. An architecture
+test forbids any layer above `src/adapters/` from taking a model string apart.
+
+### Non-interactive is not the same as permitted
+
+`--mode accept-edits` grants **file edits** without a confirmation prompt. It does not grant
+**command execution**, and the two were conflated under `supportsNonInteractive` until
+AD-32 split them.
+
+The dogfood's evidence, from the vendor's own log directory — which a person had to open by
+hand, because `StageFailure.raw` was being discarded at both persistence points:
+
+```
+soft-denying tool confirmation "Bash"
+permission check failed
+```
+
+The process was genuinely non-interactive: it did not block on a prompt. It asked to run
+`grep`, local policy required a confirmation, nobody was present to give one, and the run
+recorded a generic `execution_failed`. So the adapter declares:
+
+```ts
+nonInteractiveToolGrants: { fileEdit: true, commandExecution: false }
+```
+
+`false` does **not** block execution. It produces a `permission_not_ready` warning from
+`doctor` and a preflight finding (C-04), so an ungranted tool class is visible *before* an
+attempt is spent rather than discovered by spending one. A grant is declared, never inferred
+from a run that happened to succeed.
+
+### What is deliberately not claimed here
+
+- **No effort was probed by invocation.** The effective table comes from the CLI's model
+  enumeration, not from running each effort and comparing output. AR-01 extended
+  `probeRunner` to exercise every *configured* effort and a read-only tool-use question,
+  but that is `doctor --deep` — opt-in, and it spends quota. The table above is still
+  enumeration, and re-measuring it by invocation would be a separate exercise.
+- **`deniedCommands` is left absent.** The capability shape allows a discoverable deny-list
+  and this environment exposes none through the CLI. An empty array would read as "nothing
+  is denied", which is the opposite of what was observed.
+- **No fixtures yet.** `test/fixtures/responses/agy/` does not exist. AR-02 adds captured
+  fixtures for the permission denial, an unsupported effort and a quota error, so those
+  paths can be replayed without spending quota.
+
+### Fixtures
+
+| File | Origin |
+|---|---|
+| — | none captured yet; see above |

@@ -102,8 +102,18 @@ export interface AttemptEvidenceFailure {
   readonly detail: string;
 }
 
-/** Everything an attempt is, except the one field only this module may add. */
-export type AttemptDraft = Omit<TaskAttemptResult, 'receipt'>;
+/**
+ * Everything an attempt is, except the one field only this module may add.
+ *
+ * `acceptance` is optional on the draft even though the artifact always carries it. The
+ * schema defaults it to `[]` and this module parses before writing, so an omitted map
+ * becomes an empty one — which is the honest record for a milestone that does not yet
+ * compute acceptance evidence (C-15 is AR-05a's). Requiring it here would force the
+ * caller to fabricate a map now, and a fabricated `[]` and a computed `[]` are
+ * indistinguishable on disk.
+ */
+export type AttemptDraft = Omit<TaskAttemptResult, 'receipt' | 'acceptance'> &
+  Partial<Pick<TaskAttemptResult, 'acceptance'>>;
 
 /** The marker, once it exists in the repository. */
 export interface AttemptMarker {
@@ -360,7 +370,10 @@ export function markerMessage(attempt: TaskAttemptResult, gitRunKey: string): st
  */
 async function writeAttemptArtifact(
   deps: AttemptEvidenceDeps,
-  attempt: TaskAttemptResult,
+  // The schema's *input* shape, not its output: this function's first act is to parse,
+  // so it must accept what a caller can honestly build — a draft whose defaulted members
+  // are absent — and the parsed value is what everything below it reads.
+  attempt: AttemptDraft & { readonly receipt?: TaskAttemptResult['receipt'] },
 ): Promise<
   | { readonly ok: true; readonly value: TaskAttemptResult }
   | { readonly ok: false; readonly failure: AttemptEvidenceFailure }

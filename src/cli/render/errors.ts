@@ -38,14 +38,20 @@ export function renderError(error: unknown): RenderedError {
     return { message: error.message, exitCode: ExitCode.CONFIG_ERROR };
   }
 
-  // Before `StageFailure`, and a different sentence: nothing ran. A repository
-  // gate refused, the code is Appendix A's, and the action is what resolves it.
-  // Nothing here suggests retrying, on this runner or another — §6.4's refusals
-  // are not overridden, they are met.
+  // Before `StageFailure`, and a different sentence: nothing ran. A gate refused,
+  // the code is Appendix A's, and the action is what resolves it. Nothing here
+  // suggests retrying, on this runner or another — §6.4's refusals are not
+  // overridden, they are met.
+  //
+  // The exit code follows the refusal's own `kind` rather than a code string matched
+  // here. AR-01's C-01 requires `CONFIG_ERROR` for an uninitialised project, and every
+  // repository refusal keeps `EXECUTION_ERROR`; which of the two a code is belongs to
+  // the layer that raised it, not to the renderer.
   if (error instanceof PlanningRefusal) {
     return {
       message: `${error.message}\n\n${error.action}`,
-      exitCode: ExitCode.EXECUTION_ERROR,
+      exitCode:
+        error.kind === 'configuration' ? ExitCode.CONFIG_ERROR : ExitCode.EXECUTION_ERROR,
     };
   }
 

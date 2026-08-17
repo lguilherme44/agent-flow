@@ -2,6 +2,68 @@ import { stringify as toYaml } from 'yaml';
 import type { FileSystem } from '../ports/file-system.js';
 import { detectStack, type DetectedStack } from '../config/stack-detection.js';
 import { agentFlowPaths } from './paths.js';
+import type { StateStore } from './state-store.js';
+import type { RunState } from '../contracts/index.js';
+
+/**
+ * A run whose planningBase a commit could invalidate (AR-01, C-02).
+ *
+ * "Not completed or failed" is the spec's definition, and it is deliberately the
+ * complement rather than a list: a status added later is active until somebody decides
+ * otherwise, which is the safe direction for a gate to fail in.
+ */
+export function isRunActive(state: RunState): boolean {
+  return state.status !== 'completed' && state.status !== 'failed';
+}
+
+/**
+ * The files `init` touched, named relative to the project (§21.3).
+ *
+ * `InitResult` carries absolute paths because the CLI prints them to a person standing in
+ * a terminal, and there the absolute form is the useful one. **Persisting it is a different
+ * question**: an absolute path names this machine's home directory, and §21.3 is explicit
+ * that persisted detail is path-free by construction. The paths are already known to be
+ * inside the project, so relativising them loses nothing and leaks nothing.
+ */
+export function projectRelativePaths(
+  projectDir: string,
+  paths: readonly string[],
+): string[] {
+  const prefix = `${projectDir}/`;
+  return paths.map((path) => (path.startsWith(prefix) ? path.slice(prefix.length) : path));
+}
+
+export interface ActiveRunFinding {
+  readonly runId: string;
+  readonly status: RunState['status'];
+  readonly planningBase?: string;
+}
+
+/**
+ * The active run `init` would disturb, if there is one.
+ *
+ * The evidence run's second intervention, and the one that made the first expensive:
+ * `agent-flow init` ran *after* planning had frozen a planningBase, and the commit its
+ * files require moved HEAD out from under the run. Every worktree cut afterwards came from
+ * a base the run had not planned against.
+ *
+ * Newest first, and the first active one wins — `listRunIds` already orders that way, and
+ * the newest active run is the one whose base is still being used.
+ */
+export async function findActiveRun(store: StateStore): Promise<ActiveRunFinding | undefined> {
+  for (const runId of await store.listRunIds()) {
+    const state = await store.loadRun(runId);
+    if (!isRunActive(state)) continue;
+
+    return {
+      runId: state.runId,
+      status: state.status,
+      ...(state.planningBase === undefined ? {} : { planningBase: state.planningBase }),
+    };
+  }
+
+  return undefined;
+}
 
 /** Marks the block `init` owns inside an existing AGENTS.md. */
 const AGENTS_BEGIN = '<!-- agent-flow:begin -->';

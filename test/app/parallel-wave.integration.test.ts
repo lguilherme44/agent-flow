@@ -191,7 +191,7 @@ function latchedExecutor(
             startedAt,
             finishedAt,
             filesChanged: [written],
-            agentReport: { status: 'COMPLETED', notes: [], deviations: [] },
+            agentReport: { status: 'COMPLETED', notes: [], deviations: [], claimedFilesChanged: [] },
             validation: { expectation: 'pass', passed: true, ids: [], commands: [] },
             validationJudgement: 'satisfied',
           },

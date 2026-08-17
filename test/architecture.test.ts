@@ -2662,3 +2662,430 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
     ]);
   });
 });
+
+describe('the recovery taxonomy is one vocabulary, refined (AR-00, AD-36)', () => {
+  // The single most dangerous shape this milestone could have produced: a second enum
+  // beside `RUNNER_ERROR_CODES` that answers the same question differently. Every rule
+  // here is about keeping the refinement *above* the transport vocabulary rather than
+  // beside it.
+  const CLASSIFIER = 'src/core/failure-classification.ts';
+
+  it('declares the runner error codes in exactly one place', () => {
+    // A classifier that re-listed them would be a second copy able to disagree with the
+    // adapters' translation contract — and `FALLBACK_TRIGGERS` is defined as a subset of
+    // that list at the schema level, so a divergence would change fallback reasoning.
+    const owners = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /RUNNER_ERROR_CODES\s*=/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(owners).toEqual(['src/contracts/common.schema.ts']);
+  });
+
+  it('declares the failure classes in exactly one place', () => {
+    const owners = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /FAILURE_CLASSES\s*=/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(owners).toEqual(['src/contracts/common.schema.ts']);
+  });
+
+  it('maps class to runner code in the classifier and nowhere else', () => {
+    // The mapping is the refinement. A second module holding its own copy is how one
+    // question acquires two answers.
+    const owners = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /refinedRunnerErrorCode|classesRefining/.test(codeOnly(text)))
+      .map(({ path }) => path)
+      .sort();
+
+    expect(owners).toEqual([CLASSIFIER]);
+  });
+
+  it('never branches on a failure class and a runner code in one condition', () => {
+    // AD-36's rule, read as code: "nothing branches on both". A module decides on the
+    // class or on the code — mixing them in one predicate is where the two vocabularies
+    // start to drift apart.
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path === CLASSIFIER || path.startsWith('src/contracts/')) continue;
+
+      const code = codeOnly(text);
+      // A conditional naming both concepts. `failureClass` and `errorCode` may legitimately
+      // sit in one *object literal* — an artifact carries both — so the pattern is anchored
+      // on `if (`/`&&`/`||` rather than on co-occurrence in a file.
+      const mixed =
+        /\bif\s*\([^)]*\bfailureClass\b[^)]*\berrorCode\b/.test(code) ||
+        /\bif\s*\([^)]*\berrorCode\b[^)]*\bfailureClass\b/.test(code);
+      if (mixed) offenders.push(path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the classifier and the policy free of the UtilityModel', () => {
+    // §11, verbatim: "an architecture test must assert that `core/recovery-policy.ts` and
+    // `core/failure-classification.ts` have no dependency on `ports/utility-model.ts`".
+    // The UtilityModel's role in this milestone is none, and a module that *could* ask it
+    // is a module where somebody eventually does.
+    for (const path of [CLASSIFIER, 'src/core/recovery-policy.ts']) {
+      const { text } = read(join(ROOT, path));
+      const code = codeOnly(text);
+
+      expect(
+        importSpecifiers(text).some((specifier) => specifier.includes('utility-model')),
+        `${path} imports the utility model port`,
+      ).toBe(false);
+      expect(code, `${path} names a UtilityModel`).not.toMatch(/\bUtilityModel\b/);
+    }
+  });
+
+  it('never routes a recovery decision through a model', () => {
+    // AR §5's `mechanical` column is 20 of 22 rows, and those rows are asserted to spend
+    // zero model calls. A policy module that could invoke anything would make that a
+    // promise rather than a property.
+    for (const path of [CLASSIFIER, 'src/core/recovery-policy.ts', 'src/core/run-projection.ts']) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+
+      for (const forbidden of ['AgentRunner', 'AgentRunInput', 'ProcessRunner', 'StageRunner']) {
+        expect(code, `${path} reaches for ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+});
+
+describe('the AR-00 pure modules stay pure', () => {
+  // §7 of the milestone brief: a pure module accesses no filesystem, calls no
+  // AgentRunner, executes no Git and runs no shell. `src/core stays pure` above covers
+  // imports; these cover the ways a *port handed in* could smuggle the same thing.
+  const PURE = [
+    'src/core/evidence-redaction.ts',
+    'src/core/failure-classification.ts',
+    'src/core/recovery-policy.ts',
+    'src/core/run-projection.ts',
+  ];
+
+  it('takes no dependency that could observe a machine', () => {
+    for (const path of PURE) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+
+      for (const forbidden of [
+        'readFile',
+        'writeFile',
+        'readdir',
+        'realpath',
+        'existsSync',
+        'spawn',
+        'execFile',
+        'process.',
+        'Math.random',
+        'Date.now',
+        'fetch(',
+      ]) {
+        expect(code, `${path} reaches for ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('imports only contracts and other pure core modules', () => {
+    // A port, an adapter or an app module would each be a way for an answer to depend on
+    // something other than its arguments.
+    for (const path of PURE) {
+      for (const specifier of importSpecifiers(read(join(ROOT, path)).text)) {
+        expect(specifier, `${path} imports ${specifier}`).toMatch(/^\.\.\/contracts\/|^\.\//);
+      }
+    }
+  });
+
+  it('spawns no Git command', () => {
+    for (const path of PURE) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      expect(code, `${path} names a git command`).not.toMatch(/command:\s*/);
+      expect(code, `${path} builds a subcommand`).not.toMatch(/subcommand:\s*/);
+    }
+  });
+
+  it('resolves no absolute path of its own', () => {
+    // `evidence-redaction` is *about* absolute paths and must still not know one: the
+    // worktree root and the home directory are passed in, because they are observations
+    // about a machine and this layer cannot make one.
+    for (const path of PURE) {
+      const { text } = read(join(ROOT, path));
+      expect(text, `${path} names a home directory`).not.toMatch(/homedir|os\.homedir/);
+      expect(text, `${path} names the worktree root`).not.toMatch(/\.agent-flow\/worktrees/);
+    }
+  });
+});
+
+describe('I-21 — redaction is applied once, at the boundary that persists (AD-35)', () => {
+  const HOME = 'src/core/evidence-redaction.ts';
+
+  it('stays visible to this file’s lexer, so every rule below can see it', () => {
+    // Measured, not hypothetical. `codeOnly` blanks string literals and has no notion of a
+    // regex literal, so a `"` or `'` inside a character class opens a string that closes at
+    // the next one anywhere below — it was swallowing 1894 characters of this module, and
+    // every rule written against it was passing by looking at nothing.
+    //
+    // The module now writes those two characters as `\x22` and `\x27`. This assertion is
+    // what stops somebody from typing them back and quietly blinding the rules.
+    const { text } = read(join(ROOT, HOME));
+    const code = codeOnly(text);
+
+    // The last declaration in the file. If the lexer drifts, the tail is what disappears.
+    expect(code, `${HOME} is being partly blanked by codeOnly`).toMatch(
+      /function stripTrailingSeparator/,
+    );
+    // And a rough size check, because a drift can eat the middle without touching the end.
+    expect(code.length).toBeGreaterThan(text.length / 4);
+  });
+
+  it('implements redaction in exactly one module', () => {
+    // Redacting at each writer independently guarantees drift, and the drift is silent:
+    // the writer that forgot is the one that leaks.
+    const owners = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /function redactEvidence|redactEvidence\s*=/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(owners).toEqual([HOME]);
+  });
+
+  it('keeps the credential patterns where they can be reviewed as a set', () => {
+    // Guards the rule above from passing vacuously if the module were emptied, and pins
+    // that the shapes AD-35 lists are actually present.
+    const text = withoutComments(read(join(ROOT, HOME)).text);
+
+    expect(text).toMatch(/authorization/i);
+    expect(text).toMatch(/bearer/i);
+    expect(text).toMatch(/api\[_-\]\?key/i);
+    expect(text).toMatch(/PRIVATE KEY/);
+  });
+
+  it('offers no way to recover the original text', () => {
+    // "Irreversible and lossy by design." A module exporting an inverse — or keeping a
+    // copy — would make every persisted artifact a container for the secret again.
+    const code = codeOnly(read(join(ROOT, HOME)).text);
+
+    for (const forbidden of ['unredact', 'reveal', 'original', 'decrypt', 'cache']) {
+      expect(code, `${HOME} offers ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});
+
+describe('I-26 — runtime status is projected, never persisted (AD-48)', () => {
+  it('adds nothing to the persisted run statuses', () => {
+    // `RUN_STATUSES` is unchanged, and that is the decision rather than an omission:
+    // mixing lifecycle with presentation means a crash mid-write persists an opinion.
+    const { text } = read(join(ROOT, 'src/contracts/state.schema.ts'));
+    const declaration = /RUN_STATUSES = \[([\s\S]*?)\]/.exec(withoutComments(text))?.[1] ?? '';
+
+    const statuses = [...declaration.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
+    expect(statuses).toEqual([
+      'running',
+      'waiting_for_approval',
+      'plan_rejected',
+      'approved',
+      'completed',
+      'failed',
+    ]);
+  });
+
+  it('declares the runtime statuses outside the persisted contract', () => {
+    // In the projection, which nothing writes, rather than in the schema, which everything
+    // does.
+    const owners = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /RUNTIME_STATUSES\s*=/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(owners).toEqual(['src/core/run-projection.ts']);
+  });
+
+  it('never writes a runtime status to a store', () => {
+    const code = codeOnly(read(join(ROOT, 'src/core/run-projection.ts')).text);
+
+    for (const forbidden of ['updateRun', 'appendEvent', 'writeArtifact', 'StateStore']) {
+      expect(code, `the projection calls ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('keeps the task graph file-agnostic (AD-43)', () => {
+    // The projection consumes `DagNode`, so it is a place a file-shaped field could arrive
+    // by the back door. Overlap is planning and scheduling policy, not graph topology.
+    const dag = codeOnly(read(join(ROOT, 'src/core/dag.ts')).text);
+    const node = dag.slice(dag.indexOf('interface DagNode'));
+    const body = node.slice(node.indexOf('{'), node.indexOf('}') + 1);
+
+    for (const field of ['files', 'likely', 'paths', 'scope']) {
+      expect(body, `DagNode carries a ${field}`).not.toContain(field);
+    }
+  });
+});
+
+describe('one word, one meaning: attempt versus repair (AR §4.4)', () => {
+  it('names StageRunner’s internal counter repair, not attempt', () => {
+    // The evidence run wrote `attempt=1 failed` inside a file named `…-attempt-2.log`:
+    // two different numbers under one name, in one sentence. An *attempt* is one agent
+    // invocation for one task in one prepared workspace; this counter is re-prompts inside
+    // one stage call.
+    const code = codeOnly(read(join(ROOT, 'src/app/stage-runner.ts')).text);
+
+    // The loop variable and what it writes.
+    expect(code).toMatch(/let repair = 0/);
+    expect(code).toMatch(/repairs:\s*repair/);
+    // And the old spellings are gone from the emitting module.
+    expect(code, 'stage-runner still declares an attempt counter').not.toMatch(/let attempt = 0/);
+    expect(code, 'stage-runner still emits attempts').not.toMatch(/attempts:\s*attempt\b/);
+  });
+
+  it('writes the repair count into the log under its own name', () => {
+    // Read with literals kept: the log line *is* a string literal, and `codeOnly` blanks
+    // exactly the thing this rule is looking for.
+    const text = withoutComments(read(join(ROOT, 'src/app/stage-runner.ts')).text);
+
+    expect(text).toMatch(/repair=\$\{/);
+    expect(text, 'the log still says attempt=').not.toMatch(/attempt=\$\{/);
+  });
+
+  it('still reads the old spelling back, so an existing run keeps its numbers', () => {
+    // Renaming a field a reader depends on is a migration unless the reader accepts both.
+    // Every event already on disk says `attempts`.
+    //
+    // Read through `withoutComments` rather than `codeOnly`: the field names *are* string
+    // literals — `detail['repairs']` — and `codeOnly` blanks exactly those, so this rule
+    // written against it would be asserting nothing.
+    for (const path of ['src/core/stage-timeline.ts', 'src/app/telemetry.ts']) {
+      const code = withoutComments(read(join(ROOT, path)).text);
+      expect(code, `${path} does not read the new spelling`).toContain('repairs');
+      expect(code, `${path} dropped the old spelling`).toContain('attempts');
+    }
+  });
+});
+
+describe('the (runner, model) capability seam (AD-30)', () => {
+  it('reads a capabilities entry through one accessor', () => {
+    // "Record or resolver" is answered once. A module indexing the map directly would get
+    // a function where it expected an object — which type-checks nowhere useful and would
+    // push callers to normalise it themselves, differently.
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path === 'src/core/role.ts') continue;
+      const code = codeOnly(text);
+
+      // The shape of the old direct lookup, in either spelling.
+      if (/capabilities\[[^\]]+\]/.test(code)) offenders.push(path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps every model name out of the core', () => {
+    // AD-13, re-asserted where it is newly at risk: AD-30 hands the core a model string,
+    // and the temptation is a lookup table keyed by it. The existing provider rule covers
+    // vendor names; this covers the shape.
+    const offenders = sourceFiles('src/core')
+      .map(read)
+      .filter(({ text }) => /gemini|antigravity|agy/i.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps a per-model capability table inside the runner adapters, and nowhere else (AR-01)', () => {
+    // **The line AR-00 drew and AR-01 crossed, redrawn where it now belongs.**
+    //
+    // AR-00 landed `capabilities(model?)` inert and pinned that inertness here, so that
+    // encoding the measurement would have to be a deliberate edit rather than a drift.
+    // AR-01 makes that edit: one adapter now answers differently per model, which is what
+    // makes `clampReasoning` fire (C-03, I-20).
+    //
+    // What must not move is *where* the knowledge lives. A table keyed by model name is
+    // provider knowledge; AD-13 puts it in the adapter that owns the provider, and AD-30
+    // says explicitly that such a table "may never live in the core". So the rule inverts:
+    // it no longer forbids the table, it confines it.
+    const port = codeOnly(read(join(ROOT, 'src/ports/agent-runner.ts')).text);
+    expect(port, 'the port does not declare the model parameter').toMatch(
+      /capabilities\(\s*model\?:\s*string\s*\)/,
+    );
+
+    // The port stays a contract: it declares that an answer may depend on the model and
+    // says nothing about any particular one.
+    expect(port, 'the port names a model').not.toMatch(/gemini|antigravity|claude-|gpt-|sonnet|opus/i);
+
+    const tables = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /MEASURED_MODEL|MODEL_EFFORTS|modelCapabilities/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    // Confined to the runner adapters. Not the core, not the app layer, not the CLI, not
+    // the server — each of which receives the model as an opaque string and must keep
+    // treating it as one.
+    const strays = tables.filter((path) => !path.startsWith('src/adapters/runners/'));
+    expect(strays, 'a per-model capability table escaped the runner adapters').toEqual([]);
+  });
+
+  it('lets no layer above the adapters reconcile a model id with an effort (AR-01)', () => {
+    // The specific temptation this milestone creates. One vendor's model ids *encode* an
+    // effort — an id ending in `-high` — while the effective effort is decided by
+    // `clampReasoning` and may be `low`. The tidy-looking fix is to make the two agree
+    // somewhere above the adapter, and every version of that fix is a heuristic applied to
+    // a string the core is forbidden to interpret (AD-13).
+    //
+    // So: no layer above `src/adapters/` may take the model apart. The adapter may — it is
+    // the only place that knows what the id means.
+    const DISSECTION = [
+      /\bmodel\b[^\n;]*\.(?:startsWith|endsWith|split|match|replace|slice|substring)\s*\(/,
+      /\bmodel\b[^\n;]*\.includes\s*\(/,
+    ];
+
+    const offenders: string[] = [];
+    for (const file of sourceFiles('src')) {
+      const { path, text } = read(file);
+      if (path.startsWith('src/adapters/')) continue;
+      const code = codeOnly(text);
+      if (DISSECTION.some((pattern) => pattern.test(code))) offenders.push(path);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the measurement in the documentation, beside the code that now encodes it', () => {
+    // AR-00's acceptance named a *documentation* deliverable: "`docs/runner-capabilities.md`
+    // gains an AGY section with measured per-model reasoning levels". AR-01 encodes it in
+    // the adapter, and the documentation is what says where the numbers came from — a
+    // table in code with no recorded provenance is an assertion, not a measurement.
+    const doc = readFileSync(join(ROOT, 'docs/runner-capabilities.md'), 'utf8');
+
+    expect(doc).toMatch(/##\s+AGY/);
+    expect(doc).toMatch(/gemini-3\.1-pro/);
+    // The distinction the section exists to draw.
+    expect(doc).toMatch(/CLI surface/i);
+    expect(doc).toMatch(/effective/i);
+  });
+
+  it('declares a non-interactive tool grant in every adapter', () => {
+    // AD-32 makes this a required field, which means each adapter has to state what its
+    // CLI documents. Unknown stays false, and false does not block execution — it produces
+    // a warning rather than a silent pass.
+    const adapters = [
+      'src/adapters/runners/claude-code-runner.ts',
+      'src/adapters/runners/codex-runner.ts',
+      'src/adapters/runners/agy-runner.ts',
+    ];
+
+    for (const path of adapters) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      expect(code, `${path} declares no tool grants`).toContain('nonInteractiveToolGrants');
+    }
+
+    // The decorator forwards rather than declaring one of its own: a fallback's
+    // capabilities were checked when its configuration was resolved.
+    const fallback = codeOnly(read(join(ROOT, 'src/adapters/runners/fallback-runner.ts')).text);
+    expect(fallback).toMatch(/primary\.capabilities\(model\)/);
+  });
+});

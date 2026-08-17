@@ -89,9 +89,15 @@ function executedView(
     ...(text(event.detail['reasoning']) === undefined
       ? {}
       : { reasoning: text(event.detail['reasoning']) as ReasoningLevel }),
-    ...(typeof event.detail['attempts'] === 'number'
-      ? { attempts: event.detail['attempts'] }
-      : {}),
+    // `repairs` since AR-00 renamed StageRunner's internal counter (AR §4.4);
+    // `attempts` is the spelling on every event written before that, and reading both
+    // is what keeps an existing run's timeline intact. The view's own field name is
+    // unchanged, so no surface moves.
+    ...(typeof event.detail['repairs'] === 'number'
+      ? { attempts: event.detail['repairs'] }
+      : typeof event.detail['attempts'] === 'number'
+        ? { attempts: event.detail['attempts'] }
+        : {}),
     ...(text(event.detail['errorCode']) === undefined
       ? {}
       : { errorCode: text(event.detail['errorCode']) as string }),

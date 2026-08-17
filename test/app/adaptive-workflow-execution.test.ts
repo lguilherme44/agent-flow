@@ -95,7 +95,7 @@ async function createTestHarness(options: {
     approved: options.approved ?? false,
     approvedAt: options.approved ? clock.now() : undefined,
     approvedPlanHash: options.approved ? hash : undefined,
-    tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0 }],
+    tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0, infrastructureFailures: 0 }],
   }));
 
   const fakeRunner = new FakeProcessRunner().always((opts) => {
@@ -256,12 +256,12 @@ describe('Adaptive Workflow Execution & Review without SDD', () => {
     // Progress task cleanly: queued -> running -> completed
     await store.updateRun(runId, (s) => ({
       ...s,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
     }));
     await store.updateRun(runId, (s) => ({
       ...s,
       stage: 'implementation',
-      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const outcome = await review(deps, runId);
@@ -279,12 +279,12 @@ describe('Adaptive Workflow Execution & Review without SDD', () => {
 
     await store.updateRun(runId, (s) => ({
       ...s,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
     }));
     await store.updateRun(runId, (s) => ({
       ...s,
       stage: 'implementation',
-      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const outcome = await review(deps, runId);
@@ -301,12 +301,12 @@ describe('Adaptive Workflow Execution & Review without SDD', () => {
 
     await store.updateRun(runId, (s) => ({
       ...s,
-      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
     }));
     await store.updateRun(runId, (s) => ({
       ...s,
       stage: 'implementation',
-      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const outcome = await review(deps, runId);

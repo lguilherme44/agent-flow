@@ -16,6 +16,7 @@ import {
   repoKeyFromCanonicalRoot,
 } from '../core/worktree-policy.js';
 import { agentFlowPaths } from './paths.js';
+import { projectConfigPath } from '../config/loader.js';
 
 /**
  * A run's Git identity, decided once — at creation — and never again (I-13).
@@ -79,6 +80,77 @@ export const WORKTREE_REFUSAL_CODES = [
 ] as const;
 
 export type WorktreeRefusalCode = (typeof WORKTREE_REFUSAL_CODES)[number];
+
+/**
+ * What planning preflight may refuse for — the worktree codes, plus the one that is not
+ * about worktrees at all (AR-01, C-01).
+ *
+ * A separate union rather than a new entry in {@link WORKTREE_REFUSAL_CODES}, because the
+ * two questions genuinely differ. `checkWorktreePreconditions` runs *during* execution and
+ * asks whether an isolated run can still proceed; every code it may return describes a
+ * repository state. `project_not_initialized` describes the project's configuration, is
+ * evaluated in every isolation mode, and is not an answer that function is ever entitled to
+ * give — so the compiler, not a convention, is what keeps it out.
+ */
+export type PlanningPreflightCode = WorktreeRefusalCode | 'project_not_initialized';
+
+export type PlanningPreconditions =
+  | { readonly satisfied: true }
+  | { readonly satisfied: false; readonly code: PlanningPreflightCode; readonly detail: string };
+
+/** What a person is told to do about a preflight refusal, worktree or otherwise. */
+export function planningPreflightAction(code: PlanningPreflightCode): string {
+  if (code === 'project_not_initialized') {
+    return 'Run `agent-flow init`, then commit what it writes.';
+  }
+  return worktreeRefusalAction(code);
+}
+
+/**
+ * A refusal, rendered for the surface that has to put it in front of a person.
+ *
+ * Built here rather than at the call site because there is now more than one call site —
+ * `feature` today, `bug` and the write API next — and the sentence has to be the same in
+ * all of them. It also has to be *true* in all of them: the caller used to wrap every
+ * refusal in "Worktree mode was requested and this repository is not ready", which is
+ * false for a configuration fault and false for every sequential run.
+ *
+ * `kind` exists so the CLI can reach the right exit code without matching on a code
+ * string. C-01 requires `CONFIG_ERROR`, and the existing repository refusals must keep
+ * `EXECUTION_ERROR`; that is a distinction about the *nature* of the fault, so this layer
+ * makes it and the CLI maps it.
+ */
+export interface RenderedPlanningRefusal {
+  readonly code: PlanningPreflightCode;
+  readonly message: string;
+  readonly action: string;
+  readonly kind: 'configuration' | 'repository';
+}
+
+export function renderPlanningRefusal(refusal: {
+  readonly code: PlanningPreflightCode;
+  readonly detail: string;
+}): RenderedPlanningRefusal {
+  const action = planningPreflightAction(refusal.code);
+
+  if (refusal.code === 'project_not_initialized') {
+    return {
+      code: refusal.code,
+      message: `This project has not been initialised for Agent Flow: ${refusal.detail}`,
+      action,
+      kind: 'configuration',
+    };
+  }
+
+  return {
+    code: refusal.code,
+    message:
+      `Worktree mode was requested and this repository is not ready ` +
+      `(${refusal.code}): ${refusal.detail}`,
+    action,
+    kind: 'repository',
+  };
+}
 
 export interface WorktreeRefusal {
   readonly code: WorktreeRefusalCode;
@@ -259,16 +331,54 @@ export async function resolveRunGitIdentity(
 }
 
 /**
- * Evaluates deterministic repository preflight checks before a run is created.
+ * Is this directory a project Agent Flow has been set up in? (AR-01, C-01)
  *
- * Checks structural conditions (1–6), repository commits, state paths ignored (8),
- * and clean working tree (9) when worktrees are requested.
+ * One file answers it: `.agent-flow/config.yaml` is the only versioned artifact `init`
+ * writes, and `loadConfig` treats its absence as "no project overrides" rather than as a
+ * missing project — which is correct for a *loader* and is exactly why nothing refused.
+ *
+ * A fact about the working tree, not about history. `init` writes the file and then tells
+ * the user to commit it; refusing until they had would make the documented next step
+ * impossible.
+ */
+export async function checkProjectInitialized(deps: {
+  readonly fs: FileSystem;
+  readonly projectDir: string;
+}): Promise<PlanningPreconditions> {
+  const path = projectConfigPath(deps.projectDir);
+  if (await deps.fs.exists(path)) return SATISFIED;
+
+  return {
+    satisfied: false,
+    code: 'project_not_initialized',
+    // The absent path, named. C-01 asks for it because "not initialised" leaves the
+    // person guessing which of several directories the tool was looking in.
+    detail: `there is no Agent Flow configuration at ${path}`,
+  };
+}
+
+/**
+ * Evaluates deterministic preflight checks before a run is created.
+ *
+ * Initialisation first, in **every** isolation mode (AR-01, C-01). Then, only when
+ * worktrees are requested: structural conditions (1–6), repository commits, state paths
+ * ignored (8), and a clean working tree (9).
+ *
+ * The ordering is load-bearing twice over. An uninitialised project is uninitialised
+ * whatever `git.useWorktrees` says, and this function used to return `SATISFIED` before
+ * asking anything when worktrees were off — so a sequential run got no preflight at all.
+ * And an uninitialised *and* dirty repository must report the initialisation, because that
+ * is the one the person has to fix first, and because reaching Git at all is work this
+ * refusal exists to avoid.
  *
  * If this returns satisfied: false, StateStore.createRun MUST NOT be called.
  */
 export async function checkPlanningPreflight(
   deps: RunGitIdentityDeps,
-): Promise<WorktreePreconditions> {
+): Promise<PlanningPreconditions> {
+  const initialized = await checkProjectInitialized(deps);
+  if (!initialized.satisfied) return initialized;
+
   const wantsWorktrees = deps.config.global.git.useWorktrees;
   if (!wantsWorktrees) return SATISFIED;
 

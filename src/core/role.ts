@@ -1,12 +1,19 @@
 import {
   GlobalConfigSchema,
   roleConfigOf,
+  type FailureClass,
   type GlobalConfig,
   type ReasoningLevel,
   type WorkflowRole,
 } from '../contracts/index.js';
-import type { RunnerCapabilities } from '../ports/agent-runner.js';
+import type {
+  RunnerCapabilities,
+  RunnerCapabilityEntry,
+  RunnerCapabilityResolver,
+} from '../ports/agent-runner.js';
 import { clampReasoning } from './reasoning.js';
+
+export type { RunnerCapabilityEntry, RunnerCapabilityResolver };
 
 export { GlobalConfigSchema };
 export type { GlobalConfig, WorkflowRole };
@@ -15,8 +22,35 @@ export type { GlobalConfig, WorkflowRole };
  * Capabilities keyed by runner id. Passed in rather than looked up, so this
  * module stays pure: it reasons about what runners can do without knowing that
  * any particular runner exists.
+ *
+ * Since AD-30 an entry may be a **resolver** rather than a plain record, because a
+ * runner's capabilities can depend on the model the role configured. The map is
+ * still keyed by runner id and the model is still opaque here: this module hands the
+ * string through to the resolver and never inspects it.
+ *
+ * Both forms are accepted on purpose. Every existing caller passes plain records —
+ * `registry.capabilities()` builds one, and ~20 test files write one inline — and a
+ * runner with no model-specific knowledge has nothing to gain from a function. Use
+ * {@link capabilitiesOf} rather than indexing, so no caller has to know which it got.
  */
-export type RunnerCapabilitiesMap = Readonly<Record<string, RunnerCapabilities>>;
+export type RunnerCapabilitiesMap = Readonly<Record<string, RunnerCapabilityEntry>>;
+
+/**
+ * The capabilities of one runner, on one model.
+ *
+ * The single reader of a {@link RunnerCapabilitiesMap} entry. Everything downstream
+ * — resolution, the preflight AR-01 will add, `doctor` — asks through here, so
+ * "record or resolver" is answered once instead of at every call site.
+ */
+export function capabilitiesOf(
+  capabilities: RunnerCapabilitiesMap,
+  runnerId: string,
+  model?: string,
+): RunnerCapabilities | undefined {
+  const entry = capabilities[runnerId];
+  if (entry === undefined) return undefined;
+  return typeof entry === 'function' ? entry(model) : entry;
+}
 
 export type RoleResolutionErrorKind =
   | 'unknown_runner'
@@ -56,8 +90,96 @@ export interface ResolvedAgentConfig {
   readonly model?: string;
   readonly reasoning: ReasoningLevel;
   readonly reasoningClamped: boolean;
+  /**
+   * The level the configuration asked for, before the pair's capabilities were applied.
+   *
+   * Carried rather than recomputed, because C-03 requires the `reasoning_clamped`
+   * degradation to record "requested, effective, supported set and reason" — and until
+   * now two of those three were discarded at the exact moment they were known. A caller
+   * that recomputed them would have to consult the capabilities map a second time, and a
+   * second answer to one question is the one that eventually disagrees.
+   *
+   * Equal to {@link reasoning} whenever nothing was clamped. Present on both paths on
+   * purpose: a field that appears only on the unhappy path is a field every reader has to
+   * guard.
+   */
+  readonly requestedReasoning: ReasoningLevel;
+  /** What the resolved (runner, model) pair declared. The third fact C-03 asks for. */
+  readonly supportedReasoningLevels: readonly ReasoningLevel[];
   readonly timeoutSeconds: number;
   readonly structuredOutputStrategy: 'native' | 'prompted';
+}
+
+/** The tool classes AD-32 makes explicit. Never a free-form string. */
+export type NonInteractiveToolClass = 'fileEdit' | 'commandExecution';
+
+/**
+ * A permission gap, named (AD-32, C-04).
+ *
+ * Deliberately a *value* rather than an exception. `supportsNonInteractive: true` says the
+ * process will not stop at a prompt; it does not say the agent may run the tools the work
+ * requires, and one runner in the evidence run was non-interactive and still failed
+ * because local policy soft-denied a shell command with nobody present to confirm it.
+ *
+ * The response to that is a person granting something, and stopping the run would not help
+ * them grant it any sooner — so this is reported, never thrown (I-22: discovering it costs
+ * no attempt either).
+ */
+export interface PermissionFinding {
+  readonly failureClass: FailureClass;
+  readonly runner: string;
+  readonly model?: string;
+  readonly toolClass: NonInteractiveToolClass;
+  /** The one specific action. "Check your permissions" is a contract violation (AR §3.6). */
+  readonly action: string;
+}
+
+export interface PermissionReadinessInput {
+  readonly capabilities: RunnerCapabilities;
+  /** What the stage's prompt front-matter declares (AD-12). */
+  readonly permissions: 'read-only' | 'write';
+  readonly runner: string;
+  readonly model?: string;
+}
+
+/**
+ * Whether the resolved pair may exercise the tools this stage's work requires.
+ *
+ * Returns `undefined` when it may, or when the stage asks for nothing that needs a grant:
+ * a read-only stage observes and writes nothing, and warning about a command grant it will
+ * never use would train the reader to ignore the warning that matters.
+ *
+ * File edits are checked before command execution because a write stage that cannot edit a
+ * file cannot do any of its work, whereas one that cannot run a command can often still do
+ * most of it. One finding at a time, most disabling first.
+ */
+export function permissionReadiness(
+  input: PermissionReadinessInput,
+): PermissionFinding | undefined {
+  if (input.permissions !== 'write') return undefined;
+
+  const grants = input.capabilities.nonInteractiveToolGrants;
+  const missing: NonInteractiveToolClass | undefined = !grants.fileEdit
+    ? 'fileEdit'
+    : !grants.commandExecution
+      ? 'commandExecution'
+      : undefined;
+
+  if (missing === undefined) return undefined;
+
+  return {
+    failureClass: 'permission_not_ready',
+    runner: input.runner,
+    ...(input.model === undefined ? {} : { model: input.model }),
+    toolClass: missing,
+    action: permissionAction(missing, input.runner),
+  };
+}
+
+function permissionAction(toolClass: NonInteractiveToolClass, runner: string): string {
+  return toolClass === 'fileEdit'
+    ? `Grant non-interactive file edits to "${runner}" in its own CLI configuration`
+    : `Grant non-interactive command execution to "${runner}" in its own CLI configuration`;
 }
 
 /**
@@ -78,7 +200,9 @@ export function resolveRole(
   const runnerId = roleConfig.runner;
 
   const runnerConfig = config.runners[runnerId];
-  const runnerCapabilities = capabilities[runnerId];
+  // Resolved with the role's model, which is the whole of AD-30: the capabilities that
+  // matter are those of the (runner, model) pair, not of the CLI in the abstract.
+  const runnerCapabilities = capabilitiesOf(capabilities, runnerId, roleConfig.model);
 
   if (!runnerConfig || !runnerCapabilities) {
     const known = Object.keys(config.runners).join(', ') || '(none)';
@@ -146,6 +270,8 @@ export function resolveRole(
     ...(roleConfig.model === undefined ? {} : { model: roleConfig.model }),
     reasoning,
     reasoningClamped: clamped,
+    requestedReasoning: roleConfig.effort,
+    supportedReasoningLevels: runnerCapabilities.supportedReasoningLevels,
     timeoutSeconds: roleConfig.timeoutSeconds,
     structuredOutputStrategy: runnerCapabilities.structuredOutputStrategy,
   };
@@ -175,7 +301,14 @@ export function resolveFallback(
   if (fallbackConfig === undefined) return undefined;
 
   const runnerConfig = config.runners[fallbackConfig.runner];
-  const runnerCapabilities = capabilities[fallbackConfig.runner];
+  // The fallback's own model, not the primary's: a fallback entry is resolved as a role
+  // in its own right, and sending the primary's model name to a runner that has never
+  // heard of it is the defect this signature already existed to avoid.
+  const runnerCapabilities = capabilitiesOf(
+    capabilities,
+    fallbackConfig.runner,
+    fallbackConfig.model,
+  );
   if (runnerConfig?.enabled !== true || runnerCapabilities === undefined) return undefined;
 
   // A fallback that cannot satisfy the stage is no fallback. Using it anyway
@@ -202,6 +335,8 @@ export function resolveFallback(
     ...(fallbackConfig.model === undefined ? {} : { model: fallbackConfig.model }),
     reasoning,
     reasoningClamped: clamped,
+    requestedReasoning: fallbackConfig.effort,
+    supportedReasoningLevels: runnerCapabilities.supportedReasoningLevels,
     timeoutSeconds: fallbackConfig.timeoutSeconds,
     structuredOutputStrategy: runnerCapabilities.structuredOutputStrategy,
   };

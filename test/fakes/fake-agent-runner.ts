@@ -22,6 +22,7 @@ const DEFAULT_CAPABILITIES: RunnerCapabilities = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 };
 
 /**

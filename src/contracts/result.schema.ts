@@ -22,6 +22,27 @@ export const CommandResultSchema = z.object({
 });
 export type CommandResult = z.infer<typeof CommandResultSchema>;
 
+/**
+ * One command, compressed to what a retry needs to know (AD-40).
+ *
+ * A {@link CommandResultSchema} carries whole streams — the evidence run's held a
+ * complete `vitest` transcript — and a Failure Context Packet has an 8 KB budget for
+ * everything it says. So the packet takes this instead: the command, its exit code,
+ * and the *tail* of what it printed, which is where a test runner puts the summary.
+ *
+ * `tail` is post-redaction like every other persisted evidence field (AD-35, I-21):
+ * a command's output is third-party text and the packet is written to disk.
+ */
+export const CommandSummarySchema = z.object({
+  command: z.string().min(1),
+  exitCode: z.number().int(),
+  /** Last lines of the combined output, redacted and bounded. */
+  tail: z.string().default(''),
+  /** True when `tail` is not the whole output — never truncated silently. */
+  truncated: z.boolean().default(false),
+});
+export type CommandSummary = z.infer<typeof CommandSummarySchema>;
+
 /** §21, plus the provenance fields the spec leaves implicit. */
 export const TaskResultSchema = z.object({
   task: AnyTaskIdSchema,

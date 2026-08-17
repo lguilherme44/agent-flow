@@ -41,6 +41,7 @@ const CAPS = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
 function config(overrides: Record<string, unknown> = {}) {
@@ -352,6 +353,8 @@ describe('quota is exhausted and a fallback exists', () => {
         runner: 'claude',
         reasoning: 'high',
         reasoningClamped: false,
+        requestedReasoning: 'high',
+        supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],
         timeoutSeconds: 900,
         structuredOutputStrategy: 'native',
       },

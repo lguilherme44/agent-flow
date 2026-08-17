@@ -1,5 +1,7 @@
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
-import { initProject } from '../app/init-project.js';
+import { SystemClock } from '../adapters/clock/system-clock.js';
+import { findActiveRun, initProject, projectRelativePaths } from '../app/init-project.js';
+import { StateStore } from '../app/state-store.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
@@ -9,12 +11,53 @@ export async function runInitCommand(
   options: { force?: boolean },
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
+  const fs = new NodeFileSystem();
+
   try {
+    const store = new StateStore({ fs, clock: new SystemClock(), projectDir: globals.cwd });
+
+    // AR-01, C-02. Before `initProject`, because "it writes nothing" is half the contract
+    // and a gate that runs after the write is not a gate.
+    const active = await findActiveRun(store);
+
+    if (active !== undefined && options.force !== true) {
+      process.stderr.write(
+        [
+          `Run ${active.runId} is still active (${active.status}).`,
+          '',
+          `  planningBase  ${active.planningBase ?? '(none recorded)'}`,
+          '',
+          'init writes files that have to be committed, and that commit moves HEAD.',
+          "A run's planningBase is frozen when the run is created, so committing now",
+          'would leave this run planning against one base and executing against another.',
+          '',
+          'Finish or abandon the run first, or re-run with --force to proceed anyway',
+          '(recorded on the run).',
+          '',
+        ].join('\n'),
+      );
+      return ExitCode.GATE_NOT_SATISFIED;
+    }
+
     const result = await initProject({
-      fs: new NodeFileSystem(),
+      fs,
       projectDir: globals.cwd,
       ...(options.force === undefined ? {} : { force: options.force }),
     });
+
+    // After the write rather than before it: the event says what happened, and an event
+    // recording an override that then failed would be a lie the audit trail keeps.
+    if (active !== undefined) {
+      await store.appendEvent(active.runId, 'init_during_active_run', {
+        forced: true,
+        status: active.status,
+        ...(active.planningBase === undefined ? {} : { planningBase: active.planningBase }),
+        // Project-relative, never absolute (§21.3). What matters afterwards is which files
+        // moved under this run, not where this machine keeps its home directory.
+        created: projectRelativePaths(globals.cwd, result.created),
+        updated: projectRelativePaths(globals.cwd, result.updated),
+      });
+    }
 
     const lines: string[] = [
       `Detected: ${result.stack.type} (${result.stack.name})`,
@@ -35,6 +78,14 @@ export async function runInitCommand(
         '',
         'No validation commands were detected. Add them to .agent-flow/config.yaml —',
         'agent-flow runs them itself, so an invented command fails for the wrong reason.',
+      );
+    }
+
+    if (active !== undefined) {
+      lines.push(
+        '',
+        `Warning: run ${active.runId} is active and its planningBase may no longer`,
+        'match HEAD once you commit these files. This was recorded on the run.',
       );
     }
 

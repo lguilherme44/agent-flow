@@ -111,7 +111,40 @@ export interface RunnerCapabilities {
    * for JSON and validate afterwards, with a bounded repair loop.
    */
   readonly structuredOutputStrategy: 'native' | 'prompted';
+  /**
+   * Tool classes the runner can exercise without an interactive confirmation (AD-32).
+   *
+   * **Distinct from `supportsNonInteractive`, and the two were conflated.** That flag
+   * says the process will not block on a prompt. It does not say the agent can run the
+   * tools the work requires — one runner in the evidence run was non-interactive and
+   * still failed: it tried `grep`, local policy demanded a confirmation, nobody could
+   * answer, and the run recorded a generic execution failure.
+   *
+   * Unknown stays `false`, and `false` does not block execution: it produces a
+   * `permission_not_ready` warning from `doctor` and a preflight finding, never a
+   * silent pass. A grant is *declared*, never inferred from a run that happened to
+   * succeed.
+   */
+  readonly nonInteractiveToolGrants: {
+    readonly fileEdit: boolean;
+    readonly commandExecution: boolean;
+    /** Commands known to be denied in this environment, when discoverable. */
+    readonly deniedCommands?: readonly string[];
+  };
 }
+
+/**
+ * How a caller may be *given* a runner's capabilities (AD-30).
+ *
+ * Two forms, both accepted. A plain record is what a runner with no model-specific
+ * knowledge has to say, and it is what every caller wrote before this milestone; a
+ * resolver is what a runner whose answer depends on the model provides. Declared in the
+ * port rather than in the core because it is a property of the *contract* — the core
+ * merely reads it, through one accessor, so no consumer has to know which it received.
+ */
+export type RunnerCapabilityResolver = (model?: string) => RunnerCapabilities;
+
+export type RunnerCapabilityEntry = RunnerCapabilities | RunnerCapabilityResolver;
 
 export interface RunnerHealth {
   readonly installed: boolean;
@@ -128,7 +161,26 @@ export interface RunnerHealth {
 
 export interface AgentRunner {
   readonly id: string;
-  capabilities(): RunnerCapabilities;
+  /**
+   * What this runner can do — optionally, on a specific model (AD-30).
+   *
+   * The core passes the configured model as an **opaque string** and never
+   * interprets it; an adapter with model-specific knowledge answers with it, and one
+   * without ignores the argument and returns what it always returned. Behaviour is
+   * therefore unchanged for every existing runner, and adding the parameter is
+   * source-compatible with every adapter.
+   *
+   * The old signature was *structurally incapable* of expressing the difference that
+   * cost the evidence run a task attempt: one adapter declares
+   * `['low','medium','high']`, which is true of its CLI and false of the model that
+   * CLI was pointed at. No argument reached `capabilities()`, so the mismatch was
+   * undetectable before invocation.
+   *
+   * **A capability table keyed by model name may never live in the core.** That is
+   * provider knowledge, it belongs to the adapter that owns the provider (AD-13), and
+   * putting it above the adapter boundary would make one vendor a core concern.
+   */
+  capabilities(model?: string): RunnerCapabilities;
   healthCheck(): Promise<RunnerHealth>;
   run(input: AgentRunInput): Promise<AgentRunResult>;
 }

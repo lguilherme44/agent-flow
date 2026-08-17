@@ -37,6 +37,7 @@ const CAPABILITIES = {
     supportsNonInteractive: true,
     supportsWorkingDirectory: true,
     structuredOutputStrategy: 'native',
+    nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
   },
 } as const;
 
@@ -299,6 +300,162 @@ describe('reasoning clamping is recorded as a degradation (R-16)', () => {
 
     const state = await store.loadRun(run.runId);
     expect(state.degradations.map((d) => d.kind)).toContain('reasoning_clamped');
+  });
+});
+
+/**
+ * C-03 and I-20 (AR-01) — the evidence run's TASK-002 attempt 1, reproduced.
+ *
+ * A role configured `effort: medium` against a model offering only `low` and `high`. The
+ * clamp machinery already existed and had never fired, because `capabilities()` took no
+ * argument and answered with the *CLI's* levels. Feeding it the pair's levels is the whole
+ * change; what this milestone owes on top is that the clamp is never silent, and that no
+ * runner is ever handed the unsupported level.
+ */
+describe('a model that does not offer the configured effort clamps, loudly (C-03, I-20)', () => {
+  const NARROW_MODEL = 'narrow-model';
+  const WIDE_MODEL = 'wide-model';
+
+  /** Capabilities that genuinely depend on the model, as an adapter with knowledge is. */
+  const perModel = {
+    claude: (model?: string) =>
+      model === NARROW_MODEL
+        ? { ...CAPABILITIES.claude, supportedReasoningLevels: ['low', 'high'] as const }
+        : CAPABILITIES.claude,
+  };
+
+  const configWithModel = (model: string) =>
+    GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' } },
+      roles: {
+        architect: { runner: 'claude', effort: 'high' },
+        // The role under test: `medium`, against whichever model the case supplies.
+        sdd: { runner: 'claude', effort: 'medium', model },
+        planner: { runner: 'claude', effort: 'high' },
+        planReviewer: { runner: 'claude', effort: 'high' },
+        executors: {
+          trivial: { runner: 'claude', effort: 'low' },
+          normal: { runner: 'claude', effort: 'medium' },
+          complex: { runner: 'claude', effort: 'high' },
+        },
+        verification: { runner: 'claude', effort: 'medium' },
+        finalReviewer: { runner: 'claude', effort: 'high' },
+      },
+    });
+
+  async function clampHarness(model: string) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    fs.seed(
+      `${PROMPTS}/sdd.md`,
+      '---\nrole: sdd\npermissions: read-only\nrequiredVars: [featureRequest]\n---\n{{featureRequest}}\n',
+    );
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f');
+    const runner = new FakeAgentRunner('claude');
+    runner.pushText('# SDD');
+
+    const stageRunner = new StageRunner({
+      fs,
+      clock,
+      store,
+      config: configWithModel(model),
+      capabilities: perModel,
+      promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+      getRunner: () => runner,
+      projectDir: PROJECT,
+    });
+
+    const result = await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+    return { store, run, runner, result };
+  }
+
+  it('hands the adapter the effective level, never the requested one (I-20)', async () => {
+    // The invariant, asserted where it can actually be broken: at the port. Everything
+    // else in this describe is evidence *about* the decision; this is the decision.
+    const { runner } = await clampHarness(NARROW_MODEL);
+
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.lastCall?.reasoning).toBe('low');
+  });
+
+  it('passes the model through unchanged, as the opaque string it is (AD-13, AD-30)', async () => {
+    // The constraint that keeps provider knowledge out of the core: the effective effort
+    // and the model id are decided by different mechanisms, and the core must not
+    // "reconcile" them. A model id that encodes an effort is the adapter's business.
+    const { runner } = await clampHarness(NARROW_MODEL);
+
+    expect(runner.lastCall?.model).toBe(NARROW_MODEL);
+  });
+
+  it('chooses the greatest supported level that does not exceed the request', async () => {
+    const { result } = await clampHarness(NARROW_MODEL);
+
+    expect(result.execution.reasoning).toBe('low');
+    expect(result.execution.reasoningClamped).toBe(true);
+  });
+
+  it('records a reasoning_clamped degradation carrying every fact C-03 requires', async () => {
+    const { store, run } = await clampHarness(NARROW_MODEL);
+
+    const state = await store.loadRun(run.runId);
+    const clamp = state.degradations.find((d) => d.kind === 'reasoning_clamped');
+    expect(clamp).toBeDefined();
+
+    // requested, effective, supported set, runner, model, reason — in the words a person
+    // reads. "Something was degraded" is the sentence this channel exists to forbid.
+    const said = `${clamp?.reason ?? ''} ${clamp?.impact ?? ''}`;
+    expect(said).toContain('medium');
+    expect(said).toContain('low');
+    expect(said).toContain('high');
+    expect(said).toContain('claude');
+    expect(said).toContain(NARROW_MODEL);
+  });
+
+  it('publishes the same facts structurally, so a reader never parses prose', async () => {
+    // §8 keeps `RunEvent.detail` an open record precisely so evidence can be enriched
+    // without a migration. The degradation is for people; this is for the read model.
+    const { store, run } = await clampHarness(NARROW_MODEL);
+
+    const events = await store.readEvents(run.runId);
+    const started = events.find((event) => event.type === 'stage_started');
+
+    expect(started?.detail).toMatchObject({
+      runner: 'claude',
+      model: NARROW_MODEL,
+      reasoning: 'low',
+      reasoningRequested: 'medium',
+      reasoningClamped: true,
+    });
+    expect(started?.detail?.['reasoningSupported']).toEqual(['low', 'high']);
+  });
+
+  it('lets the run proceed rather than refusing it (AD-31)', async () => {
+    const { result, store, run } = await clampHarness(NARROW_MODEL);
+
+    expect(result.text).toContain('# SDD');
+    expect(await store.readArtifact(run.runId, 'sdd')).toContain('# SDD');
+  });
+
+  it('does not clamp the same effort when the model does offer it', async () => {
+    // The control. Without it, a test suite that clamps everything would pass.
+    const { runner, store, run, result } = await clampHarness(WIDE_MODEL);
+
+    expect(runner.lastCall?.reasoning).toBe('medium');
+    expect(result.execution.reasoningClamped).toBe(false);
+
+    const state = await store.loadRun(run.runId);
+    expect(state.degradations.map((d) => d.kind)).not.toContain('reasoning_clamped');
+  });
+
+  it('records no clamp evidence on the event when nothing was clamped', async () => {
+    const { store, run } = await clampHarness(WIDE_MODEL);
+
+    const events = await store.readEvents(run.runId);
+    const started = events.find((event) => event.type === 'stage_started');
+
+    expect(started?.detail).toMatchObject({ reasoningClamped: false, reasoning: 'medium' });
   });
 });
 

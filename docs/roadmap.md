@@ -79,7 +79,7 @@ context bloat and accelerates stage execution while preserving all security inva
 ## Autonomous Execution & Recovery · in progress
 
 Specified in [`specs/autonomous-execution-recovery.md`](specs/autonomous-execution-recovery.md).
-`AR-00` has landed; every milestone above it is still design.
+`AR-00` and `AR-01` have landed; every milestone above them is still design.
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -96,7 +96,7 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | | Milestone | Status |
 |---|---|---|
 | AR-00 | Contracts, vocabulary and probes | **done** |
-| AR-01 | Readiness preflight | design |
+| AR-01 | Readiness preflight | **done** |
 | AR-02 | Failure intelligence and evidence | design |
 | AR-05a | Acceptance integrity | design |
 | AR-06 | DAG and conflict safety | design |
@@ -123,12 +123,10 @@ classification, recovery policy and the runtime projection. `recovery.enabled` s
 because a budget nothing enforces must not read as a feature that is on.
 
 **No behaviour changed.** `capabilities(model?)` and the resolver-shaped capability map
-landed, and every shipped adapter still answers the same thing for every model — so
-resolution is byte-identical to before. The measured per-model narrowing that would make the
+landed, and every shipped adapter still answered the same thing for every model — so
+resolution was byte-identical to before. The measured per-model narrowing that makes the
 existing clamp fire is documented in [`runner-capabilities.md`](runner-capabilities.md) and
-is **AR-01's** to encode: that milestone owns `core/role.ts` and all four adapters, carries
-C-03 and I-20, and its migration note is "a previously-fatal configuration now clamps". An
-architecture test pins the inertness so AR-01 has to come and edit it.
+was **AR-01's** to encode; it is encoded now.
 
 Two divergences are worth recording, both now corrected in the specification itself:
 
@@ -142,6 +140,43 @@ Two divergences are worth recording, both now corrected in the specification its
   existing run keeps its numbers. `TelemetryEntry.attempts` and `StageViewResponse.attempts`
   still carry the repair count for stages under the older name; renaming those is a
   read-model change and belongs to AR-07.
+
+### What AR-01 landed
+
+The first milestone that changes behaviour, and the change is stated plainly because it is
+a migration: **a previously-fatal configuration now clamps.**
+
+- **An uninitialised project is refused before a run exists.** `checkPlanningPreflight` now
+  asks whether `.agent-flow/config.yaml` exists, in **every** isolation mode — it used to
+  return satisfied immediately when `git.useWorktrees` was off, so a sequential run got no
+  preflight at all. Zero runner invocations, zero runs, HEAD unchanged, exit `CONFIG_ERROR`,
+  and one sentence naming the absent path and `agent-flow init` (C-01).
+- **The effort a (runner, model) pair does not offer is clamped, loudly.** The AGY adapter
+  encodes its measured per-model table; `medium` against a model offering `low` and `high`
+  resolves to `low`, records a `reasoning_clamped` degradation naming requested, effective,
+  supported set, runner and model, publishes the same facts on `stage_started` structurally,
+  and the run proceeds. No runner is invoked at the unsupported level (I-20) and no task
+  attempt is spent finding out (I-22, C-03).
+- **`doctor` reports the pair mechanically, for free.** A new capability section compares
+  what each role asks for with what its pair declares, and warns `permission_not_ready` when
+  a write role's runner does not grant a tool class it needs (C-04). `--deep` stays opt-in
+  and now exercises **every configured effort** plus a read-only tool-use probe — the old
+  probe used the cheapest supported level and would never have exercised the `medium` that
+  broke. Nothing here edits configuration or escalates a permission; repairing a gap is a
+  later milestone's.
+- **`init` refuses during an active run.** It names the run and its `planningBase`, writes
+  nothing, and exits `GATE_NOT_SATISFIED`; `--force` proceeds and records
+  `init_during_active_run` on the run (C-02).
+
+**No persisted schema changed.** The degradation kind and the event name both already
+existed from AR-00, and the structured clamp evidence rides on `RunEvent.detail`, which §8
+keeps an open record precisely so evidence can be enriched without a migration.
+
+**The model id is never reconciled with the effective effort.** One vendor's ids encode an
+effort — `gemini-3.1-pro-high` — while the clamp may land on `low`. The adapter forwards
+both verbatim; the core treats the model as the opaque string AD-13 requires. An
+architecture test forbids any layer above `src/adapters/` from taking a model string apart,
+and confines the per-model table to `src/adapters/runners/`.
 
 ### Core invariants added by this milestone
 

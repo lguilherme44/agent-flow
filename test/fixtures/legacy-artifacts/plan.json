@@ -1,0 +1,396 @@
+{
+  "feature": "bug-command-entry-point",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Add RED CLI tests for bug registration and option parity",
+      "description": "Write the failing registration-level tests in test/cli/cli.test.ts. (a) Extend the existing 'lists the commands available at this milestone' case so it asserts that `agent-flow --help` contains `bug` alongside `feature` (additive change only \u2014 no existing assertion removed). (b) Add a new case over `agent-flow bug --help` asserting the four options `--no-cache`, `--from`, `--skip-review` and `--wo\n<truncated for fixture>",
+      "scope": "backend",
+      "complexity": "trivial",
+      "risk": "low",
+      "dependencies": [],
+      "requirements": [
+        "FR-002",
+        "FR-003",
+        "FR-009"
+      ],
+      "files": {
+        "likely": [
+          "test/cli/cli.test.ts"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "test/cli/cli.test.ts asserts `bug` appears in the output of `agent-flow --help`, keeping the pre-existing `feature` assertion intact.",
+        "A new test asserts `agent-flow bug --help` lists --no-cache, --from, --skip-review and --workflow.",
+        "A new test asserts the `bug` description names correction/defect work and that the argument help text is not 'what the feature should do'.",
+        "`npm run test` fails on exactly these new/extended assertions before `bug` is registered (RED confirmed).",
+        "No file outside test/cli/cli.test.ts is modified; in particular no change under src/, prompts/ or src/contracts/."
+      ],
+      "validation": [
+        "test"
+      ],
+      "validationExpectation": "fail"
+    },
+    {
+      "id": "TASK-002",
+      "title": "Add RED CLI tests for bug dispatch, exit code, missing argument and --dry-run",
+      "description": "Write the failing behavioural tests in test/cli/cli.test.ts, using the fixture pattern already established in test/cli/feature-workflow.test.ts:12-21 (mkdtemp + empty .git/ + minimal global config with runners.claude.type=claude-code-cli and roles.planner.runner=claude). No agent runner may be invoked by any of these tests.\n\n(1) Dispatch + exit-code propagation: call main(['node','agent-flow','bug\n<truncated for fixture>",
+      "scope": "backend",
+      "complexity": "normal",
+      "risk": "medium",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "requirements": [
+        "FR-003",
+        "FR-004",
+        "FR-005",
+        "FR-006",
+        "FR-010"
+      ],
+      "files": {
+        "likely": [
+          "test/cli/cli.test.ts"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "A test drives main() with `bug` + `--workflow banana` + `--cwd <tempDir>` and requires ExitCode.CONFIG_ERROR (2); changing the future .action to `return` instead of assigning to `exitCode` makes it fail.",
+        "A test drives main() with `bug` and no description using `--cwd <tempDir>`, asserts a non-zero exit code, asserts the stderr/message reports a missing required argument, and explicitly asserts the message is not commander's `unknown command`.",
+        "That same test asserts `<tempDir>/.agent-flow/runs` does not exist after the call.",
+        "A test drives main() with `bug \"x\" --dry-run --cwd <tempDir>`, asserts exit code 0, stdout containing `Execution plan for <tempDir>`, output ending with `No runner was invoked.`, and zero AgentRunner/model invocations.",
+        "The --dry-run test asserts the emitted plan equals the plan emitted by the equivalent `feature \"x\" --dry-run` invocation, proving the shared composition/configuration path.",
+        "`npm run test` fails on these three cases before `bug` is registered (RED confirmed), and no real agent CLI is spawned by any of them.",
+        "No file outside test/cli/cli.test.ts is modified."
+      ],
+      "validation": [
+        "test"
+      ],
+      "validationExpectation": "fail"
+    },
+    {
+      "id": "TASK-003",
+      "title": "Register the bug command in src/cli/index.ts delegating to runFeatureCommand",
+      "description": "Register `bug` in src/cli/index.ts immediately after the `feature` block (src/cli/index.ts:127-143), since help ordering is registration ordering. Use `.argument('<description>', <text describing the defect to fix>)`, a command description that frames corrective work, and the same four options as feature (--no-cache, --from <stage>, --skip-review, --workflow <class>). The .action must ASSIGN the a\n<truncated for fixture>",
+      "scope": "backend",
+      "complexity": "normal",
+      "risk": "medium",
+      "dependencies": [
+        "TASK-001",
+        "TASK-002"
+      ],
+      "requirements": [
+        "FR-001",
+        "FR-002",
+        "FR-003",
+        "FR-004",
+        "FR-005",
+        "FR-006",
+        "NFR-002",
+        "NFR-003",
+        "NFR-005",
+        "NFR-006"
+      ],
+      "files": {
+        "likely": [
+          "src/cli/index.ts"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "`bug` is registered in src/cli/index.ts right after the feature block, with one required <description> argument and the options --no-cache, --from <stage>, --skip-review and --workflow <class>.",
+        "The .action assigns the awaited runFeatureCommand result to the `exitCode` closure variable and does not return it.",
+        "The .action body contains no createRun, buildExecutionContext, buildPlanningPipeline, composeRunIdentity, resolveRunGitIdentity or stage parsing \u2014 only argument forwarding.",
+        "src/cli/bug.ts does not exist; src/cli/feature.ts is byte-unchanged; runFeatureCommand keeps its exact signature and FeatureOptions gains no field.",
+        "No file under prompts/ or src/contracts/ is modified by this task.",
+        "All RED tests from TASK-001 and TASK-002 now pass, and `npm run test`, `npm run typecheck` and `npm run lint` pass with test/architecture.test.ts unmodified."
+      ],
+      "validation": [
+        "test",
+        "typecheck",
+        "lint"
+      ],
+      "validationExpectation": "pass"
+    },
+    {
+      "id": "TASK-004",
+      "title": "Document the bug command in both README command tables",
+      "description": "Add one row for `bug \"<description>\"` to the `### Commands` table in README.md (around README.md:336-347) and the mirrored row to the `### Comandos` table in README.pt-BR.md (around README.pt-BR.md:339-350), adjacent to the `feature` row in each, with the description framing corrective/defect work. Both files must change in the same commit \u2014 the tables are mirrors and nothing automated checks thei\n<truncated for fixture>",
+      "scope": "docs",
+      "complexity": "trivial",
+      "risk": "low",
+      "dependencies": [
+        "TASK-003"
+      ],
+      "requirements": [
+        "FR-008"
+      ],
+      "files": {
+        "likely": [
+          "README.md",
+          "README.pt-BR.md"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "README.md `### Commands` contains a row for `bug \"<description>\"` next to the feature row.",
+        "README.pt-BR.md `### Comandos` contains the mirrored row for `bug \"<description>\"`.",
+        "Both tables list the same set of commands after the change (no drift between the two files).",
+        "No new docs file is created and docs/specs/**, apps/web/** and prompts/** are untouched."
+      ],
+      "validation": [],
+      "validationExpectation": "none"
+    },
+    {
+      "id": "TASK-005",
+      "title": "Extend the packaging smoke to require bug in the packaged --help and run it green",
+      "description": "Add 'bug' to the literal command list checked against the packaged binary's --help in scripts/packaging-smoke.mjs:128 (currently ['init','doctor','feature','approve','run','review','ui']), so the smoke fails if the packaged `agent-flow --help` does not list `bug`. Then EXECUTE `npm run test:packaging` (node scripts/packaging-smoke.mjs) and require a PASS \u2014 this is mandatory, not optional, because \n<truncated for fixture>",
+      "scope": "infra",
+      "complexity": "trivial",
+      "risk": "low",
+      "dependencies": [
+        "TASK-003"
+      ],
+      "requirements": [
+        "FR-011"
+      ],
+      "files": {
+        "likely": [
+          "scripts/packaging-smoke.mjs"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "scripts/packaging-smoke.mjs includes 'bug' in the command list asserted against the packaged binary's --help.",
+        "`npm run test:packaging` was executed and PASSED, and its output is reported.",
+        "The smoke's `--help lists bug` check is present in the passing output, proving the packaged agent-flow --help lists `bug`.",
+        "Removing the `bug` registration from src/cli/index.ts would make `npm run test:packaging` fail."
+      ],
+      "validation": [
+        "build"
+      ],
+      "validationExpectation": "pass"
+    },
+    {
+      "id": "TASK-006",
+      "title": "Verify persistence parity, untouched contracts and full check gate",
+      "description": "Final verification gate \u2014 no production behaviour changes here, only proof that the change stayed a pure CLI-surface addition.\n\n(1) Persistence parity (FR-007): create two runs with the same description, one via `feature` and one via `bug`, and confirm state.json has the same key set and the same values apart from runId and timestamps, and events.jsonl has the same event-type sequence. No new fiel\n<truncated for fixture>",
+      "scope": "backend",
+      "complexity": "normal",
+      "risk": "medium",
+      "dependencies": [
+        "TASK-003",
+        "TASK-004",
+        "TASK-005"
+      ],
+      "requirements": [
+        "FR-007",
+        "NFR-001",
+        "NFR-004",
+        "SEC-001",
+        "SEC-002",
+        "SEC-003"
+      ],
+      "files": {
+        "likely": [
+          "src/contracts/state.schema.ts",
+          "test/architecture.test.ts",
+          "src/cli/feature.ts"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "Two runs with the same description \u2014 one created by `feature`, one by `bug` \u2014 have state.json with an identical key set and identical values except runId and timestamps, and events.jsonl with an identical event-type sequence.",
+        "`git diff --stat -- src/contracts/` is empty and no new field, enum value or persisted event type was introduced anywhere.",
+        "`git diff --stat -- prompts/` is empty (no prompt file changed; prompt wording is out of this SDD's scope).",
+        "`rg -n \"\\.createRun\\s*\\(\" src/` returns only src/app/state-store.ts and src/cli/feature.ts; src/cli/bug.ts does not exist.",
+        "src/cli/feature.ts is byte-unchanged and runFeatureCommand keeps its exact signature; no orchestration logic was duplicated anywhere.",
+        "test/architecture.test.ts is byte-identical to its pre-change state and passes, including the createRun caller rule and the run-identity user rule.",
+        "`npm run check` passes and `git diff` shows no non-additive change to any pre-existing test.",
+        "The approval gate is intact: a `bug` run stops at the plan and no new code path reaches implementation before `agent-flow approve`; the bug description never reaches a shell and no new external endpoint, credential or child process was introduced."
+      ],
+      "validation": [
+        "typecheck",
+        "lint",
+        "test"
+      ],
+      "validationExpectation": "pass"
+    },
+    {
+      "id": "FIX-001",
+      "title": "O caso (3) da TASK-002 \u2014 `agent-flow bug \"x\" --dry-run` \u2014 n\u00e3o foi escrito. N\u00e3o e",
+      "description": "O caso (3) da TASK-002 \u2014 `agent-flow bug \"x\" --dry-run` \u2014 n\u00e3o foi escrito. N\u00e3o existe nenhuma asser\u00e7\u00e3o de exit code 0, de `Execution plan for <tempDir>` no stdout, de encerramento com `No runner was invoked.`, de zero invoca\u00e7\u00f5es de AgentRunner, nem a igualdade do plano emitido contra o do `feature \"x\" --dry-run` equivalente. `rg -n \"dry-run\" test/cli/*.ts` n\u00e3o retorna nada em cli.test.ts. Era exat\n<truncated for fixture>",
+      "complexity": "complex",
+      "risk": "medium",
+      "dependencies": [],
+      "requirements": [
+        "FR-006"
+      ],
+      "correctiveFor": {
+        "stage": "final-review",
+        "findingType": "missing_test",
+        "severity": "high",
+        "requirement": "FR-006",
+        "description": "O caso (3) da TASK-002 \u2014 `agent-flow bug \"x\" --dry-run` \u2014 n\u00e3o foi escrito. N\u00e3o existe nenhuma asser\u00e7\u00e3o de exit code 0, de `Execution plan for <tempDir>` no stdout, de encerramento com `No runner was invoked.`, de zero invoca\u00e7\u00f5es de AgentRunner, nem a igualdade do plano emitido contra o do `feature \"x\" --dry-run` equivalente. `rg -n \"dry-run\" test/cli/*.ts` n\u00e3o retorna nada em cli.test.ts. Era exat\n<truncated for fixture>",
+        "file": "test/cli/cli.test.ts"
+      },
+      "files": {
+        "likely": [
+          "test/cli/cli.test.ts"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "Acrescentar o caso em test/cli/cli.test.ts usando o mesmo fixture (mkdtemp + .git/ vazio + config global m\u00ednima): chamar main() com `bug 'x' --dry-run --cwd <tempDir> --config <configFile>`, exigir ExitCode.OK, stdout contendo `Execution plan for <tempDir>` e terminando em `No runner was invoked.`, zero invoca\u00e7\u00f5es de runner, e igualdade do plano impresso contra a mesma chamada com `feature`."
+      ],
+      "validation": [
+        "build",
+        "install",
+        "lint",
+        "test",
+        "typecheck"
+      ],
+      "validationExpectation": "pass"
+    },
+    {
+      "id": "FIX-002",
+      "title": "O teste 'fails if the description argument is missing' chama `main(['node','agen",
+      "description": "O teste 'fails if the description argument is missing' chama `main(['node','agent-flow','bug'])` e s\u00f3 assevera `expect(code).not.toBe(ExitCode.OK)`. Antes do registro de `bug`, o commander responde `unknown command` e devolve c\u00f3digo diferente de zero \u2014 logo o teste passaria id\u00eantico com o comando ausente, isto \u00e9, nunca foi RED e n\u00e3o prova nada sobre `bug`. Faltam as tr\u00eas asser\u00e7\u00f5es que a TASK-002 c\n<truncated for fixture>",
+      "complexity": "complex",
+      "risk": "medium",
+      "dependencies": [],
+      "requirements": [
+        "FR-005"
+      ],
+      "correctiveFor": {
+        "stage": "final-review",
+        "findingType": "missing_test",
+        "severity": "high",
+        "requirement": "FR-005",
+        "description": "O teste 'fails if the description argument is missing' chama `main(['node','agent-flow','bug'])` e s\u00f3 assevera `expect(code).not.toBe(ExitCode.OK)`. Antes do registro de `bug`, o commander responde `unknown command` e devolve c\u00f3digo diferente de zero \u2014 logo o teste passaria id\u00eantico com o comando ausente, isto \u00e9, nunca foi RED e n\u00e3o prova nada sobre `bug`. Faltam as tr\u00eas asser\u00e7\u00f5es que a TASK-002 c\n<truncated for fixture>",
+        "file": "test/cli/cli.test.ts"
+      },
+      "files": {
+        "likely": [
+          "test/cli/cli.test.ts"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "Reescrever o caso com `--cwd <tempDir> --config <configFile>`, capturar stderr e asseverar que cont\u00e9m o erro de argumento obrigat\u00f3rio faltante do commander, asseverar explicitamente que n\u00e3o cont\u00e9m `unknown command`, e asseverar que `<tempDir>/.agent-flow/runs` n\u00e3o existe ao final."
+      ],
+      "validation": [
+        "build",
+        "install",
+        "lint",
+        "test",
+        "typecheck"
+      ],
+      "validationExpectation": "pass"
+    },
+    {
+      "id": "FIX-003",
+      "title": "Nenhum comando de valida\u00e7\u00e3o foi executado com sucesso: lint, typecheck, test e b",
+      "description": "Nenhum comando de valida\u00e7\u00e3o foi executado com sucesso: lint, typecheck, test e build registraram exit 127 ('eslint/tsc/vitest/tsup: command not found'), e o worktree n\u00e3o tem node_modules. Com isso, AC-013 (`npm run check` passa) e AC-010 (`npm run test:packaging` foi executado e PASSOU, com o check `--help lists bug` presente na sa\u00edda) est\u00e3o sem qualquer evid\u00eancia \u2014 a TASK-005 declarava essa execu\n<truncated for fixture>",
+      "complexity": "complex",
+      "risk": "medium",
+      "dependencies": [],
+      "requirements": [
+        "NFR-004"
+      ],
+      "correctiveFor": {
+        "stage": "final-review",
+        "findingType": "missing_requirement",
+        "severity": "high",
+        "requirement": "NFR-004",
+        "description": "Nenhum comando de valida\u00e7\u00e3o foi executado com sucesso: lint, typecheck, test e build registraram exit 127 ('eslint/tsc/vitest/tsup: command not found'), e o worktree n\u00e3o tem node_modules. Com isso, AC-013 (`npm run check` passa) e AC-010 (`npm run test:packaging` foi executado e PASSOU, com o check `--help lists bug` presente na sa\u00edda) est\u00e3o sem qualquer evid\u00eancia \u2014 a TASK-005 declarava essa execu\n<truncated for fixture>",
+        "file": "scripts/packaging-smoke.mjs"
+      },
+      "files": {
+        "likely": [
+          "scripts/packaging-smoke.mjs"
+        ]
+      },
+      "flags": {
+        "databaseChange": false,
+        "crossModule": false,
+        "architectureDecision": false,
+        "externalIntegration": false
+      },
+      "acceptanceCriteria": [
+        "Instalar depend\u00eancias no worktree e executar `npm run check` e `npm run test:packaging`, reportando as sa\u00eddas; exigir PASS em ambos e confirmar na sa\u00edda do smoke a linha `--help lists bug` antes de considerar a mudan\u00e7a entregue."
+      ],
+      "validation": [
+        "build",
+        "install",
+        "lint",
+        "test",
+        "typecheck"
+      ],
+      "validationExpectation": "pass"
+    }
+  ],
+  "findingProposals": [
+    {
+      "findingIndex": 0,
+      "status": "RESOLVED",
+      "rationale": "All prompt work removed from scope. No task touches prompts/*.md; TASK-003 forbids it explicitly and TASK-006 verifies `git diff --stat -- prompts/` is empty. Prompt language neutralisation is deferred to separate work, as the SDD requires."
+    },
+    {
+      "findingIndex": 1,
+      "status": "RESOLVED",
+      "rationale": "TASK-002 case (3) covers `agent-flow bug \"x\" --dry-run`: exit code 0, stdout containing `Execution plan for <cwd>`, output ending with `No runner was invoked.`, zero AgentRunner/model invocations, and an equality assertion against the plan emitted by the equivalent `feature --dry-run` call to prove the shared composition/configuration path."
+    },
+    {
+      "findingIndex": 2,
+      "status": "RESOLVED",
+      "rationale": "All earlier corrections are preserved: TASK-005 executes `npm run test:packaging` and requires PASS including the packaged `--help lists bug` check; TASK-002 uses `--cwd <tempDir>`, distinguishes `missing required argument` from `unknown command` in stderr, and asserts `<tempDir>/.agent-flow/runs` does not exist; TASK-006 verifies src/contracts/ unchanged, no new persisted field/enum/event type, a\n<truncated for fixture>"
+    },
+    {
+      "findingIndex": 3,
+      "status": "RESOLVED",
+      "rationale": "The plan now touches only what the SDD lists as in-scope: src/cli/index.ts, README.md, README.pt-BR.md, test/cli/cli.test.ts and scripts/packaging-smoke.mjs. Nothing the SDD placed out of scope (prompts/, src/contracts/, src/app, src/core, src/server, apps/web, docs/specs, i18n) is modified, and no new requirement or file was introduced."
+    }
+  ]
+}

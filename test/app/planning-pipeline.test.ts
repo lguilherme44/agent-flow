@@ -47,6 +47,7 @@ const CAPABILITIES = {
     supportsNonInteractive: true,
     supportsWorkingDirectory: true,
     structuredOutputStrategy: 'native',
+    nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
   },
 } as const;
 

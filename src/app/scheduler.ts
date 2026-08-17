@@ -748,6 +748,13 @@ export class Scheduler {
           id,
           state: taskState,
           attempts: starting.has(id) ? attempts + 1 : attempts,
+          // Carried forward, never recomputed. AR-00 splits the counter (AD-37) and
+          // nothing yet increments this one — but a rebuild of the task list that
+          // dropped it would silently reset a budget the moment AR-03 starts using it,
+          // and the reset would look like an environment that had never faulted.
+          infrastructureFailures: entry?.infrastructureFailures ?? 0,
+          ...(entry?.failureClass === undefined ? {} : { failureClass: entry.failureClass }),
+          ...(entry?.lastFailureAt === undefined ? {} : { lastFailureAt: entry.lastFailureAt }),
           // Provenance travels with the block: a task leaving `blocked` drops
           // its reason, and one that stays blocked keeps or learns its own.
           ...(taskState === 'blocked'

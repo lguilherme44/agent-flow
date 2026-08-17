@@ -1,0 +1,46 @@
+{
+  "verdict": "FAIL",
+  "independence": "cross-provider",
+  "reviewer": {
+    "runner": "claude",
+    "reasoning": "high"
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "type": "missing_test",
+      "requirement": "FR-006",
+      "description": "O caso (3) da TASK-002 \u2014 `agent-flow bug \"x\" --dry-run` \u2014 n\u00e3o foi escrito. N\u00e3o existe nenhuma asser\u00e7\u00e3o de exit code 0, de `Execution plan for <tempDir>` no stdout, de encerramento com `No runner was invoked.`, de zero invoca\u00e7\u00f5es de AgentRunner, nem a igualdade do plano emitido contra o do `feature \"x\" --dry-run` equivalente. `rg -n \"dry-run\" test/cli/*.ts` n\u00e3o retorna nada em cli.test.ts. Era exat\n<truncated for fixture>",
+      "suggestedAction": "Acrescentar o caso em test/cli/cli.test.ts usando o mesmo fixture (mkdtemp + .git/ vazio + config global m\u00ednima): chamar main() com `bug 'x' --dry-run --cwd <tempDir> --config <configFile>`, exigir ExitCode.OK, stdout contendo `Execution plan for <tempDir>` e terminando em `No runner was invoked.`, zero invoca\u00e7\u00f5es de runner, e igualdade do plano impresso contra a mesma chamada com `feature`.",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "high",
+      "type": "missing_test",
+      "requirement": "FR-005",
+      "description": "O teste 'fails if the description argument is missing' chama `main(['node','agent-flow','bug'])` e s\u00f3 assevera `expect(code).not.toBe(ExitCode.OK)`. Antes do registro de `bug`, o commander responde `unknown command` e devolve c\u00f3digo diferente de zero \u2014 logo o teste passaria id\u00eantico com o comando ausente, isto \u00e9, nunca foi RED e n\u00e3o prova nada sobre `bug`. Faltam as tr\u00eas asser\u00e7\u00f5es que a TASK-002 c\n<truncated for fixture>",
+      "suggestedAction": "Reescrever o caso com `--cwd <tempDir> --config <configFile>`, capturar stderr e asseverar que cont\u00e9m o erro de argumento obrigat\u00f3rio faltante do commander, asseverar explicitamente que n\u00e3o cont\u00e9m `unknown command`, e asseverar que `<tempDir>/.agent-flow/runs` n\u00e3o existe ao final.",
+      "file": "test/cli/cli.test.ts"
+    },
+    {
+      "severity": "high",
+      "type": "missing_requirement",
+      "requirement": "NFR-004",
+      "description": "Nenhum comando de valida\u00e7\u00e3o foi executado com sucesso: lint, typecheck, test e build registraram exit 127 ('eslint/tsc/vitest/tsup: command not found'), e o worktree n\u00e3o tem node_modules. Com isso, AC-013 (`npm run check` passa) e AC-010 (`npm run test:packaging` foi executado e PASSOU, com o check `--help lists bug` presente na sa\u00edda) est\u00e3o sem qualquer evid\u00eancia \u2014 a TASK-005 declarava essa execu\n<truncated for fixture>",
+      "suggestedAction": "Instalar depend\u00eancias no worktree e executar `npm run check` e `npm run test:packaging`, reportando as sa\u00eddas; exigir PASS em ambos e confirmar na sa\u00edda do smoke a linha `--help lists bug` antes de considerar a mudan\u00e7a entregue.",
+      "file": "scripts/packaging-smoke.mjs"
+    },
+    {
+      "severity": "low",
+      "type": "missing_test",
+      "requirement": "FR-002",
+      "description": "No teste 'registers bug with options parity but distinct wording', a asser\u00e7\u00e3o positiva `expect(stdout).toMatch(/defect|correction|bug/i)` \u00e9 satisfeita pela pr\u00f3pria linha de uso do commander (`Usage: agent-flow bug [options] <description>`), independentemente do texto da descri\u00e7\u00e3o. Ela sozinha n\u00e3o prova que a descri\u00e7\u00e3o enquadra trabalho corretivo, como AC-002 pede. As asser\u00e7\u00f5es negativas (`Plan a f\n<truncated for fixture>",
+      "suggestedAction": "Trocar a asser\u00e7\u00e3o positiva por uma que case s\u00f3 o texto da descri\u00e7\u00e3o \u2014 por exemplo exigir `bug fix` ou `defect` fora da linha `Usage:`, ou asseverar diretamente contra a descri\u00e7\u00e3o registrada do comando.",
+      "file": "test/cli/cli.test.ts"
+    }
+  ],
+  "adjudications": [],
+  "residualRisks": [],
+  "summary": "O c\u00f3digo de produ\u00e7\u00e3o est\u00e1 correto e m\u00ednimo \u2014 `bug` \u00e9 registrado logo ap\u00f3s `feature` em src/cli/index.ts, delega a runFeatureCommand atribuindo ao closure `exitCode`, sem novo createRun, sem src/cli/bug.ts, com src/cli/feature.ts, src/contracts/, prompts/ e test/architecture.test.ts intocados, e ambos os READMEs e o packaging-smoke atualizados. Reprova pela cobertura de teste: o caso de --dry-run e\n<truncated for fixture>",
+  "integrationHead": "6e804263e613d167b338345d80feacc070fd81df"
+}

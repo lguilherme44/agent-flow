@@ -58,6 +58,17 @@ export class ClaudeCodeRunner extends BaseRunner {
       // `--json-schema` is enforced by the runtime, not merely requested in the
       // prompt: the response carries a parsed `structured_output` field.
       structuredOutputStrategy: 'native',
+      // AD-32. Declared from what the CLI documents and what the probe exercised, not
+      // from a run that happened to work: `--permission-mode acceptEdits` is what the
+      // adapter passes for a write stage, and it is what makes `fileEdit` true.
+      //
+      // `commandExecution` is false, and that is a measurement rather than a
+      // pessimism: the probe never exercised a Bash tool call under
+      // `acceptEdits`, and `--dangerously-skip-permissions` is explicitly out of
+      // scope (it would remove the containment AD-14 assigns to the runner). False
+      // does not block execution — it produces a `permission_not_ready` warning and
+      // a preflight finding, so an unmeasured grant is visible instead of assumed.
+      nonInteractiveToolGrants: { fileEdit: true, commandExecution: false },
     };
   }
 

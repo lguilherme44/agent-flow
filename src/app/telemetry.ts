@@ -70,7 +70,12 @@ function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntr
       finishedAt,
       durationMs: durationBetween(startedAt, finishedAt),
       status: event.type === 'stage_completed' ? 'completed' : 'failed',
-      attempts: detail['attempts'] ?? 1,
+      // A *stage* entry's count is the repair counter, which AR-00 renamed in the event
+      // (AR §4.4). `attempts` is the older spelling and is still on disk, so both are
+      // read — an existing run's telemetry must not lose a number because a field was
+      // renamed. The entry's own field keeps its name; renaming that is a read-model
+      // change and belongs to the milestone that owns read models.
+      attempts: detail['repairs'] ?? detail['attempts'] ?? 1,
       ...(detail['errorCode'] === undefined ? {} : { errorCode: detail['errorCode'] }),
     };
 

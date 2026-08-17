@@ -1,3 +1,4 @@
+import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import type { AgentRunInput, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
 import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
@@ -7,6 +8,58 @@ const EFFORT: Readonly<Record<'low' | 'medium' | 'high', string>> = {
   medium: 'medium',
   high: 'high',
 };
+
+/**
+ * What the CLI's own `--effort` flag accepts: `low|medium|high`, from `--help`.
+ *
+ * **The CLI surface, not the effective capability.** The flag parses all three; whether the
+ * *model* behind it offers all three is a different question, and the old zero-argument
+ * `capabilities()` was structurally incapable of asking it. This remains the answer for a
+ * role that configures no model, and for every family nobody has measured.
+ */
+const CLI_REASONING_LEVELS: readonly ReasoningLevel[] = ['low', 'medium', 'high'];
+
+/**
+ * Reasoning levels measured per model family (AD-30, C-03).
+ *
+ * **Measured, not inferred.** `agy models` enumerates one model id *per offered effort*,
+ * which makes the effective set directly observable: `gemini-3.1-pro` lists `-high` and
+ * `-low` and no `-medium`. That is the configuration that cost the AF-2026-002 dogfood a
+ * task attempt — a role at `effort: medium` against a model with no `medium` — and the
+ * whole provenance is recorded in `docs/runner-capabilities.md`.
+ *
+ * **Keyed by family prefix, deliberately.** The effort suffix is a *setting*, not a
+ * distinct model: `gemini-3.1-pro-low` and `gemini-3.1-pro-high` are one model at two
+ * settings. Matching on the full id would make the clamp depend on which id somebody
+ * happened to type, which is a different answer to the same question.
+ *
+ * **Only measured families appear.** The other families show a `-medium` id and would
+ * *plausibly* offer all three — and plausibly is not a measurement, so they have no entry
+ * and fall through to the CLI surface. Adding a row means probing first.
+ *
+ * This table lives here, in the adapter that owns the provider, and may never move up:
+ * AD-13 keeps provider knowledge below the port, and AD-30 says a capability table keyed by
+ * model name in the core would make one vendor a core concern. An architecture test
+ * confines it to `src/adapters/runners/`.
+ */
+const MEASURED_MODEL_REASONING: readonly {
+  readonly family: string;
+  readonly levels: readonly ReasoningLevel[];
+}[] = [{ family: 'gemini-3.1-pro', levels: ['low', 'high'] }];
+
+/**
+ * The effective levels for one model id.
+ *
+ * The id is matched against the family prefixes above; anything unrecognised — including
+ * `undefined` — gets the CLI surface, because "no measurement" must never read as "no
+ * capability".
+ */
+function reasoningLevelsFor(model?: string): readonly ReasoningLevel[] {
+  if (model === undefined) return CLI_REASONING_LEVELS;
+
+  const measured = MEASURED_MODEL_REASONING.find((entry) => model.startsWith(entry.family));
+  return measured?.levels ?? CLI_REASONING_LEVELS;
+}
 
 interface AgyEnvelope {
   conversation_id?: string;
@@ -31,9 +84,18 @@ export class AgyRunner extends BaseRunner {
     return 'agy';
   }
 
-  capabilities(): RunnerCapabilities {
+  /**
+   * AD-30's signature, in the adapter whose mismatch motivated it — now acted on.
+   *
+   * Only the reasoning levels vary by model. Everything else here is a property of the
+   * CLI: read-only containment, non-interactivity, the working directory flag, the output
+   * strategy and the tool grants are the same whichever model the CLI is pointed at, and
+   * letting any of them drift because a model string was passed would be inventing a
+   * measurement.
+   */
+  capabilities(model?: string): RunnerCapabilities {
     return {
-      supportedReasoningLevels: ['low', 'medium', 'high'],
+      supportedReasoningLevels: reasoningLevelsFor(model),
       // Strict containment is not guaranteed by standalone CLI flags (writes to ~/.gemini/antigravity-cli occurred during probe),
       // so supportsReadOnly is explicitly declared false per security baseline requirements.
       supportsReadOnly: false,
@@ -41,6 +103,14 @@ export class AgyRunner extends BaseRunner {
       supportsWorkingDirectory: true,
       // Structured output strategy is prompted because native json-schema enforcement in headless CLI mode requires manual permission configuration.
       structuredOutputStrategy: 'prompted',
+      // AD-32, and the measurement that motivated the whole capability. This runner was
+      // non-interactive and still failed: `--mode accept-edits` grants file edits
+      // without a prompt, and a command the local policy had not authorised was
+      // soft-denied with nobody present to confirm it. So `fileEdit` is true and
+      // `commandExecution` is false — the two properties are different, and conflating
+      // them under `supportsNonInteractive` is what hid the failure until it cost an
+      // attempt.
+      nonInteractiveToolGrants: { fileEdit: true, commandExecution: false },
     };
   }
 

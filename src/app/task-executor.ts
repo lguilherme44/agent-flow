@@ -381,6 +381,11 @@ export class TaskExecutor {
         status: evidence.report.status,
         notes: evidence.report.notes,
         deviations: evidence.report.deviations,
+        // The agent's own list, recorded *as a claim* (AD-39). `filesChanged` above is
+        // still sourced from the same parse today; AR-05a makes it mechanical, and this
+        // field is what lets the two be compared once it is. Recording the claim now
+        // means the comparison has something to compare against from the first run.
+        claimedFilesChanged: evidence.report.filesChanged,
       },
       validation: {
         expectation: result.validation.expectation,

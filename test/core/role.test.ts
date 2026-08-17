@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { resolveRole, resolveFallback, RoleResolutionError } from '../../src/core/role.js';
+import {
+  resolveRole,
+  resolveFallback,
+  permissionReadiness,
+  RoleResolutionError,
+} from '../../src/core/role.js';
 import { GlobalConfigSchema, type GlobalConfig, type RunnerCapabilitiesMap } from '../../src/core/role.js';
 
 const fullCapabilities = {
@@ -8,6 +13,7 @@ const fullCapabilities = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
 const capabilities: RunnerCapabilitiesMap = { claude: fullCapabilities };
@@ -329,5 +335,273 @@ describe('resolveFallback', () => {
     const resolved = resolveFallback('architect', requested, caps);
     expect(resolved?.reasoning).toBe('high');
     expect(resolved?.reasoningClamped).toBe(true);
+  });
+});
+
+/**
+ * AD-30 and AD-31, where the capability gap becomes a resolution decision.
+ *
+ * The evidence run's first failure: a role configured at `medium` against a model offering
+ * only `low` and `high`. `capabilities()` took no argument, so the resolver was fed the
+ * *CLI's* levels, found `medium` among them, and invoked a runner with an effort the pair
+ * did not support — costing a task attempt to discover it.
+ *
+ * The machinery to prevent that already existed. `clampReasoning`, the `reasoningClamped`
+ * field and the `reasoning_clamped` degradation had never fired, because they were being
+ * fed the wrong set. Feeding them the pair's set is the whole change.
+ */
+describe('capabilities are resolved for the (runner, model) pair (AD-30, AD-31, I-20)', () => {
+  /** A runner whose answer depends on the model, as an adapter with knowledge would be. */
+  const perModel: RunnerCapabilitiesMap = {
+    claude: (model?: string) =>
+      model === 'narrow-model'
+        ? { ...fullCapabilities, supportedReasoningLevels: ['low', 'high'] }
+        : fullCapabilities,
+  };
+
+  const withModel = (model: string | undefined, effort: string): GlobalConfig =>
+    GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' } },
+      roles: {
+        architect: { runner: 'claude', effort: 'high' },
+        sdd: { runner: 'claude', effort: 'high' },
+        planner: { runner: 'claude', effort: 'high' },
+        planReviewer: { runner: 'claude', effort: 'high' },
+        executors: {
+          trivial: { runner: 'claude', effort: 'low' },
+          normal: { runner: 'claude', effort, ...(model === undefined ? {} : { model }) },
+          complex: { runner: 'claude', effort: 'high' },
+        },
+        verification: { runner: 'claude', effort: 'medium' },
+        finalReviewer: { runner: 'claude', effort: 'high' },
+      },
+    });
+
+  it('accepts a plain record, exactly as every existing caller passes', () => {
+    // Source compatibility is half of AD-30's claim. A map of records must keep working, or
+    // the twenty call sites that write one inline become a migration.
+    const resolved = resolveRole('executor.normal', withModel(undefined, 'medium'), capabilities);
+    expect(resolved.reasoning).toBe('medium');
+    expect(resolved.reasoningClamped).toBe(false);
+  });
+
+  it('clamps to the nearest level below when the model does not offer the configured one', () => {
+    // The evidence run's TASK-002 attempt 1, reproduced: `medium` against a model offering
+    // `low` and `high` resolves to `low`, recorded — never to `high`, which would spend
+    // more of the user's quota than they asked for.
+    const resolved = resolveRole(
+      'executor.normal',
+      withModel('narrow-model', 'medium'),
+      perModel,
+    );
+
+    expect(resolved.reasoning).toBe('low');
+    expect(resolved.reasoningClamped).toBe(true);
+  });
+
+  it('does not clamp the same effort when the model does offer it', () => {
+    // The control: the clamp is a property of the pair, not of the effort. Same role, same
+    // effort, different model, no clamp.
+    const resolved = resolveRole('executor.normal', withModel('wide-model', 'medium'), perModel);
+
+    expect(resolved.reasoning).toBe('medium');
+    expect(resolved.reasoningClamped).toBe(false);
+  });
+
+  it('resolves the run rather than refusing it (AD-31)', () => {
+    // Refusing would satisfy R-05 — a capability gap is a configuration error — and would
+    // stop the run and demand a human, which is the behaviour this milestone exists to
+    // remove. The refusal path stays for gaps clamping cannot resolve.
+    expect(() =>
+      resolveRole('executor.normal', withModel('narrow-model', 'medium'), perModel),
+    ).not.toThrow();
+  });
+
+  it('still refuses a gap that clamping cannot resolve', () => {
+    // Read-only, non-interactive, working directory and native structured output are not
+    // matters of degree, so they remain configuration errors rather than clamps.
+    const noReadOnly: RunnerCapabilitiesMap = {
+      claude: () => ({ ...fullCapabilities, supportsReadOnly: false }),
+    };
+
+    expect(() =>
+      resolveRole('sdd', withModel(undefined, 'high'), noReadOnly, { readOnly: true }),
+    ).toThrow(RoleResolutionError);
+  });
+
+  it('passes the role’s own model, not another role’s', () => {
+    // The bug a single shared lookup would introduce: every role resolving against
+    // whichever model happened to be asked about first.
+    const seen: (string | undefined)[] = [];
+    const recording: RunnerCapabilitiesMap = {
+      claude: (model?: string) => {
+        seen.push(model);
+        return fullCapabilities;
+      },
+    };
+
+    resolveRole('executor.normal', withModel('narrow-model', 'medium'), recording);
+    resolveRole('executor.trivial', withModel('narrow-model', 'medium'), recording);
+
+    expect(seen).toEqual(['narrow-model', undefined]);
+  });
+
+  it('resolves a fallback against the fallback’s model, never the primary’s', () => {
+    // A fallback entry is a role in its own right: it carries its own runner, model and
+    // effort, and sending the primary's model to it would name a model that runner has
+    // never heard of.
+    const seen: (string | undefined)[] = [];
+    const recording: RunnerCapabilitiesMap = {
+      codex: (model?: string) => {
+        seen.push(model);
+        return { ...fullCapabilities, supportedReasoningLevels: ['low', 'high'] };
+      },
+    };
+
+    const requested = GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      roles: withModel(undefined, 'medium').roles,
+      fallback: {
+        enabled: true,
+        roles: { architect: { runner: 'codex', model: 'fallback-model', effort: 'medium' } },
+      },
+    });
+
+    const resolved = resolveFallback('architect', requested, recording);
+
+    expect(seen).toEqual(['fallback-model']);
+    expect(resolved?.reasoning).toBe('low');
+    expect(resolved?.reasoningClamped).toBe(true);
+  });
+
+  it('treats an unregistered runner the same whichever form the map takes', () => {
+    const empty: RunnerCapabilitiesMap = {};
+    expect(() => resolveRole('executor.normal', withModel(undefined, 'medium'), empty)).toThrow(
+      RoleResolutionError,
+    );
+  });
+
+  /**
+   * C-03's evidence requirement, carried on the resolution rather than recomputed.
+   *
+   * "A `reasoning_clamped` degradation records requested, effective, supported set and
+   * reason." The effective level is on the result already; the other two were thrown away
+   * at the moment they were known. A caller that had to recompute them would have to reach
+   * for the capabilities map a second time, and the second answer is the one that drifts.
+   */
+  it('carries the requested level and the supported set, so the clamp can explain itself', () => {
+    const resolved = resolveRole('executor.normal', withModel('narrow-model', 'medium'), perModel);
+
+    expect(resolved.requestedReasoning).toBe('medium');
+    expect(resolved.supportedReasoningLevels).toEqual(['low', 'high']);
+    expect(resolved.reasoning).toBe('low');
+  });
+
+  it('carries them identically when nothing was clamped', () => {
+    // Present whether or not the clamp fired: a field that only appears on the unhappy
+    // path is a field every reader has to guard.
+    const resolved = resolveRole('executor.normal', withModel('wide-model', 'medium'), perModel);
+
+    expect(resolved.requestedReasoning).toBe('medium');
+    expect(resolved.reasoning).toBe('medium');
+    expect(resolved.reasoningClamped).toBe(false);
+  });
+
+  it('carries them on a fallback resolution too', () => {
+    const requested = GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      roles: withModel(undefined, 'medium').roles,
+      fallback: {
+        enabled: true,
+        roles: { architect: { runner: 'codex', model: 'fallback-model', effort: 'medium' } },
+      },
+    });
+
+    const resolved = resolveFallback('architect', requested, {
+      codex: () => ({ ...fullCapabilities, supportedReasoningLevels: ['low', 'high'] }),
+    });
+
+    expect(resolved?.requestedReasoning).toBe('medium');
+    expect(resolved?.supportedReasoningLevels).toEqual(['low', 'high']);
+  });
+});
+
+/**
+ * C-04 (AR-01) — permission readiness is a capability, and a warning, never a block.
+ *
+ * `supportsNonInteractive: true` says the process will not stop at a prompt. It does not
+ * say the agent may run the tools the work requires. One runner in the evidence run was
+ * genuinely non-interactive and still failed: it asked to run a shell command, local policy
+ * demanded a confirmation, nobody was present, and the run recorded `execution_failed`.
+ *
+ * AD-32 splits the two properties. This is the reader that turns the split into a finding
+ * a person can act on — before an attempt is spent discovering it.
+ */
+describe('permission readiness (AD-32, C-04)', () => {
+  const granted = { fileEdit: true, commandExecution: true };
+  const noCommands = { fileEdit: true, commandExecution: false };
+
+  it('produces no finding when the runner may run what a write stage needs', () => {
+    expect(
+      permissionReadiness({
+        capabilities: { ...fullCapabilities, nonInteractiveToolGrants: granted },
+        permissions: 'write',
+        runner: 'claude',
+        model: 'sonnet',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('names the runner, the model and the tool class when a grant is missing', () => {
+    const finding = permissionReadiness({
+      capabilities: { ...fullCapabilities, nonInteractiveToolGrants: noCommands },
+      permissions: 'write',
+      runner: 'agy',
+      model: 'gemini-3.1-pro-high',
+    });
+
+    expect(finding?.failureClass).toBe('permission_not_ready');
+    expect(finding?.runner).toBe('agy');
+    expect(finding?.model).toBe('gemini-3.1-pro-high');
+    expect(finding?.toolClass).toBe('commandExecution');
+    // "Something is not ready" is the sentence the taxonomy forbids: a finding that
+    // escalates has to name the one action that resolves it.
+    expect(finding?.action.length).toBeGreaterThan(0);
+  });
+
+  it('says nothing about a read-only stage, which asks for no tools', () => {
+    // A stage that only observes does not need a command grant, and warning about it
+    // would train the reader to ignore the warning that matters.
+    expect(
+      permissionReadiness({
+        capabilities: { ...fullCapabilities, nonInteractiveToolGrants: noCommands },
+        permissions: 'read-only',
+        runner: 'agy',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('reports a missing file-edit grant, which a write stage also needs', () => {
+    const finding = permissionReadiness({
+      capabilities: {
+        ...fullCapabilities,
+        nonInteractiveToolGrants: { fileEdit: false, commandExecution: true },
+      },
+      permissions: 'write',
+      runner: 'codex',
+    });
+
+    expect(finding?.toolClass).toBe('fileEdit');
+  });
+
+  it('is a finding, not a refusal — resolution still succeeds (C-04)', () => {
+    // "Execution is not blocked by the warning alone." A capability gap that clamping
+    // cannot resolve refuses; a permission gap is a fact about the environment that a
+    // person grants, and stopping the run would not help them grant it any sooner.
+    const ungranted: RunnerCapabilitiesMap = {
+      claude: () => ({ ...fullCapabilities, nonInteractiveToolGrants: noCommands }),
+    };
+
+    expect(() => resolveRole('executor.normal', config(), ungranted)).not.toThrow();
   });
 });

@@ -854,7 +854,7 @@ describe('a marker already on the branch is not merged twice (§14.3 step 5)', (
         {
           ...crashed,
           integrationHead: run.planningBase,
-          tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }],
+          tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
         },
         null,
         2,
@@ -1340,7 +1340,7 @@ describe('an attempt offered without a TaskResult (§17.3 window 7)', () => {
     writeFileSync(
       statePath,
       JSON.stringify(
-        { ...crashed, tasks: [{ id: 'TASK-001', state: 'running', attempts: 1 }] },
+        { ...crashed, tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }] },
         null,
         2,
       ),

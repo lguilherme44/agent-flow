@@ -52,6 +52,14 @@ export interface TempRepo {
   /** Commits everything currently in the working tree and returns the new commit. */
   commitAll(message: string): string;
   write(relativePath: string, contents: string): void;
+  /**
+   * Writes the one file that makes a directory an initialised Agent Flow project.
+   *
+   * Named for what it means rather than for the path it writes, because AR-01's C-01
+   * turns "this file is absent" into a refusal: a test that seeds it by hand states a
+   * precondition, and a test that forgets to gets a refusal it did not ask about.
+   */
+  initAgentFlow(contents?: string): void;
   head(): string;
   cleanup(): void;
 }
@@ -114,6 +122,11 @@ export async function makeTempRepo(): Promise<TempRepo> {
 
     write(relativePath: string, contents: string): void {
       writeFileSync(join(dir, relativePath), contents);
+    },
+
+    initAgentFlow(contents = 'project:\n  name: temp-repo\n  type: node\n'): void {
+      mkdirSync(join(dir, '.agent-flow'), { recursive: true });
+      writeFileSync(join(dir, '.agent-flow', 'config.yaml'), contents);
     },
 
     commitAll(message: string): string {

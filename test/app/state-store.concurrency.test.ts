@@ -125,8 +125,8 @@ async function twoRunningTasks(): Promise<World> {
   await plain.updateRun(run.runId, (state) => ({
     ...state,
     tasks: [
-      { id: 'TASK-001', state: 'running', attempts: 1 },
-      { id: 'TASK-002', state: 'running', attempts: 1 },
+      { id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 },
+      { id: 'TASK-002', state: 'running', attempts: 1, infrastructureFailures: 0 },
     ],
   }));
 
@@ -179,6 +179,7 @@ describe('concurrent updateRun calls on one state file', () => {
         id,
         state: 'running' as const,
         attempts: 1,
+        infrastructureFailures: 0,
       })),
     }));
 

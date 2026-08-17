@@ -32,6 +32,7 @@ const CAPS = {
   supportsNonInteractive: true,
   supportsWorkingDirectory: true,
   structuredOutputStrategy: 'native',
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
 const globalConfig = GlobalConfigSchema.parse({
@@ -388,6 +389,83 @@ describe('recorded provenance is what actually ran (V-06 regression)', () => {
 
     expect(result.reasoning).toBe('medium');
     expect(result.reasoningClamped).toBe(true);
+  });
+
+  /**
+   * I-22 and C-03 (AR-01) — the configuration that used to cost a task attempt.
+   *
+   * The evidence run's TASK-002: `effort: medium` against a model offering `low` and
+   * `high`. The runner was invoked at the unsupported level, the invocation failed, and the
+   * task spent one of its two attempts finding out something the system already knew. With
+   * the pair's capabilities resolved before invocation, there is nothing to spend it on.
+   */
+  it('spends no attempt discovering an effort the model does not support', async () => {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude', CAPS);
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    // The pair, not the CLI: `agy-like` answers narrowly for one model and widely for the
+    // rest, which is precisely the shape AD-30 made expressible.
+    const perModel = {
+      claude: (model?: string) =>
+        model === 'narrow-model'
+          ? { ...CAPS, supportedReasoningLevels: ['low', 'high'] as const }
+          : CAPS,
+    };
+
+    const withNarrowModel = GlobalConfigSchema.parse({
+      ...globalConfig,
+      roles: {
+        ...globalConfig.roles,
+        executors: {
+          ...globalConfig.roles.executors,
+          normal: { runner: 'claude', model: 'narrow-model', effort: 'medium' },
+        },
+      },
+    });
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f');
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: withNarrowModel,
+        capabilities: perModel,
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner: new FakeProcessRunner().always({ exitCode: 0 }),
+      config: { global: withNarrowModel },
+      projectDir: PROJECT,
+    });
+
+    runner.pushText(COMPLETED);
+    const result = await executor.execute(task(), run.runId, 'SDD');
+
+    // Exactly one invocation, at the supported level. Not two, and never at `medium`.
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.reasoning).toBe('low');
+    expect(runner.calls[0]?.model).toBe('narrow-model');
+
+    // The work itself succeeded, so the attempt was spent on work — which is the whole
+    // of AD-37's distinction.
+    expect(result.status).toBe('completed');
+    expect(result.reasoning).toBe('low');
+    expect(result.reasoningClamped).toBe(true);
+    expect(result.model).toBe('narrow-model');
   });
 
   it('records the model when the role configures one', async () => {

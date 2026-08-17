@@ -78,8 +78,12 @@ export class FallbackRunner implements AgentRunner {
    * capabilities were already checked when its configuration was resolved, so a
    * fallback that cannot satisfy the stage never reaches this class.
    */
-  capabilities(): RunnerCapabilities {
-    return this.options.primary.capabilities();
+  capabilities(model?: string): RunnerCapabilities {
+    // Forwarded, not reinterpreted. The model belongs to the *primary's* resolution —
+    // a fallback entry carries its own model and was resolved against its own
+    // capabilities before this decorator was built (see `resolveFallback`), so
+    // answering with the secondary's would describe a run that has not been decided on.
+    return this.options.primary.capabilities(model);
   }
 
   async healthCheck(): Promise<RunnerHealth> {

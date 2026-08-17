@@ -1,0 +1,72 @@
+{
+  "run": "AF-2026-002",
+  "task": "TASK-003",
+  "attempt": 3,
+  "base": "4f2025f5fc3ea626eb7e41511e0358172f22114b",
+  "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-3",
+  "workspace": "agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-3",
+  "runner": "agy",
+  "reasoning": "high",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T16:37:07.999Z",
+  "finishedAt": "2026-08-17T16:39:15.388Z",
+  "filesChanged": [
+    "src/cli/index.ts",
+    "test/cli/cli.test.ts",
+    "README.md",
+    "README.pt-BR.md",
+    "scripts/packaging-smoke.mjs"
+  ],
+  "agentReport": {
+    "status": "COMPLETED",
+    "notes": [
+      "The `bug` command was successfully registered right after the `feature` block inside `src/cli/index.ts`, directly delegating execution to `runFeatureCommand` and assigning its awaited value to the `exitCode` closure.",
+      "The command arguments and descriptions were properly tailored for corrective work.",
+      "Tests were added to `test/cli/cli.test.ts` validating execution dispatch, exit code propagation and argument requirements.",
+      "The command tables in both versions of the README and the standalone test within `packaging-smoke.mjs` were updated.",
+      "```"
+    ],
+    "deviations": []
+  },
+  "validation": {
+    "expectation": "pass",
+    "passed": true,
+    "ids": [
+      "test",
+      "typecheck",
+      "lint"
+    ],
+    "commands": [
+      {
+        "command": "npm run test",
+        "exitCode": 0,
+        "durationMs": 31989,
+        "stdout": "\n> agent-flow@0.1.0 test\n> vitest run\n\n\n RUN  v2.1.9 <home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-3\n\n \u2713 test/adapters/utility-model/openai-utility-model.test.ts (101 tests) 158ms\n \u2713 test/app/task-executor.test.ts (56 tests) 196ms\n \u2713 test/core/diff-triager.test.ts (58 tests) 605ms\n   \u2713 DiffTriager mechanical truth > consumes a real GitClient Git\n<truncated for fixture>",
+        "stderr": "fatal: Needed a single revision\ngit: 'sentinel' is not a git command. See 'git --help'.\nfatal: Needed a single revision\nAutomatic merge went well; stopped before committing as requested\nAutomatic merge went well; stopped before committing as requested\nPreparing worktree (checking out 'my-own-work')\nInvalid workflow class \"banana\". Supported classes: trivial, simple, standard, high-risk\n",
+        "truncated": false
+      },
+      {
+        "command": "npm run typecheck",
+        "exitCode": 0,
+        "durationMs": 2732,
+        "stdout": "\n> agent-flow@0.1.0 typecheck\n> tsc --noEmit\n\n",
+        "stderr": "",
+        "truncated": false
+      },
+      {
+        "command": "npm run lint",
+        "exitCode": 0,
+        "durationMs": 3978,
+        "stdout": "\n> agent-flow@0.1.0 lint\n> eslint src test bin apps/web/src\n\n\n<home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-003/attempt-3/test/core/repository-retriever.test.ts\n  824:11  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/only-throw-error')\n  838:9   warning  Unused eslint-disable directive (no problems were reporte\n<truncated for fixture>",
+        "stderr": "",
+        "truncated": false
+      }
+    ]
+  },
+  "validationJudgement": "satisfied",
+  "receipt": {
+    "nonce": "465cfc33c031a433f2561ad266fb79d0",
+    "validatedTree": "00b7b161656c5836b084f0b533c39234b192b778",
+    "issuedAt": "2026-08-17T16:39:15.430Z"
+  }
+}

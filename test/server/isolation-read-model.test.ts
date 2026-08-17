@@ -176,8 +176,8 @@ describe('the isolation view (§21.2)', () => {
       ...state,
       integrationHead: 'b'.repeat(40),
       tasks: [
-        { id: 'TASK-001', state: 'completed' as const, attempts: 1 },
-        { id: 'TASK-002', state: 'running' as const, attempts: 2 },
+        { id: 'TASK-001', state: 'completed' as const, attempts: 1, infrastructureFailures: 0 },
+        { id: 'TASK-002', state: 'running' as const, attempts: 2, infrastructureFailures: 0 },
       ],
     }));
 
@@ -223,8 +223,8 @@ describe('the per-task isolation facts (§21.2)', () => {
     await store.updateRun(run.runId, (state) => ({
       ...state,
       tasks: [
-        { id: 'TASK-001', state: 'running' as const, attempts: 1 },
-        { id: 'TASK-002', state: 'running' as const, attempts: 1 },
+        { id: 'TASK-001', state: 'running' as const, attempts: 1, infrastructureFailures: 0 },
+        { id: 'TASK-002', state: 'running' as const, attempts: 1, infrastructureFailures: 0 },
       ],
     }));
     return { fs, store, reader, runId: run.runId };
@@ -307,7 +307,7 @@ describe('the per-task isolation facts (§21.2)', () => {
     await store.writeArtifact(run.runId, 'plan', JSON.stringify(PLAN));
     await store.updateRun(run.runId, (state) => ({
       ...state,
-      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1 }],
+      tasks: [{ id: 'TASK-001', state: 'running' as const, attempts: 1, infrastructureFailures: 0 }],
     }));
 
     const tasks = (await reader.tasks(PROJECT, run.runId)) ?? [];

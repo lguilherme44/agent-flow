@@ -9,10 +9,27 @@ import {
   type ObservedRunner,
 } from '../core/health.js';
 import { probeRunner, type ProbeResult } from '../app/runner-probe.js';
+import { describeRoleRoutes, type RoleRoute } from '../app/role-routes.js';
+import { PromptLoader } from '../app/prompt-loader.js';
+import { resolvePromptsDir } from '../app/prompt-paths.js';
+import {
+  capabilitiesOf,
+  permissionReadiness,
+  type PermissionFinding,
+  type RunnerCapabilitiesMap,
+} from '../core/role.js';
 import { NodeHost } from '../adapters/host/node-host.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
 import { runCommands } from '../app/verification-commands.js';
-import type { EffectiveConfig } from '../contracts/index.js';
+import { compareReasoning } from '../core/reasoning.js';
+import {
+  ALL_WORKFLOW_ROLES,
+  roleConfigOf,
+  type EffectiveConfig,
+  type GlobalConfig,
+  type ReasoningLevel,
+  type WorkflowRole,
+} from '../contracts/index.js';
 import {
   createGitWorkspaces,
   MINIMUM_SUPPORTED_GIT_VERSION,
@@ -34,6 +51,132 @@ export interface DoctorOptions {
 const TICK = '✓';
 const CROSS = '✗';
 const DASH = '·';
+const WARN = '⚠';
+
+/**
+ * What one role's configured (runner, model) pair can actually do (AR-01).
+ *
+ * Every field here is read from declarations and configuration — no process is spawned and
+ * no quota is spent. That is the whole point: the configuration that cost the AF-2026-002
+ * dogfood a task attempt was visibly wrong on disk, and nothing looked at it.
+ */
+export interface CapabilityObservation {
+  readonly role: WorkflowRole;
+  readonly runner: string;
+  readonly model?: string;
+  /** What the role's `effort` asks for. */
+  readonly requestedReasoning: ReasoningLevel;
+  /** What the pair would actually be invoked at. */
+  readonly effectiveReasoning: ReasoningLevel;
+  readonly supportedReasoningLevels: readonly ReasoningLevel[];
+  readonly reasoningClamped: boolean;
+  /** What this role's prompts declare, read from the prompts rather than assumed. */
+  readonly permissions: 'read-only' | 'write';
+  /** Present when a write role's runner cannot exercise a tool class it needs (C-04). */
+  readonly permissionFinding?: PermissionFinding;
+}
+
+/**
+ * Reads what each role's pair declares, mechanically (AR-01).
+ *
+ * Skips a role whose configuration cannot be resolved at all — `assessHealth` already
+ * reports those as roles with nowhere to run, and repeating it here would be a second
+ * voice saying the same thing.
+ */
+export function observeCapabilities(
+  routes: readonly RoleRoute[],
+  capabilities: RunnerCapabilitiesMap,
+): CapabilityObservation[] {
+  const observations: CapabilityObservation[] = [];
+
+  for (const route of routes) {
+    const resolved = route.resolved;
+    if (resolved === undefined) continue;
+
+    const declared = capabilitiesOf(capabilities, resolved.runner, resolved.model);
+    if (declared === undefined) continue;
+
+    // Read from the prompts, exactly as `StageRunner` reads them. A table here would be a
+    // second opinion, and the two would eventually disagree.
+    const permissions = route.requirements.readOnly === true ? 'read-only' : 'write';
+
+    observations.push({
+      role: route.role,
+      runner: resolved.runner,
+      ...(resolved.model === undefined ? {} : { model: resolved.model }),
+      requestedReasoning: route.configured.reasoning,
+      effectiveReasoning: resolved.reasoning,
+      supportedReasoningLevels: declared.supportedReasoningLevels,
+      reasoningClamped: resolved.reasoningClamped,
+      permissions,
+      ...(() => {
+        const finding = permissionReadiness({
+          capabilities: declared,
+          permissions,
+          runner: resolved.runner,
+          ...(resolved.model === undefined ? {} : { model: resolved.model }),
+        });
+        return finding === undefined ? {} : { permissionFinding: finding };
+      })(),
+    });
+  }
+
+  return observations;
+}
+
+/**
+ * The mechanical capability section, as lines.
+ *
+ * Reports the clamp **before** it happens, which is the entire deliverable: `medium`
+ * against a pair offering `low` and `high` is a fact available at configuration time, and
+ * discovering it cost a task attempt.
+ *
+ * A permission gap is a warning and never a verdict. `false` on a tool grant means nobody
+ * declared it, execution is not blocked by it, and the response is a person granting
+ * something — so this section names the grant and stops there. Repairing it belongs to a
+ * later milestone (AR-02 classifies the runtime denial; nothing here edits configuration).
+ */
+export function renderCapabilityReport(
+  observations: readonly CapabilityObservation[],
+): string[] {
+  if (observations.length === 0) return [];
+
+  const lines: string[] = ['Capabilities (declared — no runner was invoked)'];
+
+  for (const observation of observations) {
+    const model = observation.model ?? '(runner default)';
+    lines.push(`  ${observation.role.padEnd(20)} ${observation.runner.padEnd(10)} ${model}`);
+
+    const supported = observation.supportedReasoningLevels.join(', ');
+    if (observation.reasoningClamped) {
+      lines.push(
+        `    ${DASH} effort ${observation.requestedReasoning} is not offered by this pair ` +
+          `(supported: ${supported})`,
+        `      it will be clamped to ${observation.effectiveReasoning}, recorded on the run`,
+      );
+    } else {
+      lines.push(`    ${TICK} effort ${observation.effectiveReasoning} (supported: ${supported})`);
+    }
+
+    const finding = observation.permissionFinding;
+    if (finding !== undefined) {
+      lines.push(
+        `    ${WARN} ${finding.failureClass}: "${finding.runner}" does not declare ` +
+          `${finding.toolClass}, which this role's prompts need`,
+        `      ${finding.action}`,
+      );
+    }
+  }
+
+  lines.push(
+    '',
+    '  Declared capabilities are read from the adapters, never inferred from a run that',
+    '  happened to succeed. A missing grant is a warning: it does not stop execution.',
+    '',
+  );
+
+  return lines;
+}
 
 /**
  * `agent-flow doctor` — is this environment able to work?
@@ -98,9 +241,24 @@ export async function runDoctorCommand(
           };
     });
 
+    // ---- Mechanical capability discovery (AR-01). Free: it reads what the adapters
+    // declare for each role's configured (runner, model) pair and compares it with what
+    // the role asks for. This is the check whose absence let a `medium` effort reach a
+    // model that offers only `low` and `high`, at the cost of a task attempt.
+    const routes = await describeRoleRoutes({
+      config: config.global,
+      capabilities: registry.capabilities(),
+      promptLoader: new PromptLoader({ fs, promptsDir: resolvePromptsDir() }),
+    });
+    const capabilityReport = observeCapabilities(routes, registry.capabilities());
+    for (const line of renderCapabilityReport(capabilityReport)) lines.push(line);
+
     // ---- Live probe, only when asked for. It spends quota on every runner,
     // which is the entire reason the shallow check exists as the default.
-    const probes = options.deep === true ? await probeAll(registry, shallow, globals.cwd) : [];
+    const probes =
+      options.deep === true
+        ? await probeAll(registry, shallow, globals.cwd, effortsByRunner(config.global))
+        : [];
     const observed = withProbeEvidence(shallow, probes);
 
     for (const runner of observed) {
@@ -126,6 +284,32 @@ export async function runDoctorCommand(
           `  ${probe.outcome === 'healthy' ? TICK : CROSS} ${probe.id.padEnd(18)}` +
             `${probe.outcome} (${String(probe.durationMs)}ms)${detail}`,
         );
+
+        // Per effort, because "this runner is broken" and "this pair cannot do medium"
+        // have different fixes, and the second is the one AF-2026-002 needed.
+        for (const effort of probe.efforts ?? []) {
+          const why = effort.detail === undefined ? '' : ` — ${effort.detail}`;
+          lines.push(
+            `      ${effort.outcome === 'healthy' ? TICK : CROSS} effort ${effort.reasoning.padEnd(10)}` +
+              `${effort.outcome}${why}`,
+          );
+        }
+
+        if (probe.toolUse !== undefined) {
+          const why = probe.toolUse.detail === undefined ? '' : ` — ${probe.toolUse.detail}`;
+          lines.push(
+            `      ${probe.toolUse.outcome === 'healthy' ? TICK : WARN} tool use   ` +
+              `${probe.toolUse.outcome}${why}`,
+          );
+          if (probe.toolUse.outcome !== 'healthy') {
+            // Actionable, and it stops there. Granting the tool is the user's; AR-01
+            // neither edits configuration nor escalates permissions to work around it.
+            lines.push(
+              `        The probe ran read-only and could not use a tool. Grant the runner`,
+              `        non-interactive tool access in its own CLI configuration.`,
+            );
+          }
+        }
       }
       // Stated rather than left to be worked out from the verdict below.
       lines.push(
@@ -211,6 +395,7 @@ async function probeAll(
   registry: RunnerRegistry,
   observed: readonly ObservedRunner[],
   workingDirectory: string,
+  efforts: ReadonlyMap<string, readonly ReasoningLevel[]>,
 ): Promise<ProbeResult[]> {
   const results: ProbeResult[] = [];
 
@@ -218,10 +403,48 @@ async function probeAll(
     if (!runner.installed || !runner.executable) continue;
     if (!registry.has(runner.id)) continue;
 
-    results.push(await probeRunner(registry.get(runner.id), { workingDirectory }));
+    results.push(
+      await probeRunner(registry.get(runner.id), {
+        workingDirectory,
+        // Every effort this configuration would actually ask for (AR-01). The old probe
+        // used the cheapest level the runner supported, so a pair that could not do
+        // `medium` looked perfectly healthy right up until a task tried it.
+        efforts: efforts.get(runner.id) ?? [],
+        // And a question that cannot be answered without a tool — read-only, and never
+        // escalated. Non-interactive is not the same as permitted, and the difference is
+        // what the evidence run spent an attempt discovering.
+        toolUse: true,
+      }),
+    );
   }
 
   return results;
+}
+
+/**
+ * The distinct efforts each runner is configured to be asked for.
+ *
+ * From the configuration rather than from the runner's declared set: probing a level no
+ * role uses spends quota to learn nothing, and probing only the cheapest one — which is
+ * what happened before — learns nothing about the level that breaks.
+ */
+function effortsByRunner(config: GlobalConfig): Map<string, readonly ReasoningLevel[]> {
+  const byRunner = new Map<string, Set<ReasoningLevel>>();
+
+  for (const role of ALL_WORKFLOW_ROLES) {
+    const roleConfig = roleConfigOf(config.roles, role);
+    const existing = byRunner.get(roleConfig.runner) ?? new Set<ReasoningLevel>();
+    existing.add(roleConfig.effort);
+    byRunner.set(roleConfig.runner, existing);
+  }
+
+  return new Map(
+    [...byRunner].map(([id, levels]) => [
+      id,
+      // Cheapest first, so a runner that is simply broken fails on the cheap call.
+      [...levels].sort((a, b) => compareReasoning(a, b)),
+    ]),
+  );
 }
 
 interface ToolStatus {

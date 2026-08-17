@@ -1,0 +1,55 @@
+{
+  "runId": "AF-2026-002",
+  "feature": "Adicionar um comando 'bug <description>' como entrada de primeiro n\u00edvel para trabalhos de corre\u00e7\u00e3o. O comando deve reutilizar exatamente o mesmo workflow seguro de 'feature', sem duplicar l\u00f3gica de orquestra\u00e7\u00e3o. Atualizar help, documenta\u00e7\u00e3o e testes de CLI. N\u00e3o criar um workflow separado para bugs e n\u00e3o alterar contratos persistidos desnecessariamente.",
+  "stage": "plan-review",
+  "status": "plan_rejected",
+  "workflow": "standard",
+  "revisionCount": 2,
+  "approved": false,
+  "degradations": [
+    {
+      "kind": "single_provider",
+      "reason": "the review ran on \"claude\" (claude-code-cli); the work it judges ran on claude",
+      "impact": "the plan review is same-provider: a wrong assumption made while planning may be repeated rather than caught",
+      "detectedAt": "2026-08-17T13:58:55.988Z"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "state": "completed",
+      "attempts": 1
+    },
+    {
+      "id": "TASK-002",
+      "state": "completed",
+      "attempts": 2
+    },
+    {
+      "id": "TASK-003",
+      "state": "completed",
+      "attempts": 3
+    },
+    {
+      "id": "TASK-004",
+      "state": "completed",
+      "attempts": 1
+    },
+    {
+      "id": "TASK-005",
+      "state": "completed",
+      "attempts": 1
+    },
+    {
+      "id": "TASK-006",
+      "state": "completed",
+      "attempts": 1
+    }
+  ],
+  "planningBase": "4387a74b0e3ccf6d3cdee35267a9da0d90da594c",
+  "gitRunKey": "AF-2026-002-6c9e32b9e51f1c1e",
+  "isolationMode": "worktree",
+  "integrationHead": "6e804263e613d167b338345d80feacc070fd81df",
+  "createdAt": "2026-08-17T13:34:15.131Z",
+  "updatedAt": "2026-08-17T17:15:51.118Z"
+}

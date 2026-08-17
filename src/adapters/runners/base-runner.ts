@@ -71,7 +71,11 @@ export abstract class BaseRunner implements AgentRunner {
     this.command = options.command ?? this.defaultCommand();
   }
 
-  abstract capabilities(): RunnerCapabilities;
+  /**
+   * AD-30's signature. An adapter with no model-specific knowledge ignores the
+   * argument, which is why it is optional here rather than required of every subclass.
+   */
+  abstract capabilities(model?: string): RunnerCapabilities;
   abstract healthCheck(): Promise<RunnerHealth>;
 
   /** Executable name looked up on PATH when config does not override it. */

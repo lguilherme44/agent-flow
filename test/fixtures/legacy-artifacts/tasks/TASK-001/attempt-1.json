@@ -1,0 +1,46 @@
+{
+  "run": "AF-2026-002",
+  "task": "TASK-001",
+  "attempt": 1,
+  "base": "4387a74b0e3ccf6d3cdee35267a9da0d90da594c",
+  "branch": "agent-flow/AF-2026-002-6c9e32b9e51f1c1e/TASK-001/attempt-1",
+  "workspace": "agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-001/attempt-1",
+  "runner": "agy",
+  "reasoning": "low",
+  "reasoningClamped": false,
+  "startedAt": "2026-08-17T14:47:20.075Z",
+  "finishedAt": "2026-08-17T14:48:41.000Z",
+  "filesChanged": [
+    "test/cli/cli.test.ts"
+  ],
+  "agentReport": {
+    "status": "COMPLETED",
+    "notes": [
+      "The tests check that `bug` appears in `--help`, that the four options (`--no-cache`, `--from`, `--skip-review`, `--workflow`) are present when running `bug --help`, and that the `bug` wording aligns with defect/correction phrasing instead of the standard feature phrasing. As requested, the implementation files under `src/` were untouched, ensuring the tests fail (RED state) until the implementatio\n<truncated for fixture>"
+    ],
+    "deviations": []
+  },
+  "validation": {
+    "expectation": "fail",
+    "passed": false,
+    "ids": [
+      "test"
+    ],
+    "commands": [
+      {
+        "command": "npm run test",
+        "exitCode": 1,
+        "durationMs": 29379,
+        "stdout": "\n> agent-flow@0.1.0 test\n> vitest run\n\n\n RUN  v2.1.9 <home>/.agent-flow/worktrees/agent-flow-ae32bc7780d0/AF-2026-002-6c9e32b9e51f1c1e/TASK-001/attempt-1\n\n \u2713 test/adapters/utility-model/openai-utility-model.test.ts (101 tests) 104ms\n \u2713 test/app/task-executor.test.ts (56 tests) 124ms\n \u2713 test/architecture.test.ts (136 tests) 608ms\n \u2713 test/core/context-telemetry.test.ts (44 tests) 14ms\n \u2713 test/core/d\n<truncated for fixture>",
+        "stderr": "fatal: Needed a single revision\ngit: 'sentinel' is not a git command. See 'git --help'.\nfatal: Needed a single revision\nAutomatic merge went well; stopped before committing as requested\nAutomatic merge went well; stopped before committing as requested\nPreparing worktree (checking out 'my-own-work')\nInvalid workflow class \"banana\". Supported classes: trivial, simple, standard, high-risk\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Fai\n<truncated for fixture>",
+        "truncated": false
+      }
+    ]
+  },
+  "validationJudgement": "satisfied",
+  "receipt": {
+    "nonce": "563c404b69634e6b6a40e395c66987d8",
+    "validatedTree": "1f7b90da51afb881b1a50946e3df81b938e641c5",
+    "issuedAt": "2026-08-17T14:48:41.026Z"
+  }
+}

@@ -43,6 +43,16 @@ export const OVERRIDABLE_KEYS = [
   'retry',
   'git',
   'approval',
+  // AR §6. Beside `retry` because it is the same kind of fact: how far *this
+  // repository's* tasks may recover before a person is asked. Unlike `ui` and
+  // `utilityModel`, none of these budgets can make the machine read anything new —
+  // they only ever bound work agent-flow was already going to do.
+  //
+  // Listed now rather than when a milestone first reads one, because a key absent from
+  // this list is silently *dropped* from a project file rather than rejected. A
+  // repository that wrote `recovery: { maxCorrectiveRounds: 0 }` and got the default
+  // would be a run doing exactly what it was told not to.
+  'recovery',
 ] as const;
 
 /** `.agent-flow/config.yaml` under the project — the only versioned artifact. */
