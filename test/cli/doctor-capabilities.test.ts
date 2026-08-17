@@ -2,8 +2,12 @@ import { describe, it, expect } from 'vitest';
 import type { ReasoningLevel } from '../../src/contracts/index.js';
 import {
   renderCapabilityReport,
+  unresolvableRoles,
   type CapabilityObservation,
 } from '../../src/cli/doctor.js';
+
+/** The mark the report uses for something that cannot work, as opposed to a warning. */
+const CROSS_MARK = '✗';
 import { probeRunner, PROBE_PROMPT, TOOL_USE_PROBE_PROMPT } from '../../src/app/runner-probe.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
 import type { RunnerCapabilities } from '../../src/ports/index.js';
@@ -28,7 +32,10 @@ const CAPS: RunnerCapabilities = {
   nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 };
 
-const observation = (overrides: Partial<CapabilityObservation> = {}): CapabilityObservation => ({
+type ResolvedObservation = Extract<CapabilityObservation, { kind: 'resolved' }>;
+
+const observation = (overrides: Partial<ResolvedObservation> = {}): CapabilityObservation => ({
+  kind: 'resolved',
   role: 'executor.normal',
   runner: 'agy',
   model: 'gemini-3.1-pro-high',
@@ -92,6 +99,47 @@ describe('mechanical capability discovery (AR-01)', () => {
     expect(lines).toContain('commandExecution');
     // The specific grant needed, not a generic "check your permissions".
     expect(lines).toContain('Grant non-interactive command execution');
+  });
+
+  /**
+   * The hole AR-01 left, found by pointing a read-only role at a runner with no read-only
+   * mode: the role vanished from the report and `doctor` still said OK.
+   *
+   * `assessHealth` reports a role with nowhere to run only when the *runner* is unusable —
+   * not installed, not authenticated. A **capability** gap is a different fault: the runner
+   * is perfectly healthy and simply cannot do what this role's prompts require. Nothing
+   * looked at that, so the most complete configuration error the tool can detect was the
+   * one it rendered as silence.
+   */
+  describe('a role that cannot resolve at all', () => {
+    const unresolvable = (): CapabilityObservation => ({
+      kind: 'unresolvable',
+      role: 'sdd',
+      runner: 'agy',
+      requestedReasoning: 'high',
+      errorKind: 'missing_capability',
+      reason: 'Role "sdd" must run read-only, but runner "agy" offers no read-only mode.',
+    });
+
+    it('is reported rather than skipped', () => {
+      const lines = renderCapabilityReport([unresolvable()]).join('\n');
+
+      expect(lines).toContain('sdd');
+      expect(lines).toContain('agy');
+      expect(lines).toMatch(/read-only/);
+    });
+
+    it('is marked as a failure, not as a warning', () => {
+      // The distinction that matters: a missing tool grant is a warning because execution
+      // proceeds. A role that cannot resolve means the run dies at that stage, every time.
+      const lines = renderCapabilityReport([unresolvable()]).join('\n');
+      expect(lines).toContain(CROSS_MARK);
+    });
+
+    it('is counted, so the command can refuse instead of printing OK', () => {
+      expect(unresolvableRoles([unresolvable(), observation()])).toEqual(['sdd']);
+      expect(unresolvableRoles([observation()])).toEqual([]);
+    });
   });
 
   it('is a warning: nothing in the report claims the environment is unusable', () => {

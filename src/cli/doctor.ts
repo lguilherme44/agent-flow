@@ -60,28 +60,51 @@ const WARN = '⚠';
  * no quota is spent. That is the whole point: the configuration that cost the AF-2026-002
  * dogfood a task attempt was visibly wrong on disk, and nothing looked at it.
  */
-export interface CapabilityObservation {
-  readonly role: WorkflowRole;
-  readonly runner: string;
-  readonly model?: string;
-  /** What the role's `effort` asks for. */
-  readonly requestedReasoning: ReasoningLevel;
-  /** What the pair would actually be invoked at. */
-  readonly effectiveReasoning: ReasoningLevel;
-  readonly supportedReasoningLevels: readonly ReasoningLevel[];
-  readonly reasoningClamped: boolean;
-  /** What this role's prompts declare, read from the prompts rather than assumed. */
-  readonly permissions: 'read-only' | 'write';
-  /** Present when a write role's runner cannot exercise a tool class it needs (C-04). */
-  readonly permissionFinding?: PermissionFinding;
-}
+export type CapabilityObservation =
+  | {
+      readonly kind: 'resolved';
+      readonly role: WorkflowRole;
+      readonly runner: string;
+      readonly model?: string;
+      /** What the role's `effort` asks for. */
+      readonly requestedReasoning: ReasoningLevel;
+      /** What the pair would actually be invoked at. */
+      readonly effectiveReasoning: ReasoningLevel;
+      readonly supportedReasoningLevels: readonly ReasoningLevel[];
+      readonly reasoningClamped: boolean;
+      /** What this role's prompts declare, read from the prompts rather than assumed. */
+      readonly permissions: 'read-only' | 'write';
+      /** Present when a write role's runner cannot exercise a tool class it needs (C-04). */
+      readonly permissionFinding?: PermissionFinding;
+    }
+  | {
+      /**
+       * The role cannot be resolved at all: its runner is unknown, disabled, or cannot do
+       * something the role's prompts require.
+       *
+       * A distinct variant rather than an optional field, so the renderer has to handle it.
+       * The first version of this section skipped these roles on the assumption that
+       * `assessHealth` already reported them — it does not. That function asks whether the
+       * *runner* is usable (installed, authenticated); this asks whether the runner can do
+       * what the role needs. A perfectly healthy CLI with no read-only mode fails the
+       * second question and passes the first, and the result was a role that vanished from
+       * the report under an `OK` verdict.
+       */
+      readonly kind: 'unresolvable';
+      readonly role: WorkflowRole;
+      readonly runner: string;
+      readonly model?: string;
+      readonly requestedReasoning: ReasoningLevel;
+      /** `RoleResolutionErrorKind` — `unknown_runner`, `runner_disabled`, `missing_capability`. */
+      readonly errorKind: string;
+      readonly reason: string;
+    };
 
 /**
  * Reads what each role's pair declares, mechanically (AR-01).
  *
- * Skips a role whose configuration cannot be resolved at all — `assessHealth` already
- * reports those as roles with nowhere to run, and repeating it here would be a second
- * voice saying the same thing.
+ * Every configured role produces exactly one observation, including the ones that cannot
+ * run. Silence about a role is the one answer this section may never give.
  */
 export function observeCapabilities(
   routes: readonly RoleRoute[],
@@ -91,7 +114,19 @@ export function observeCapabilities(
 
   for (const route of routes) {
     const resolved = route.resolved;
-    if (resolved === undefined) continue;
+
+    if (resolved === undefined) {
+      observations.push({
+        kind: 'unresolvable',
+        role: route.role,
+        runner: route.configured.runner,
+        ...(route.configured.model === undefined ? {} : { model: route.configured.model }),
+        requestedReasoning: route.configured.reasoning,
+        errorKind: route.error?.kind ?? 'unknown',
+        reason: route.error?.message ?? 'the configured runner could not be resolved',
+      });
+      continue;
+    }
 
     const declared = capabilitiesOf(capabilities, resolved.runner, resolved.model);
     if (declared === undefined) continue;
@@ -101,6 +136,7 @@ export function observeCapabilities(
     const permissions = route.requirements.readOnly === true ? 'read-only' : 'write';
 
     observations.push({
+      kind: 'resolved',
       role: route.role,
       runner: resolved.runner,
       ...(resolved.model === undefined ? {} : { model: resolved.model }),
@@ -125,6 +161,21 @@ export function observeCapabilities(
 }
 
 /**
+ * The roles that cannot run, by name.
+ *
+ * Separate from the rendering so the command can turn them into a verdict. A role that
+ * cannot resolve is not a degradation to work around — the stage it serves dies every
+ * time it is reached — so it fails the check outright.
+ */
+export function unresolvableRoles(
+  observations: readonly CapabilityObservation[],
+): WorkflowRole[] {
+  return observations
+    .filter((observation) => observation.kind === 'unresolvable')
+    .map((observation) => observation.role);
+}
+
+/**
  * The mechanical capability section, as lines.
  *
  * Reports the clamp **before** it happens, which is the entire deliverable: `medium`
@@ -146,6 +197,16 @@ export function renderCapabilityReport(
   for (const observation of observations) {
     const model = observation.model ?? '(runner default)';
     lines.push(`  ${observation.role.padEnd(20)} ${observation.runner.padEnd(10)} ${model}`);
+
+    if (observation.kind === 'unresolvable') {
+      // A cross, not a dash: this role has nowhere to run, and every stage it serves will
+      // fail on contact. Rendering it as a degradation would say work is still possible.
+      lines.push(
+        `    ${CROSS} cannot run: ${observation.errorKind}`,
+        ...observation.reason.split('\n').map((line) => `      ${line.trim()}`),
+      );
+      continue;
+    }
 
     const supported = observation.supportedReasoningLevels.join(', ');
     if (observation.reasoningClamped) {
@@ -324,6 +385,13 @@ export async function runDoctorCommand(
 
     const verdict = assessHealth(config.global, observed);
 
+    // A capability gap is not a health question, and `assessHealth` is right not to answer
+    // it: that function asks whether each runner is *usable* — installed, executable,
+    // authenticated — and a runner can be all three and still be unable to do what a role
+    // needs. Pointing a read-only stage at a CLI with no read-only mode produced a healthy
+    // runner, a role that could never run, and an `OK` verdict.
+    const cannotRun = unresolvableRoles(capabilityReport);
+
     if (verdict.orphanRoles.length > 0) {
       lines.push('Roles with nowhere to run:');
       for (const role of verdict.orphanRoles) {
@@ -331,6 +399,17 @@ export async function runDoctorCommand(
         lines.push(`  ${CROSS} ${role} → "${route?.primary ?? '?'}" is unusable and has no fallback`);
       }
       lines.push('');
+    }
+
+    if (cannotRun.length > 0) {
+      lines.push(
+        'Roles whose configuration cannot run:',
+        ...cannotRun.map((role) => `  ${CROSS} ${role} — see Capabilities above`),
+        '',
+        '  These are configuration errors, not degradations: the stage fails on contact,',
+        '  every time. Point the role at a runner that can do what its prompts require.',
+        '',
+      );
     }
 
     if (verdict.degradations.length > 0) {
@@ -358,9 +437,13 @@ export async function runDoctorCommand(
       lines.push('');
     }
 
-    lines.push(verdict.status);
+    // A role that cannot resolve fails the check outright, whatever the runners' health
+    // says. `assessHealth` never sees this fault, so the verdict is widened here rather
+    // than misreported there.
+    const status = cannotRun.length > 0 ? 'FAIL' : verdict.status;
+    lines.push(status);
 
-    if (verdict.status === 'DEGRADED' && !globals.strict) {
+    if (status === 'DEGRADED' && !globals.strict) {
       lines.push('');
       lines.push('Work is still possible. Use --strict to treat this as a failure in CI.');
     }
@@ -368,11 +451,13 @@ export async function runDoctorCommand(
     process.stdout.write(`${lines.join('\n')}\n`);
 
     if (globals.json) {
-      process.stdout.write(`${JSON.stringify({ ...verdict, probes }, null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify({ ...verdict, status, unresolvableRoles: cannotRun, probes }, null, 2)}\n`,
+      );
     }
 
-    if (verdict.status === 'FAIL') return ExitCode.EXECUTION_ERROR;
-    if (verdict.status === 'DEGRADED' && globals.strict) return ExitCode.DEGRADED_STRICT;
+    if (status === 'FAIL') return ExitCode.EXECUTION_ERROR;
+    if (status === 'DEGRADED' && globals.strict) return ExitCode.DEGRADED_STRICT;
     return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);
