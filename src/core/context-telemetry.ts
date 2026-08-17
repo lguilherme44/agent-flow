@@ -726,5 +726,78 @@ function uniqueObservedIdentity(
   return observed;
 }
 
+/**
+ * Deterministic outcome aggregate computed per-observation.
+ *
+ * Delivery is only counted when a retrieval observation carries no bypassReason
+ * (ok=true, advisory reached the prompt). Bypassed observations are counted by
+ * the presence of bypassReason, not from aggregate utility call counters.
+ *
+ * This avoids the overlapping-counter problem: an observation with both
+ * utilityFailures=1 and bypassReason set is ONE bypass, not two failures.
+ */
+export interface ContextOutcomes {
+  readonly observations: number;
+  readonly utilityCalls: number;
+  readonly deliveredAdvisories: number;
+  readonly bypassedObservations: number;
+  readonly bypassReasons: ReadonlyArray<{
+    readonly reason: ContextTelemetryBypassReason;
+    readonly count: number;
+  }>;
+}
+
+/**
+ * Aggregates observation-level outcome facts from a bounded observation list.
+ *
+ * Rules (§4–§7):
+ * - Delivery = observations where bypassReason is absent (advisory was delivered)
+ * - Bypass = observations where bypassReason is present (one bypass per observation)
+ * - utilityCalls = sum of utilityCalls across ALL observations: each observation
+ *   contributes its own call count exactly once, which keeps this consistent with
+ *   `aggregate.utilityCalls`. A bypass never erases the calls that produced it —
+ *   `validation_failed` DID invoke the model; `no_candidates` never did.
+ * - bypassReasons = histogram of bypassReason values, preserving duplicates
+ * - Zero-call bypasses (utility_model_missing, no_candidates) add zero to utilityCalls
+ */
+export function aggregateContextOutcomes(
+  observations: readonly ContextTelemetryObservation[],
+): ContextOutcomes {
+  const reasonCounts = new Map<ContextTelemetryBypassReason, number>();
+  let delivered = 0;
+  let bypassed = 0;
+  let utilityCalls = 0;
+  let counted = 0;
+
+  for (const obs of observations) {
+    if (obs.stage === 'aggregate') continue;
+    counted += 1;
+
+    if (obs.bypassReason !== undefined) {
+      bypassed += 1;
+      reasonCounts.set(obs.bypassReason, (reasonCounts.get(obs.bypassReason) ?? 0) + 1);
+    } else {
+      delivered += 1;
+    }
+
+    if (obs.utilityCalls !== undefined && isIntegerMetric(obs.utilityCalls)) {
+      utilityCalls += obs.utilityCalls;
+    }
+  }
+
+  // Sort by count descending for stable display ordering.
+  const bypassReasons = [...reasonCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => ({ reason, count }));
+
+  return Object.freeze({
+    observations: counted,
+    utilityCalls,
+    deliveredAdvisories: delivered,
+    bypassedObservations: bypassed,
+    bypassReasons: Object.freeze(bypassReasons),
+  });
+}
+
 // Compile-time exhaustiveness guard: every runtime bypass must be schema-closed.
 void CONTEXT_TELEMETRY_BYPASS_REASONS;

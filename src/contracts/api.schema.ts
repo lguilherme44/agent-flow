@@ -556,7 +556,27 @@ export interface ContextTelemetryAnalyticsView {
     readonly truncated: boolean;
   };
   readonly aggregate?: ContextTelemetryObservation;
+  /**
+   * Per-observation outcome counts — mechanically proven, never derived from
+   * overlapping aggregate counters.
+   *
+   * `deliveredAdvisories` counts observations where bypassReason is absent.
+   * `bypassedObservations` counts observations where bypassReason is present.
+   * Each is counted independently; they sum to `observations`.
+   * `bypassReasons` is a closed-vocabulary histogram sorted by count descending.
+   */
+  readonly outcomes?: {
+    readonly observations: number;
+    readonly utilityCalls: number;
+    readonly deliveredAdvisories: number;
+    readonly bypassedObservations: number;
+    readonly bypassReasons: ReadonlyArray<{
+      readonly reason: string;
+      readonly count: number;
+    }>;
+  };
 }
+
 
 /**
  * Operational analytics (§84), derived and never stored.

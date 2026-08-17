@@ -1,5 +1,6 @@
 import type {
   AnalyticsView,
+  ContextTelemetryObservation,
   MetricBucketView,
   RunState,
   TelemetryEntry,
@@ -7,7 +8,7 @@ import type {
 import { StateStore } from '../app/state-store.js';
 import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry, type TelemetryBucket } from '../core/telemetry.js';
-import { aggregateContextTelemetry } from '../core/context-telemetry.js';
+import { aggregateContextTelemetry, aggregateContextOutcomes } from '../core/context-telemetry.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
 import {
@@ -58,7 +59,7 @@ export class AnalyticsReader {
     const entries: TelemetryEntry[] = [];
     const tasksByState: Record<string, number> = {};
     const runsByProject: AnalyticsView['runsByProject'] = [];
-    const contextObservations: unknown[] = [];
+    const contextObservations: ContextTelemetryObservation[] = [];
 
     let runsAvailable = 0;
     let runsConsidered = 0;
@@ -133,6 +134,8 @@ export class AnalyticsReader {
       contextObservations.length === 0
         ? undefined
         : aggregateContextTelemetry(contextObservations);
+    const contextOutcomes =
+      contextObservations.length > 0 ? aggregateContextOutcomes(contextObservations) : undefined;
     const context =
       (contextObservations.length > 0 && contextAggregate !== undefined) ||
       contextEventLogsTruncated > 0
@@ -146,8 +149,10 @@ export class AnalyticsReader {
               truncated: contextObservationsTruncated || contextEventLogsTruncated > 0,
             },
             ...(contextAggregate === undefined ? {} : { aggregate: contextAggregate }),
+            ...(contextOutcomes === undefined ? {} : { outcomes: contextOutcomes }),
           }
         : undefined;
+
 
     return {
       scope: {
