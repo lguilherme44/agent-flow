@@ -1,4 +1,11 @@
-import type { Plan, RunState, Task, TaskResult, TaskState } from '../contracts/index.js';
+import type {
+  FailureClass,
+  Plan,
+  RunState,
+  Task,
+  TaskResult,
+  TaskState,
+} from '../contracts/index.js';
 import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
 import type { TaskBlockReason } from '../contracts/state.schema.js';
 import {
@@ -18,6 +25,19 @@ import type {
 } from './integrator.js';
 import type { RunRecovery, RunRecoveryOutcome } from './worktree-recovery.js';
 import { overlappingPaths } from '../core/file-overlap.js';
+import { decideTaskRecovery, type RecoveryConfig } from '../core/recovery-policy.js';
+import { buildFailureContextPacket } from '../core/failure-context.js';
+import { runPaths } from './paths.js';
+import type { FileSystem } from '../ports/index.js';
+
+/**
+ * The attempt ceiling when no caller supplied one.
+ *
+ * Matches `retry.maxAttempts`'s own default, so a scheduler constructed without the
+ * option behaves like one constructed from configuration rather than like one with no
+ * bound at all.
+ */
+const DEFAULT_MAX_ATTEMPTS = 2;
 
 export interface SchedulerOptions {
   readonly store: StateStore;
@@ -86,6 +106,19 @@ export interface SchedulerOptions {
   readonly recovery?: RunRecovery;
   /** Bounds recovery of interrupted tasks. Comes from `retry.maxAttempts`. */
   readonly maxAttempts?: number;
+  /**
+   * Autonomy budgets and the kill switch (AR-03, §6).
+   *
+   * Absent — and, shipped, `enabled: false` — means the scheduler never retries on its
+   * own, which is exactly what it did before this milestone. Automatic retry is new
+   * behaviour, and being able to turn it off is an acceptance criterion rather than a
+   * convenience.
+   */
+  readonly recoveryConfig?: RecoveryConfig;
+  /** Where the Failure Context Packet is written. Absent, no packet is persisted. */
+  readonly fs?: FileSystem;
+  /** Needed with {@link fs} to place the packet beside the attempt it informs. */
+  readonly projectDir?: string;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
@@ -233,6 +266,14 @@ export class Scheduler {
     // tasks did this run execute at once" a question with more than one answer.
     const concurrency = await this.concurrencyOf(runId);
     let haltedBy: string | undefined;
+    /**
+     * Tasks that ended a wave un-completed, awaiting a recovery decision (AR-03).
+     *
+     * Collected during the settle loop and drained after it: the decision needs the run's
+     * persisted counters, and taking it per outcome would put an await in the middle of
+     * settling a wave — where the ordering is a property of the plan and must stay so.
+     */
+    const unsettled: TaskResult[] = [];
 
     // §5.3 and §14.1, once, before anything is dispatched: the integration branch
     // is cut from `planningBase` and checked out, or the run's own namespace is
@@ -422,8 +463,12 @@ export class Scheduler {
             blockReasons[outcome.result.task] = 'agent';
           }
 
-          if (outcome.result.status !== 'completed' && haltedBy === undefined) {
-            haltedBy = `${outcome.result.task} ended as ${outcome.result.status}`;
+          if (outcome.result.status !== 'completed') {
+            // Held rather than halting immediately (AR-03). Whether this stops the run
+            // depends on a recovery decision that needs the run's persisted counters, and
+            // taking it inside this loop would mean an await per outcome in the middle of
+            // settling a wave.
+            unsettled.push(outcome.result);
           }
           continue;
         }
@@ -438,6 +483,38 @@ export class Scheduler {
             `${outcome.task} never started: workspace preparation failed ` +
             `at the ${outcome.phase} check — ${outcome.detail}`;
         }
+      }
+
+      // **Recovery, before the run decides to stop** (AR-03, C-08).
+      //
+      // `requeue` used to write `state: 'queued'` and nothing else, so a retry re-read the
+      // description that had already failed. Here the decision is mechanical — the failure
+      // class and the run's own counters, through `decideTaskRecovery` — and a task that
+      // may retry goes back to the queue carrying a Failure Context Packet.
+      //
+      // Off unless `recovery.enabled`, which restores the previous behaviour exactly: the
+      // scheduler's standing rule that it never retries on its own remains available as
+      // configuration (AR-03's acceptance criterion).
+      if (unsettled.length > 0) {
+        // The outcome is written before the requeue, and the two writes are the point:
+        // `running → queued` is not a legal transition, and it should not be. What
+        // actually happened is `running → review_required → queued`, and an audit trail
+        // that skipped the middle step would show a task that went back to the queue
+        // without ever having failed.
+        await this.persist(runId, states);
+
+        for (const failed of unsettled) {
+          const requeued = await this.recoverTask(runId, failed, byId);
+          if (requeued) {
+            states[failed.task] = 'queued';
+            continue;
+          }
+          if (haltedBy === undefined) {
+            haltedBy = `${failed.task} ended as ${failed.status}`;
+          }
+        }
+
+        unsettled.length = 0;
       }
 
       // §9.2: **the wave completes before the run halts.** A sibling that failed
@@ -756,6 +833,121 @@ export class Scheduler {
     };
   }
 
+  /**
+   * Whether this failure recovers itself, and the packet the retry will be told (AR-03).
+   *
+   * Returns `true` when the task went back to the queue. Everything about the decision is
+   * mechanical: the failure class comes from the classifier, the counters from the run,
+   * and `decideTaskRecovery` is a table. No model is consulted, and §5's `Authority`
+   * column says none may be.
+   *
+   * **Off unless `recovery.enabled`.** That kill switch is an acceptance criterion rather
+   * than a convenience: automatic retry is new behaviour, and the scheduler's standing
+   * rule that it never retries on its own has to remain available as configuration.
+   */
+  private async recoverTask(
+    runId: string,
+    result: TaskResult,
+    byId: ReadonlyMap<string, Task>,
+  ): Promise<boolean> {
+    const recoveryConfig = this.options.recoveryConfig;
+    if (recoveryConfig?.enabled !== true) return false;
+
+    // A class is required to decide anything. A result with none predates the classifier
+    // or came from a path that could not name one, and guessing would be the opposite of
+    // what this milestone is for.
+    const failureClass = result.failureClass;
+    if (failureClass === undefined) return false;
+
+    const state = await this.options.store.loadRun(runId);
+    const progress = state.tasks.find((task) => task.id === result.task);
+
+    const decision = decideTaskRecovery({
+      failureClass,
+      counters: {
+        attempts: progress?.attempts ?? 0,
+        infrastructureFailures: progress?.infrastructureFailures ?? 0,
+        environmentRepairs: progress?.infrastructureFailures ?? 0,
+        // Bounded by the attempts already spent: this scheduler makes one agent call per
+        // attempt, so the two coincide until a repair loop makes them diverge.
+        modelCalls: progress?.attempts ?? 0,
+        identicalFailures: progress?.failureClass === failureClass ? 1 : 0,
+      },
+      config: recoveryConfig,
+      maxAttempts: this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+    });
+
+    await this.options.store.appendEvent(runId, 'recovery_started', {
+      task: result.task,
+      failureClass,
+      disposition: decision.disposition,
+      reason: decision.reason,
+      ...(decision.step === undefined ? {} : { step: decision.step }),
+    });
+
+    if (!decision.mayProceedAutomatically) {
+      await this.options.store.appendEvent(runId, 'recovery_exhausted', {
+        task: result.task,
+        failureClass,
+        reason: decision.reason,
+        // AR §3.6: an escalation without one specific action is a contract violation.
+        humanAction: decision.humanAction ?? 'Inspect this failure and decide',
+        ...(decision.exhaustedBudget === undefined ? {} : { budget: decision.exhaustedBudget }),
+      });
+      return false;
+    }
+
+    // Built from what is already on disk, and persisted beside the attempt it informs so a
+    // run can always show what a retry was told (AD-40).
+    const packet = buildFailureContextPacket({
+      previousAttempt: progress?.attempts ?? 1,
+      failureClass,
+      ...(result.errorCode === undefined ? {} : { runnerErrorCode: result.errorCode }),
+      failedChecks: result.validation.commands
+        .filter((command) => command.exitCode !== 0)
+        .map((command) => ({
+          command: command.command,
+          exitCode: command.exitCode ?? 1,
+          tail: command.stderr.length > 0 ? command.stderr : command.stdout,
+        })),
+      successfulChecks: result.validation.commands
+        .filter((command) => command.exitCode === 0)
+        .map((command) => command.command),
+      acceptanceCriteria: acceptanceCriteriaOf(byId, result.task),
+      // Mechanical phrasing. AD-40 allows a model to write this one field and nothing
+      // else; nothing here spends a call to do it.
+      correctiveObjective: objectiveFor(failureClass, result),
+      budgets: {
+        maxPacketBytes: recoveryConfig.maxPacketBytes,
+        maxRawExcerptBytes: recoveryConfig.maxRawExcerptBytes,
+        maxDiffStatLines: recoveryConfig.maxDiffStatLines,
+      },
+    });
+
+    const path = runPaths(this.options.projectDir ?? '.', runId).attemptContext(
+      result.task,
+      (progress?.attempts ?? 1) + 1,
+    );
+    await this.options.fs?.mkdirp(path.slice(0, path.lastIndexOf('/')));
+    await this.options.fs?.writeFileAtomic(path, `${JSON.stringify(packet, null, 2)}\n`);
+
+    await this.options.store.appendEvent(runId, 'failure_context_built', {
+      task: result.task,
+      attempt: (progress?.attempts ?? 1) + 1,
+      failureClass,
+      failedChecks: packet.failedChecks.length,
+      truncated: packet.truncated,
+    });
+
+    await this.options.store.appendEvent(runId, 'recovery_step_completed', {
+      task: result.task,
+      step: decision.step ?? 'work_retry',
+      outcome: 'requeued',
+    });
+
+    return true;
+  }
+
   private async persist(
     runId: string,
     states: Record<string, TaskState>,
@@ -816,6 +1008,38 @@ function admitWithoutOverlap(
   }
 
   return admitted;
+}
+
+/**
+ * The acceptance criteria a retry is judged against, from the plan.
+ *
+ * Read through the DAG's task map rather than re-parsing the plan: the scheduler already
+ * holds it, and a second lookup is a second chance to describe a different task.
+ */
+function acceptanceCriteriaOf(byId: ReadonlyMap<string, Task>, taskId: string): string[] {
+  return [...(byId.get(taskId)?.acceptanceCriteria ?? [])];
+}
+
+/**
+ * What the next attempt is being asked to do, phrased mechanically (AD-40).
+ *
+ * AD-40 permits a model to write this one field. Nothing here spends a call to do it: the
+ * class already says what went wrong, and a paraphrase of a table entry is not worth an
+ * invocation.
+ */
+function objectiveFor(failureClass: FailureClass, result: TaskResult): string {
+  switch (failureClass) {
+    case 'validation_unsatisfied':
+      return 'Make the failing validation commands pass without weakening what they assert.';
+    case 'acceptance_evidence_missing':
+      return 'The previous attempt changed nothing. Produce the change this task describes.';
+    case 'malformed_runner_output':
+      return 'Answer in the exact structure the task requires.';
+    case 'runner_timeout':
+      return 'The previous attempt ran out of time. Do the smallest change that satisfies the task.';
+    default:
+      return `The previous attempt ended as ${result.status}. Address what the evidence below reports.`;
+  }
 }
 
 /** What two tasks both declare, or nothing. Absent tasks contend with no one. */

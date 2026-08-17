@@ -1714,3 +1714,265 @@ describe('a wave never contends for a file (AD-43, C-17)', () => {
     expect(plan.tasks[1]?.dependencies).toEqual([]);
   });
 });
+
+/**
+ * AR-03 — a recoverable failure recovers itself.
+ *
+ * `requeue` wrote `state: 'queued'` and nothing else, so a retry re-read the same task
+ * description that had already failed. The system held the failing command, its exit code,
+ * its stderr and the acceptance criteria, and asked the operator to explain the failure to
+ * the next attempt by hand — eleven of the evidence run's sixteen manual operations
+ * happened after approval, and none of them was a decision.
+ */
+describe('automatic retry (AR-03, C-08)', () => {
+  const RECOVERY = {
+    enabled: true,
+    maxEnvironmentRepairs: 2,
+    maxIdenticalFailures: 2,
+    maxModelCallsPerTask: 4,
+    maxCorrectiveRounds: 2,
+    maxCorrectivePlanRepairs: 2,
+    maxVerificationCycles: 3,
+    maxAutonomousModelCalls: 24,
+    maxPacketBytes: 8192,
+    maxRawExcerptBytes: 2048,
+    maxDiffStatLines: 40,
+  } as const;
+
+  /** Fails the first time with a classified validation failure, then succeeds. */
+  function flakyExecutor() {
+    const attempts: string[] = [];
+
+    const executor = {
+      execute: async (t: Task) => {
+        attempts.push(t.id);
+        const first = attempts.filter((id) => id === t.id).length === 1;
+        await Promise.resolve();
+
+        return TaskResultSchema.parse({
+          task: t.id,
+          status: first ? 'review_required' : 'completed',
+          runner: 'fake',
+          reasoning: 'medium',
+          startedAt: '2026-08-09T20:00:00.000Z',
+          finishedAt: '2026-08-09T20:00:01.000Z',
+          ...(first ? { failureClass: 'validation_unsatisfied' } : {}),
+          validation: {
+            passed: !first,
+            commands: first
+              ? [
+                  {
+                    id: 'test',
+                    command: 'npm test',
+                    exitCode: 1,
+                    durationMs: 10,
+                    stdout: '',
+                    stderr: 'Expected 2, received 3',
+                  },
+                ]
+              : [],
+          },
+        });
+      },
+    } as unknown as TaskExecutor;
+
+    return { executor, attempts };
+  }
+
+  const withCriteria = (id: string) => ({
+    ...task(id),
+    acceptanceCriteria: ['The suite passes.'],
+    validation: ['test'],
+  });
+
+  it('requeues a recoverable failure and finishes without a human', async () => {
+    const { store, run } = await harness();
+    const { executor, attempts } = flakyExecutor();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      recoveryConfig: RECOVERY,
+      maxAttempts: 3,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(attempts).toEqual(['TASK-001', 'TASK-001']);
+    expect(outcome.complete).toBe(true);
+    expect(outcome.haltedBy).toBeUndefined();
+  });
+
+  it('does nothing at all when recovery is disabled', async () => {
+    // The kill switch, and an acceptance criterion: `recovery.enabled: false` restores the
+    // previous behaviour exactly. It ships false.
+    const { store, run } = await harness();
+    const { executor, attempts } = flakyExecutor();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      recoveryConfig: { ...RECOVERY, enabled: false },
+      maxAttempts: 3,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(attempts).toEqual(['TASK-001']);
+    expect(outcome.haltedBy).toContain('TASK-001');
+  });
+
+  it('behaves identically when no recovery config is wired at all', async () => {
+    const { store, run } = await harness();
+    const { executor, attempts } = flakyExecutor();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+
+    await new Scheduler({ store, executor, maxAttempts: 3 }).run(plan, run.runId, 'SDD');
+
+    expect(attempts).toEqual(['TASK-001']);
+  });
+
+  it('records the decision, the packet and the step', async () => {
+    const { store, run } = await harness();
+    const { executor } = flakyExecutor();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+
+    await new Scheduler({ store, executor, recoveryConfig: RECOVERY, maxAttempts: 3 }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+
+    const types = (await store.readEvents(run.runId)).map((event) => event.type);
+    expect(types).toContain('recovery_started');
+    expect(types).toContain('failure_context_built');
+    expect(types).toContain('recovery_step_completed');
+  });
+
+  it('persists what the retry was told, beside the attempt it informs', async () => {
+    // AD-40: "persisted next to the attempt it informs, so a run can always show what a
+    // retry was told". Without it, "why did the second attempt do that" is answerable only
+    // by re-deriving a packet from artifacts that may since have changed.
+    const { fs, store, run } = await harness();
+    const { executor } = flakyExecutor();
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+
+    await new Scheduler({
+      store,
+      executor,
+      recoveryConfig: RECOVERY,
+      maxAttempts: 3,
+      fs,
+      projectDir: PROJECT,
+    }).run(plan, run.runId, 'SDD');
+
+    const path = runPaths(PROJECT, run.runId).attemptContext('TASK-001', 2);
+    const packet = JSON.parse(await fs.readFile(path)) as Record<string, unknown>;
+
+    expect(packet['failureClass']).toBe('validation_unsatisfied');
+    expect(JSON.stringify(packet['failedChecks'])).toContain('npm test');
+    expect(JSON.stringify(packet['failedChecks'])).toContain('Expected 2, received 3');
+    expect(packet['acceptanceCriteria']).toEqual(['The suite passes.']);
+  });
+
+  it('never retries a class the taxonomy says needs a person', async () => {
+    // `agent_blocked` means a decision is missing, and having attempts left does not
+    // conjure one. The class outranks the budget, always.
+    const { store, run } = await harness();
+
+    const executor = {
+      execute: async (t: Task) =>
+        TaskResultSchema.parse({
+          task: t.id,
+          status: 'blocked',
+          runner: 'fake',
+          reasoning: 'medium',
+          startedAt: '2026-08-09T20:00:00.000Z',
+          finishedAt: '2026-08-09T20:00:01.000Z',
+          failureClass: 'agent_blocked',
+          validation: { passed: false, commands: [] },
+        }),
+    } as unknown as TaskExecutor;
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      recoveryConfig: RECOVERY,
+      maxAttempts: 3,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(outcome.haltedBy).toContain('TASK-001');
+
+    const exhausted = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'recovery_exhausted',
+    );
+    // AR §3.6: an escalation always names one specific human action.
+    expect(String(exhausted?.detail?.['humanAction'] ?? '')).not.toHaveLength(0);
+  });
+
+  it('stops when the attempt budget runs out, naming the budget', async () => {
+    const { store, run } = await harness();
+
+    const executor = {
+      execute: async (t: Task) =>
+        TaskResultSchema.parse({
+          task: t.id,
+          status: 'review_required',
+          runner: 'fake',
+          reasoning: 'medium',
+          startedAt: '2026-08-09T20:00:00.000Z',
+          finishedAt: '2026-08-09T20:00:01.000Z',
+          failureClass: 'validation_unsatisfied',
+          validation: { passed: false, commands: [] },
+        }),
+    } as unknown as TaskExecutor;
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      recoveryConfig: RECOVERY,
+      maxAttempts: 2,
+    }).run(plan, run.runId, 'SDD');
+
+    // Bounded: it stops rather than looping (C-22).
+    expect(outcome.haltedBy).toBeDefined();
+
+    const exhausted = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'recovery_exhausted',
+    );
+    expect(exhausted?.detail?.['budget']).toBeDefined();
+  });
+
+  it('terminates rather than looping on a failure that never changes', async () => {
+    // `maxIdenticalFailures` is the anti-thrash rule: a loop producing the same failure
+    // twice has learned nothing, whatever the other budgets allow.
+    const { store, run } = await harness();
+    let calls = 0;
+
+    const executor = {
+      execute: async (t: Task) => {
+        calls += 1;
+        if (calls > 20) throw new Error('the recovery loop did not terminate');
+        return TaskResultSchema.parse({
+          task: t.id,
+          status: 'review_required',
+          runner: 'fake',
+          reasoning: 'medium',
+          startedAt: '2026-08-09T20:00:00.000Z',
+          finishedAt: '2026-08-09T20:00:01.000Z',
+          failureClass: 'validation_unsatisfied',
+          validation: { passed: false, commands: [] },
+        });
+      },
+    } as unknown as TaskExecutor;
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+    await new Scheduler({ store, executor, recoveryConfig: RECOVERY, maxAttempts: 10 }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+
+    expect(calls).toBeLessThan(20);
+  });
+});

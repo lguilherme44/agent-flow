@@ -314,6 +314,12 @@ export async function buildExecutionContext(
     // discriminant, and it was captured before anything observed the repository.
     concurrencyFor: (state) => concurrencyFor(state.isolationMode).effective,
     maxAttempts: config.global.retry.maxAttempts,
+    // AR-03. Ships `enabled: false`, so the scheduler keeps its standing rule of never
+    // retrying on its own until a project turns it on — automatic retry is new behaviour,
+    // and the kill switch is an acceptance criterion rather than a convenience.
+    recoveryConfig: config.global.recovery,
+    fs,
+    projectDir: options.projectDir,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),
     ...(options.onTaskFinish === undefined ? {} : { onTaskFinish: options.onTaskFinish }),
   });

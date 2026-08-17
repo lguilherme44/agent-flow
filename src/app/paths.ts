@@ -82,6 +82,14 @@ export interface RunPaths {
    * two somebody needed to diagnose.
    */
   failedAttempt(taskId: string, attempt: number): string;
+  /**
+   * `tasks/<taskId>/attempt-<n>.context.json` — what attempt *n* was told (AD-40, §8.5).
+   *
+   * Persisted beside the attempt it informs, so a run can always show what a retry was
+   * given. Without it "why did the second attempt do that" is answerable only by
+   * re-deriving a packet from artifacts that may since have changed.
+   */
+  attemptContext(taskId: string, attempt: number): string;
   log(name: string): string;
 }
 
@@ -109,6 +117,8 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     taskAttempt: (taskId, attempt) => `${tasksDir}/${taskId}/attempt-${String(attempt)}.json`,
     failedAttempt: (taskId, attempt) =>
       `${tasksDir}/${taskId}/attempt-${String(attempt)}.failed.json`,
+    attemptContext: (taskId, attempt) =>
+      `${tasksDir}/${taskId}/attempt-${String(attempt)}.context.json`,
     log: (name) => `${logsDir}/${name}.log`,
   };
 }

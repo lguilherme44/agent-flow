@@ -27,6 +27,15 @@ import {
  */
 
 /** The counters a decision is made against. All of them are already persisted. */
+/**
+ * The budgets, re-exported from the contracts.
+ *
+ * Consumers of this module reach for the policy and the shape it is configured by in the
+ * same import; sending them to two places for one decision is how a caller ends up
+ * reading the budgets from somewhere the policy does not.
+ */
+export type { RecoveryConfig };
+
 export interface TaskRecoveryCounters {
   /** Work attempts spent (AD-37). */
   readonly attempts: number;
