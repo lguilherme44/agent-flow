@@ -38,6 +38,22 @@ export const PromptMetaSchema = z.object({
   requiredVars: z.array(z.string()).default([]),
   /** True when prompted-and-validated structured output is not acceptable. */
   nativeStructuredOutput: z.boolean().default(false),
+  /**
+   * True when this prompt reads or writes the repository.
+   *
+   * **Declared, not assumed.** The resolver used to require a working directory of every
+   * runner on the grounds that "every role requires" one, and nine of the eleven shipped
+   * prompts disprove it: `sdd`, `planning`, both reviews, `verification`, `final-review`
+   * and `architecture-impact` receive their whole input as variables and open no file.
+   * `discovery` explores the project — its own text says "prefer reading a file over
+   * inferring from its name" — and `implementation` changes it.
+   *
+   * Defaults to `false` for the same reason `permissions` defaults to `read-only`: the
+   * narrower claim is the safe one, and a prompt that needs more says so. A prompt that
+   * declared it falsely would be routed to a runner that cannot serve it and fail at
+   * resolution, which is the loud direction.
+   */
+  workingDirectory: z.boolean().default(false),
 });
 export type PromptMeta = z.infer<typeof PromptMetaSchema>;
 

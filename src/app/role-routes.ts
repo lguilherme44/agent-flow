@@ -241,16 +241,18 @@ async function unionRequirements(
 ): Promise<RoleRequirements> {
   let readOnly = false;
   let nativeStructuredOutput = false;
+  let workingDirectory = false;
 
   for (const name of prompts) {
     try {
       const prompt = await loader.load(name);
       if (prompt.meta.permissions === 'read-only') readOnly = true;
       if (prompt.meta.nativeStructuredOutput) nativeStructuredOutput = true;
+      if (prompt.meta.workingDirectory) workingDirectory = true;
     } catch {
       continue;
     }
   }
 
-  return { readOnly, nativeStructuredOutput };
+  return { readOnly, nativeStructuredOutput, workingDirectory };
 }

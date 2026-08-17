@@ -287,7 +287,11 @@ export async function runDoctorCommand(
       lines.push(line);
     }
 
-    const registry = buildRegistry(config.global, { processRunner, fs });
+    const registry = buildRegistry(config.global, {
+      processRunner,
+      fs,
+      env: (name) => process.env[name],
+    });
     const health = await registry.health();
 
     const shallow: ObservedRunner[] = referencedRunners(config.global).map((id) => {

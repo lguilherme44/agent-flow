@@ -125,19 +125,33 @@ describe('configuration errors surface at resolution, not at run time (R-05)', (
     }
   });
 
-  it('rejects a runner that cannot be pointed at a working directory', () => {
-    // agent-flow always runs an agent against a specific repository. A runner
-    // that ignores cwd would silently operate on whatever directory it pleased.
+  it('rejects a runner with no working directory when the stage reads the repository', () => {
+    // A stage that explores or edits the project needs a runner that can be pointed at
+    // it; one that ignored cwd would silently operate on whatever directory it pleased.
     const caps: RunnerCapabilitiesMap = {
       claude: { ...fullCapabilities, supportsWorkingDirectory: false },
     };
     try {
-      resolveRole('sdd', config(), caps);
+      resolveRole('sdd', config(), caps, { workingDirectory: true });
       expect.unreachable('should have thrown');
     } catch (error) {
       expect((error as RoleResolutionError).kind).toBe('missing_capability');
       expect((error as Error).message).toMatch(/working directory/i);
     }
+  });
+
+  it('accepts a runner with no working directory when the stage needs none', () => {
+    // **The control the previous rule never had.** The resolver required a working
+    // directory of every runner, on the grounds that "every role requires" one — and nine
+    // of the eleven shipped prompts disprove it. `sdd`, `planning`, both reviews,
+    // `verification` and `final-review` receive their whole input as variables and open no
+    // file, which is what makes an inference endpoint a legitimate runner for them.
+    const caps: RunnerCapabilitiesMap = {
+      claude: { ...fullCapabilities, supportsWorkingDirectory: false },
+    };
+
+    expect(() => resolveRole('sdd', config(), caps)).not.toThrow();
+    expect(resolveRole('sdd', config(), caps).runner).toBe('claude');
   });
 
   it('rejects a read-only stage on a runner with no read-only mode', () => {
@@ -302,7 +316,12 @@ describe('resolveFallback', () => {
     const noCwd: RunnerCapabilitiesMap = {
       codex: { ...fullCapabilities, supportsWorkingDirectory: false },
     };
-    expect(resolveFallback('sdd', fallbackConfig('sdd', 'codex'), noCwd)).toBeUndefined();
+    // Only when the stage actually reads the repository. Without that requirement the
+    // fallback is perfectly usable — nine of the eleven shipped prompts open no file.
+    expect(
+      resolveFallback('sdd', fallbackConfig('sdd', 'codex'), noCwd, { workingDirectory: true }),
+    ).toBeUndefined();
+    expect(resolveFallback('sdd', fallbackConfig('sdd', 'codex'), noCwd)).toBeDefined();
 
     const noReadOnly: RunnerCapabilitiesMap = {
       codex: { ...fullCapabilities, supportsReadOnly: false },

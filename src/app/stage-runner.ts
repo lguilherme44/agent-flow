@@ -270,6 +270,9 @@ export class StageRunner {
     const resolved = resolveRole(stage.role, config, capabilities, {
       readOnly: prompt.meta.permissions === 'read-only',
       nativeStructuredOutput: prompt.meta.nativeStructuredOutput,
+      // The prompt decides, exactly as it does for `readOnly` (AD-12). A stage that opens
+      // no file may run on a runner that has no filesystem.
+      workingDirectory: prompt.meta.workingDirectory,
     });
 
     // Raises on a missing variable — before anything is spawned or spent.

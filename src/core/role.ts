@@ -82,6 +82,15 @@ export interface RoleRequirements {
   readonly readOnly?: boolean;
   /** True only when a prompted-and-validated fallback is unacceptable. */
   readonly nativeStructuredOutput?: boolean;
+  /**
+   * True when the stage's prompt reads or writes the repository.
+   *
+   * Declared by the prompt rather than assumed of every role. `discovery` explores the
+   * project and `implementation` changes it; the other nine shipped prompts receive their
+   * whole input as variables and open no file — which is what makes an inference endpoint
+   * a legitimate runner for them, and not for these two.
+   */
+  readonly workingDirectory?: boolean;
 }
 
 export interface ResolvedAgentConfig {
@@ -231,11 +240,23 @@ export function resolveRole(
     );
   }
 
-  if (!runnerCapabilities.supportsWorkingDirectory) {
+  // **Only when the role's prompts actually read the repository.**
+  //
+  // This used to say "which every role requires", and the prompts disprove it: nine of the
+  // eleven shipped ones carry their whole input — `sdd`, `planning`, both reviews,
+  // `verification`, `final-review`, `architecture-impact` all receive text and produce text
+  // or JSON, and open no file. The two that do are `discovery`, whose prompt says "prefer
+  // reading a file over inferring from its name", and `implementation`.
+  //
+  // The requirement therefore comes from the prompt, exactly as `readOnly` already does,
+  // rather than from a blanket claim. That is what lets an inference endpoint — which has
+  // no filesystem and says so — serve the nine while being refused for the two.
+  if (requirements.workingDirectory === true && !runnerCapabilities.supportsWorkingDirectory) {
     throw new RoleResolutionError(
       'missing_capability',
       role,
-      `Runner "${runnerId}" cannot target a working directory, which every role requires.`,
+      `Role "${role}" reads the repository, but runner "${runnerId}" has no working ` +
+        `directory. Point this role at a coding agent, or at a runner that does.`,
     );
   }
 
@@ -315,7 +336,9 @@ export function resolveFallback(
   // would quietly break the guarantee the requirement expresses — a read-only
   // stage has to stay read-only even when the primary runner is down.
   if (!runnerCapabilities.supportsNonInteractive) return undefined;
-  if (!runnerCapabilities.supportsWorkingDirectory) return undefined;
+  if (requirements.workingDirectory === true && !runnerCapabilities.supportsWorkingDirectory) {
+    return undefined;
+  }
   if (requirements.readOnly === true && !runnerCapabilities.supportsReadOnly) return undefined;
   if (
     requirements.nativeStructuredOutput === true &&

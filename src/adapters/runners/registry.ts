@@ -14,6 +14,7 @@ import type { FileSystem } from '../../ports/file-system.js';
 import { ClaudeCodeRunner } from './claude-code-runner.js';
 import { CodexRunner } from './codex-runner.js';
 import { AgyRunner } from './agy-runner.js';
+import { OpenAiRunner } from './openai-runner.js';
 
 export class RegistryError extends Error {
   constructor(message: string) {
@@ -26,6 +27,14 @@ export interface RegistryDependencies {
   readonly processRunner: ProcessRunner;
   /** Some adapters must write temp files; see the codex-cli factory. */
   readonly fs: FileSystem;
+  /**
+   * Reads an environment variable by name, for a runner configured with `apiKeyEnv`.
+   *
+   * Injected rather than reaching for `process.env`, for the reason every other port is:
+   * a factory that reads the process environment directly is a factory only one caller
+   * can drive, and the value it reads is a credential a test must be able to withhold.
+   */
+  readonly env?: (name: string) => string | undefined;
 }
 
 type RunnerFactory = (
@@ -64,6 +73,35 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       processRunner: deps.processRunner,
       ...(config.command === undefined ? {} : { command: config.command }),
     }),
+
+  /**
+   * An inference endpoint rather than a coding CLI — a local llama.cpp or vLLM server, or
+   * any OpenAI-compatible host.
+   *
+   * It cannot write and has no working directory, and it declares both. That is what lets
+   * it serve the nine shipped prompts which carry their whole input — `sdd`, `planning`,
+   * the reviews, `verification` — while the resolver refuses it for `discovery` and
+   * `implementation`, which read and write the repository.
+   *
+   * The key comes from the environment, never from the config file (§7.1).
+   */
+  'openai-compatible': (id, config, deps) => {
+    if (config.baseUrl === undefined) {
+      throw new RegistryError(
+        `Runner "${id}" is an openai-compatible endpoint and declares no baseUrl.\n` +
+          `  Add runners.${id}.baseUrl, e.g. http://127.0.0.1:8080/v1`,
+      );
+    }
+
+    const apiKey = config.apiKeyEnv === undefined ? undefined : deps.env?.(config.apiKeyEnv);
+
+    return new OpenAiRunner({
+      id,
+      baseUrl: config.baseUrl,
+      ...(apiKey === undefined || apiKey.length === 0 ? {} : { apiKey }),
+      ...(config.model === undefined ? {} : { model: config.model }),
+    });
+  },
 };
 
 export interface RunnerRegistry {

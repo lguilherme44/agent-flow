@@ -30,6 +30,33 @@ runners:
     type: codex-cli
     enabled: false
 
+  # An OpenAI-compatible inference endpoint — a local llama.cpp or vLLM server,
+  # or any hosted one. **Not a coding agent**: it has no working directory and
+  # cannot write, and it declares both, so \`agent-flow doctor\` will refuse it for
+  # \`discovery\` and the executors and accept it everywhere else.
+  #
+  # That "everywhere else" is most of the workflow. Nine of the eleven shipped
+  # prompts carry their whole input — sdd, planning, both reviews, verification,
+  # final-review, architecture-impact — so pointing them at a local model costs
+  # no quota and makes the two review stages genuinely independent of whichever
+  # provider wrote the code.
+  #
+  # \`apiKeyEnv\` names an environment variable, never the key itself (§7.1).
+  #
+  #   local:
+  #     type: openai-compatible
+  #     enabled: true
+  #     baseUrl: http://127.0.0.1:8080/v1
+  #     apiKeyEnv: LOCAL_LLM_API_KEY
+  #     model: moe
+  #
+  # …then point the stages that read nothing at it:
+  #
+  #   roles:
+  #     planReviewer:
+  #       runner: local
+  #       effort: high
+
 roles:
   # Discovery reads the repository; it does not need the deepest setting.
   architect:

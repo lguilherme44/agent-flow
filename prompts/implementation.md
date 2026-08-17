@@ -1,5 +1,7 @@
 ---
 permissions: write
+# writes the code
+workingDirectory: true
 outputFormat: markdown
 requiredVars: [task, sdd, projectConfig, agentsMd]
 ---

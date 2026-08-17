@@ -168,7 +168,13 @@ export async function buildExecutionContext(
     projectDir: options.projectDir,
   });
 
-  const registry = buildRegistry(config.global, { processRunner, fs });
+  const registry = buildRegistry(config.global, {
+    processRunner,
+    fs,
+    // For a runner configured with `apiKeyEnv`. Injected rather than read here, so a test
+    // can withhold a credential the production path supplies (§7.1).
+    env: options.env ?? ((name) => process.env[name]),
+  });
   // Fails here rather than after the first expensive invocation.
   registry.validateRoles(config.global);
 

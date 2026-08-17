@@ -1,5 +1,7 @@
 ---
 permissions: read-only
+# explores the repository: "prefer reading a file over inferring from its name"
+workingDirectory: true
 outputFormat: markdown
 requiredVars: [projectDir, projectConfig, agentsMd]
 ---

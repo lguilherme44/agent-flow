@@ -17,6 +17,24 @@ export const RunnerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   /** Overrides the executable looked up on PATH. */
   command: z.string().min(1).optional(),
+  /**
+   * Base URL for a runner that speaks HTTP rather than spawning a CLI.
+   *
+   * `http://host:port/v1`, or a bare origin. Required by the `openai-compatible` type and
+   * meaningless to the others, which is why it is optional here and validated by the
+   * factory that needs it — the registry is where a type's requirements belong.
+   */
+  baseUrl: z.string().min(1).optional(),
+  /**
+   * **The name of an environment variable, never a key** (§7.1).
+   *
+   * The same rule the utility model already follows: configuration is committed to a
+   * repository, and a secret in a committed file is a secret. A local endpoint whose key
+   * is the word `local` is not an exception worth making a second rule for.
+   */
+  apiKeyEnv: z.string().min(1).optional(),
+  /** The model id to request. Optional for the same reason `RoleConfig.model` is (AD-13). */
+  model: z.string().min(1).optional(),
 });
 export type RunnerConfig = z.infer<typeof RunnerConfigSchema>;
 

@@ -496,3 +496,77 @@ from a run that happened to succeed.
 | File | Origin |
 |---|---|
 | — | none captured yet; see above |
+
+---
+
+## OpenAI-compatible endpoints (local or hosted)
+
+**Probed:** 2026-08-17, against a llama.cpp server on the LAN
+**Server:** `llama-server`, `--jinja`, one model at a time
+**Adapter:** `src/adapters/runners/openai-runner.ts` (`type: openai-compatible`)
+
+> This is the first runner in the table that is **not a coding CLI**, and the difference
+> decides everything about it.
+
+Claude Code, Codex and AGY are *agents*: they hold a working directory, read files, run
+commands and edit code. An OpenAI-compatible endpoint holds a conversation. There is no
+filesystem on the other side of the HTTP call.
+
+### Capability summary
+
+| Capability | Verdict | Proven by |
+|---|---|---|
+| Non-interactive | ✅ | it is an HTTP request |
+| Model selection | ✅ | `model` in the request body; the server usually serves one |
+| Reasoning level | ➖ **not differentiated** | no effort dial exists; all four levels declared, none distinguished |
+| Structured output | ✅ **`native`** | `response_format: json_schema` is enforced by the server's grammar sampler |
+| Read-only mode | ✅ **by construction** | there is nothing to write to |
+| Working directory | ❌ **declared false** | the endpoint cannot see the repository |
+| Non-interactive **file edits** | ❌ | no tools are sent |
+| Non-interactive **command execution** | ❌ | no tools are sent |
+
+### What it can and cannot serve
+
+`supportsWorkingDirectory: false` is not a limitation to work around — it is the fact that
+routes the roles. Of the eleven shipped prompts, **nine carry their whole input**:
+
+```
+sdd · planning · planning-simple · planning-trivial · plan-review · plan-review-simple
+verification · final-review · architecture-impact
+```
+
+They receive text and produce text or JSON, and open no file. **Two do not**: `discovery`,
+whose own text says *"prefer reading a file over inferring from its name"*, and
+`implementation`, which writes the code. Those two declare `workingDirectory: true` in
+their front matter, and the resolver refuses to route them here.
+
+This was previously unexpressible: `core/role.ts` required a working directory of every
+runner, on the grounds that *"every role requires"* one. The prompts disprove it, and the
+requirement now comes from the prompt exactly as `permissions` already does.
+
+### Measured, on a Qwen3.6-35B-A3B MoE (3B active), RTX 3060 Ti + CPU offload
+
+| Question | Result |
+|---|---|
+| `models` endpoint | answers, names the served model |
+| trivial completion | `ok`, ~3.7 s |
+| **enforced JSON schema** (enum + nested object array) | **valid on the first response**, ~8–17 s |
+| tool calling | works, well-formed arguments, ~6 s |
+| review quality on a seeded flaw | found the missing rate limiting *and* the missing test task, severities sensible |
+
+The dense 27B on the same machine measured ~3 tok/s and did not answer a trivial prompt
+inside 120 s. **The MoE is the viable shape here**, and it is the one the lab's own profile
+table already marks as the only one validated for agentic work.
+
+### What is deliberately not claimed
+
+- **Reasoning levels are declared, not differentiated.** A server is started with one model
+  at one quantisation; asking for `high` changes nothing. Declaring all four is honest —
+  declaring fewer would make `clampReasoning` fire and record a downgrade that did not
+  happen.
+- **No tool loop.** The adapter sends no tool definitions, so `nonInteractiveToolGrants` is
+  false on both counts. Making this a coding agent would mean building the read/write/exec
+  loop, which is a different piece of work with its own security surface.
+- **A write stage is refused before the request is sent**, rather than accepted and quietly
+  producing nothing — which would be an AR-05a false positive arriving from the opposite
+  direction.
