@@ -410,8 +410,126 @@ export function defaultClassForRunnerError(code: RunnerErrorCode): FailureClass 
  * `execution_failed` is refined by `runner_execution_failed` and
  * `runner_permission_required`, and the generic one is the honest default: claiming a
  * permission problem without having matched a denial signature would be an assertion
- * nobody measured. AR-02 upgrades it when the signature is there.
+ * nobody measured. {@link classifyRunnerFailure} upgrades it when the signature is there.
  */
 const AMBIGUOUS_CODE_DEFAULTS: Partial<Record<RunnerErrorCode, FailureClass>> = {
   execution_failed: 'runner_execution_failed',
 };
+
+// ---------------------------------------------------------------------------
+// Signature matching (AR-02, C-06)
+// ---------------------------------------------------------------------------
+
+/**
+ * One way a runner says "local policy would not let me use a tool".
+ *
+ * **Every entry must describe a *tool confirmation*, never a bare denial.** That
+ * constraint is the whole design. `permission denied` on its own appears in `EACCES`
+ * messages, in shell output, in compiler errors and inside test assertions, and matching it
+ * would send a person to grant a tool that was never the problem — while also marking the
+ * attempt as not-consumed when the agent genuinely failed at its work. Both halves of that
+ * mistake are worse than the generic class.
+ *
+ * `command` captures group 1 when present, so an escalation can name what to grant instead
+ * of saying "grant something".
+ */
+interface DenialSignature {
+  readonly pattern: RegExp;
+  /** Why this wording is trusted. Kept beside the pattern so a future entry has to argue. */
+  readonly seenIn: string;
+}
+
+const PERMISSION_DENIAL_SIGNATURES: readonly DenialSignature[] = [
+  {
+    // The AF-2026-002 wording, read out of the vendor's own log directory by hand because
+    // the raw output was discarded at both persistence points.
+    pattern: /soft-denying tool confirmation\s+["']([^"']+)["']/i,
+    seenIn: 'AGY 1.1.13 — the evidence run',
+  },
+  {
+    pattern: /(?:tool call|tool use|tool request)[^\n]{0,60}?requires? (?:approval|confirmation)(?:[^\n]*?[:\s]["']?([A-Za-z_][\w.-]*)\s*\()?/i,
+    seenIn: 'generic CLI phrasing for an unattended approval prompt',
+  },
+  {
+    pattern: /(?:permission|approval) (?:check )?(?:failed|denied) for tool\s+["']?([\w.-]+)/i,
+    seenIn: 'generic CLI phrasing, tool named',
+  },
+];
+
+/**
+ * A second signal that must accompany a weak match, never a match on its own.
+ *
+ * `permission check failed` is strong evidence *in the company of* a tool request and
+ * useless without one, which is exactly the shape a corroborating pattern has.
+ */
+const DENIAL_CORROBORATION = /permission check failed|could not continue without the requested tool/i;
+
+/** A tool request line, used only to corroborate — never to classify by itself. */
+const TOOL_REQUEST = /tool (?:request|call|use)\s*:?\s*["']?([A-Za-z_][\w.-]*)/i;
+
+export interface RunnerFailureClassification {
+  readonly failureClass: FailureClass;
+  /** What the runner was refused, when the evidence names it (C-06). */
+  readonly deniedCommand?: string;
+}
+
+/**
+ * The class a runner failure deserves, given its code and — when it helps — its output.
+ *
+ * Table-driven, deterministic, and it never calls a model: an identical input classifies
+ * identically every time, which is what lets a recovery decision be audited rather than
+ * re-litigated.
+ *
+ * The signature pass runs **only** for a code that several classes refine. A code with one
+ * refinement is already unambiguous, and reading prose could only make that answer worse.
+ *
+ * Falling back to the default refinement is always a correct outcome. This function is
+ * built to be wrong in one direction only — it would rather report `runner_execution_failed`
+ * for a genuine permission denial than the reverse, because the first costs a diagnosis and
+ * the second costs a person's afternoon plus a miscounted attempt budget.
+ *
+ * `redactedRaw` is named for what it must be. Redaction happens at the boundary that
+ * persists (AD-35), and this module is pure: it neither redacts nor checks, so a caller
+ * handing it unredacted text gets a correct class and keeps its own I-21 problem.
+ */
+export function classifyRunnerFailure(input: {
+  readonly errorCode: RunnerErrorCode;
+  readonly redactedRaw?: string;
+}): RunnerFailureClassification {
+  const candidates = classesRefining(input.errorCode);
+  const fallback =
+    defaultClassForRunnerError(input.errorCode) ??
+    // Unreachable for today's codes and not defaulted away: a code with no refinement at
+    // all is a table that has drifted from the enum, and the generic runner class is the
+    // only honest thing left to say about a runner that failed.
+    'runner_execution_failed';
+
+  const raw = input.redactedRaw;
+  if (raw === undefined || raw.length === 0) return { failureClass: fallback };
+
+  // One candidate means the code is already decided. Nothing in the text can improve it.
+  if (candidates.length < 2) return { failureClass: fallback };
+  if (!candidates.includes('runner_permission_required')) return { failureClass: fallback };
+
+  for (const signature of PERMISSION_DENIAL_SIGNATURES) {
+    const match = signature.pattern.exec(raw);
+    if (match === null) continue;
+
+    const named = match[1] ?? TOOL_REQUEST.exec(raw)?.[1];
+    return {
+      failureClass: 'runner_permission_required',
+      ...(named === undefined ? {} : { deniedCommand: named }),
+    };
+  }
+
+  // The corroborating signal, which is allowed to decide only when a tool request is also
+  // present. On its own it is a sentence a build tool could plausibly print.
+  if (DENIAL_CORROBORATION.test(raw)) {
+    const named = TOOL_REQUEST.exec(raw)?.[1];
+    if (named !== undefined) {
+      return { failureClass: 'runner_permission_required', deniedCommand: named };
+    }
+  }
+
+  return { failureClass: fallback };
+}

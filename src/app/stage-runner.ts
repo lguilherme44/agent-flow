@@ -2,15 +2,21 @@ import type { ZodType } from 'zod';
 import {
   formatValidationError,
   toJsonSchema,
+  type FailureClass,
   type GlobalConfig,
   type ReasoningLevel,
   type RunStage,
   type RunnerErrorCode,
   type WorkflowRole,
 } from '../contracts/index.js';
-import type { AgentRunner, Clock, FileSystem, RunProvenance } from '../ports/index.js';
+import type { AgentRunner, Clock, FileSystem, Host, RunProvenance } from '../ports/index.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveRole, type ResolvedAgentConfig } from '../core/role.js';
+import {
+  classifyRunnerFailure,
+  type RunnerFailureClassification,
+} from '../core/failure-classification.js';
+import { redactAndTruncate, redactEvidence } from '../core/evidence-redaction.js';
 import type { PromptLoader } from './prompt-loader.js';
 import type { StateStore } from './state-store.js';
 import { runPaths, type ArtifactName } from './paths.js';
@@ -35,6 +41,23 @@ export class StageFailure extends Error {
    */
   readonly fallbackEligible: boolean;
 
+  /**
+   * What this failure *is*, above the transport code (AD-36, AR-02).
+   *
+   * `errorCode` says the runner process failed; `failureClass` says why, when the evidence
+   * supports naming it. The two are a refinement, not a replacement — `execution_failed`
+   * covered an unsupported effort, a denied command and a genuine implementation failure,
+   * three failures with three different correct responses.
+   *
+   * **Nothing branches on this.** Control flow still reads `errorCode` (that is I-21's
+   * companion rule and AD-33's); this travels onto artifacts, events and the sentence a
+   * person reads.
+   */
+  readonly failureClass: FailureClass;
+
+  /** The tool the runner was refused, when the evidence names it (C-06). */
+  readonly deniedCommand?: string;
+
   constructor(
     readonly stage: RunStage,
     readonly errorCode: RunnerErrorCode,
@@ -50,10 +73,18 @@ export class StageFailure extends Error {
      * someone reading a failed result needs to know.
      */
     readonly execution?: StageExecution,
+    classification?: RunnerFailureClassification,
   ) {
     super(message);
     this.name = 'StageFailure';
     this.fallbackEligible = FALLBACK_ELIGIBLE.has(errorCode);
+
+    // Classified here when the caller did not, so no construction site can produce a
+    // failure with no class. The code-only answer is always available and always correct
+    // as a floor; passing `raw` sharpens it.
+    const resolved = classification ?? classifyRunnerFailure({ errorCode, ...(raw === undefined ? {} : { redactedRaw: raw }) });
+    this.failureClass = resolved.failureClass;
+    if (resolved.deniedCommand !== undefined) this.deniedCommand = resolved.deniedCommand;
   }
 }
 
@@ -135,6 +166,14 @@ export interface StageRunnerOptions {
    * Offline, malformed, or throwing advisors leave the prompt untouched.
    */
   readonly advisor?: StageAdvisor;
+  /**
+   * The machine, for its home directory — the second root {@link redactEvidence} needs.
+   *
+   * Optional so the twenty-odd test wirings that predate AR-02 keep working; production
+   * always supplies it from `execution-context.ts`. Absent, workspace paths are still
+   * redacted and home paths are not, which is a weaker guarantee rather than a wrong one.
+   */
+  readonly host?: Host;
 }
 
 /**
@@ -199,6 +238,14 @@ export class StageRunner {
       undefined,
       resolveRole(role, this.options.config, this.options.capabilities),
     );
+  }
+
+  /** The roots this stage's output may name, for {@link redactEvidence}. */
+  private redactionContext(options: StageRunOptions): { workspaceRoot: string; home?: string } {
+    return redactionContextOf({
+      workingDirectory: options.workingDirectory ?? this.options.projectDir,
+      ...(this.options.host === undefined ? {} : { home: this.options.host.homeDir }),
+    });
   }
 
   /**
@@ -329,12 +376,44 @@ export class StageRunner {
         // Infrastructure failures are not retried here: re-running immediately
         // would hit the same wall. Deciding whether to fall back belongs to the
         // caller, which is why the code travels with the error.
-        logLines.push(`repair=${repair} failed errorCode=${result.errorCode}`);
+        //
+        // **Redaction first, once, before anything is looked at or written** (AD-35,
+        // I-21). Both persistence paths below and the classifier all read the same
+        // redacted string, so there is no unredacted mirror and no second opinion about
+        // what the runner said.
+        const redactionContext = this.redactionContext(options);
+        const redactedRaw = redactEvidence(result.raw, redactionContext);
+        const classification = classifyRunnerFailure({
+          errorCode: result.errorCode,
+          redactedRaw,
+        });
+        const excerpt = redactAndTruncate(
+          redactedRaw,
+          config.recovery.maxRawExcerptBytes,
+          // Already redacted; truncation is all that is left to do.
+          {},
+        );
+
+        logLines.push(
+          `repair=${repair} failed errorCode=${result.errorCode} failureClass=${classification.failureClass}`,
+          // The full output, in the one place with room for it. This is the line whose
+          // absence sent a person to read the vendor's own log directory.
+          '--- runner output (redacted) ---',
+          redactedRaw,
+          '--- end runner output ---',
+        );
         await this.writeLog(runId, stage, logLines);
         await store.appendEvent(runId, 'stage_failed', {
           stage: stage.name,
           role: stage.role,
           errorCode: result.errorCode,
+          failureClass: classification.failureClass,
+          ...(classification.deniedCommand === undefined
+            ? {}
+            : { deniedCommand: classification.deniedCommand }),
+          // The head of it, bounded. The dashboard reads events; without this an
+          // operator still needs a terminal to find out what happened.
+          rawExcerpt: excerpt.text,
           // A failure is provenance too: it ran somewhere, at some effort, and
           // possibly after a substitution that also failed.
           ...executionDetail(lastExecution),
@@ -347,8 +426,9 @@ export class StageRunner {
           stage.name,
           result.errorCode,
           `Stage "${stage.name}" failed: ${result.errorCode}`,
-          result.raw,
+          redactedRaw,
           lastExecution,
+          classification,
         );
       }
 
@@ -457,6 +537,22 @@ export class StageRunner {
       `${lines.join('\n')}\n`,
     );
   }
+}
+
+/**
+ * The roots a runner's output is likely to name, for redaction (AD-35).
+ *
+ * The working directory rather than the project directory: in worktree mode the agent ran
+ * inside `~/.agent-flow/worktrees/…`, and that is the absolute path its output quotes.
+ */
+function redactionContextOf(options: {
+  readonly workingDirectory: string;
+  readonly home?: string;
+}): { workspaceRoot: string; home?: string } {
+  return {
+    workspaceRoot: options.workingDirectory,
+    ...(options.home === undefined ? {} : { home: options.home }),
+  };
 }
 
 /**

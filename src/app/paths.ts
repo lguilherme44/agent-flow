@@ -71,6 +71,17 @@ export interface RunPaths {
    * not part of any checkout an agent receives.
    */
   taskAttempt(taskId: string, attempt: number): string;
+  /**
+   * `tasks/<taskId>/attempt-<n>.failed.json` — why one attempt failed (AD-34).
+   *
+   * **A distinct file name, and that is the point.** MVP 2 §17.3 reads "no
+   * `attempt-<n>.json`" as *the attempt's work was never observed*, and the recovery
+   * windows depend on that being literally true. Writing the failure under the same name
+   * with a null report would break it; writing nothing at all is what left the evidence
+   * run's two failed attempts as the only ones with no persisted record — precisely the
+   * two somebody needed to diagnose.
+   */
+  failedAttempt(taskId: string, attempt: number): string;
   log(name: string): string;
 }
 
@@ -96,6 +107,8 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     logsDir,
     taskResult: (taskId) => `${tasksDir}/${taskId}/result.json`,
     taskAttempt: (taskId, attempt) => `${tasksDir}/${taskId}/attempt-${String(attempt)}.json`,
+    failedAttempt: (taskId, attempt) =>
+      `${tasksDir}/${taskId}/attempt-${String(attempt)}.failed.json`,
     log: (name) => `${logsDir}/${name}.log`,
   };
 }

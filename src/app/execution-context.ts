@@ -222,6 +222,10 @@ export async function buildExecutionContext(
     promptLoader: new PromptLoader({ fs, promptsDir: options.promptsDir }),
     getRunner,
     projectDir: options.projectDir,
+    // For its home directory, which is the second root evidence redaction needs (AD-35):
+    // in worktree mode an agent runs under `~/.agent-flow/worktrees/…`, so its output
+    // quotes a path that names this machine's user.
+    host: options.host,
     ...(advisor === undefined ? {} : { advisor }),
   });
 

@@ -107,6 +107,59 @@ describe('error rendering', () => {
     expect(rendered.message).toMatch(/human decision/i);
   });
 
+  /**
+   * AR-02 at the surface a person actually reads.
+   *
+   * The evidence run's worst failure reached a terminal as `execution_failed` and nothing
+   * else. The cause — a denied shell command — was in memory and was discarded, so the
+   * sentence in front of the operator contained no fact they could act on.
+   */
+  describe('a classified failure says what to do', () => {
+    const denial = () =>
+      new StageFailure(
+        'implementation',
+        'execution_failed',
+        'failed',
+        'soft-denying tool confirmation "Bash"\npermission check failed',
+      );
+
+    it('names the class beside the transport code, never instead of it', () => {
+      // A refinement, not a replacement: a script matching on `execution_failed` still
+      // finds it (AD-36).
+      const message = renderError(denial()).message;
+
+      expect(message).toContain('runner_permission_required');
+      expect(message).toContain('execution_failed');
+    });
+
+    it('names the tool that was refused', () => {
+      expect(renderError(denial()).message).toContain('Bash');
+    });
+
+    it('prefers the taxonomy’s action when the class is sharper than the code', () => {
+      // The generic hint for `execution_failed` is "the original message is above", which
+      // is exactly the non-advice this milestone exists to remove.
+      const message = renderError(denial()).message;
+
+      expect(message).toMatch(/Next:/);
+      expect(message).toMatch(/grant/i);
+    });
+
+    it('says the attempt was not spent, because it was not', () => {
+      // The counter that forced `retry --force` in the evidence run (AD-37, I-22).
+      expect(renderError(denial()).message).toMatch(/did not spend/i);
+    });
+
+    it('keeps the richer terminal hint when the class adds nothing', () => {
+      // `quota_exceeded` has exactly one refinement, so the classifier learned nothing the
+      // code did not already say and the sentence written for this terminal is better.
+      const message = renderError(new StageFailure('sdd', 'quota_exceeded', 'x')).message;
+
+      expect(message).toMatch(/usage limit|fallback/i);
+      expect(message).not.toMatch(/Next:/);
+    });
+  });
+
   it('includes the original runner output for diagnosis', () => {
     const rendered = renderError(
       new StageFailure('sdd', 'execution_failed', 'failed', 'original CLI message'),

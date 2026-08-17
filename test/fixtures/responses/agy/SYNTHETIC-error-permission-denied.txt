@@ -1,0 +1,11 @@
+Reconstructed from the AF-2026-002 dogfood, whose true cause was read out of the
+vendor's own log directory by hand because StageFailure.raw was discarded at both
+persistence points. Synthetic: the wording is the wording that was observed, the
+surrounding lines are representative rather than captured verbatim.
+
+[agy] session start conversation_id=c4f1b2e0
+[agy] tool request: Bash(grep -rn "runFeatureCommand" src/)
+[agy] soft-denying tool confirmation "Bash"
+[agy] permission check failed
+[agy] the agent could not continue without the requested tool
+{"status":"ERROR","is_error":true,"error":"tool execution was not permitted"}

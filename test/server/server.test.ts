@@ -9,6 +9,7 @@ import { StateStore } from '../../src/app/state-store.js';
 import { ContextTelemetryRecorder } from '../../src/app/context-telemetry-recorder.js';
 import { PlanSchema, type TaskState } from '../../src/contracts/index.js';
 import { planHash } from '../../src/app/approval.js';
+import { attemptLogName, runPaths } from '../../src/app/paths.js';
 import type {
   ActionErrorView,
   ActionJobView,
@@ -374,6 +375,72 @@ describe('UI-04 — the run read API', () => {
     expect(task.description).toContain('Domain types');
     expect(task.acceptanceCriteria).toEqual(['Types compile.']);
     expect(task.log).toEqual([]);
+  });
+
+  /**
+   * C-07 (AR-02) — the log the dashboard could never find.
+   *
+   * `paths.ts` writes `implementation-<TASK>-attempt-<n>.log` in worktree mode; the reader
+   * asked for `implementation-<TASK>.log`. So every isolated run returned `[]` for every
+   * task, and an operator who wanted to see what an attempt did opened a terminal — which
+   * is the behaviour AR-02 exists to remove.
+   */
+  describe('attempt logs (C-07)', () => {
+    it('finds the log an isolated attempt actually wrote', async () => {
+      const { server, run, fs } = await serve();
+      fs.seed(
+        runPaths('/repo', run.runId).log(attemptLogName('TASK-001', 1)),
+        'repair=1 failed errorCode=execution_failed\nsoft-denying tool confirmation "Bash"\n',
+      );
+
+      const task = (
+        await server.app.inject(`/api/v1/runs/${run.runId}/tasks/TASK-001`)
+      ).json<TaskDetailView>();
+
+      expect(task.log.join('\n')).toContain('soft-denying');
+    });
+
+    it('exposes each attempt separately, newest last', async () => {
+      const { server, run, fs } = await serve();
+      const paths = runPaths('/repo', run.runId);
+      fs.seed(paths.log(attemptLogName('TASK-001', 1)), 'first attempt\n');
+      fs.seed(paths.log(attemptLogName('TASK-001', 2)), 'second attempt\n');
+      fs.seed(paths.log(attemptLogName('TASK-001', 3)), 'third attempt\n');
+
+      const task = (
+        await server.app.inject(`/api/v1/runs/${run.runId}/tasks/TASK-001`)
+      ).json<TaskDetailView>();
+
+      expect(task.attemptLogs?.map((entry) => entry.attempt)).toEqual([1, 2, 3]);
+      expect(task.attemptLogs?.[2]?.lines.join('\n')).toContain('third attempt');
+    });
+
+    it('shows the newest attempt in the flat log, so one field still answers "what happened"', async () => {
+      const { server, run, fs } = await serve();
+      const paths = runPaths('/repo', run.runId);
+      fs.seed(paths.log(attemptLogName('TASK-001', 1)), 'first attempt\n');
+      fs.seed(paths.log(attemptLogName('TASK-001', 2)), 'second attempt\n');
+
+      const task = (
+        await server.app.inject(`/api/v1/runs/${run.runId}/tasks/TASK-001`)
+      ).json<TaskDetailView>();
+
+      expect(task.log.join('\n')).toContain('second attempt');
+      expect(task.log.join('\n')).not.toContain('first attempt');
+    });
+
+    it('still reads the sequential name, which has no attempt suffix', async () => {
+      // A sequential run writes `implementation-<TASK>.log` and always did. Fixing the
+      // isolated path must not break the one that was working.
+      const { server, run, fs } = await serve();
+      fs.seed(runPaths('/repo', run.runId).log('implementation-TASK-001'), 'sequential run\n');
+
+      const task = (
+        await server.app.inject(`/api/v1/runs/${run.runId}/tasks/TASK-001`)
+      ).json<TaskDetailView>();
+
+      expect(task.log.join('\n')).toContain('sequential run');
+    });
   });
 
   it('404s on a task that does not exist', async () => {

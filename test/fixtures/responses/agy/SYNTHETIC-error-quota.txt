@@ -1,0 +1,4 @@
+Synthetic. Shape follows the envelope the adapter already normalises on
+(`status_code`), so the classification is structural rather than by phrasing.
+
+{"status":"ERROR","is_error":true,"status_code":429,"error":"usage limit reached for this model; retry after the quota window resets"}

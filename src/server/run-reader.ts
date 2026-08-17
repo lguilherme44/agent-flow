@@ -19,9 +19,9 @@ import type { IsolationDetailView, IntegrationConflictView } from '../contracts/
 import { StateStore } from '../app/state-store.js';
 import { loadConfig } from '../config/loader.js';
 import { resolveTaskConcurrency } from '../core/concurrency.js';
-import { integrationRef } from '../core/worktree-policy.js';
+import { integrationRef, MAX_SUPPORTED_ATTEMPT } from '../core/worktree-policy.js';
 import { describeIsolation } from '../app/run-git-identity.js';
-import { runPaths, type ArtifactName } from '../app/paths.js';
+import { attemptLogName, runPaths, type ArtifactName } from '../app/paths.js';
 import { describeRunGraph, effectiveTaskStates, type GraphTask } from '../app/run-graph.js';
 import { buildStageTimeline } from '../core/stage-timeline.js';
 import { stripAnsi } from './ansi.js';
@@ -537,6 +537,7 @@ export class RunReader {
         stderr: stripAnsi(command.stderr),
       })),
       log: await this.readTaskLog(project, runId, taskId),
+      attemptLogs: await this.readAttemptLogs(project, runId, taskId),
     };
   }
 
@@ -638,18 +639,61 @@ export class RunReader {
     return parsed.success ? parsed.data : null;
   }
 
+  /**
+   * Every log this task left behind, per attempt (C-07).
+   *
+   * The defect this replaces: `paths.ts` writes `implementation-<TASK>-attempt-<n>.log` in
+   * worktree mode and this reader asked for `implementation-<TASK>.log`, so every isolated
+   * run returned `[]` for every task. An operator wanting to see what an attempt did
+   * opened a terminal — which is the behaviour AR-02 exists to remove.
+   *
+   * Both spellings are read. The unsuffixed name is what a sequential run writes and has
+   * always written; fixing the isolated path must not break the one that worked.
+   *
+   * Probed rather than counted. The attempt counter lives on run state and a *failed*
+   * attempt's log exists whether or not that counter moved (AD-37 splits the two), so
+   * asking the filesystem is the answer that cannot disagree with what is on disk. Bounded
+   * by `MAX_SUPPORTED_ATTEMPT`, and it stops at the first gap.
+   */
+  private async readAttemptLogs(
+    project: RegisteredProject,
+    runId: string,
+    taskId: string,
+  ): Promise<{ attempt: number; lines: string[] }[]> {
+    const paths = runPaths(project.path, runId);
+    const logs: { attempt: number; lines: string[] }[] = [];
+
+    for (let attempt = 1; attempt <= MAX_SUPPORTED_ATTEMPT; attempt += 1) {
+      const path = paths.log(attemptLogName(taskId, attempt));
+      if (!(await this.options.fs.exists(path))) break;
+      logs.push({ attempt, lines: linesOf(await this.options.fs.readFile(path)) });
+    }
+
+    return logs;
+  }
+
   private async readTaskLog(
     project: RegisteredProject,
     runId: string,
     taskId: string,
   ): Promise<string[]> {
+    // The newest attempt, so the one flat field still answers "what happened" without a
+    // caller having to know that attempts exist.
+    const attempts = await this.readAttemptLogs(project, runId, taskId);
+    const newest = attempts.at(-1);
+    if (newest !== undefined) return newest.lines;
+
     const path = runPaths(project.path, runId).log(`implementation-${taskId}`);
     if (!(await this.options.fs.exists(path))) return [];
 
-    return stripAnsi(await this.options.fs.readFile(path))
-      .split('\n')
-      .filter((line) => line.length > 0);
+    return linesOf(await this.options.fs.readFile(path));
   }
+}
+
+function linesOf(raw: string): string[] {
+  return stripAnsi(raw)
+    .split('\n')
+    .filter((line) => line.length > 0);
 }
 
 /**

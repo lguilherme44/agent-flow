@@ -382,8 +382,23 @@ export interface TaskDetailView extends TaskSummaryView {
     readonly stdout: string;
     readonly stderr: string;
   }[];
-  /** Task log lines, already stripped of terminal escapes. */
+  /**
+   * The newest attempt's log lines, already stripped of terminal escapes.
+   *
+   * One flat field so a caller that does not care about attempts still gets an answer to
+   * "what happened". {@link attemptLogs} carries the rest.
+   */
   readonly log: string[];
+  /**
+   * Every attempt's log, oldest first (C-07).
+   *
+   * A retry is a fresh attempt in every respect, including its log, and a task that failed
+   * twice before succeeding has three of them. Collapsing that into one field would delete
+   * the record of exactly the attempt somebody is retrying because they wanted to read it.
+   *
+   * Empty for a sequential run, which writes one unsuffixed log and always did.
+   */
+  readonly attemptLogs?: { readonly attempt: number; readonly lines: string[] }[];
 }
 
 /**

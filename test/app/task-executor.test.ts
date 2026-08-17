@@ -10,6 +10,7 @@ import { StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import {
+  FailedAttemptSchema,
   GlobalConfigSchema,
   ProjectConfigSchema,
   TaskAttemptResultSchema,
@@ -1257,5 +1258,144 @@ describe('worktree mode records an attempt, not a result (M2-05 §10.1)', () => 
       const events = await world.store.readEvents(world.run.runId);
       expect(events.map((event) => event.type)).not.toContain('task_attempt_marker_created');
     });
+  });
+});
+
+/**
+ * AD-34 and C-05 (AR-02) — a failed attempt leaves an artifact of its own.
+ *
+ * `task-executor` deliberately wrote nothing when the stage threw, and the reasoning was
+ * sound: the agent produced no report, and inventing one would be evidence of a report
+ * nobody made. But the conclusion overshot. The evidence of the *failure* exists — code,
+ * provenance, raw output, duration — and discarding it meant the only attempts with no
+ * persisted record were exactly the two somebody needed to diagnose.
+ *
+ * The separate file name is what preserves §17.3's window semantics: "no `attempt-<n>.json`"
+ * still means the attempt's work was never observed.
+ */
+describe('a failed attempt is recorded, under its own name (AD-34)', () => {
+  const DENIAL = [
+    'tool request: Bash(npm test)',
+    'soft-denying tool confirmation "Bash"',
+    'permission check failed',
+  ].join('\n');
+
+  async function failedInWorktree(raw: string) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude', CAPS);
+
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) {
+        fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+      }
+    }
+
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('f');
+
+    const executor = new TaskExecutor({
+      fs,
+      clock,
+      store,
+      stageRunner: new StageRunner({
+        fs,
+        clock,
+        store,
+        config: globalConfig,
+        capabilities: { claude: CAPS },
+        promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+        getRunner: () => runner,
+        projectDir: PROJECT,
+      }),
+      processRunner: new FakeProcessRunner().always({ exitCode: 0 }),
+      config: { global: globalConfig },
+      projectDir: PROJECT,
+    });
+
+    runner.push({ ok: false, errorCode: 'execution_failed', raw, durationMs: 3 });
+
+    const workspace = {
+      path: '/wt/AF-2026-001/TASK-001/attempt-2',
+      attempt: 2,
+      isolation: {
+        base: 'a'.repeat(40),
+        branch: 'agent-flow/AF-2026-001-0123456789abcdef/TASK-001/attempt-2',
+        relativePath: 'repo-abc/AF-2026-001-0123456789abcdef/TASK-001/attempt-2',
+      },
+    };
+
+    const result = await executor.execute(task(), run.runId, 'SDD', workspace);
+    const path = runPaths(PROJECT, run.runId).failedAttempt('TASK-001', 2);
+    const written = (await fs.exists(path)) ? await fs.readFile(path) : undefined;
+
+    return { fs, store, run, result, written, path };
+  }
+
+  it('writes attempt-<n>.failed.json', async () => {
+    const { written } = await failedInWorktree(DENIAL);
+    expect(written).toBeDefined();
+  });
+
+  it('validates against the schema the milestone declared', async () => {
+    const { written } = await failedInWorktree(DENIAL);
+    expect(() => FailedAttemptSchema.parse(JSON.parse(written ?? '{}'))).not.toThrow();
+  });
+
+  it('carries the classification, the provenance and the redacted excerpt', async () => {
+    const { written } = await failedInWorktree(DENIAL);
+    const artifact = FailedAttemptSchema.parse(JSON.parse(written ?? '{}'));
+
+    expect(artifact.failureClass).toBe('runner_permission_required');
+    expect(artifact.runnerErrorCode).toBe('execution_failed');
+    expect(artifact.runner).toBe('claude');
+    expect(artifact.attempt).toBe(2);
+    expect(artifact.branch).toContain('TASK-001/attempt-2');
+    expect(artifact.rawExcerpt).toContain('soft-denying');
+  });
+
+  it('records whether the failure spent an attempt, per the taxonomy (AD-37, I-22)', async () => {
+    // The decision, persisted rather than recomputed: a reader asking "why was retry still
+    // allowed" gets an answer from the artifact instead of re-deriving it from a table
+    // that may since have changed.
+    const denied = await failedInWorktree(DENIAL);
+    expect(FailedAttemptSchema.parse(JSON.parse(denied.written ?? '{}')).consumedAttempt).toBe(
+      false,
+    );
+
+    const generic = await failedInWorktree('the process exited unexpectedly');
+    expect(FailedAttemptSchema.parse(JSON.parse(generic.written ?? '{}')).consumedAttempt).toBe(
+      true,
+    );
+  });
+
+  it('contains no agentReport, which is what §17.3 rests on', async () => {
+    const { written } = await failedInWorktree(DENIAL);
+    expect(JSON.parse(written ?? '{}')).not.toHaveProperty('agentReport');
+  });
+
+  it('does not write attempt-<n>.json, so the window semantics survive', async () => {
+    const { fs, run } = await failedInWorktree(DENIAL);
+    expect(await fs.exists(runPaths(PROJECT, run.runId).taskAttempt('TASK-001', 2))).toBe(false);
+  });
+
+  it('persists no absolute path (§21.3, I-21)', async () => {
+    const { written } = await failedInWorktree(
+      `failed inside /wt/AF-2026-001/TASK-001/attempt-2/src/x.ts\n${DENIAL}`,
+    );
+
+    expect(written).not.toContain('/wt/AF-2026-001');
+  });
+
+  it('still returns a failed TaskResult, unchanged', async () => {
+    // The artifact is additive. Nothing about the task's outcome moves in this milestone.
+    const { result } = await failedInWorktree(DENIAL);
+    expect(result.status).toBe('failed');
+    expect(result.errorCode).toBe('execution_failed');
+  });
+
+  it('names the failure class on the result, so a reader never sees only a code', async () => {
+    const { result } = await failedInWorktree(DENIAL);
+    expect(result.failureClass).toBe('runner_permission_required');
   });
 });

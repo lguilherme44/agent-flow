@@ -6,6 +6,11 @@ import { StateError } from '../../app/state-store.js';
 import { RoleResolutionError } from '../../core/role.js';
 import { RegistryError } from '../../adapters/runners/registry.js';
 import { DagError } from '../../core/dag.js';
+import {
+  consumesAttempt,
+  defaultClassForRunnerError,
+  failureClassDefinition,
+} from '../../core/failure-classification.js';
 import { ExitCode, type ExitCodeValue } from '../exit-codes.js';
 
 export interface RenderedError {
@@ -86,10 +91,48 @@ function renderStageFailure(error: StageFailure): string {
     execution_failed: 'The runner failed. The original message is above.',
   };
 
-  const parts = [`Stage "${error.stage}" failed: ${error.errorCode}`, '', error.message];
+  // The class first, because it is the sentence that changes what the reader does. The
+  // transport code stays beside it rather than being replaced: the two are a refinement,
+  // and someone matching on `execution_failed` in a script must still find it (AD-36).
+  const definition = failureClassDefinition(error.failureClass);
+  const parts = [
+    `Stage "${error.stage}" failed: ${error.failureClass} (${error.errorCode})`,
+    '',
+    error.message,
+  ];
+
+  if (error.deniedCommand !== undefined) {
+    // C-06: the escalation names the grant. "Grant something" is what AR §3.6 calls a
+    // contract violation, and it is what this run reported before the classifier existed.
+    parts.push('', `The runner was refused the tool "${error.deniedCommand}".`);
+  }
+
+  // Which advice is *more specific* wins, and specificity is decidable rather than a
+  // matter of taste: when the class is the code's default refinement, the classifier
+  // learned nothing the code did not already say, and the hint written for this terminal
+  // is the better sentence. When the class is sharper than the default — a denied command
+  // hiding inside `execution_failed` — the taxonomy's own action is the one that names
+  // what to do, and the generic hint would bury it.
+  const sharpened = defaultClassForRunnerError(error.errorCode) !== error.failureClass;
   const hint = hints[error.errorCode];
-  if (hint) parts.push('', hint);
-  if (error.raw) parts.push('', '--- runner output ---', error.raw.slice(0, 2000));
+
+  if (sharpened && definition.humanAction !== undefined) {
+    parts.push('', `Next: ${definition.humanAction}`);
+  } else if (hint !== undefined) {
+    parts.push('', hint);
+  } else if (definition.humanAction !== undefined) {
+    // No hint for this code. The taxonomy is what keeps an escalation from degrading into
+    // "something failed, inspect logs" (AR §3.6).
+    parts.push('', `Next: ${definition.humanAction}`);
+  }
+
+  if (!consumesAttempt(error.failureClass)) {
+    // Worth saying out loud: the previous run reached for `retry --force` to work around
+    // a counter that should never have moved (AD-37, I-22).
+    parts.push('', 'This did not spend one of the task’s attempts.');
+  }
+
+  if (error.raw) parts.push('', '--- runner output (redacted) ---', error.raw.slice(0, 2000));
 
   return parts.join('\n');
 }

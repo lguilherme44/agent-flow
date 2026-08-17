@@ -1,0 +1,5 @@
+Synthetic. The failure AR-01 now makes unreachable: an effort the model does not
+offer, sent because capabilities() answered with the CLI surface. Kept so the
+classifier can be shown *not* to invent a permission class for it.
+
+{"status":"ERROR","is_error":true,"error":"model gemini-3.1-pro-medium is not available; run `agy models` to list available models"}

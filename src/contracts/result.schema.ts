@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AnyTaskIdSchema,
   CommitOidSchema,
+  FailureClassSchema,
   IsoTimestampSchema,
   ReasoningLevelSchema,
   RunIdSchema,
@@ -76,6 +77,28 @@ export const TaskResultSchema = z.object({
 
   notes: z.array(z.string()).default([]),
   errorCode: RunnerErrorCodeSchema.optional(),
+  /**
+   * What the failure *was*, above the transport code (AD-36, AR-02).
+   *
+   * A refinement of `errorCode`, never a replacement: that field is the runner-transport
+   * level and stays correct there, and everything that branches still branches on it. What
+   * was missing is the level above, where `execution_failed` covered an unsupported
+   * effort, a denied command and a genuine implementation failure — three failures whose
+   * correct responses differ, reported under one word.
+   *
+   * Optional and absent by default, so every `result.json` written before this milestone
+   * parses unchanged. Absent means "nobody classified this", which is exactly true of a
+   * result written before the classifier existed.
+   */
+  failureClass: FailureClassSchema.optional(),
+  /**
+   * The tool the runner was refused, when the evidence named it (C-06).
+   *
+   * Present only alongside `runner_permission_required`. Its whole purpose is to let the
+   * escalation say *which* grant to add — "grant something" is the sentence AR §3.6
+   * declares a contract violation.
+   */
+  deniedCommand: z.string().optional(),
 
   /**
    * Where this task's validated tree landed on the integration branch (MVP 2 §10.3).

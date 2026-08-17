@@ -614,3 +614,129 @@ describe('advisory context (M3-08)', () => {
     }
   });
 });
+
+/**
+ * C-05 and I-21 (AR-02) — the failure stops being a code with nothing attached.
+ *
+ * `AgentRunFailure.raw` is documented as "kept for diagnosis" and was dropped at exactly
+ * the two points that persist anything: the log wrote only the error code, and the event
+ * omitted it entirely. The true cause of the evidence run's worst failure —
+ * `soft-denying tool confirmation "Bash"` — existed in memory and was thrown away, so a
+ * person opened the vendor's own log directory instead.
+ *
+ * Raw output is **evidence, never control flow**. Everything that branches still branches
+ * on `RunnerErrorCode`; the classifier reads the text once, to name what happened.
+ */
+describe('a failed stage persists what actually happened (C-05, I-21)', () => {
+  const DENIAL = [
+    '[agy] tool request: Bash(grep -rn "x" src/)',
+    '[agy] soft-denying tool confirmation "Bash"',
+    '[agy] permission check failed',
+  ].join('\n');
+
+  async function failWith(raw: string, errorCode: 'execution_failed' | 'timeout' = 'execution_failed') {
+    const harnessed = await harness();
+    harnessed.runner.push({ ok: false, errorCode, raw, durationMs: 5 });
+
+    const error = await harnessed.stageRunner
+      .run(SDD_STAGE, harnessed.run.runId, { featureRequest: 'x' })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    return { ...harnessed, error };
+  }
+
+  it('classifies the denial rather than reporting execution_failed', async () => {
+    const { error } = await failWith(DENIAL);
+
+    expect(error).toBeInstanceOf(StageFailure);
+    expect((error as StageFailure).failureClass).toBe('runner_permission_required');
+    expect((error as StageFailure).deniedCommand).toBe('Bash');
+  });
+
+  it('keeps branching on the runner code, never on the text', async () => {
+    // The classification is a *name*, not a decision. `errorCode` is still what the
+    // caller's control flow reads, and it is unchanged.
+    const { error } = await failWith(DENIAL);
+    expect((error as StageFailure).errorCode).toBe('execution_failed');
+  });
+
+  it('carries the class and a redacted excerpt on stage_failed', async () => {
+    const { store, run } = await failWith(DENIAL);
+
+    const events = await store.readEvents(run.runId);
+    const failed = events.find((event) => event.type === 'stage_failed');
+
+    expect(failed?.detail).toMatchObject({
+      errorCode: 'execution_failed',
+      failureClass: 'runner_permission_required',
+      deniedCommand: 'Bash',
+      runner: 'claude',
+    });
+    expect(String(failed?.detail?.['rawExcerpt'])).toContain('soft-denying');
+  });
+
+  it('writes the full raw into the stage log', async () => {
+    const { fs, run } = await failWith(DENIAL);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    expect(log).toContain('soft-denying tool confirmation');
+    expect(log).toContain('permission check failed');
+  });
+
+  it('redacts before persisting, in the log and in the event', async () => {
+    // I-21: no persisted artifact, event or response carries unredacted runner output.
+    // A runner's output routinely names the absolute directory it ran in and, when a
+    // build tool echoes its environment, rather more than that.
+    const leaky = [
+      `failed while reading ${PROJECT}/src/secret-place/config.ts`,
+      'export API_KEY=sk-live-4f2b9c81aa77de31',
+      'Authorization: Bearer ghp_ZZZZYYYYXXXXWWWWVVVV1111',
+    ].join('\n');
+
+    const { fs, store, run } = await failWith(leaky);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    const events = await store.readEvents(run.runId);
+    const failed = events.find((event) => event.type === 'stage_failed');
+    const persisted = `${log}\n${JSON.stringify(failed?.detail ?? {})}`;
+
+    expect(persisted).not.toContain('sk-live-4f2b9c81aa77de31');
+    expect(persisted).not.toContain('ghp_ZZZZYYYYXXXXWWWWVVVV1111');
+    expect(persisted).not.toContain(`${PROJECT}/src/secret-place`);
+    // And it still says something: redaction is lossy, not silencing.
+    expect(persisted).toContain('failed while reading');
+  });
+
+  it('bounds the excerpt and marks the cut', async () => {
+    // §6.5: a budget is never applied silently.
+    const huge = `first line\n${'x'.repeat(8000)}`;
+    const { store, run } = await failWith(huge);
+
+    const events = await store.readEvents(run.runId);
+    const excerpt = String(
+      events.find((event) => event.type === 'stage_failed')?.detail?.['rawExcerpt'] ?? '',
+    );
+
+    expect(new TextEncoder().encode(excerpt).length).toBeLessThanOrEqual(2048);
+    expect(excerpt).toContain('first line');
+    expect(excerpt).toMatch(/truncated/);
+  });
+
+  it('does not invent a class for a failure whose text says nothing', async () => {
+    const { error, store, run } = await failWith('the process exited unexpectedly');
+
+    expect((error as StageFailure).failureClass).toBe('runner_execution_failed');
+    expect((error as StageFailure).deniedCommand).toBeUndefined();
+
+    const events = await store.readEvents(run.runId);
+    expect(events.find((event) => event.type === 'stage_failed')?.detail).toMatchObject({
+      failureClass: 'runner_execution_failed',
+    });
+  });
+
+  it('classifies a timeout from its code alone', async () => {
+    const { error } = await failWith('deadline exceeded', 'timeout');
+    expect((error as StageFailure).failureClass).toBe('runner_timeout');
+  });
+});

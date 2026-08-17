@@ -5,9 +5,12 @@ import {
   FALLBACK_TRIGGERS,
   type FailureClass,
 } from '../../src/contracts/index.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   FAILURE_CLASS_DEFINITIONS,
   classesRefining,
+  classifyRunnerFailure,
   consumesAttempt,
   defaultClassForRunnerError,
   dispositionOf,
@@ -247,5 +250,152 @@ describe('determinism', () => {
     for (const failureClass of FAILURE_CLASSES) {
       expect(failureClassDefinition(failureClass)).toEqual(failureClassDefinition(failureClass));
     }
+  });
+});
+
+/**
+ * AR-02's half: the signature matching that turns a raw string into a class.
+ *
+ * AR-00 landed the table and the dumbest-correct classification — one runner code in, its
+ * default refinement out. This is the sharpening: reading redacted raw output and choosing
+ * among `classesRefining(code)` when, and only when, the evidence actually says so.
+ *
+ * The discipline that matters here is **not** recall. A classifier that guesses
+ * `runner_permission_required` from a stray "permission denied" in a compiler message
+ * would send a person to grant a tool that was never the problem, and would mark an
+ * attempt as not-consumed when the agent genuinely failed at its work. Silence — falling
+ * back to the default refinement — is always a correct answer.
+ */
+describe('classifying a runner failure from its raw output (AR-02, C-06)', () => {
+  const PERMISSION_DENIAL = readFileSync(
+    join(import.meta.dirname, '../fixtures/responses/agy/SYNTHETIC-error-permission-denied.txt'),
+    'utf8',
+  );
+  const QUOTA = readFileSync(
+    join(import.meta.dirname, '../fixtures/responses/agy/SYNTHETIC-error-quota.txt'),
+    'utf8',
+  );
+  const UNSUPPORTED_EFFORT = readFileSync(
+    join(import.meta.dirname, '../fixtures/responses/agy/SYNTHETIC-error-unsupported-effort.txt'),
+    'utf8',
+  );
+
+  it('recognises the denial that cost the evidence run an attempt', () => {
+    const result = classifyRunnerFailure({
+      errorCode: 'execution_failed',
+      redactedRaw: PERMISSION_DENIAL,
+    });
+
+    expect(result.failureClass).toBe('runner_permission_required');
+  });
+
+  it('extracts the denied command, so the escalation can name it', () => {
+    // "The denied command is extracted and persisted" — C-06. Without it the escalation
+    // degrades to "grant something", which is the sentence §3.6 forbids.
+    const result = classifyRunnerFailure({
+      errorCode: 'execution_failed',
+      redactedRaw: PERMISSION_DENIAL,
+    });
+
+    expect(result.deniedCommand).toBe('Bash');
+  });
+
+  it('does not consume an attempt, and says why', () => {
+    const result = classifyRunnerFailure({
+      errorCode: 'execution_failed',
+      redactedRaw: PERMISSION_DENIAL,
+    });
+
+    expect(consumesAttempt(result.failureClass)).toBe(false);
+    expect(dispositionOf(result.failureClass)).toBe('requires_human');
+    expect(failureClassDefinition(result.failureClass).humanAction).toBeTruthy();
+  });
+
+  it('falls back to the default refinement when the raw says nothing', () => {
+    // The honest answer. Claiming a permission problem without having matched a denial
+    // signature would be an assertion nobody measured.
+    expect(
+      classifyRunnerFailure({ errorCode: 'execution_failed', redactedRaw: 'segmentation fault' })
+        .failureClass,
+    ).toBe('runner_execution_failed');
+
+    expect(classifyRunnerFailure({ errorCode: 'execution_failed' }).failureClass).toBe(
+      'runner_execution_failed',
+    );
+  });
+
+  it('does not read a permission denial into an unrelated failure', () => {
+    // An unsupported model is a configuration fault, not a tool grant. Getting this wrong
+    // sends a person to edit permissions for a problem in their config file.
+    expect(
+      classifyRunnerFailure({ errorCode: 'execution_failed', redactedRaw: UNSUPPORTED_EFFORT })
+        .failureClass,
+    ).toBe('runner_execution_failed');
+  });
+
+  it('does not fire on an ordinary filesystem or compiler "permission denied"', () => {
+    // The false positive that would matter most, because this string is everywhere.
+    const noise = [
+      "error: EACCES: permission denied, open '<workspace>/dist/out.js'",
+      'sh: ./scripts/build.sh: Permission denied',
+      "test/auth.test.ts:14 expected 'permission denied' to equal 'ok'",
+    ];
+
+    for (const raw of noise) {
+      expect(
+        classifyRunnerFailure({ errorCode: 'execution_failed', redactedRaw: raw }).failureClass,
+        raw,
+      ).toBe('runner_execution_failed');
+    }
+  });
+
+  it('never overrides a code that is already unambiguous', () => {
+    // `quota_exceeded` is refined by exactly one class. Reading raw text could only ever
+    // make that answer worse, so the signature pass does not run for it.
+    const result = classifyRunnerFailure({ errorCode: 'quota_exceeded', redactedRaw: QUOTA });
+    expect(result.failureClass).toBe('runner_quota_exhausted');
+    expect(result.deniedCommand).toBeUndefined();
+
+    expect(classifyRunnerFailure({ errorCode: 'auth_required', redactedRaw: '' }).failureClass).toBe(
+      'runner_not_authenticated',
+    );
+    expect(classifyRunnerFailure({ errorCode: 'timeout' }).failureClass).toBe('runner_timeout');
+    expect(classifyRunnerFailure({ errorCode: 'invalid_output' }).failureClass).toBe(
+      'malformed_runner_output',
+    );
+    expect(classifyRunnerFailure({ errorCode: 'blocked' }).failureClass).toBe('agent_blocked');
+  });
+
+  it('returns a class every caller can look up, for every runner code', () => {
+    // Totality at the call site: no code may leave a caller with nothing to persist.
+    for (const code of RUNNER_ERROR_CODES) {
+      const result = classifyRunnerFailure({ errorCode: code });
+      expect(() => failureClassDefinition(result.failureClass), code).not.toThrow();
+    }
+  });
+
+  it('is deterministic: the same evidence classifies identically every time', () => {
+    const once = classifyRunnerFailure({
+      errorCode: 'execution_failed',
+      redactedRaw: PERMISSION_DENIAL,
+    });
+    const twice = classifyRunnerFailure({
+      errorCode: 'execution_failed',
+      redactedRaw: PERMISSION_DENIAL,
+    });
+
+    expect(once).toEqual(twice);
+  });
+
+  it('recognises a denial phrased as an approval request', () => {
+    // Wording differs per CLI and the signature table is where that belongs. Each entry
+    // still has to describe a *tool confirmation*, never a bare "denied".
+    const result = classifyRunnerFailure({
+      errorCode: 'execution_failed',
+      redactedRaw: 'the tool call requires approval: run_command("npm test")',
+    });
+
+    expect(result.failureClass).toBe('runner_permission_required');
+    expect(result.deniedCommand).toBe('run_command');
   });
 });

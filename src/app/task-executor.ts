@@ -1,11 +1,14 @@
 import { stringify as toYaml } from 'yaml';
 import {
+  FailedAttemptSchema,
   TaskResultSchema,
   type EffectiveConfig,
   type Task,
   type TaskResult,
   type ValidationJudgement,
 } from '../contracts/index.js';
+import { consumesAttempt } from '../core/failure-classification.js';
+import { redactAndTruncate } from '../core/evidence-redaction.js';
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
@@ -133,23 +136,48 @@ export class TaskExecutor {
       execution = result.execution;
     } catch (error) {
       const failure = error instanceof StageFailure ? error : undefined;
-      // No attempt artifact, and deliberately: the agent produced no report, so
-      // there is nothing to record as an attempt's evidence. §17.3 windows 1 and
-      // 2 read "no `attempt-<n>.json`" as *the attempt's work was never
-      // observed*, and that is precisely what happened here — inventing an
-      // `agentReport` to have something to write would be evidence of a report
-      // nobody made.
+      const finishedAt = clock.now();
+      const failedExecution =
+        failure?.execution ?? execution ?? stageRunner.plannedExecution(role);
+
+      // Still no `attempt-<n>.json`, and still deliberately: the agent produced no report,
+      // so there is nothing to record as an attempt's *work*. §17.3 windows 1 and 2 read
+      // "no `attempt-<n>.json`" as *the attempt's work was never observed*, and inventing
+      // an `agentReport` to have something to write would be evidence of a report nobody
+      // made.
+      //
+      // **What that reasoning overshot is the failure itself** (AD-34). Error code,
+      // provenance, redacted output and duration all exist, and discarding them left the
+      // only attempts with no persisted record as exactly the ones somebody needed to
+      // diagnose. So a *differently named* artifact carries them, which keeps the window
+      // semantics literally true.
+      await this.writeFailedAttempt({
+        runId,
+        task,
+        workspace,
+        execution: failedExecution,
+        failure,
+        startedAt,
+        finishedAt,
+      });
+
       return this.finish(
         runId,
         {
           task: task.id,
           status: 'failed',
-          ...provenanceOf(failure?.execution ?? execution ?? stageRunner.plannedExecution(role)),
+          ...provenanceOf(failedExecution),
           startedAt,
-          finishedAt: clock.now(),
+          finishedAt,
           validation: { passed: false, commands: [] },
           notes: [failure?.message ?? String(error)],
           ...(failure === undefined ? {} : { errorCode: failure.errorCode }),
+          // Named on the result too, so no surface has to open an artifact to find out
+          // what kind of failure it is reporting.
+          ...(failure === undefined ? {} : { failureClass: failure.failureClass }),
+          ...(failure?.deniedCommand === undefined
+            ? {}
+            : { deniedCommand: failure.deniedCommand }),
         },
         workspace,
         undefined,
@@ -286,6 +314,78 @@ export class TaskExecutor {
    * is a lie recovery would believe (I-3). The Integrator writes that file, and
    * it does not exist yet (M2-06).
    */
+  /**
+   * `tasks/<TASK>/attempt-<n>.failed.json` (AD-34).
+   *
+   * **Worktree mode only, and that is the schema talking rather than a preference.**
+   * `FailedAttemptSchema` requires `base`, `branch` and a workspace-relative path; a
+   * sequential attempt has none of the three, and filling them with placeholders would put
+   * three assertions on disk that nobody measured. A sequential failure is still fully
+   * described by `result.json` plus the stage log, which is what it always was.
+   *
+   * Best-effort by construction: a failure to write evidence must not replace the failure
+   * being described. The stage log and the `stage_failed` event have already landed by the
+   * time this runs.
+   */
+  private async writeFailedAttempt(input: {
+    readonly runId: string;
+    readonly task: Task;
+    readonly workspace: TaskWorkspace | undefined;
+    readonly execution: StageExecution;
+    readonly failure: StageFailure | undefined;
+    readonly startedAt: string;
+    readonly finishedAt: string;
+  }): Promise<void> {
+    const isolation = input.workspace?.isolation;
+    if (input.workspace === undefined || isolation === undefined) return;
+
+    const { fs, projectDir, config } = this.options;
+
+    // Already redacted by `StageRunner`, which redacts once at the boundary that persists
+    // (AD-35). Truncated here to this artifact's own budget.
+    const excerpt =
+      input.failure?.raw === undefined
+        ? undefined
+        : redactAndTruncate(input.failure.raw, config.global.recovery.maxRawExcerptBytes).text;
+
+    const failureClass = input.failure?.failureClass ?? 'runner_execution_failed';
+
+    const artifact = {
+      run: input.runId,
+      task: input.task.id,
+      attempt: input.workspace.attempt,
+      base: isolation.base,
+      branch: isolation.branch,
+      workspace: isolation.relativePath,
+      runner: input.execution.runner,
+      ...(input.execution.model === undefined ? {} : { model: input.execution.model }),
+      reasoning: input.execution.reasoning,
+      reasoningClamped: input.execution.reasoningClamped,
+      ...(input.execution.fallback === undefined ? {} : { fallback: input.execution.fallback }),
+      startedAt: input.startedAt,
+      finishedAt: input.finishedAt,
+      failureClass,
+      ...(input.failure === undefined ? {} : { runnerErrorCode: input.failure.errorCode }),
+      ...(excerpt === undefined ? {} : { rawExcerpt: excerpt }),
+      repairAttempts: 1,
+      // The decision the budget was applied to, recorded rather than recomputed (AD-37).
+      consumedAttempt: consumesAttempt(failureClass),
+    };
+
+    try {
+      const parsed = FailedAttemptSchema.parse(artifact);
+      const path = runPaths(projectDir, input.runId).failedAttempt(
+        input.task.id,
+        input.workspace.attempt,
+      );
+      await fs.mkdirp(path.slice(0, path.lastIndexOf('/')));
+      await fs.writeFileAtomic(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    } catch {
+      // Evidence about a failure must never become a second failure. The stage log and the
+      // `stage_failed` event already carry the same facts.
+    }
+  }
+
   private async finish(
     runId: string,
     result: unknown,
