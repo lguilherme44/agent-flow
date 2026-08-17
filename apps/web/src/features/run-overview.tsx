@@ -41,7 +41,39 @@ export function RunPanel(props: {
   projectId: string | undefined;
   asGraph: boolean;
   onToggleGraph: () => void;
+  isFocusMode?: boolean;
+  onToggleFocusMode?: () => void;
 }): JSX.Element {
+  if (props.isFocusMode) {
+    return (
+      <section className="relative shrink-0 flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="tabular font-bold text-title text-text">{props.run.runId}</span>
+          <Badge tone={runTone(props.run.status)} caps className="shrink-0 px-2 py-0.5 text-label">
+            {runLabel(props.run.status)}
+          </Badge>
+          <span className="min-w-0 truncate text-body-lg text-muted" title={props.run.feature}>
+            {props.run.feature}
+          </span>
+          <span className="hidden sm:inline-flex items-center gap-1 rounded-sm border border-primary-border bg-primary-soft px-1.5 py-0.5 text-micro font-medium text-text">
+            Focus Mode
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {props.onToggleFocusMode ? (
+            <Button
+              onClick={props.onToggleFocusMode}
+              title="Restore standard view (Esc)"
+              className="text-micro"
+            >
+              Restore View
+            </Button>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="relative shrink-0 overflow-visible rounded-lg border border-border bg-surface">
       <RunHeader

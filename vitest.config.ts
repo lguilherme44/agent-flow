@@ -24,6 +24,7 @@ export default defineConfig({
     testTimeout: 30_000,
     coverage: {
       provider: 'v8',
+      clean: true,
       include: ['src/**/*.ts'],
       // ports/ is type declarations only — nothing to execute, so coverage
       // there would report 0% forever and mean nothing.

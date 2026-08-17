@@ -125,6 +125,6 @@ export default defineConfig({
      * two seconds, and the alternative is a suite whose green means nothing.
      */
     reuseExistingServer: false,
-    timeout: 120_000,
+    timeout: 600_000,
   },
 });

@@ -112,6 +112,17 @@ beforeEach(() => {
     '/api/v1/runners': RUNNERS,
     '/api/v1/runners/health': HEALTH,
     '/api/v1/projects': [],
+    '/api/v1/config': { sections: [] },
+    '/api/v1/analytics': {
+      scope: { projectIds: [], runsAvailable: 0, runsConsidered: 0, truncated: false },
+      runsByProject: [],
+      tasksByState: {},
+      totals: { entries: 0, durationMs: 0, failures: 0, fallbacks: 0, retries: 0, reasoningClamped: 0 },
+      byRunner: [],
+      byModel: [],
+      byRole: [],
+      byStage: [],
+    },
   };
 
   vi.stubGlobal(
@@ -300,5 +311,106 @@ describe('the routing table', () => {
 
     renderPage();
     expect(await screen.findByText('Unobservable')).toBeInTheDocument();
+  });
+
+  it('handles Utility disabled state correctly', async () => {
+    routes['/api/v1/config'] = {
+      sections: [
+        {
+          id: 'utility',
+          title: 'Utility',
+          settings: [{ key: 'enabled', value: 'false', origin: 'default' }],
+        },
+      ],
+    };
+    renderPage();
+    expect(await screen.findByText(/Status: Disabled/i)).toBeInTheDocument();
+  });
+
+  it('handles configured but unobserved utility state', async () => {
+    routes['/api/v1/config'] = {
+      sections: [
+        {
+          id: 'utility',
+          title: 'Utility',
+          settings: [
+            { key: 'enabled', value: 'true', origin: 'default' },
+            { key: 'provider', value: 'openai-compatible', origin: 'config' },
+            { key: 'model', value: 'qwen2.5-coder:7b', origin: 'config' },
+            { key: 'endpoint', value: 'http://127.0.0.1:11434/v1', origin: 'config' },
+          ],
+        },
+      ],
+    };
+    renderPage();
+    expect(await screen.findByText(/Status: Configured \(Not observed\)/i)).toBeInTheDocument();
+    expect(screen.getByText('qwen2.5-coder:7b')).toBeInTheDocument();
+    expect(screen.getAllByText('Not observed').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('handles observed effective provider and model with configured != effective', async () => {
+    routes['/api/v1/config'] = {
+      sections: [
+        {
+          id: 'utility',
+          title: 'Utility',
+          settings: [
+            { key: 'enabled', value: 'true', origin: 'default' },
+            { key: 'provider', value: 'openai-compatible', origin: 'config' },
+            { key: 'model', value: 'qwen2.5-coder:7b', origin: 'config' },
+            { key: 'endpoint', value: 'http://127.0.0.1:11434/v1', origin: 'config' },
+          ],
+        },
+      ],
+    };
+    routes['/api/v1/analytics'] = {
+      scope: { projectIds: [], runsAvailable: 1, runsConsidered: 1, truncated: false },
+      runsByProject: [],
+      tasksByState: {},
+      totals: { entries: 1, durationMs: 100, failures: 0, fallbacks: 0, retries: 0, reasoningClamped: 0 },
+      byRunner: [],
+      byModel: [],
+      byRole: [],
+      byStage: [],
+      context: {
+        basis: 'estimated_operational_not_billing',
+        scope: { runsObserved: 1, observations: 1, observationLimit: 256, eventLogsTruncated: 0, truncated: false },
+        aggregate: {
+          stage: 'aggregate',
+          source: 'aggregate',
+          provenance: 'aggregate',
+          effectiveProvider: 'openai-compatible',
+          effectiveModel: 'qwen2.5-coder:14b-instruct',
+        },
+      },
+    };
+    renderPage();
+    expect(await screen.findByText(/Status: Available \(Observed\)/i)).toBeInTheDocument();
+    expect(screen.getByText('qwen2.5-coder:7b')).toBeInTheDocument(); // configured
+    expect(screen.getByText('qwen2.5-coder:14b-instruct')).toBeInTheDocument(); // effective observed
+  });
+
+  it('sanitizes endpoints and never exposes secret keys or query credentials', async () => {
+    routes['/api/v1/config'] = {
+      sections: [
+        {
+          id: 'utility',
+          title: 'Utility',
+          settings: [
+            { key: 'enabled', value: 'true', origin: 'config' },
+            {
+              key: 'endpoint',
+              value:
+                'https://user:supersecretpass@api.openai.com/v1?api_key=sk-proj-secret123',
+              origin: 'config',
+            },
+          ],
+        },
+      ],
+    };
+    renderPage();
+    expect(await screen.findByText('https://api.openai.com/v1')).toBeInTheDocument();
+    expect(screen.queryByText(/supersecretpass/)).toBeNull();
+    expect(screen.queryByText(/sk-proj-secret123/)).toBeNull();
   });
 });

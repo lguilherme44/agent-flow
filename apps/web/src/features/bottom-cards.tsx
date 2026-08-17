@@ -165,12 +165,25 @@ export function ApprovalCard(props: {
           </div>
 
           {run.approved ? (
-            <dl className="flex items-baseline gap-2">
-              <dt className="text-micro text-faint">Hash</dt>
-              <dd className="tabular truncate font-mono text-micro text-text">
-                {run.approvedPlanHash ?? '—'}
-              </dd>
-            </dl>
+            <div className="flex flex-col gap-1">
+              <dl className="flex items-baseline justify-between text-micro">
+                <dt className="text-faint">Plan Hash</dt>
+                <dd className="tabular truncate font-mono text-text" title={run.approvedPlanHash}>
+                  {run.approvedPlanHash ?? '—'}
+                </dd>
+              </dl>
+              {run.isolation?.integrationHead ? (
+                <dl className="flex items-baseline justify-between text-micro">
+                  <dt className="text-faint">Integration Head</dt>
+                  <dd
+                    className="tabular truncate font-mono text-text"
+                    title={run.isolation.integrationHead}
+                  >
+                    {run.isolation.integrationHead.slice(0, 8)}
+                  </dd>
+                </dl>
+              ) : null}
+            </div>
           ) : run.status === 'waiting_for_approval' ? (
             // Operational, as §94 asks: the card that says a plan is ready for
             // review is the card that opens the review. It used to name the

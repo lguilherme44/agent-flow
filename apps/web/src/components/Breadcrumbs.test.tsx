@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Breadcrumbs } from './Breadcrumbs';
+import { Shell } from '../app/Shell';
 import { ProjectProvider } from '../app/project-context';
 import { I18nProvider } from '../lib/i18n/i18n-context';
 
@@ -90,5 +91,29 @@ describe('Breadcrumbs component', () => {
     expect(screen.getByText('workspace')).toBeInTheDocument();
     expect(screen.getByText('Runs')).toBeInTheDocument();
     expect(screen.getByText('AF-2026-001')).toBeInTheDocument();
+  });
+
+  it('renders the shared breadcrumb system within the Shell component (integration test)', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/analytics']}>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route path="/analytics" element={<div>Analytics Content</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(nav).toBeInTheDocument();
+    expect(screen.getByText('workspace')).toBeInTheDocument();
+    const current = screen.getByText('Metrics');
+    expect(current).toHaveAttribute('aria-current', 'page');
   });
 });

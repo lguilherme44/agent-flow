@@ -6,7 +6,7 @@ import type {
   RunnerView,
 } from '@contracts/index.js';
 import { useProjectSelection } from '../app/project-context';
-import { useAgents, useConfig, useRunnerHealth, useRunners } from '../lib/queries';
+import { useAgents, useAnalytics, useConfig, useRunnerHealth, useRunners } from '../lib/queries';
 import {
   Button,
   Empty,
@@ -16,6 +16,8 @@ import {
   cx,
 } from '../components/ui';
 import { humanise } from '../lib/format';
+import { sanitizeEndpoint } from '../lib/sanitize';
+import { resolveModelProvenance } from '../lib/model-provenance';
 
 export function AgentsPage(): JSX.Element {
   const { projectId } = useProjectSelection();
@@ -132,27 +134,48 @@ export function AgentsPage(): JSX.Element {
 
 function ContextIntelligenceSection(props: { projectId: string | undefined }): JSX.Element {
   const config = useConfig(props.projectId);
+  const analytics = useAnalytics(props.projectId);
+
   const utility = config.data?.sections.find((s) => s.id === 'utility');
+  const enabledSetting = utility?.settings.find((s) => s.key === 'enabled')?.value;
   const providerSetting = utility?.settings.find((s) => s.key === 'provider')?.value;
   const modelSetting = utility?.settings.find((s) => s.key === 'model')?.value;
   const endpointSetting = utility?.settings.find((s) => s.key === 'endpoint')?.value;
 
-  const sanitizeUrl = (raw: unknown): string => {
-    if (typeof raw !== 'string' || !raw) return 'http://127.0.0.1:11434/v1';
-    try {
-      const parsed = new URL(raw);
-      parsed.search = '';
-      parsed.password = '';
-      parsed.username = '';
-      return parsed.toString().replace(/\/$/, '');
-    } catch {
-      return String(raw).replace(/api_key=[^&]+/, 'api_key=***');
-    }
-  };
+  const aggregate = analytics.data?.context?.aggregate;
+  const observedProvider = aggregate?.effectiveProvider;
+  const observedModel = aggregate?.effectiveModel;
 
-  const effectiveProvider = typeof providerSetting === 'string' ? providerSetting : 'openai-compatible';
-  const effectiveModel = typeof modelSetting === 'string' ? modelSetting : 'qwen2.5-coder:7b';
-  const sanitizedEndpoint = sanitizeUrl(endpointSetting);
+  const isDisabled =
+    utility === undefined ||
+    enabledSetting === 'false' ||
+    providerSetting === 'none' ||
+    (providerSetting === undefined && modelSetting === undefined && endpointSetting === undefined);
+
+  const statusLabel = isDisabled
+    ? 'Disabled'
+    : observedModel !== undefined || observedProvider !== undefined
+      ? 'Available (Observed)'
+      : 'Configured (Not observed)';
+
+  const configuredAdapter =
+    typeof providerSetting === 'string' && providerSetting.trim()
+      ? providerSetting.trim()
+      : 'Not configured';
+  const configuredModel =
+    typeof modelSetting === 'string' && modelSetting.trim()
+      ? modelSetting.trim()
+      : 'Not configured';
+  const sanitizedEndpoint = sanitizeEndpoint(endpointSetting);
+
+  const effectiveProvider =
+    typeof observedProvider === 'string' && observedProvider.trim()
+      ? observedProvider.trim()
+      : 'Not observed';
+  const effectiveModel =
+    typeof observedModel === 'string' && observedModel.trim()
+      ? observedModel.trim()
+      : 'Not observed';
 
   return (
     <Panel
@@ -160,9 +183,23 @@ function ContextIntelligenceSection(props: { projectId: string | undefined }): J
       className="shrink-0"
       header={
         <SectionHeader title="Context Intelligence & Advisory">
-          <span className="flex items-center gap-1.5 rounded-sm bg-primary-soft px-2 py-0.5 text-micro font-medium text-text">
-            Advisory Only · Zero Authority
-          </span>
+          <div className="flex items-center gap-2">
+            <span
+              className={cx(
+                'rounded-sm px-1.5 py-0.5 text-micro font-medium',
+                isDisabled
+                  ? 'border border-border bg-surface-3 text-faint'
+                  : observedModel !== undefined
+                    ? 'border border-success/30 bg-success-soft text-success'
+                    : 'border border-primary-border bg-primary-soft text-text',
+              )}
+            >
+              Status: {statusLabel}
+            </span>
+            <span className="flex items-center gap-1 rounded-sm bg-primary-soft px-1.5 py-0.5 text-micro font-semibold uppercase tracking-caps text-text">
+              Advisory Only · Zero Authority
+            </span>
+          </div>
         </SectionHeader>
       }
     >
@@ -171,30 +208,73 @@ function ContextIntelligenceSection(props: { projectId: string | undefined }): J
           <p className="font-medium text-text mb-1">Strict Authority Boundary</p>
           <p className="text-micro text-faint">
             The Utility Model acts strictly as an advisory context condenser and filter. It holds{' '}
-            <strong className="text-text">ZERO</strong> workflow authority, <strong className="text-text">ZERO</strong> verification authority, <strong className="text-text">ZERO</strong> review authority, and <strong className="text-text">ZERO</strong> shell or git execution authority.
+            <strong className="text-text">ZERO</strong> workflow authority,{' '}
+            <strong className="text-text">ZERO</strong> verification authority,{' '}
+            <strong className="text-text">ZERO</strong> review authority, and{' '}
+            <strong className="text-text">ZERO</strong> shell or git execution authority.
           </p>
         </div>
 
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-2 md:grid-cols-2 xl:grid-cols-4 border-t border-border pt-3 text-body-lg">
-          <div className="flex flex-col">
-            <dt className="text-micro uppercase tracking-caps text-faint">Adapter Type</dt>
-            <dd className="font-mono text-label text-text">{effectiveProvider}</dd>
+        {/* Semantic distinction: Configured Intent vs Effective Runtime Observation */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 border-t border-border pt-3">
+          {/* Configured State */}
+          <div className="flex flex-col gap-2 rounded-md border border-border/80 bg-surface-2/40 p-3">
+            <span className="text-micro uppercase tracking-caps font-semibold text-faint">
+              Configured State (Intent)
+            </span>
+            <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 text-body-lg">
+              <div className="flex flex-col">
+                <dt className="text-micro text-faint">Configured Adapter</dt>
+                <dd className="font-mono text-label text-text">{configuredAdapter}</dd>
+              </div>
+              <div className="flex flex-col">
+                <dt className="text-micro text-faint">Configured Model</dt>
+                <dd className="font-mono text-label text-text">{configuredModel}</dd>
+              </div>
+              <div className="flex flex-col sm:col-span-2">
+                <dt className="text-micro text-faint">Configured Endpoint (Sanitized)</dt>
+                <dd className="font-mono text-label text-text truncate" title={sanitizedEndpoint}>
+                  {sanitizedEndpoint}
+                </dd>
+              </div>
+            </dl>
           </div>
-          <div className="flex flex-col">
-            <dt className="text-micro uppercase tracking-caps text-faint">Effective Model</dt>
-            <dd className="font-mono text-label text-text">{effectiveModel}</dd>
+
+          {/* Effective Observed State */}
+          <div className="flex flex-col gap-2 rounded-md border border-border/80 bg-surface-2/40 p-3">
+            <span className="text-micro uppercase tracking-caps font-semibold text-faint">
+              Effective State (Observed Runtime Evidence)
+            </span>
+            <dl className="grid grid-cols-1 gap-y-2 sm:grid-cols-2 text-body-lg">
+              <div className="flex flex-col">
+                <dt className="text-micro text-faint">Observed Provider</dt>
+                <dd
+                  className={cx(
+                    'font-mono text-label',
+                    observedProvider ? 'text-text' : 'text-faint italic',
+                  )}
+                >
+                  {effectiveProvider}
+                </dd>
+              </div>
+              <div className="flex flex-col">
+                <dt className="text-micro text-faint">Observed Model</dt>
+                <dd
+                  className={cx(
+                    'font-mono text-label',
+                    observedModel ? 'text-text' : 'text-faint italic',
+                  )}
+                >
+                  {effectiveModel}
+                </dd>
+              </div>
+              <div className="flex flex-col sm:col-span-2">
+                <dt className="text-micro text-faint">Fallback Behavior</dt>
+                <dd className="text-label text-success">Safe Bypass (Non-blocking)</dd>
+              </div>
+            </dl>
           </div>
-          <div className="flex flex-col">
-            <dt className="text-micro uppercase tracking-caps text-faint">Endpoint URL</dt>
-            <dd className="font-mono text-label text-text truncate" title={sanitizedEndpoint}>
-              {sanitizedEndpoint}
-            </dd>
-          </div>
-          <div className="flex flex-col">
-            <dt className="text-micro uppercase tracking-caps text-faint">Fallback Behavior</dt>
-            <dd className="text-label text-success">Safe Bypass (Non-blocking)</dd>
-          </div>
-        </dl>
+        </div>
       </div>
     </Panel>
   );
@@ -207,8 +287,11 @@ function RoleRow(props: {
 }): JSX.Element {
   const { route } = props;
   const resolved = route.resolved;
-  const isAgy = route.configured.runner === 'agy' || resolved?.runner === 'agy';
-  const modelName = isAgy ? 'Unobservable' : (route.configured.model ?? 'runner default');
+  const provenance = resolveModelProvenance({
+    runner: route.configured.runner,
+    configuredModel: route.configured.model,
+    effectiveModel: resolved?.model,
+  });
 
   return (
     <tr className="border-b border-border/70 align-top hover:bg-surface-2">
@@ -252,14 +335,13 @@ function RoleRow(props: {
       <td className="px-2 py-2">
         <span className="flex min-w-0 flex-col">
           <span
-            className={cx('truncate text-label', isAgy ? 'text-faint italic' : 'text-text')}
-            title={
-              isAgy
-                ? 'The backing model of AGY CLI is managed internally by the CLI binary and is unobservable'
-                : (route.configured.model ?? 'runner default')
-            }
+            className={cx(
+              'truncate text-label',
+              provenance.isUnobservable || !provenance.isObserved ? 'text-faint italic' : 'text-text',
+            )}
+            title={provenance.tooltip}
           >
-            {modelName}
+            {provenance.display}
           </span>
           {route.error === undefined ? (
             <span className="truncate text-micro text-faint">

@@ -1,11 +1,9 @@
-import type { ReactNode } from 'react';
-import { NavLink, Outlet, useLocation, useMatch, useParams } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
   BookOpen,
   BarChart3,
-  ChevronRight,
   Cpu,
   FileText,
   FolderGit2,
@@ -17,11 +15,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ProjectProvider, useProjectSelection } from './project-context';
+import { TaskSelectionProvider, useGlobalTaskSelection } from './task-selection-context';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 import { I18nProvider, useI18n } from '../lib/i18n/i18n-context';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { useLiveEvents, type ConnectionState } from '../hooks/use-live-events';
-import { useProjects, useRunnerHealth, useRuns } from '../lib/queries';
-import { pickRun } from '../pages/DashboardPage';
+import { useProjects, useRunnerHealth } from '../lib/queries';
 import { Button, Notice, cx } from '../components/ui';
 import { runLabel, runTone, TONE_DOT } from '../lib/status';
 
@@ -41,18 +40,20 @@ export function Shell(): JSX.Element {
   return (
     <I18nProvider>
       <ProjectProvider>
-        <div className="flex h-full min-h-0 bg-bg">
-          <Sidebar />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <Topbar />
-            <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-page">
-              <UnknownProject />
-              <div className="min-h-0 flex-1">
-                <Outlet />
-              </div>
-            </main>
+        <TaskSelectionProvider>
+          <div className="flex h-full min-h-0 bg-bg">
+            <Sidebar />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <Topbar />
+              <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-page">
+                <UnknownProject />
+                <div className="min-h-0 flex-1">
+                  <Outlet />
+                </div>
+              </main>
+            </div>
           </div>
-        </div>
+        </TaskSelectionProvider>
       </ProjectProvider>
     </I18nProvider>
   );
@@ -373,45 +374,15 @@ function SidebarFooter(): JSX.Element {
 
 /**
  * A context bar, not a page title (§69).
- *
- * The breadcrumb is semantic and interactive: it reads workspace / project / section / run / task,
- * with previous levels clickable, the current page marked with aria-current="page", and
- * responsive collapse for narrow viewports.
  */
 function Topbar(): JSX.Element {
   const { projectId } = useProjectSelection();
+  const { selectedTaskId } = useGlobalTaskSelection();
   const connection = useLiveEvents(projectId);
-  const projects = useProjects();
-  const runs = useRuns(projectId);
-  const onRunRoute = useMatch('/runs/:runId') !== null;
-  const onDashboard = useMatch('/dashboard') !== null;
-  const { runId } = useParams<{ runId: string }>();
-  const section = useSectionLabel();
-  const sectionTo = useSectionTo();
-
-  const shownRun = onRunRoute ? runId : onDashboard ? pickRun(runs.data ?? []) : undefined;
-  const runProject = runs.data?.find((entry) => entry.runId === shownRun)?.projectId;
-  const projectName =
-    projects.data?.find((project) => project.id === (projectId ?? runProject))?.name ??
-    (projectId === undefined ? 'all projects' : projectId);
 
   return (
     <header className="flex h-topbar shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-page">
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-body-lg">
-        <Crumb to="/dashboard">workspace</Crumb>
-        <Separator />
-        <Crumb to="/projects">{projectName}</Crumb>
-        <Separator />
-        <Crumb to={shownRun === undefined ? undefined : sectionTo} current={shownRun === undefined}>
-          {section}
-        </Crumb>
-        {shownRun === undefined ? null : (
-          <>
-            <Separator />
-            <Crumb current>{shownRun}</Crumb>
-          </>
-        )}
-      </nav>
+      <Breadcrumbs selectedTaskId={selectedTaskId} />
 
       <div className="flex shrink-0 items-center gap-2">
         <LiveIndicator connection={connection} />
@@ -448,60 +419,6 @@ function Topbar(): JSX.Element {
       </div>
     </header>
   );
-}
-
-function useSectionLabel(): string {
-  const { t } = useI18n();
-  const navEntries = useNavEntries();
-  const { pathname } = useLocation();
-
-  const entry = navEntries.find(
-    (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
-  );
-
-  if (entry === undefined || entry.to === '/dashboard') return t.nav.runs;
-  return entry.label;
-}
-
-function useSectionTo(): string {
-  const navEntries = useNavEntries();
-  const { pathname } = useLocation();
-
-  const entry = navEntries.find(
-    (candidate) => pathname === candidate.to || pathname.startsWith(`${candidate.to}/`),
-  );
-
-  if (entry === undefined || entry.to === '/dashboard') return '/runs';
-  return entry.to;
-}
-
-function Crumb(props: { children: ReactNode; current?: boolean | undefined; to?: string | undefined }): JSX.Element {
-  if (props.current || !props.to) {
-    return (
-      <span
-        aria-current={props.current === true ? 'page' : undefined}
-        className={cx(
-          'truncate',
-          props.current === true ? 'font-medium text-text' : 'text-faint',
-        )}
-      >
-        {props.children}
-      </span>
-    );
-  }
-
-  return (
-    <NavLink
-      to={props.to}
-      className="truncate text-faint transition-colors hover:text-text"
-    >
-      {props.children}
-    </NavLink>
-  );
-}
-
-function Separator(): JSX.Element {
-  return <ChevronRight className="h-3 w-3 shrink-0 text-faint/60" aria-hidden />;
 }
 
 /**

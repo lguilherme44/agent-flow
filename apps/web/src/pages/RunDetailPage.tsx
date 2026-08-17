@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Minimize2, X } from 'lucide-react';
 import { useProjectSelection } from '../app/project-context';
+import { useGlobalTaskSelection } from '../app/task-selection-context';
 import {
   useArtifact,
   useArtifacts,
@@ -57,6 +58,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   const params = useParams<{ runId: string }>();
   const runId = props.runId ?? params.runId;
   const { projectId } = useProjectSelection();
+  const { setSelectedTaskId } = useGlobalTaskSelection();
 
   const [selectedTask, setSelectedTask] = useState<string | undefined>(undefined);
   const [openArtifact, setOpenArtifact] = useState<string | undefined>(undefined);
@@ -65,6 +67,14 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   // answers to the question the filter asks.
   const [filter, setFilter] = useState<TaskFilter>(NO_FILTER);
   const asPane = useMediaQuery(INSPECTOR_PANE);
+
+  // Sync selected task to global breadcrumb
+  useEffect(() => {
+    setSelectedTaskId(selectedTask);
+    return () => {
+      setSelectedTaskId(undefined);
+    };
+  }, [selectedTask, setSelectedTaskId]);
 
   // Which rendering is open lives in the URL, so it survives a reload and can be
   // linked to. It is a *view* of one page rather than a route of its own: the
@@ -109,22 +119,18 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   // showing a task the run does not have.
   useEffect(() => {
     if (selectedTask === undefined || tasks.data === undefined) return;
-    if (!tasks.data.some((entry) => entry.id === selectedTask)) setSelectedTask(undefined);
+    if (!tasks.data.some((entry) => entry.id === selectedTask)) {
+      setSelectedTask(undefined);
+    }
   }, [selectedTask, tasks.data]);
 
-  // The graph dims what the filter excludes rather than removing it: a node
-  // vanishing takes its edges with it, and a chain with a hole in the middle
-  // describes a dependency that does not exist.
   const visible = useMemo(
-    () => new Set(filterTasks(tasks.data ?? [], filter).map((entry) => entry.id)),
+    () => filterTasks(tasks.data ?? [], filter),
     [tasks.data, filter],
   );
 
   if (run.isError) {
-    // 404 and "the server is unreachable" are different situations with different
-    // next steps, and a single "could not be read" hides which one this is (§95).
     const missing = run.error instanceof ApiError && run.error.status === 404;
-
     return (
       <div className="p-4">
         <Notice
@@ -167,90 +173,19 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
           else next.set('view', 'dag');
           setSearch(next, { replace: true });
         }}
+        isFocusMode={isFocusMode}
+        onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
       />
 
-      {/* Below 1200 the inspector leaves the grid and becomes a drawer (§66).
-          Side by side it would take 400px from a table that only has ~740, and
-          a task title rendered as "Criar en…" is a table nobody can scan.
-          Chosen in JavaScript rather than with `hidden`, so only one inspector
-          is ever in the document — see `use-media-query`. */}
-      {/* In graph mode the inspector only takes its column once there is a task
-          in it. A 448px "Select a task" placeholder beside a graph costs the
-          graph nearly 40% of its width, and width is the axis a left-to-right
-          dependency chain is actually short of. */}
+      {/* Main Workspace (Preserved across inline & fullscreen modes) */}
       <div
-        className={
-          asPane && (!asGraph || selectedTask !== undefined)
-            ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
-            : 'flex min-h-0 flex-1'
-        }
+        className={cx(
+          isDagFullscreen && asGraph
+            ? 'fixed inset-0 z-50 flex flex-col bg-bg p-4 gap-3'
+            : 'flex min-h-0 flex-1 flex-col',
+        )}
       >
-        <TaskTable
-          tasks={tasks.data ?? []}
-          selectedId={selectedTask}
-          onSelect={setSelectedTask}
-          filter={filter}
-          onFilterChange={setFilter}
-          isFocusMode={isFocusMode}
-          onToggleFocusMode={() => {
-            setIsFocusMode((prev) => !prev);
-          }}
-          {...(asGraph
-            ? {
-                graph: (
-                  <Suspense fallback={<Empty title="Loading the graph…" />}>
-                    <DagView
-                      dag={dag.data}
-                      tasks={tasks.data ?? []}
-                      visible={visible}
-                      selectedId={selectedTask}
-                      onSelect={setSelectedTask}
-                      isLoading={dag.isLoading}
-                      isDagFullscreen={isDagFullscreen}
-                      onToggleFullscreen={() => {
-                        setIsDagFullscreen((prev) => !prev);
-                      }}
-                    />
-                  </Suspense>
-                ),
-              }
-            : {})}
-        />
-        {asPane && (!asGraph || selectedTask !== undefined) ? (
-          <TaskInspector
-            task={task.data}
-            projectId={projectId}
-            runId={runId}
-            {...(selectedTask === undefined
-              ? {}
-              : {
-                  onClose: () => {
-                    setSelectedTask(undefined);
-                  },
-                })}
-          />
-        ) : null}
-      </div>
-
-      {asPane ? null : (
-        <InspectorDrawer
-          open={selectedTask !== undefined}
-          task={task.data}
-          projectId={projectId}
-          runId={runId}
-          onClose={() => {
-            setSelectedTask(undefined);
-          }}
-        />
-      )}
-
-      {/* True Fullscreen DAG Overlay (Phase D) */}
-      {isDagFullscreen && asGraph ? (
-        <div
-          role="dialog"
-          aria-label="Expanded DAG Workspace"
-          className="fixed inset-0 z-50 flex flex-col bg-bg p-4 gap-3"
-        >
+        {isDagFullscreen && asGraph ? (
           <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4 rounded-md">
             <div className="flex items-center gap-3 min-w-0">
               <span className="font-bold text-title tabular text-text">{run.data.runId}</span>
@@ -269,38 +204,74 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
               </button>
             </div>
           </div>
-          <div
-            className={
-              asPane && selectedTask !== undefined
-                ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
-                : 'flex min-h-0 flex-1'
-            }
-          >
-            <div className="min-w-0 flex-1 flex flex-col rounded-lg border border-border bg-surface overflow-hidden">
-              <Suspense fallback={<Empty title="Loading the graph…" />}>
-                <DagView
-                  dag={dag.data}
-                  tasks={tasks.data ?? []}
-                  visible={visible}
-                  selectedId={selectedTask}
-                  onSelect={setSelectedTask}
-                  isLoading={dag.isLoading}
-                  isDagFullscreen={true}
-                  onToggleFullscreen={() => setIsDagFullscreen(false)}
-                />
-              </Suspense>
-            </div>
-            {asPane && selectedTask !== undefined ? (
-              <TaskInspector
-                task={task.data}
-                projectId={projectId}
-                runId={runId}
-                onClose={() => setSelectedTask(undefined)}
-              />
-            ) : null}
-          </div>
+        ) : null}
+
+        <div
+          className={
+            asPane && (!asGraph || selectedTask !== undefined)
+              ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
+              : 'flex min-h-0 flex-1'
+          }
+        >
+          <TaskTable
+            tasks={tasks.data ?? []}
+            selectedId={selectedTask}
+            onSelect={setSelectedTask}
+            filter={filter}
+            onFilterChange={setFilter}
+            isFocusMode={isFocusMode}
+            onToggleFocusMode={() => {
+              setIsFocusMode((prev) => !prev);
+            }}
+            {...(asGraph
+              ? {
+                  graph: (
+                    <Suspense fallback={<Empty title="Loading the graph…" />}>
+                      <DagView
+                        dag={dag.data}
+                        tasks={tasks.data ?? []}
+                        visible={new Set(visible.map((t) => t.id))}
+                        selectedId={selectedTask}
+                        onSelect={setSelectedTask}
+                        isLoading={dag.isLoading}
+                        isDagFullscreen={isDagFullscreen}
+                        onToggleFullscreen={() => {
+                          setIsDagFullscreen((prev) => !prev);
+                        }}
+                      />
+                    </Suspense>
+                  ),
+                }
+              : {})}
+          />
+          {asPane && (!asGraph || selectedTask !== undefined) ? (
+            <TaskInspector
+              task={task.data}
+              projectId={projectId}
+              runId={runId}
+              {...(selectedTask === undefined
+                ? {}
+                : {
+                    onClose: () => {
+                      setSelectedTask(undefined);
+                    },
+                  })}
+            />
+          ) : null}
         </div>
-      ) : null}
+      </div>
+
+      {asPane ? null : (
+        <InspectorDrawer
+          open={selectedTask !== undefined}
+          task={task.data}
+          projectId={projectId}
+          runId={runId}
+          onClose={() => {
+            setSelectedTask(undefined);
+          }}
+        />
+      )}
 
       {/* Bottom cards: hidden when in DAG view OR in Focus Mode */}
       {asGraph || isFocusMode ? null : (

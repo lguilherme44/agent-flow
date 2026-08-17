@@ -117,8 +117,86 @@ export function AnalyticsPage(): JSX.Element {
         <TasksByState data={data} />
       </div>
 
+      <ExecutionInsightsPanel data={data} />
+
       {data.context === undefined ? null : <ContextIntelligencePanel data={data.context} />}
     </div>
+  );
+}
+
+/**
+ * Deterministic facts about execution history.
+ *
+ * Generated entirely from closed observations and counts — no model prose,
+ * no causal claims, no guesses.
+ */
+function ExecutionInsightsPanel(props: { data: AnalyticsView }): JSX.Element {
+  const { data } = props;
+  const insights: string[] = [];
+
+  insights.push(
+    `${data.totals.entries} total agent invocations observed across ${data.scope.runsConsidered} runs.`,
+  );
+
+  if (data.totals.retries > 0) {
+    insights.push(
+      `${data.totals.retries} ${data.totals.retries === 1 ? 'retry was' : 'retries were'} observed across runs.`,
+    );
+  } else {
+    insights.push('0 retries were observed.');
+  }
+
+  if (data.totals.failures > 0) {
+    insights.push(
+      `${data.totals.failures} ${data.totals.failures === 1 ? 'failure was' : 'failures were'} recorded.`,
+    );
+  } else {
+    insights.push('0 failures were recorded.');
+  }
+
+  if (data.totals.fallbacks > 0) {
+    insights.push(
+      `${data.totals.fallbacks} ${data.totals.fallbacks === 1 ? 'fallback was' : 'fallbacks were'} triggered due to primary runner errors.`,
+    );
+  }
+
+  if (data.context?.aggregate) {
+    const agg = data.context.aggregate;
+    if (agg.utilityCalls !== undefined) {
+      const calls = agg.utilityCalls;
+      const failures = (agg.utilityFailures ?? 0) + (agg.structuredOutputFailures ?? 0);
+      const bypassed = agg.bypassReason !== undefined;
+      insights.push(
+        `${calls} Utility model invocation${calls === 1 ? '' : 's'} recorded (${failures} degraded, ${bypassed ? '1 bypassed' : '0 bypassed'}).`,
+      );
+    }
+    if (agg.utilityLatencyMs !== undefined && agg.utilityLatencyMs > 0) {
+      insights.push(
+        `Utility inference contributed ${formatDuration(agg.utilityLatencyMs)} of observed latency.`,
+      );
+    }
+  }
+
+  return (
+    <Panel
+      divided
+      className="shrink-0"
+      header={
+        <SectionHeader title="Execution Insights">
+          <span className="text-micro text-faint">deterministic summary · closed observations</span>
+        </SectionHeader>
+      }
+    >
+      <div className="flex flex-col gap-2 px-4 pb-3 pt-1">
+        <ul className="m-0 list-disc pl-4 text-body-lg text-muted space-y-1">
+          {insights.map((insight, idx) => (
+            <li key={idx}>
+              <span className="text-text">{insight}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Panel>
   );
 }
 
@@ -131,15 +209,21 @@ export function AnalyticsPage(): JSX.Element {
  * subtracts the second from the first. No number on this page is a bill, and none
  * claims to be: the header and the basis row say so, the way every other claim on
  * the page has a guardrail around it.
- *
- * The panel only appears when the read model found observations. Absent means
- * nothing recorded it, never zero — recording "zero avoided" when nothing
- * observed anything would be a different and dishonest claim.
  */
 function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }): JSX.Element {
   const { data } = props;
   const aggregate = data.aggregate;
   const scope = data.scope;
+
+  const totalCalls = aggregate?.utilityCalls ?? 0;
+  const failures = (aggregate?.utilityFailures ?? 0) + (aggregate?.structuredOutputFailures ?? 0);
+  const isBypassed = aggregate?.bypassReason !== undefined;
+  const deliveryRate =
+    totalCalls > 0
+      ? `${Math.round(((totalCalls - failures) / totalCalls) * 100)}%`
+      : isBypassed
+        ? '0%'
+        : '100%';
 
   return (
     <Panel
@@ -147,7 +231,11 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
       className="shrink-0"
       header={
         <SectionHeader title="Context intelligence">
-          <span className="whitespace-nowrap text-micro text-faint">estimated, not billing</span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-sm border border-primary-border bg-primary-soft px-1.5 py-0.5 text-micro font-semibold uppercase tracking-caps text-text">
+              ESTIMATED · NOT BILLING
+            </span>
+          </div>
         </SectionHeader>
       }
     >
@@ -157,9 +245,38 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
           hint="Adaptive run telemetry could not be summed — check the run audit trail."
         />
       ) : (
-        <>
-          <div className="flex flex-wrap items-stretch divide-x divide-border px-4 pb-3">
-            <StripItem label="Estimated input" value={tokenLabel(aggregate.estimatedInputTokens)} />
+        <div className="flex flex-col gap-3 pb-3">
+          {/* Funnel & Outcome Summary */}
+          <div className="flex flex-wrap items-stretch divide-x divide-border px-4 pt-1">
+            {aggregate.candidatesBefore !== undefined ? (
+              <StripItem label="Candidates Before" value={String(aggregate.candidatesBefore)} />
+            ) : null}
+            {aggregate.candidatesAfter !== undefined ? (
+              <StripItem label="Candidates Selected" value={String(aggregate.candidatesAfter)} />
+            ) : null}
+            {aggregate.filesBefore !== undefined ? (
+              <StripItem label="Files Before" value={String(aggregate.filesBefore)} />
+            ) : null}
+            {aggregate.filesAfter !== undefined ? (
+              <StripItem label="Files Selected" value={String(aggregate.filesAfter)} />
+            ) : null}
+            <StripItem label="Utility calls" value={countLabel(aggregate.utilityCalls)} />
+            <StripItem label="Delivery Rate" value={deliveryRate} />
+            <StripItem
+              label="Utility latency"
+              value={formatDuration(aggregate.utilityLatencyMs)}
+            />
+            {failures > 0 ? (
+              <StripItem label="Degraded" tone="warning" value={String(failures)} />
+            ) : null}
+          </div>
+
+          {/* Token Estimates Strip */}
+          <div className="flex flex-wrap items-stretch divide-x divide-border border-t border-border px-4 pt-2">
+            <StripItem
+              label="Estimated input"
+              value={tokenLabel(aggregate.estimatedInputTokens)}
+            />
             <StripItem
               label="Primary context"
               value={tokenLabel(
@@ -170,25 +287,23 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
               label="Estimated avoided"
               value={tokenLabel(aggregate.estimatedAvoidedTokens)}
             />
-            <StripItem label="Utility calls" value={countLabel(aggregate.utilityCalls)} />
-            <StripItem
-              label="Utility latency"
-              value={formatDuration(aggregate.utilityLatencyMs)}
-            />
-            {(aggregate.utilityFailures !== undefined && aggregate.utilityFailures > 0) ||
-            aggregate.structuredOutputFailures !== undefined &&
-              aggregate.structuredOutputFailures > 0 ? (
-              <StripItem
-                label="Degraded"
-                tone="warning"
-                value={String(
-                  (aggregate.utilityFailures ?? 0) + (aggregate.structuredOutputFailures ?? 0),
-                )}
-              />
-            ) : null}
           </div>
 
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border px-4 pb-3 pt-2.5 text-micro text-faint">
+          {/* Bypass / Degradation Breakdown */}
+          {aggregate.bypassReason !== undefined ? (
+            <div className="mx-4 rounded-md border border-warning/30 bg-warning-soft/40 p-3 text-label text-text">
+              <span className="font-medium text-warning mb-1 block">Bypass Reason Breakdown</span>
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-micro">
+                <div className="flex items-center justify-between">
+                  <dt className="text-muted">{humanise(aggregate.bypassReason)}</dt>
+                  <dd className="font-mono font-semibold text-text">1 occurrence</dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
+
+          {/* Scope and Metadata */}
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border px-4 pt-2.5 text-micro text-faint">
             <span>
               {scope.runsObserved} run{scope.runsObserved === 1 ? '' : 's'} observed ·{' '}
               {scope.observations} of {scope.observationLimit} observations
@@ -205,7 +320,7 @@ function ContextIntelligencePanel(props: { data: ContextTelemetryAnalyticsView }
               </span>
             ) : null}
           </div>
-        </>
+        </div>
       )}
     </Panel>
   );

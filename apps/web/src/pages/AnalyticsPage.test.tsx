@@ -263,7 +263,7 @@ describe('analytics', () => {
     await screen.findByRole('heading', { name: 'Context intelligence' });
 
     const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
-    expect(within(panelRoot).getByText('estimated, not billing')).toBeInTheDocument();
+    expect(within(panelRoot).getByText(/ESTIMATED · NOT BILLING/i)).toBeInTheDocument();
     expect(within(panelRoot).getByText('47.4k tokens')).toBeInTheDocument();
     expect(within(panelRoot).getByText('11.2k tokens')).toBeInTheDocument();
     expect(within(panelRoot).getByText('36.2k tokens')).toBeInTheDocument();
@@ -349,6 +349,64 @@ describe('analytics', () => {
     renderPage();
 
     expect(await screen.findByText('Nothing to measure yet.')).toBeInTheDocument();
+  });
+
+  it('renders deterministic execution insights from closed facts', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: 'Execution Insights' });
+
+    expect(screen.getByText(/214 total agent invocations observed across 25 runs/)).toBeInTheDocument();
+    expect(screen.getByText(/11 retries were observed across runs/)).toBeInTheDocument();
+    expect(screen.getByText(/7 failures were recorded/)).toBeInTheDocument();
+    expect(screen.getByText(/3 fallbacks were triggered due to primary runner errors/)).toBeInTheDocument();
+  });
+
+  it('renders full context telemetry funnel, bypass breakdown, and delivery rate', async () => {
+    routes['/api/v1/analytics'] = {
+      ...ANALYTICS,
+      context: {
+        basis: 'estimated_operational_not_billing' as const,
+        scope: {
+          runsObserved: 2,
+          observations: 4,
+          observationLimit: 256,
+          eventLogsTruncated: 0,
+          truncated: false,
+        },
+        aggregate: {
+          stage: 'aggregate',
+          source: 'aggregate',
+          provenance: 'aggregate',
+          candidatesBefore: 45,
+          candidatesAfter: 12,
+          filesBefore: 20,
+          filesAfter: 8,
+          utilityCalls: 4,
+          utilityFailures: 0,
+          structuredOutputFailures: 0,
+          utilityLatencyMs: 3500,
+          bypassReason: 'validation_failed',
+          estimatedInputTokens: 5000,
+          estimatedPrimaryContextTokens: 1200,
+          estimatedAvoidedTokens: 3800,
+          effectiveProvider: 'openai-compatible',
+          effectiveModel: 'qwen2.5-coder:14b',
+        },
+      },
+    };
+    renderPage();
+    await screen.findByRole('heading', { name: 'Context intelligence' });
+
+    const panelRoot = screen.getByRole('heading', { name: 'Context intelligence' }).closest('section') as HTMLElement;
+    expect(within(panelRoot).getByText('ESTIMATED · NOT BILLING')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('Candidates Before')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('45')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('Candidates Selected')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('12')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('Delivery Rate')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('100%')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('Bypass Reason Breakdown')).toBeInTheDocument();
+    expect(within(panelRoot).getByText('Validation Failed')).toBeInTheDocument();
   });
 
   it('says analytics could not be read rather than drawing empty charts', async () => {
