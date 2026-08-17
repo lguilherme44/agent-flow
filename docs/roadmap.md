@@ -76,6 +76,85 @@ context bloat and accelerates stage execution while preserving all security inva
 
 ---
 
-## Beyond MVP 3
+## Autonomous Execution & Recovery · in progress
+
+Specified in [`specs/autonomous-execution-recovery.md`](specs/autonomous-execution-recovery.md).
+`AR-00` has landed; every milestone above it is still design.
+
+Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
+244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
+The finding that ordered the milestone: three of six tasks produced a Git tree identical to
+their base and were still recorded `completed` and integrated, so the run's final FAIL was
+caused by false-positive acceptance rather than by anything the corrective path could fix.
+
+The milestone moves the human from *recovery mechanism* to *decision maker*: everything
+mechanically decidable — an uninitialised project, a (runner, model) effort mismatch, an
+absent `node_modules`, a denied command hidden in discarded stderr, two corrective tasks
+writing to one file, a task that changed nothing — is decided by code, bounded by explicit
+budgets, and escalated with a specific action when a budget is exhausted.
+
+| | Milestone | Status |
+|---|---|---|
+| AR-00 | Contracts, vocabulary and probes | **done** |
+| AR-01 | Readiness preflight | design |
+| AR-02 | Failure intelligence and evidence | design |
+| AR-05a | Acceptance integrity | design |
+| AR-06 | DAG and conflict safety | design |
+| AR-03 | Autonomous retry and Failure Context Packet | design |
+| AR-04 | Verification environment readiness | design |
+| AR-05b | Autonomous corrective loop | design |
+| AR-07 | Runtime state projection and human gates | design |
+| AR-08 | Recovery UX and CLI ergonomics | design |
+| AR-09 | Cost and context controls | design |
+| AR-10 | Dogfood and autonomy benchmark | design |
+
+Ordered by dependency rather than by number: `AR-05a` precedes the corrective loop because
+correcting damage the system is still creating would be building the loop backwards, and
+`AR-06` precedes `AR-05b` because the corrective generator itself emitted the conflicting
+plan that the evidence run had to reject.
+
+### What AR-00 landed, and what it deliberately did not
+
+Contracts and pure primitives, with **no behaviour change**: the failure taxonomy
+(`FailureClass`, refining `RunnerErrorCode` rather than replacing it), the recovery budgets,
+`capabilities(model?)` and `nonInteractiveToolGrants`, the two new artifact schemas, the
+three-valued mechanical verdict, and four pure modules — evidence redaction, failure
+classification, recovery policy and the runtime projection. `recovery.enabled` ships `false`,
+because a budget nothing enforces must not read as a feature that is on.
+
+**No behaviour changed.** `capabilities(model?)` and the resolver-shaped capability map
+landed, and every shipped adapter still answers the same thing for every model — so
+resolution is byte-identical to before. The measured per-model narrowing that would make the
+existing clamp fire is documented in [`runner-capabilities.md`](runner-capabilities.md) and
+is **AR-01's** to encode: that milestone owns `core/role.ts` and all four adapters, carries
+C-03 and I-20, and its migration note is "a previously-fatal configuration now clamps". An
+architecture test pins the inertness so AR-01 has to come and edit it.
+
+Two divergences are worth recording, both now corrected in the specification itself:
+
+- **`scope` was already taken.** AR §8.3 wanted that name for the file-containment mode,
+  and every task in the AF-2026-002 plan carries `scope: "backend" | "docs" | "infra"` as a
+  free-form module label. Redefining it as a two-value enum would have made one of the
+  fixtures the compatibility gate depends on fail to parse, so the containment mode is
+  **`scopeMode`** with the spec's values verbatim.
+- **The `attempt` → `repair` rename is complete in `StageRunner` and partial above it.**
+  Its events and logs now say `repairs`, and both readers accept either spelling so an
+  existing run keeps its numbers. `TelemetryEntry.attempts` and `StageViewResponse.attempts`
+  still carry the repair count for stages under the older name; renaming those is a
+  read-model change and belongs to AR-07.
+
+### Core invariants added by this milestone
+
+- **I-20 — No unsupported effort is ever invoked**: an effort the resolved (runner, model) pair does not declare is clamped deterministically and recorded, never sent to a runner.
+- **I-21 — No unredacted evidence is persisted**: raw runner output reaches disk, events and HTTP only through a single redaction contract.
+- **I-22 — Preflight failures cost no attempt**: a failure knowable before invocation never increments the work-attempt counter.
+- **I-23 — No completion without observable change**: a validated tree identical to its base cannot complete unless the plan declared it would.
+- **I-24 — No verdict is rendered under a borrowed label**: mechanical verification, semantic review and the Definition of Done are distinct, and `NOT_RUN` is never shown as `PASS`.
+- **I-25 — Bounded corrective autonomy**: a corrective round proceeds without human approval only when every task is inside a mechanically-decided envelope and the budget holds.
+- **I-26 — Runtime status is projected, never persisted**: the CLI and the HTTP API derive status from one pure projection.
+
+---
+
+## Beyond this milestone
 
 See [`docs/post-mvp3-backlog.md`](post-mvp3-backlog.md) for non-normative enhancement ideas and future backlog items.
