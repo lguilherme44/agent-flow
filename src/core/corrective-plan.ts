@@ -103,9 +103,21 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
   //
   // Derived only among the *new* tasks: an existing task has already run, and adding an
   // edge to it would reorder work that is finished.
-  const ordered = deriveOverlapDependencies(
-    fixes.map((fix) => ({ ...fix, files: fix.files.likely })),
-  ).map(({ files: _files, ...fix }) => fix);
+  //
+  // Only the dependencies are taken from the result. The first version of this spread the
+  // whole task through the overlap helper under a flattened `files` key and then stripped
+  // that key on the way back — which deleted the task's real `files: { likely }` object,
+  // so every generated fix came out declaring no files at all. Silent, because the plan
+  // still parsed and the ordering it computed was correct; what broke was everything
+  // downstream that asks a corrective task which files it will touch.
+  const overlapOrder = deriveOverlapDependencies(
+    fixes.map((fix) => ({ id: fix.id, dependencies: fix.dependencies, files: fix.files.likely })),
+  );
+
+  const ordered = fixes.map((fix, index) => ({
+    ...fix,
+    dependencies: overlapOrder[index]?.dependencies ?? fix.dependencies,
+  }));
 
   return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...ordered] });
 }

@@ -79,10 +79,13 @@ context bloat and accelerates stage execution while preserving all security inva
 ## Autonomous Execution & Recovery · in progress
 
 Specified in [`specs/autonomous-execution-recovery.md`](specs/autonomous-execution-recovery.md).
-`AR-00` through `AR-06` have landed — everything up to and including autonomous retry.
-`recovery.enabled` now ships **true**: a recoverable failure requeues itself with a
-Failure Context Packet instead of stopping the run. What remains is the corrective
-loop (`AR-05b`) and the surfaces that render recovery (`AR-07`, `AR-08`).
+Every milestone through `AR-05b` has landed — the whole mechanical path from a failure
+being *knowable* to a run correcting itself. `recovery.enabled` ships **true**: a
+recoverable failure requeues itself with a Failure Context Packet, and a corrective round
+whose every task falls inside the approved envelope executes without reopening the gate.
+
+What remains is what a person *reads*: the runtime projection (`AR-07`), the recovery
+UX (`AR-08`), cost controls (`AR-09`) and the measured dogfood (`AR-10`).
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -105,7 +108,7 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | AR-06 | DAG and conflict safety | **done** |
 | AR-03 | Autonomous retry and Failure Context Packet | **done** |
 | AR-04 | Verification environment readiness | **done** |
-| AR-05b | Autonomous corrective loop | design |
+| AR-05b | Autonomous corrective loop | **done** |
 | AR-07 | Runtime state projection and human gates | design |
 | AR-08 | Recovery UX and CLI ergonomics | design |
 | AR-09 | Cost and context controls | design |

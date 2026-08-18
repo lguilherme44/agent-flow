@@ -160,7 +160,7 @@ async function world() {
       ...overrides,
     });
 
-  return { fs, clock, store, runners, stageRunner, run, round };
+  return { fs, clock, store, runners, stageRunner, run, round, project };
 }
 
 describe('the corrective loop closes without --force', () => {
@@ -317,5 +317,127 @@ describe('a corrective plan passes the same mechanical checks', () => {
     // Nothing was written and no review was spent.
     expect(w.runners.claude.calls).toHaveLength(0);
     expect(await w.store.readArtifact(w.run.runId, 'plan')).not.toContain('FIX-001');
+  });
+});
+
+/**
+ * AD-46, C-18 and I-25 (AR-05b) — what an approval already authorised.
+ *
+ * `runCorrectiveRound` cleared `approved` unconditionally, and the reason was sound: a
+ * human approved a set of tasks and a corrective round is a different set. AD-46's claim
+ * is that "different set" is *measurable* — a fix touching only files this run already
+ * changed, citing only requirements the SDD already declares, adding no contract and no
+ * validation id is the same agreement executed correctly.
+ *
+ * Eleven of the evidence run's sixteen manual operations came after approval, and none of
+ * them was a decision. This is the one that removes the last of them.
+ */
+describe('a corrective round inside the envelope keeps its approval (AD-46, C-18)', () => {
+  /** Everything the round needs to be judged inside: the SDD's own ids, the plan's files. */
+  const insideEnvelope = (touched: string[], validationIds: readonly string[]) => ({
+    context: {
+      touchedFiles: touched,
+      declaredRequirements: ['FR-001', 'FR-002', 'FR-003', 'NFR-001', 'NFR-002'],
+      declaredValidationIds: validationIds,
+      contractPaths: ['src/contracts/'],
+    },
+    budget: { correctiveRoundsUsed: 0, maxCorrectiveRounds: 2 },
+  });
+
+  async function approved() {
+    const w = await world();
+    await approveRun(w.store, w.run.runId, PLAN);
+    expect((await w.store.loadRun(w.run.runId)).approved).toBe(true);
+    return w;
+  }
+
+  it('does not clear approval when every task is inside', async () => {
+    const w = await approved();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    // The finding names no file, so `applyFixes` declares none — a task that claims
+    // nothing cannot be outside a set it makes no claim about.
+    const outcome = await w.round({ envelope: insideEnvelope(['src/recurrence.ts'], buildValidationRegistry(w.project).ids) });
+
+    expect(outcome.outcome).toBe('applied');
+    expect((await w.store.loadRun(w.run.runId)).approved).toBe(true);
+  });
+
+  it('clears approval when a task reaches a file this run never touched', async () => {
+    const w = await approved();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    const outcome = await w.round({
+      finalReview: ReviewResultSchema.parse({
+        ...FINAL_REVIEW,
+        findings: [{ ...FINAL_REVIEW.findings[0], file: 'src/never-touched.ts' }],
+      }),
+      envelope: insideEnvelope(['src/recurrence.ts'], buildValidationRegistry(w.project).ids),
+    });
+
+    expect(outcome.outcome).toBe('applied');
+    expect((await w.store.loadRun(w.run.runId)).approved).toBe(false);
+  });
+
+  it('records the evaluation per task, whichever way it went', async () => {
+    // C-18 asks for the reason a task *passed*, not only the reason one failed. A record
+    // of refusals alone cannot answer "why did this not ask me".
+    const w = await approved();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    await w.round({ envelope: insideEnvelope(['src/recurrence.ts'], buildValidationRegistry(w.project).ids) });
+
+    const evaluated = (await w.store.readEvents(w.run.runId)).find(
+      (event) => event.type === 'corrective_envelope_evaluated',
+    );
+
+    expect(evaluated?.detail).toMatchObject({ evaluated: true, mayProceed: true });
+    const tasks = evaluated?.detail?.['tasks'] as { id: string; reason: string }[];
+    expect(tasks.length).toBeGreaterThan(0);
+    expect(tasks.every((entry) => entry.reason.length > 0)).toBe(true);
+  });
+
+  it('clears approval when the corrective budget is spent', async () => {
+    // Condition 5, and it applies to the round rather than to a task: an envelope full of
+    // inside-tasks does not buy another round.
+    const w = await approved();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    await w.round({
+      envelope: {
+        ...insideEnvelope(['src/recurrence.ts'], buildValidationRegistry(w.project).ids),
+        budget: { correctiveRoundsUsed: 2, maxCorrectiveRounds: 2 },
+      },
+    });
+
+    expect((await w.store.loadRun(w.run.runId)).approved).toBe(false);
+  });
+
+  it('still stops on a reviewer that rejects the corrected plan', async () => {
+    // The envelope answers "is this the same agreement". It does not answer "is this plan
+    // any good", and a reviewer's objection is semantic — I-25 does not overrule it.
+    const w = await approved();
+    w.runners.claude.pushJson({
+      verdict: 'FAIL',
+      summary: 'The fix misses the case.',
+      findings: [
+        { severity: 'high', type: 'correctness', description: 'Still wrong.', suggestedAction: 'Redo.' },
+      ],
+    });
+
+    await w.round({ envelope: insideEnvelope(['src/recurrence.ts'], buildValidationRegistry(w.project).ids) });
+
+    expect((await w.store.loadRun(w.run.runId)).status).toBe('plan_rejected');
+  });
+
+  it('reopens approval when no envelope is supplied at all', async () => {
+    // The default has to be the cautious one: a caller that cannot compute the envelope
+    // must not be given the benefit of it. This is every caller predating AR-05b.
+    const w = await approved();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    await w.round();
+
+    expect((await w.store.loadRun(w.run.runId)).approved).toBe(false);
   });
 });

@@ -186,7 +186,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         )}
       >
         {isDagFullscreen && asGraph ? (
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4 rounded-md">
+          <div className="glass flex h-12 shrink-0 items-center justify-between border-b border-glass-border px-4 rounded-lg shadow-md">
             <div className="flex items-center gap-3 min-w-0">
               <span className="font-bold text-title tabular text-text">{run.data.runId}</span>
               <span className="text-body-lg text-muted truncate max-w-lg">{run.data.feature}</span>
@@ -197,7 +197,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                 type="button"
                 onClick={() => setIsDagFullscreen(false)}
                 aria-label="Exit fullscreen DAG"
-                className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2.5 text-body-lg text-muted hover:border-border-strong hover:text-text"
+                className="flex h-7 items-center gap-1.5 rounded-md border border-glass-border bg-surface-2/60 px-2.5 text-label text-muted transition-colors hover:border-border hover:text-text"
               >
                 <Minimize2 className="h-3.5 w-3.5" aria-hidden />
                 <span>Exit Fullscreen</span>
@@ -341,30 +341,17 @@ function InspectorDrawer(props: {
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/60" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" />
         <DialogPrimitive.Content
-          // A label rather than the task's own title. The panel already states
-          // the id and the title as its heading, and a hidden copy of them here
-          // would make a screen reader read the task twice before reaching it.
           aria-label="Task inspector"
-          // Radix does not set this: it hides everything else with `aria-hidden`
-          // instead, which is the more widely supported of the two techniques.
-          // Both are stated here — the hiding is what actually contains a screen
-          // reader, and this is what §97 and every ARIA dialog example expect to
-          // find on the panel itself.
           aria-modal="true"
-          // Radix's modal Dialog overrides its own focus restore to focus a
-          // `Dialog.Trigger`, and this drawer has none — it opens because a task
-          // got selected, not because a button was pressed. Left alone, closing
-          // drops focus on the document body, and a keyboard user loses their
-          // place half way down a table they will have to find again.
           onCloseAutoFocus={(event) => {
             const target = opener.current;
             if (target === null || !document.contains(target)) return;
             event.preventDefault();
             target.focus({ preventScroll: true });
           }}
-          className="fixed inset-y-0 right-0 z-50 flex w-[min(440px,88vw)] flex-col border-l border-border-strong bg-bg p-3 shadow-2xl"
+          className="glass fixed inset-y-0 right-0 z-50 flex w-[min(440px,88vw)] flex-col border-l border-glass-border p-3 shadow-lg"
         >
           {/* Radix derives the accessible name from a `Title` when one exists,
               and from `aria-label` otherwise. Both are given the same words, so
@@ -402,10 +389,10 @@ function ArtifactDialog(props: {
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/70" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
         <DialogPrimitive.Content
           className={cx(
-            'fixed left-1/2 top-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border-strong bg-surface shadow-2xl transition-all duration-150',
+            'fixed left-1/2 top-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-glass-border bg-surface shadow-lg transition-all duration-150',
             isExpanded ? 'h-[94vh] w-[95vw]' : 'h-[80vh] w-[min(920px,90vw)]',
           )}
         >

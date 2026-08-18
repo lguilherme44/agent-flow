@@ -1,5 +1,11 @@
 import type { Plan, ReviewResult, Task } from '../contracts/index.js';
 import { applyFixes } from '../core/corrective-plan.js';
+import {
+  evaluateRound,
+  type EnvelopeContext,
+  type RoundBudget,
+  type RoundVerdict,
+} from '../core/corrective-envelope.js';
 import type { ProviderOf } from '../core/independence.js';
 import type { ValidationRegistry } from '../core/validation-registry.js';
 import { PlanReviewService, stageRunnersOf } from './plan-review-service.js';
@@ -20,6 +26,15 @@ export interface CorrectiveRoundOptions {
   readonly sdd: string;
   readonly architectureImpact: string;
   readonly validation: ValidationRegistry;
+  /**
+   * What this approval already covers (AD-46). Absent means "reopen approval", which is
+   * the behaviour every caller had before AR-05b — a caller that cannot compute the
+   * envelope must not be given the benefit of it.
+   */
+  readonly envelope?: {
+    readonly context: EnvelopeContext;
+    readonly budget: RoundBudget;
+  };
 }
 
 export type CorrectiveRound =
@@ -30,6 +45,8 @@ export type CorrectiveRound =
       readonly outcome: 'applied';
       readonly plan: Plan;
       readonly added: Task[];
+      /** Whether the approval survived, and why (C-18). */
+      readonly envelope?: RoundVerdict;
       readonly review: ReviewResult;
     };
 
@@ -73,20 +90,69 @@ export async function runCorrectiveRound(
 
   await store.writeArtifact(runId, 'plan', `${JSON.stringify(next, null, 2)}\n`);
 
+  // **Does this approval already cover these fixes?** (AD-46, C-18, I-25)
+  //
+  // This used to clear `approved` unconditionally, for a sound reason: a human approved a
+  // set of tasks and this is a different set. AD-46's claim is that "different set" is
+  // measurable — a fix touching only files this run already changed, citing only
+  // requirements the SDD already declares, adding no contract and no validation id is the
+  // same agreement executed correctly.
+  //
+  // Evaluated *before* anything is cleared, so a run whose corrective work falls outside
+  // behaves exactly as it did. The envelope only ever narrows what a person approved, and
+  // every verdict is persisted so the run can always show why it did not ask.
+  const envelope =
+    options.envelope === undefined
+      ? undefined
+      : evaluateRound(
+          added.map((task) => ({
+            id: task.id,
+            files: task.files.likely,
+            requirements: task.requirements,
+            validation: task.validation,
+          })),
+          options.envelope.context,
+          options.envelope.budget,
+        );
+
+  await store.appendEvent(runId, 'corrective_envelope_evaluated', {
+    origin: options.origin,
+    ...(envelope === undefined
+      ? { evaluated: false, reason: 'no envelope was supplied, so approval is reopened' }
+      : {
+          evaluated: true,
+          mayProceed: envelope.mayProceed,
+          exhausted: envelope.exhausted,
+          reason: envelope.reason,
+          tasks: envelope.evaluations.map((verdict) => ({
+            id: verdict.id,
+            inside: verdict.inside,
+            ...(verdict.failed === undefined ? {} : { failed: verdict.failed }),
+            reason: verdict.reason,
+          })),
+        }),
+  });
+
   // Approval is cleared *before* the review runs, not after. A crash in between
   // must not leave a run approved for a plan nobody approved — the failure mode
   // the hash exists to prevent, reintroduced by ordering.
-  await store.updateRun(runId, (current) => ({
-    ...current,
-    approved: false,
-    approvedAt: undefined,
-    approvedPlanHash: undefined,
-    status: 'running',
-  }));
+  //
+  // Kept only for a round the envelope did not clear. I-25: no corrective round proceeds
+  // without human approval unless every one of its tasks is inside and the budget holds.
+  if (envelope?.mayProceed !== true) {
+    await store.updateRun(runId, (current) => ({
+      ...current,
+      approved: false,
+      approvedAt: undefined,
+      approvedPlanHash: undefined,
+      status: 'running',
+    }));
+  }
 
   await store.appendEvent(runId, 'corrective_plan_created', {
     added: added.map((task) => task.id),
     origin: options.origin,
+    approvalKept: envelope?.mayProceed === true,
   });
 
   const service = new PlanReviewService({
@@ -103,12 +169,27 @@ export async function runCorrectiveRound(
     authors: await correctivePlanAuthors(options),
   });
 
+  // A round the envelope cleared is already approved, so it goes back to running rather
+  // than to a gate: sending it to `waiting_for_approval` would ask for the approval this
+  // milestone just proved it already has. A rejected plan still stops, whatever the
+  // envelope said — the reviewer's objection is semantic, and I-25 does not overrule it.
   await store.updateRun(runId, (current) => ({
     ...current,
-    status: review.verdict === 'PASS' ? 'waiting_for_approval' : 'plan_rejected',
+    status:
+      review.verdict === 'PASS'
+        ? envelope?.mayProceed === true
+          ? 'running'
+          : 'waiting_for_approval'
+        : 'plan_rejected',
   }));
 
-  return { outcome: 'applied', plan: next, added, review };
+  return {
+    outcome: 'applied',
+    plan: next,
+    added,
+    ...(envelope === undefined ? {} : { envelope }),
+    review,
+  };
 }
 
 /**

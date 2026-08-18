@@ -55,7 +55,7 @@ export function Panel(props: {
   return (
     <section
       className={cx(
-        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface',
+        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm',
         props.className,
       )}
     >
@@ -107,7 +107,7 @@ export function Card(props: {
   return (
     <section
       className={cx(
-        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface',
+        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm transition-shadow',
         props.className,
       )}
     >
@@ -140,7 +140,7 @@ export function Badge(props: {
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-px',
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-px',
         'text-micro font-medium',
         // `tracking-caps` is 0.08em. `tracking-wide` was 0.025em, which is
         // under the 0.06em floor upper-case needs to stop reading as cramped.
@@ -606,7 +606,7 @@ export function Dialog(props: {
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/70" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
         <DialogPrimitive.Content
           aria-modal="true"
           onCloseAutoFocus={(event) => {
@@ -617,7 +617,7 @@ export function Dialog(props: {
           }}
           className={cx(
             'fixed left-1/2 top-1/2 z-50 flex max-h-[86vh] w-[min(560px,92vw)] -translate-x-1/2',
-            '-translate-y-1/2 flex-col rounded-lg border border-border-strong bg-surface shadow-2xl',
+            '-translate-y-1/2 flex-col rounded-lg border border-glass-border bg-surface shadow-lg',
             props.className,
           )}
         >

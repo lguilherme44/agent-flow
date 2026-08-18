@@ -58,6 +58,7 @@ import {
 import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js';
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
+import { extractRequirementIds } from '../core/sdd-validator.js';
 import {
   checkDefinitionOfDone,
   type DoneCheck,
@@ -1415,7 +1416,16 @@ async function judgeRun(
   const corrective =
     doneCheck.done || options.fix !== true
       ? undefined
-      : await correctPlan(context, runId, plan, effectiveSdd, finalReview);
+      : await correctPlan(
+          context,
+          runId,
+          plan,
+          effectiveSdd,
+          finalReview,
+          // The integration diff, which is the mechanical answer to "what has this run
+          // already changed" — the first condition of the AD-46 envelope.
+          changes.map((change) => change.path),
+        );
 
   return done({
     runId,
@@ -1515,6 +1525,8 @@ async function correctPlan(
   plan: Plan,
   sdd: string,
   finalReview: ReviewResult,
+  /** Every path this run has already changed, from the integration diff (AD-46). */
+  touchedFiles: readonly string[],
 ): Promise<CorrectiveRound | undefined> {
   const architectureImpact =
     (await context.store.readArtifact(runId, 'architectureImpact')) ??
@@ -1534,8 +1546,35 @@ async function correctPlan(
     // configuration, never from the finding text: a fix validated by an id that
     // does not resolve fails for the wrong reason.
     validation: buildValidationRegistry(context.config.project),
+    // **What this approval already covers** (AD-46, C-18, I-25).
+    //
+    // Every input is mechanical: the touched files come from the integration diff, the
+    // requirement ids from the approved SDD, the validation ids from the project's own
+    // configuration, and the budget from the run's persisted counter. Nothing here is a
+    // judgement, and nothing a model wrote reaches it.
+    envelope: {
+      context: {
+        touchedFiles,
+        declaredRequirements: extractRequirementIds(sdd),
+        declaredValidationIds: buildValidationRegistry(context.config.project).ids,
+        contractPaths: CONTRACT_PATHS,
+      },
+      budget: {
+        correctiveRoundsUsed: (await context.store.loadRun(runId)).autonomy?.correctiveRoundsUsed ?? 0,
+        maxCorrectiveRounds: context.config.global.recovery.maxCorrectiveRounds,
+      },
+    },
   });
 }
+
+/**
+ * Where a contract lives.
+ *
+ * A new file here is a new shape everything else has to agree on, which is a change to the
+ * agreement however small the diff — so AD-46 makes it its own condition rather than
+ * leaving it to the file check. Editing one the run already touched stays inside.
+ */
+const CONTRACT_PATHS = ['src/contracts/'] as const;
 
 function noSuchRun(runId: string): ActionError {
   return {

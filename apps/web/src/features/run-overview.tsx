@@ -46,7 +46,7 @@ export function RunPanel(props: {
 }): JSX.Element {
   if (props.isFocusMode) {
     return (
-      <section className="relative shrink-0 flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-2">
+      <section className="glass relative shrink-0 flex items-center justify-between rounded-lg border border-glass-border px-4 py-2 shadow-sm">
         <div className="flex items-center gap-3 min-w-0">
           <span className="tabular font-bold text-title text-text">{props.run.runId}</span>
           <Badge tone={runTone(props.run.status)} caps className="shrink-0 px-2 py-0.5 text-label">
@@ -75,7 +75,7 @@ export function RunPanel(props: {
   }
 
   return (
-    <section className="relative shrink-0 overflow-visible rounded-lg border border-border bg-surface">
+    <section className="relative shrink-0 overflow-visible rounded-lg border border-border bg-surface shadow-md">
       <RunHeader
         run={props.run}
         projectId={props.projectId}
@@ -526,9 +526,9 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
             // measured at 1440, the word wanted 88px and its column gave 86.
             // One pixel short is still short, and the wrap below — which is the
             // safety net, not the plan — folded a single "n" onto a second line.
-            'flex min-w-0 flex-1 cursor-default items-center gap-1 rounded-md border px-1.5 py-1.5',
+            'flex min-w-0 flex-1 cursor-default items-center gap-1 rounded-md border px-1.5 py-1.5 transition-all',
             running
-              ? 'border-primary-border bg-primary-soft'
+              ? 'border-primary-border bg-primary-soft shadow-glow-primary'
               : pending
                 ? 'border-border bg-transparent'
                 : cx('border-border', TONE_BG[tone]),
@@ -588,8 +588,16 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
       {/* The connector. Everything else here could be a widget; this is
           what makes the row a flow. */}
       {props.last ? null : (
-        <span className="flex w-2 shrink-0 items-center" aria-hidden>
-          <span className="h-px w-full bg-border-strong" />
+        <span className="flex w-2.5 shrink-0 items-center" aria-hidden>
+          <svg className="h-0.5 w-full" preserveAspectRatio="none">
+            <line
+              x1="0" y1="50%" x2="100%" y2="50%"
+              stroke={running ? 'var(--af-primary-bright)' : 'var(--af-border-strong)'}
+              strokeWidth="1"
+              strokeDasharray={running ? '4 3' : 'none'}
+              className={running ? 'dash-flow' : undefined}
+            />
+          </svg>
         </span>
       )}
     </li>

@@ -8,7 +8,6 @@ import {
   FileText,
   FolderGit2,
   LayoutDashboard,
-  Moon,
   Plus,
   Settings,
   Terminal,
@@ -123,19 +122,30 @@ function Sidebar(): JSX.Element {
   const { projectId, select } = useProjectSelection();
 
   return (
-    <aside className="flex w-sidebar shrink-0 flex-col border-r border-border bg-surface">
-      <div className="flex h-topbar shrink-0 items-center gap-2 px-4">
+    <aside className="glass flex w-sidebar shrink-0 flex-col border-r border-glass-border shadow-lg">
+      <div className="flex h-topbar shrink-0 items-center gap-2.5 px-4">
         <span
-          className="flex h-6 w-6 items-center justify-center rounded-full bg-primary"
+          className="relative flex h-7 w-7 items-center justify-center rounded-lg bg-primary shadow-glow-primary"
           aria-hidden
         >
           <span className="h-2 w-2 rounded-full bg-white" />
+          <span className="absolute inset-0 rounded-lg bg-primary-bright opacity-20 glow-pulse" />
         </span>
-        <span className="text-body-lg font-bold uppercase tracking-caps">Agent Flow</span>
+        <span className="text-body-lg font-bold tracking-caps text-text">
+          Agent<span className="text-primary-bright">Flow</span>
+        </span>
       </div>
 
-      <nav className="flex flex-col gap-px px-2 py-2" aria-label="Sections">
-        {navEntries.map((entry) => (
+      <nav className="flex flex-col gap-px px-2 py-1" aria-label="Primary">
+        {navEntries.slice(0, 3).map((entry) => (
+          <SidebarLink key={entry.to} entry={entry} />
+        ))}
+      </nav>
+
+      <div className="mx-3 my-1 border-t border-glass-border" />
+
+      <nav className="flex flex-col gap-px px-2 py-1" aria-label="Secondary">
+        {navEntries.slice(3).map((entry) => (
           <SidebarLink key={entry.to} entry={entry} />
         ))}
       </nav>
@@ -170,10 +180,10 @@ function Sidebar(): JSX.Element {
                     }}
                     aria-current={active ? 'true' : undefined}
                     className={cx(
-                      'flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left',
+                      'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
                       active
                         ? 'bg-primary-soft text-text'
-                        : 'text-muted hover:bg-surface-2 hover:text-text',
+                        : 'text-muted hover:bg-surface-2/50 hover:text-text',
                     )}
                   >
                     <span
@@ -237,30 +247,13 @@ function SidebarLink(props: { entry: NavEntry }): JSX.Element {
   return (
     <NavLink
       to={entry.to}
-      // `/runs` must not stay lit while looking at `/runs/AF-104`: that is the
-      // Dashboard's row, and two highlighted destinations is worse than none.
       end
       className={({ isActive }) =>
         cx(
-          'relative flex items-center gap-2 rounded-sm px-2 py-1.5 text-body-lg',
-          // Perceptible without reading — the requirement is right — but not a
-          // full-strength violet fill.
-          //
-          // `bg-primary` at full strength existed in exactly three places, and
-          // all three were permanent chrome: the wordmark disc, this nav item,
-          // and the primary button. Meanwhile the running pipeline step — the
-          // one thing the One Violet Rule exists to mark — got only
-          // `bg-primary-soft`, the same 16% wash that nine other sites use, five
-          // of them meaning "selected". The accent shouted at the furniture and
-          // whispered at the signal.
-          //
-          // A 2px full-strength rail plus the soft wash and full text colour is
-          // findable at a glance without being the loudest element on a screen
-          // where nothing is happening (PRODUCT.md, principle 5). Full-strength
-          // violet now goes to the running step.
+          'relative flex items-center gap-2 rounded-md px-2.5 py-1.5 text-body-lg transition-colors',
           isActive
             ? 'bg-primary-soft font-medium text-text'
-            : 'text-muted hover:bg-surface-2 hover:text-text',
+            : 'text-muted hover:bg-surface-2/50 hover:text-text',
         )
       }
     >
@@ -268,7 +261,7 @@ function SidebarLink(props: { entry: NavEntry }): JSX.Element {
         <>
           {isActive ? (
             <span
-              className="absolute inset-y-1.5 left-0 w-0.5 rounded-r bg-primary-bright"
+              className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-primary-bright"
               aria-hidden
             />
           ) : null}
@@ -317,7 +310,7 @@ function SidebarFooter(): JSX.Element {
 
   return (
     <div className="shrink-0 p-2">
-      <div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 py-2">
+      <div className="flex flex-col gap-1.5 rounded-lg border border-glass-border bg-surface-2/40 px-2.5 py-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="truncate text-micro text-muted">Agent Flow v0.1.0</span>
@@ -364,7 +357,7 @@ function SidebarFooter(): JSX.Element {
         )}
       </div>
 
-      <div className="flex items-center justify-between border-t border-border px-3 py-2">
+      <div className="flex items-center justify-between border-t border-glass-border px-3 py-2">
         <span className="text-micro text-faint">Language</span>
         <LanguageSelector />
       </div>
@@ -381,7 +374,7 @@ function Topbar(): JSX.Element {
   const connection = useLiveEvents(projectId);
 
   return (
-    <header className="flex h-topbar shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-page">
+    <header className="glass flex h-topbar shrink-0 items-center justify-between gap-4 border-b border-glass-border px-page">
       <Breadcrumbs selectedTaskId={selectedTaskId} />
 
       <div className="flex shrink-0 items-center gap-2">
@@ -391,24 +384,11 @@ function Topbar(): JSX.Element {
           href="https://github.com/lguilherme44/agent-flow#readme"
           target="_blank"
           rel="noreferrer"
-          className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2.5 text-body-lg text-muted hover:border-border-strong hover:text-text"
+          className="flex h-7 items-center gap-1.5 rounded-md border border-glass-border bg-surface-2/60 px-2.5 text-label text-muted transition-colors hover:border-border hover:text-text"
         >
           <BookOpen className="h-3.5 w-3.5" aria-hidden />
           Docs
         </a>
-
-        {/* Present as composition, disabled as behaviour. The palette is
-            dark-only; a toggle that did nothing would be worse than one that
-            says it is not available. */}
-        <button
-          type="button"
-          disabled
-          title="This build is dark-mode only"
-          className="flex h-7 w-7 cursor-not-allowed items-center justify-center rounded-sm border border-border text-faint opacity-60"
-        >
-          <Moon className="h-3.5 w-3.5" aria-hidden />
-          <span className="sr-only">Theme</span>
-        </button>
 
         <span
           className="flex h-7 w-7 items-center justify-center rounded-full border border-primary-border bg-primary-soft text-micro font-semibold text-text"
@@ -434,19 +414,19 @@ function LiveIndicator(props: { connection: ConnectionState }): JSX.Element {
   return (
     <span
       className={cx(
-        'flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-body-lg',
+        'flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-label transition-colors',
         connection === 'live'
-          ? 'border-success/30 bg-success-soft text-success'
+          ? 'border-success/20 bg-success-soft text-success'
           : connection === 'polling'
-            ? 'border-warning/30 bg-warning-soft text-warning'
-            : 'border-border bg-surface-2 text-faint',
+            ? 'border-warning/20 bg-warning-soft text-warning'
+            : 'border-glass-border bg-surface-2/60 text-faint',
       )}
     >
       <span
         className={cx(
           'h-1.5 w-1.5 rounded-full',
           connection === 'live'
-            ? 'bg-success'
+            ? 'bg-success glow-pulse'
             : connection === 'polling'
               ? 'bg-warning'
               : 'bg-faint',

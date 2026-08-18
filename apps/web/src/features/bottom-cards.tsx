@@ -95,6 +95,10 @@ export function ApprovalCard(props: {
   return (
     <Card
       title="Plan approval"
+      className={cx(
+        run.status === 'waiting_for_approval' && 'border-warning/30 shadow-glow-warning',
+        run.status === 'plan_rejected' && 'border-danger/30',
+      )}
       footer={
         run.approved ? (
           <span>Bound to this exact plan — a revision reopens the gate</span>

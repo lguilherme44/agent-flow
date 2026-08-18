@@ -104,20 +104,30 @@ export function DagView(props: DagViewProps): JSX.Element {
       const onPath =
         selectedId !== undefined && path.onPath.has(edge.from) && path.onPath.has(edge.to);
 
+      const sourceTask = byId.get(edge.from);
+      const targetTask = byId.get(edge.to);
+      const hasRunning =
+        sourceTask?.state === 'running' || targetTask?.state === 'running';
+
       return {
         id: `${edge.from}->${edge.to}`,
         source: edge.from,
         target: edge.to,
         type: 'smoothstep',
         focusable: false,
+        animated: hasRunning && (selectedId === undefined || onPath),
         style: {
-          stroke: onPath ? 'var(--af-primary-bright)' : 'var(--af-border-strong)',
-          strokeWidth: onPath ? 1.6 : 1,
+          stroke: onPath
+            ? 'var(--af-primary-bright)'
+            : hasRunning
+              ? 'var(--af-info)'
+              : 'var(--af-border-strong)',
+          strokeWidth: onPath ? 1.6 : hasRunning ? 1.2 : 1,
           opacity: selectedId === undefined || onPath ? 1 : 0.28,
         },
       };
     });
-  }, [dag, selectedId, path]);
+  }, [dag, selectedId, path, byId]);
 
   const select = useCallback(
     (_event: unknown, node: { id: string }) => {
@@ -193,7 +203,7 @@ export function DagView(props: DagViewProps): JSX.Element {
             aria-pressed={props.isDagFullscreen}
             title={props.isDagFullscreen ? 'Exit fullscreen (Esc)' : 'Expand graph to fullscreen'}
             onClick={props.onToggleFullscreen}
-            className="flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 text-micro text-muted shadow-sm hover:border-border-strong hover:text-text"
+            className="glass flex h-7 items-center gap-1.5 rounded-md border border-glass-border px-2 text-micro text-muted shadow-md hover:border-border hover:text-text transition-colors"
           >
             {props.isDagFullscreen ? (
               <>
@@ -336,12 +346,13 @@ const TaskNodeBody = memo(function TaskNodeBody(props: NodeProps<TaskNode>): JSX
     <div
       className={cx(
         'flex h-full w-full cursor-pointer flex-col justify-center gap-1 rounded-md border bg-surface px-2 py-1.5',
-        'transition-opacity',
+        'transition-all',
         selected
-          ? 'border-primary-bright ring-1 ring-primary-bright'
+          ? 'border-primary-bright ring-1 ring-primary-bright shadow-glow-primary'
           : relation === 'ancestor' || relation === 'descendant'
             ? 'border-primary-border'
             : TONE_BORDER[tone],
+        state === 'running' && !selected && 'shadow-glow-info glow-ring',
         muted && 'opacity-30',
       )}
     >

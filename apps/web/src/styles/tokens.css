@@ -110,9 +110,31 @@
   --af-scale-4: #6488a4; /* 5.04:1 */
   --af-scale-5: #7ea6c2; /* 7.31:1 */
 
-  --af-radius-sm: 6px;
-  --af-radius-md: 8px;
-  --af-radius-lg: 10px;
+  --af-radius-sm: 8px;
+  --af-radius-md: 10px;
+  --af-radius-lg: 12px;
+
+  /* ── Glass surfaces ──────────────────────────────────────────────── */
+  --af-glass-bg: rgba(11, 17, 28, 0.72);
+  --af-glass-border: rgba(148, 163, 184, 0.12);
+  --af-glass-blur: 20px;
+
+  /* ── Elevation shadows (dark-tinted, not grey) ─────────────────── */
+  --af-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --af-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --af-shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.6);
+  --af-shadow-glow: 0 0 40px rgba(124, 58, 237, 0.12);
+
+  /* ── Glow (running state, per tone) ────────────────────────────── */
+  --af-glow-primary: 0 0 24px rgba(124, 58, 237, 0.35);
+  --af-glow-success: 0 0 18px rgba(52, 211, 153, 0.2);
+  --af-glow-info: 0 0 18px rgba(59, 130, 246, 0.2);
+  --af-glow-danger: 0 0 18px rgba(248, 113, 113, 0.2);
+  --af-glow-warning: 0 0 18px rgba(251, 191, 36, 0.15);
+
+  /* ── Ambient blobs (background atmosphere) ─────────────────────── */
+  --af-ambient-1: rgba(124, 58, 237, 0.045);
+  --af-ambient-2: rgba(59, 130, 246, 0.03);
 
   --af-sidebar-width: 216px;
   --af-topbar-height: 56px;

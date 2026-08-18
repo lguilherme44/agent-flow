@@ -287,6 +287,26 @@ describe('corrective tasks are ordered and sized from the work (AD-42, C-16)', (
     expect(fixes[0]?.complexity).toBe('normal');
   });
 
+  it('keeps the file the finding named, which the ordering pass once deleted', () => {
+    // **The regression this test exists for.** Deriving the dependencies spread each task
+    // through the overlap helper under a flattened `files` key and stripped that key on
+    // the way back, which deleted the real `files: { likely }` object — so every generated
+    // fix declared no files at all.
+    //
+    // Silent, because the plan still parsed and the ordering was still correct. What broke
+    // was everything downstream that asks a corrective task which files it will touch: the
+    // AD-46 envelope reads it to decide whether an approval already covers the round, the
+    // AD-38 scope assertion judges the diff against it, and `checkPlan`'s overlap guard
+    // compares it between tasks. All three quietly saw an empty set and agreed.
+    const fixes = fixesOf({
+      verdict: 'FAIL',
+      summary: 's',
+      findings: [finding({ file: 'src/never-touched.ts' })],
+    } as never);
+
+    expect(fixes[0]?.files.likely).toEqual(['src/never-touched.ts']);
+  });
+
   it('never orders a new fix against a task that already ran', () => {
     // An existing task's result is on disk and describes work that happened. Adding an
     // edge to it would reorder something finished.
