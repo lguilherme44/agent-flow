@@ -1387,12 +1387,38 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       .filter(({ path }) => !allowed.has(path))
       .filter(
         ({ text }) =>
-          /TaskAttemptResultSchema|AttemptReceipt/.test(codeOnly(text)) ||
+          /AttemptReceipt\b/.test(codeOnly(text)) ||
           importSpecifiers(text).some((specifier) => specifier.includes('attempt.schema')),
       )
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
+
+    // Parsing an attempt artifact back is a different act from composing one, and AR-08's
+    // per-task history needs it: every fact about what an earlier attempt did lives in
+    // these files and nowhere else. So the schema may be *read* by one named read model —
+    // which is held, right here, to writing nothing.
+    const readers = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !allowed.has(path))
+      .filter(({ text }) => /TaskAttemptResultSchema|FailedAttemptSchema/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    // Two, with different jobs. `task-executor.ts` authors the *failed* attempt — the
+    // receipt module owns success and only success — and `run-reader.ts` reads both back.
+    expect(readers.sort()).toEqual(['src/app/task-executor.ts', 'src/server/run-reader.ts']);
+
+    // The reader is held to reading. `safeParse` and nothing else: one that could `parse`
+    // would take the whole task view down on a single half-written artifact, and one that
+    // could write would be a second author of the evidence this milestone treats as
+    // authoritative.
+    const reader = codeOnly(read(join(ROOT, 'src/server/run-reader.ts')).text);
+    expect(reader, 'the read model writes an attempt artifact').not.toMatch(
+      /writeFile|recordAttempt|AttemptReceipt/,
+    );
+    expect(reader, 'the read model parses an attempt strictly').not.toMatch(
+      /(?:TaskAttemptResultSchema|FailedAttemptSchema)\.parse\b/,
+    );
 
     // And the path is composed in `paths.ts`, like every other artifact — so
     // "the artifact lives outside every worktree" is a property of one function

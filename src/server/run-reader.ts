@@ -5,6 +5,9 @@ import {
   type ArtifactView,
   type Plan,
   type RunDagView,
+  type AttemptHistoryView,
+  FailedAttemptSchema,
+  TaskAttemptResultSchema,
   type RunDetailView,
   type RunProjection,
   type RunRefView,
@@ -575,7 +578,112 @@ export class RunReader {
       })),
       log: await this.readTaskLog(project, runId, taskId),
       attemptLogs: await this.readAttemptLogs(project, runId, taskId),
+      ...(await this.attemptHistoryOf(project, runId, taskId, summary.attempts ?? 0)),
     };
+  }
+
+  /**
+   * What each attempt did, from its own artifact (AR-08).
+   *
+   * The flattened fields on `TaskDetailView` describe the newest attempt only, which was
+   * enough while a second attempt meant somebody had typed `retry --force`. AR-03 made
+   * retry automatic and the default, so "what failed the first time, did it cost a budget,
+   * and did the retry run on the same model" became ordinary questions with no answer.
+   *
+   * Every fact was already on disk. This reader opened those same files only to ask whether
+   * a merge had happened.
+   *
+   * Tolerant, because it is a read model: one unparseable artifact costs its own entry and
+   * never the task view.
+   *
+   * **Bounded by the task's own counter, not by `MAX_SUPPORTED_ATTEMPT`.** That constant is
+   * `Number.MAX_SAFE_INTEGER` — it exists to bound path *validity*, and a loop that scans
+   * to it never returns. The sibling that reads logs gets away with it by stopping at the
+   * first gap; this one cannot, because an attempt that failed before the runner started
+   * writes no log and stopping there would hide every attempt after it. The counter is the
+   * exact bound, and `+ 1` covers the attempt in flight whose artifact lands before the
+   * counter does.
+   */
+  private async attemptHistoryOf(
+    project: RegisteredProject,
+    runId: string,
+    taskId: string,
+    attempts: number,
+  ): Promise<{ attemptHistory?: AttemptHistoryView[] }> {
+    const paths = runPaths(project.path, runId);
+    const history: AttemptHistoryView[] = [];
+
+    for (let attempt = 1; attempt <= attempts + 1; attempt += 1) {
+      const entry =
+        (await this.readFailedAttempt(paths.failedAttempt(taskId, attempt))) ??
+        (await this.readSucceededAttempt(paths.taskAttempt(taskId, attempt)));
+      if (entry === undefined) continue;
+
+      history.push({
+        ...entry,
+        log: linesOf(
+          (await this.options.fs.exists(paths.log(attemptLogName(taskId, attempt))))
+            ? await this.options.fs.readFile(paths.log(attemptLogName(taskId, attempt)))
+            : '',
+        ),
+      });
+    }
+
+    // Absent rather than empty. A sequential run writes one unsuffixed log and no receipts,
+    // and "0 attempts" over a task that ran would be a claim nobody made.
+    return history.length === 0 ? {} : { attemptHistory: history };
+  }
+
+  private async readFailedAttempt(path: string): Promise<Omit<AttemptHistoryView, 'log'> | undefined> {
+    const parsed = FailedAttemptSchema.safeParse(await this.readJson(path));
+    if (!parsed.success) return undefined;
+
+    const failure = parsed.data;
+    return {
+      attempt: failure.attempt,
+      outcome: 'failed',
+      runner: failure.runner,
+      ...(failure.model === undefined ? {} : { model: failure.model }),
+      reasoning: failure.reasoning,
+      reasoningClamped: failure.reasoningClamped,
+      startedAt: failure.startedAt,
+      finishedAt: failure.finishedAt,
+      failureClass: failure.failureClass,
+      consumedAttempt: failure.consumedAttempt,
+      failedCommands: (failure.validation?.commands ?? [])
+        .filter((command) => command.exitCode !== 0)
+        .map((command) => command.command),
+    };
+  }
+
+  private async readSucceededAttempt(
+    path: string,
+  ): Promise<Omit<AttemptHistoryView, 'log'> | undefined> {
+    const parsed = TaskAttemptResultSchema.safeParse(await this.readJson(path));
+    if (!parsed.success) return undefined;
+
+    const result = parsed.data;
+    return {
+      attempt: result.attempt,
+      outcome: 'succeeded',
+      runner: result.runner,
+      ...(result.model === undefined ? {} : { model: result.model }),
+      reasoning: result.reasoning,
+      reasoningClamped: result.reasoningClamped,
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+      failedCommands: [],
+    };
+  }
+
+  private async readJson(path: string): Promise<unknown> {
+    if (!(await this.options.fs.exists(path))) return undefined;
+    try {
+      return JSON.parse(await this.options.fs.readFile(path));
+    } catch {
+      // A read model. A half-written artifact costs its own entry, never the view.
+      return undefined;
+    }
   }
 
   async artifacts(project: RegisteredProject, runId: string): Promise<ArtifactView[] | null> {

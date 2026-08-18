@@ -410,6 +410,48 @@ export interface TaskDetailView extends TaskSummaryView {
    * Empty for a sequential run, which writes one unsuffixed log and always did.
    */
   readonly attemptLogs?: { readonly attempt: number; readonly lines: string[] }[];
+  /**
+   * What each attempt did, oldest first (AR-08).
+   *
+   * The flattened fields above describe the **newest** attempt only. That was tolerable
+   * while a second attempt required somebody to type `retry --force`; with AR-03's
+   * automatic recovery on by default it is the normal path, and the questions it leaves
+   * unanswerable are the ones a person actually has — what failed the first time, whether
+   * it cost a budget, and whether the retry ran on the same model.
+   *
+   * Absent rather than empty for a task with no attempt artifacts. A sequential run writes
+   * one unsuffixed log and no receipts, and "0 attempts" over a task that ran is wrong.
+   */
+  readonly attemptHistory?: AttemptHistoryView[];
+}
+
+/**
+ * One attempt, as its own artifact recorded it (§11.3, AD-34).
+ *
+ * Read from `attempt-<n>.json` and `attempt-<n>.failed.json` rather than reconstructed from
+ * the task's current state, which only remembers the last one. `consumedAttempt` in
+ * particular is *recorded* rather than recomputed: it is the decision the recovery budget
+ * was applied to at the time, and a reader asking "why was retry still allowed" deserves an
+ * answer that does not depend on a policy table that may since have changed (I-22).
+ */
+export interface AttemptHistoryView {
+  readonly attempt: number;
+  readonly outcome: 'succeeded' | 'failed';
+  /** What actually ran, not what was configured — under a fallback the two differ. */
+  readonly runner: string;
+  readonly model?: string;
+  readonly reasoning: ReasoningLevel;
+  readonly reasoningClamped: boolean;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  /** Present on a failure. The refined class, never the raw transport code. */
+  readonly failureClass?: string;
+  /** Whether this failure spent one of the task's work attempts (AD-37, I-22). */
+  readonly consumedAttempt?: boolean;
+  /** Just the command names. The output lives in the log, which is paired below. */
+  readonly failedCommands: string[];
+  /** This attempt's own log, already stripped of terminal escapes. Empty when none. */
+  readonly log: string[];
 }
 
 /**
