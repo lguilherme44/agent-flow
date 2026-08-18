@@ -197,6 +197,17 @@ export interface StageRunOptions {
    * task legitimately receives a lot. Absent for a pipeline stage, which is not classified.
    */
   readonly complexity?: Task['complexity'];
+  /**
+   * Which task and attempt this stage is running for (AR-09).
+   *
+   * Absent for a pipeline stage, which genuinely belongs to no task. Present for an
+   * implementation stage, because AR-09's acceptance asks for a recovered task's cost
+   * *against a first-attempt baseline* — and a baseline is a comparison between two
+   * attempts of one task. `implementation` runs once per task per attempt, so an event
+   * naming only the stage cannot be joined to either of them.
+   */
+  readonly task?: string;
+  readonly attempt?: number;
 }
 
 /**
@@ -374,6 +385,10 @@ export class StageRunner {
     await store.appendEvent(runId, 'stage_context_measured', {
       stage: stage.name,
       role: stage.role,
+      // Omitted rather than defaulted for a stage with no task: `task: ''` would join to
+      // nothing while looking as though it should.
+      ...(options.task === undefined ? {} : { task: options.task }),
+      ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
       totalBytes: composition.totalBytes,
       parts: composition.parts,
       overCeiling: composition.overCeiling,

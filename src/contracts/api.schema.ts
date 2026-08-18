@@ -452,6 +452,21 @@ export interface AttemptHistoryView {
   readonly failedCommands: string[];
   /** This attempt's own log, already stripped of terminal escapes. Empty when none. */
   readonly log: string[];
+  /**
+   * What this attempt's prompt cost, in bytes (AR-09).
+   *
+   * Absent when nothing measured it — a run predating the measurement, or a stage whose
+   * event never landed. Reporting `0` would be a number nobody produced.
+   */
+  readonly contextBytes?: number;
+  /**
+   * What this retry's context added over the attempt it replaced (AR-09).
+   *
+   * Absent on the first attempt, which has nothing to be compared against. Negative when
+   * the retry was cheaper, which happens and is worth saying: a packet that displaced a
+   * large advisory block makes the second attempt smaller than the first.
+   */
+  readonly recoveryCost?: { readonly addedBytes: number; readonly addedShare: number };
 }
 
 /**

@@ -229,6 +229,77 @@ describe('attempt history (AR-08)', () => {
     expect(history?.map((entry) => entry.attempt)).toEqual([2]);
   });
 
+  it('reports what each attempt cost, and what the retry added (AR-09)', async () => {
+    // AR-09's acceptance, in the one place it can be checked: "a recovered task's total
+    // token cost is reported against a first-attempt baseline".
+    //
+    // `recoveryCostAgainstBaseline` existed, was tested, and had **no caller** — the same
+    // disease as the runtime projection. A measurement nothing reports is not a measurement;
+    // it is a function with a test.
+    const { fs, store, reader, run, paths } = await world();
+    fs.seed(paths.failedAttempt('TASK-001', 1), failed(run.runId, 1));
+    fs.seed(paths.taskAttempt('TASK-001', 2), succeeded(run.runId, 2));
+
+    await store.appendEvent(run.runId, 'stage_context_measured', {
+      stage: 'implementation',
+      role: 'executor.trivial',
+      task: 'TASK-001',
+      attempt: 1,
+      totalBytes: 10_000,
+      parts: [{ source: 'stagePrompt', bytes: 10_000, share: 100 }],
+      overCeiling: false,
+    });
+    await store.appendEvent(run.runId, 'stage_context_measured', {
+      stage: 'implementation',
+      role: 'executor.trivial',
+      task: 'TASK-001',
+      attempt: 2,
+      totalBytes: 12_500,
+      parts: [{ source: 'stagePrompt', bytes: 12_500, share: 100 }],
+      overCeiling: false,
+    });
+
+    const history = (await reader.taskDetail(PROJECT, run.runId, 'TASK-001'))?.attemptHistory;
+
+    expect(history?.[0]?.contextBytes).toBe(10_000);
+    expect(history?.[1]?.contextBytes).toBe(12_500);
+    // The packet's price, against the attempt it replaced.
+    expect(history?.[1]?.recoveryCost).toEqual({ addedBytes: 2_500, addedShare: 25 });
+    // The first attempt has nothing to be compared against, and inventing 0% would be an
+    // assertion nobody measured.
+    expect(history?.[0]?.recoveryCost).toBeUndefined();
+  });
+
+  it('reports no cost rather than a fabricated one when nothing measured it', async () => {
+    // A run predating AR-09, or a stage whose measurement never landed.
+    const { fs, reader, run, paths } = await world();
+    fs.seed(paths.failedAttempt('TASK-001', 1), failed(run.runId, 1));
+
+    const history = (await reader.taskDetail(PROJECT, run.runId, 'TASK-001'))?.attemptHistory;
+
+    expect(history?.[0]?.contextBytes).toBeUndefined();
+    expect(history?.[0]?.recoveryCost).toBeUndefined();
+  });
+
+  it('ignores a measurement belonging to another task', async () => {
+    const { fs, store, reader, run, paths } = await world();
+    fs.seed(paths.failedAttempt('TASK-001', 1), failed(run.runId, 1));
+
+    await store.appendEvent(run.runId, 'stage_context_measured', {
+      stage: 'implementation',
+      role: 'executor.trivial',
+      task: 'TASK-002',
+      attempt: 1,
+      totalBytes: 99_000,
+      parts: [],
+      overCeiling: false,
+    });
+
+    const history = (await reader.taskDetail(PROJECT, run.runId, 'TASK-001'))?.attemptHistory;
+
+    expect(history?.[0]?.contextBytes).toBeUndefined();
+  });
+
   it('never scans past the task\'s own attempt counter', async () => {
     // **The regression this exists for.** `MAX_SUPPORTED_ATTEMPT` is `Number.MAX_SAFE_INTEGER`
     // — it bounds path *validity*, not iteration. The sibling that reads logs gets away with

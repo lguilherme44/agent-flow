@@ -1,3 +1,4 @@
+import { decideRunAutonomy, recordAutonomousCall } from './autonomy-budget.js';
 import type {
   FailureClass,
   Plan,
@@ -891,6 +892,33 @@ export class Scheduler {
       ...(decision.step === undefined ? {} : { step: decision.step }),
     });
 
+    // C-22's run-level ceiling, checked before the per-task decision is acted on. The
+    // per-task budgets bound each task and always did; what had no ceiling was the *run*,
+    // and a run is what autonomy is granted to. 24 calls with nobody watching is the
+    // default, and the whole point of it is that the machine stops and asks.
+    const runBudget = decideRunAutonomy({
+      counters: {
+        autonomousModelCalls: state.autonomy?.autonomousModelCalls ?? 0,
+        correctiveRoundsUsed: state.autonomy?.correctiveRoundsUsed ?? 0,
+      },
+      config: recoveryConfig,
+    });
+
+    if (!runBudget.mayProceedAutomatically) {
+      await this.options.store.appendEvent(runId, 'recovery_exhausted', {
+        task: result.task,
+        failureClass,
+        reason: runBudget.reason,
+        humanAction: runBudget.humanAction ?? 'Review what this run has produced and decide',
+        ...(runBudget.exhaustedBudget === undefined
+          ? {}
+          : { budget: runBudget.exhaustedBudget }),
+        counts: counters,
+        evidence: escalationEvidence(result),
+      });
+      return false;
+    }
+
     if (!decision.mayProceedAutomatically) {
       await this.options.store.appendEvent(runId, 'recovery_exhausted', {
         task: result.task,
@@ -950,6 +978,10 @@ export class Scheduler {
       failedChecks: packet.failedChecks.length,
       truncated: packet.truncated,
     });
+
+    // Counted where the *machine* decided to spend it. A call a person asked for is not
+    // autonomous and must not spend a budget that exists to bound unattended work.
+    await recordAutonomousCall(this.options.store, runId);
 
     await this.options.store.appendEvent(runId, 'recovery_step_completed', {
       task: result.task,

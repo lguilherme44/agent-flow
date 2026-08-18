@@ -1,6 +1,8 @@
+import { renderFailureContext } from '../core/failure-context.js';
 import { stringify as toYaml } from 'yaml';
 import {
   FailedAttemptSchema,
+  FailureContextPacketSchema,
   TaskResultSchema,
   type EffectiveConfig,
   type Task,
@@ -198,8 +200,15 @@ export class TaskExecutor {
           sdd,
           projectConfig: config.project === undefined ? 'None.' : toYaml(config.project).trim(),
           agentsMd: await this.readAgentsMd(workingDirectory),
+          failureContext: await this.readFailureContext(runId, task.id, workspace?.attempt ?? 1),
         },
-        { workingDirectory, complexity: task.complexity },
+        {
+          workingDirectory,
+          complexity: task.complexity,
+          // AR-09: what this attempt's context cost, attributable to this attempt.
+          task: task.id,
+          ...(workspace?.attempt === undefined ? {} : { attempt: workspace.attempt }),
+        },
       );
       text = result.text;
       execution = result.execution;
@@ -697,6 +706,40 @@ export class TaskExecutor {
     });
 
     return parsed;
+  }
+
+  /**
+   * What the previous attempt learned, rendered into this one's prompt (AD-40, AR-03).
+   *
+   * **The defect this closes.** The packet was built by the scheduler, persisted to
+   * `attempt-<n>.context.json` and recorded in the event log — and stopped there. Nothing
+   * read it back, `renderFailureContext` had no caller, and `implementation.md` had no slot
+   * for it, so automatic recovery re-ran the identical prompt. That is not recovery; it is
+   * a retry loop with more bookkeeping, and it would have spent the whole attempt budget
+   * rediscovering one failure.
+   *
+   * Empty on a first attempt, and empty on a packet that will not parse. An uninformed
+   * attempt is worse than an informed one; it is not worse than no attempt at all, and a
+   * crash between requeue and retry must not strand the task.
+   */
+  private async readFailureContext(
+    runId: string,
+    taskId: string,
+    attempt: number,
+  ): Promise<string> {
+    if (attempt <= 1) return '';
+
+    const path = runPaths(this.options.projectDir, runId).attemptContext(taskId, attempt);
+    if (!(await this.options.fs.exists(path))) return '';
+
+    try {
+      const packet = FailureContextPacketSchema.parse(
+        JSON.parse(await this.options.fs.readFile(path)),
+      );
+      return renderFailureContext(packet);
+    } catch {
+      return '';
+    }
   }
 
   private async readAgentsMd(workingDirectory: string): Promise<string> {

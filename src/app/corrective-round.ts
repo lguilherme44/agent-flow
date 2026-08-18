@@ -1,3 +1,7 @@
+import { recordCorrectiveRound } from './autonomy-budget.js';
+import { repairCorrectivePlan } from '../core/corrective-plan-repair.js';
+import { decideCorrectivePlanRepair } from '../core/recovery-policy.js';
+import type { RecoveryConfig } from '../contracts/index.js';
 import type { Plan, ReviewResult, Task } from '../contracts/index.js';
 import { applyFixes } from '../core/corrective-plan.js';
 import {
@@ -26,6 +30,15 @@ export interface CorrectiveRoundOptions {
   readonly sdd: string;
   readonly architectureImpact: string;
   readonly validation: ValidationRegistry;
+  /**
+   * AD-47's budget, as configuration rather than a number.
+   *
+   * The whole `recovery` block, because `decideCorrectivePlanRepair` is the table that owns
+   * this decision and it takes the config. Passing a bare count would put the comparison
+   * here as well as there, and the copy that drifted would be the one deciding whether a
+   * machine keeps rewriting a plan. Absent restores the one-shot behaviour exactly.
+   */
+  readonly recovery?: RecoveryConfig;
   /**
    * What this approval already covers (AD-46). Absent means "reopen approval", which is
    * the behaviour every caller had before AR-05b — a caller that cannot compute the
@@ -82,13 +95,24 @@ export async function runCorrectiveRound(
   // The same mechanical checks a freshly planned document must pass. A
   // corrective plan that fails them is a defect in the generator, and shipping
   // it to a reviewer would spend a call to be told so.
-  const problems = checkPlan(next, options.sdd, options.validation);
-  if (problems.length > 0) {
-    await store.appendEvent(runId, 'corrective_plan_rejected', { problems });
-    return { outcome: 'invalid_plan', problems };
+  //
+  // **Repaired rather than surrendered** (AD-47, C-16). This used to be one-shot: `checkPlan`
+  // fails, the round returns `invalid_plan`, and a person writes the revision. AD-42 exists
+  // to stop generating the plans that failed in the evidence run, and this loop exists for
+  // the residue — "AD-42 is complete" is not a claim worth betting a stuck run on. The
+  // repairs are a closed mechanical set, every one of them legible in the resulting plan,
+  // and a model never authors one.
+  const repaired = await repairUntilValid(next, added, options);
+  if (repaired.problems.length > 0) {
+    await store.appendEvent(runId, 'corrective_plan_rejected', {
+      problems: repaired.problems,
+      repairsAttempted: repaired.attempts,
+    });
+    return { outcome: 'invalid_plan', problems: repaired.problems };
   }
 
-  await store.writeArtifact(runId, 'plan', `${JSON.stringify(next, null, 2)}\n`);
+  const accepted = repaired.plan;
+  await store.writeArtifact(runId, 'plan', `${JSON.stringify(accepted, null, 2)}\n`);
 
   // **Does this approval already cover these fixes?** (AD-46, C-18, I-25)
   //
@@ -149,6 +173,11 @@ export async function runCorrectiveRound(
     }));
   }
 
+  // The counter `evaluateRound` reads to bound the next round. It was read and never
+  // written, so every round compared 0 against `maxCorrectiveRounds` and a plan could
+  // produce corrective rounds indefinitely (C-22).
+  await recordCorrectiveRound(store, runId);
+
   await store.appendEvent(runId, 'corrective_plan_created', {
     added: added.map((task) => task.id),
     origin: options.origin,
@@ -163,7 +192,7 @@ export async function runCorrectiveRound(
 
   const review = await service.review({
     runId,
-    plan: next,
+    plan: accepted,
     sdd: options.sdd,
     architectureImpact: options.architectureImpact,
     authors: await correctivePlanAuthors(options),
@@ -185,7 +214,7 @@ export async function runCorrectiveRound(
 
   return {
     outcome: 'applied',
-    plan: next,
+    plan: accepted,
     added,
     ...(envelope === undefined ? {} : { envelope }),
     review,
@@ -209,4 +238,58 @@ async function correctivePlanAuthors(options: CorrectiveRoundOptions): Promise<s
   const planners = stageRunnersOf(events, 'planning');
 
   return [...new Set([...planners, options.finalReview.reviewer.runner])];
+}
+
+/**
+ * Repair and re-validate, up to `maxCorrectivePlanRepairs` (AD-47).
+ *
+ * Terminates on three conditions, and every one of them is checked: the plan validates, the
+ * repair produced nothing new, or the budget is spent. The middle one matters most — a
+ * repair loop that reports progress without making any is exactly the loop C-22 exists to
+ * terminate, and "the plan still fails and nothing changed" is the signal that says so.
+ */
+async function repairUntilValid(
+  plan: Plan,
+  added: readonly Task[],
+  options: CorrectiveRoundOptions,
+): Promise<{ plan: Plan; problems: string[]; attempts: number }> {
+  const correctiveIds = added.map((task) => task.id);
+  const recovery = options.recovery;
+
+  let current = plan;
+  let problems = checkPlan(current, options.sdd, options.validation);
+  let attempts = 0;
+
+  while (
+    problems.length > 0 &&
+    recovery !== undefined &&
+    decideCorrectivePlanRepair({ repairsUsed: attempts, config: recovery })
+      .mayProceedAutomatically
+  ) {
+    const repaired = repairCorrectivePlan(current, {
+      correctiveIds,
+      validation: {
+        ids: options.validation.ids,
+        // The project's own default set, never an invented id. A validation id that does
+        // not resolve fails the task for the wrong reason.
+        defaults: options.validation.ids.filter((id) => id === 'test'),
+      },
+    });
+
+    // Nothing mechanical applied. Another pass would produce the identical plan and the
+    // identical problems, which is a loop rather than a repair.
+    if (repaired.applied.length === 0) break;
+
+    attempts += 1;
+    current = repaired.plan;
+    problems = checkPlan(current, options.sdd, options.validation);
+
+    await options.store.appendEvent(options.runId, 'corrective_plan_repaired', {
+      attempt: attempts,
+      applied: repaired.applied,
+      remaining: problems.length,
+    });
+  }
+
+  return { plan: current, problems, attempts };
 }

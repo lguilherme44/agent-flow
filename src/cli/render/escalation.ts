@@ -1,4 +1,5 @@
 import type { RuntimeEscalation } from '../../contracts/index.js';
+import { isCompleteEscalation } from '../../core/recovery-policy.js';
 
 /**
  * What an exhausted recovery loop tells the person who has to finish the job (C-22, AR-08).
@@ -39,6 +40,15 @@ export function renderEscalation(escalation: RuntimeEscalation): string {
 
   if (escalation.evidence.length > 0) {
     lines.push('', '  Evidence', ...escalation.evidence.map((line) => `    ${line}`));
+  }
+
+  // The predicate C-22 exports precisely so both surfaces judge "enough detail" the same
+  // way. A record captured before the counters and evidence existed is still worth showing;
+  // showing it as though it were complete is how a reader concludes the machine barely
+  // tried, when what is missing is the recording rather than the work.
+  if (!isCompleteEscalation(escalation)) {
+    lines.push('', '  This escalation was recorded before the run captured full evidence;');
+    lines.push('  the attempt log holds what is missing here.');
   }
 
   lines.push('', `Do this: ${escalation.humanAction}`);

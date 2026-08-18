@@ -1,4 +1,5 @@
 import { projectRun } from '../core/run-projection.js';
+import { recoveryCostAgainstBaseline } from '../core/prompt-budget.js';
 import {
   PlanSchema,
   type ArtifactContentView,
@@ -612,12 +613,27 @@ export class RunReader {
   ): Promise<{ attemptHistory?: AttemptHistoryView[] }> {
     const paths = runPaths(project.path, runId);
     const history: AttemptHistoryView[] = [];
+    const measured = await this.contextBytesByAttempt(project, runId, taskId);
+    const baseline = measured.get(1);
 
     for (let attempt = 1; attempt <= attempts + 1; attempt += 1) {
       const entry =
         (await this.readFailedAttempt(paths.failedAttempt(taskId, attempt))) ??
         (await this.readSucceededAttempt(paths.taskAttempt(taskId, attempt)));
       if (entry === undefined) continue;
+
+      const bytes = measured.get(attempt);
+      // AR-09's acceptance: a recovered task's cost, against the attempt it replaced.
+      // `recoveryCostAgainstBaseline` returns `undefined` rather than inventing a ratio when
+      // there is no baseline — a first attempt whose size nobody recorded cannot be compared
+      // against, and both 0% and 100% would be assertions nobody measured.
+      const cost =
+        attempt === 1 || bytes === undefined
+          ? undefined
+          : recoveryCostAgainstBaseline({
+              ...(baseline === undefined ? {} : { baselineBytes: baseline }),
+              retryBytes: bytes,
+            });
 
       history.push({
         ...entry,
@@ -626,12 +642,42 @@ export class RunReader {
             ? await this.options.fs.readFile(paths.log(attemptLogName(taskId, attempt)))
             : '',
         ),
+        ...(bytes === undefined ? {} : { contextBytes: bytes }),
+        ...(cost === undefined ? {} : { recoveryCost: cost }),
       });
     }
 
     // Absent rather than empty. A sequential run writes one unsuffixed log and no receipts,
     // and "0 attempts" over a task that ran would be a claim nobody made.
     return history.length === 0 ? {} : { attemptHistory: history };
+  }
+
+  /**
+   * What each attempt's prompt measured, from `stage_context_measured` (AR-09).
+   *
+   * The event is the only record: the composition is computed at render time and nothing
+   * else keeps it. Read tolerantly and filtered to this task, because `implementation` runs
+   * once per task per attempt and every one of them writes an event under the same stage
+   * name — which is why the event carries the attribution at all.
+   */
+  private async contextBytesByAttempt(
+    project: RegisteredProject,
+    runId: string,
+    taskId: string,
+  ): Promise<Map<number, number>> {
+    const events = await this.storeFor(project).readEventsBestEffort(runId);
+    const bytes = new Map<number, number>();
+
+    for (const event of events) {
+      if (event.type !== 'stage_context_measured') continue;
+      if (event.detail['task'] !== taskId) continue;
+
+      const attempt = event.detail['attempt'];
+      const total = event.detail['totalBytes'];
+      if (typeof attempt === 'number' && typeof total === 'number') bytes.set(attempt, total);
+    }
+
+    return bytes;
   }
 
   private async readFailedAttempt(path: string): Promise<Omit<AttemptHistoryView, 'log'> | undefined> {

@@ -83,3 +83,24 @@ describe('what an exhausted run tells the person who has to fix it', () => {
     expect(rendered).toMatch(/no repair|nothing was attempted|no automatic repair/i);
   });
 });
+
+describe('an escalation that is thin says so', () => {
+  it('marks a record that predates the enrichment, rather than reading as complete', () => {
+    // `isCompleteEscalation` is the predicate C-22 exports so "both the CLI and the HTTP
+    // API can be held to it by the same predicate, rather than each surface asserting its
+    // own idea of enough detail". Neither held it, so a run recorded before the counters
+    // and evidence were captured rendered as a full escalation with a few empty sections —
+    // and a reader concluded the machine had barely tried.
+    const rendered = renderEscalation(
+      escalation({ counts: {}, evidence: [], attemptedRepairs: [] }),
+    );
+
+    expect(rendered).toMatch(/recorded before|incomplete|not recorded/i);
+    // The action still leads, because it is still the thing to do.
+    expect(rendered.trimEnd().split('\n').at(-1)).toContain('attempt-3.failed.json');
+  });
+
+  it('says nothing extra when the record is complete', () => {
+    expect(renderEscalation(escalation())).not.toMatch(/recorded before|incomplete/i);
+  });
+});

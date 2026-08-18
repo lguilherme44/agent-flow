@@ -1,3 +1,4 @@
+import { clearAutonomy } from './autonomy-budget.js';
 import { createHash } from 'node:crypto';
 import {
   ReviewResultSchema,
@@ -605,6 +606,11 @@ async function grantApproval(
   const forced = !check.allowed && options.force === true;
   await recordApproval(context.store, runId, plan, { forced });
 
+  // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
+  // stay spent; the count of calls made *with no intervening human action* is by definition
+  // broken by this one.
+  await clearAutonomy(context.store, runId);
+
   return done(
     { runId, planHash: planHash(plan), taskCount: plan.tasks.length, forced },
     check.warnings,
@@ -669,6 +675,11 @@ async function rejectPlan(
   }
 
   await context.store.updateRun(runId, (current) => ({ ...current, status: 'plan_rejected' }));
+  // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
+  // stay spent; the count of calls made *with no intervening human action* is by definition
+  // broken by this one.
+  await clearAutonomy(context.store, runId);
+
   await context.store.appendEvent(runId, 'run_rejected', {
     reason: reason ?? '(no reason given)',
   });
@@ -802,6 +813,11 @@ async function requeue(
     task: taskId,
     forced: options.force === true,
   });
+
+  // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
+  // stay spent; the count of calls made *with no intervening human action* is by definition
+  // broken by this one.
+  await clearAutonomy(context.store, runId);
 
   return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
 }
@@ -1175,6 +1191,11 @@ async function replan(
     await context.store.appendEvent(runId, 'approval_invalidated', { reason: 'revise' });
     approvalCleared = true;
   }
+
+  // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
+  // stay spent; the count of calls made *with no intervening human action* is by definition
+  // broken by this one.
+  await clearAutonomy(context.store, runId);
 
   await context.store.appendEvent(runId, 'revision_requested', {
     instruction: trimmed,
@@ -1633,6 +1654,8 @@ async function correctPlan(
     // Every input is mechanical: the touched files come from the integration diff, the
     // requirement ids from the approved SDD, the validation ids from the project's own
     // configuration, and the budget from the run's persisted counter. Nothing here is a
+    // AD-47's budget, decided by the policy table rather than compared here.
+    recovery: context.config.global.recovery,
     // judgement, and nothing a model wrote reaches it.
     envelope: {
       context: {

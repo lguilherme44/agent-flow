@@ -25,6 +25,8 @@ Implement one task. Only this task.
 
 {{agentsMd}}
 
+{{failureContext}}
+
 ## Rules
 
 **The specification is the contract.** It was reviewed and approved by a human (as an SDD for standard workflows, or as the approved plan and acceptance criteria for lightweight workflows). Where the

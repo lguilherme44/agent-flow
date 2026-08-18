@@ -764,6 +764,43 @@ describe('the prompt is measured, by source (AR-09)', () => {
     expect(Number(measured?.detail?.['totalBytes'])).toBeGreaterThan(0);
   });
 
+  it('attributes the measurement to the attempt it belongs to (AR-09)', async () => {
+    // **Without this the number is unusable.** AR-09's acceptance asks for a recovered
+    // task's cost "against a first-attempt baseline", and a baseline is a comparison
+    // between two attempts of one task. An event that names only the stage cannot be joined
+    // to either of them: `implementation` runs once per task per attempt, so every one of
+    // them writes an event with the identical `stage` field.
+    const { stageRunner, run, store, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' }, {
+      task: 'TASK-001',
+      attempt: 2,
+    });
+
+    const measured = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+
+    expect(measured?.detail).toMatchObject({ task: 'TASK-001', attempt: 2 });
+  });
+
+  it('omits the attribution for a stage that has no task', async () => {
+    // Absent rather than a placeholder. A pipeline stage genuinely belongs to no task, and
+    // `task: ''` would join to nothing while looking like it should.
+    const { stageRunner, run, store, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    const measured = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+
+    expect(measured?.detail?.['task']).toBeUndefined();
+    expect(measured?.detail?.['attempt']).toBeUndefined();
+  });
+
   it('attributes AGENTS.md separately from our own prompt', async () => {
     // Four sources, four owners. A single total cannot tell anybody which one to shrink.
     const { stageRunner, run, store, runner } = await harness();

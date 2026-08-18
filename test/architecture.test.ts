@@ -3290,3 +3290,82 @@ describe('the (runner, model) capability seam (AD-30)', () => {
     expect(fallback).toMatch(/primary\.capabilities\(model\)/);
   });
 });
+
+/**
+ * The disease this milestone kept catching in itself: built, tested, and never wired.
+ *
+ * Three times in one sitting. `projectRun` answered C-19 … C-22 with thirty-nine passing
+ * tests and **no consumer**, so every surface kept deriving its own answer and disagreeing.
+ * `recoveryCostAgainstBaseline` was AR-09's acceptance criterion — "a recovered task's cost
+ * against a first-attempt baseline" — with no caller, so nothing reported it.
+ * `renderFailureContext` turned the Failure Context Packet into the text a retry is given,
+ * had no caller, and `implementation.md` had no slot for it: **automatic recovery re-ran the
+ * identical prompt**, which is a retry loop with bookkeeping rather than recovery.
+ *
+ * Every one of those had a green unit test. That is the point. A test proves a function
+ * computes; nothing in a unit test proves anybody calls it, and "the milestone is done"
+ * was read off the wrong signal all three times.
+ */
+describe('a core module built for a milestone is actually wired to one', () => {
+  // The AR milestone modules. Scoped rather than global because a shared vocabulary module
+  // legitimately exports more than any one caller uses; these were each written to be
+  // consumed by a named surface, and each silently was not.
+  const AR_MODULES = [
+    'src/core/run-projection.ts',
+    'src/core/prompt-budget.ts',
+    'src/core/failure-context.ts',
+    'src/core/acceptance.ts',
+    'src/core/file-overlap.ts',
+    'src/core/corrective-envelope.ts',
+    'src/core/recovery-policy.ts',
+  ];
+
+  const wholeSource = sourceFiles('src').map(read);
+
+  it('exports no function that nothing calls', () => {
+    const uncalled: string[] = [];
+
+    for (const path of AR_MODULES) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      for (const [, name] of code.matchAll(/export function (\w+)/g)) {
+        // One occurrence is the declaration itself. A function with only that has no call
+        // site anywhere in the product — the exact shape all three defects took.
+        const mentions = wholeSource.reduce(
+          (total, file) =>
+            total + [...codeOnly(file.text).matchAll(new RegExp(`\\b${name}\\b`, 'g'))].length,
+          0,
+        );
+        if (mentions <= 1) uncalled.push(`${path}:${name}`);
+      }
+    }
+
+    expect(uncalled, 'exported, tested, and called by nothing').toEqual([]);
+  });
+
+  it('is reachable from a surface, not only from other core modules', () => {
+    // The second half, and the one that catches a cluster of dead code that calls itself.
+    // `core` is where answers are computed; `app`, `server` and `cli` are where they reach
+    // somebody. A module none of them can see is a module nobody uses.
+    const consumers = ['src/app', 'src/server', 'src/cli']
+      .flatMap((dir) => sourceFiles(dir))
+      .map(read);
+
+    const unreachable = AR_MODULES.filter((path) => {
+      const bare = path.slice(path.lastIndexOf('/') + 1, -3);
+      return !consumers.some(({ text }) =>
+        importSpecifiers(text).some(
+          (specifier) => specifier.includes(bare) || specifier.includes('contracts/index'),
+        ),
+      );
+    }).filter((path) => {
+      // A module reached only through the contracts barrel still counts, so re-check the
+      // narrow way: somebody names the module directly.
+      const bare = path.slice(path.lastIndexOf('/') + 1, -3);
+      return !consumers.some(({ text }) =>
+        importSpecifiers(text).some((specifier) => specifier.includes(bare)),
+      );
+    });
+
+    expect(unreachable, 'a core module no surface imports').toEqual([]);
+  });
+});
