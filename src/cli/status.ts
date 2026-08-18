@@ -7,6 +7,8 @@ import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
+import { renderEscalation } from './render/escalation.js';
+import { projectRun } from '../core/run-projection.js';
 import { loadConfig } from '../config/loader.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
 import { integrationRef } from '../core/worktree-policy.js';
@@ -104,6 +106,27 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         conflicts,
       )}\n`,
     );
+
+    // C-22, at the one surface a person is most likely to be looking at when a run stops.
+    // Rendered after the run summary rather than instead of it: the escalation says what to
+    // do, and the summary is the context that makes the instruction make sense.
+    const runtime = projectRun({
+      state,
+      ...(plan?.success === true
+        ? {
+            nodes: plan.data.tasks.map((task) => ({
+              id: task.id,
+              dependencies: [...task.dependencies],
+            })),
+          }
+        : {}),
+      events: await store.readEventsBestEffort(state.runId),
+    });
+
+    if (runtime.escalation !== undefined) {
+      process.stdout.write(`\n${renderEscalation(runtime.escalation)}\n`);
+    }
+
     return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);

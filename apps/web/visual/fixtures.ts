@@ -131,6 +131,19 @@ export const RUN: RunDetailView = {
     tasksIntegrated: 0,
   },
   integrationConflicts: [],
+  // The AR-07 projection, agreeing with the numbers above rather than restating them
+  // loosely: three of nine tasks done, the run past approval and executing, and no
+  // recovery to escalate. A fixture that disagreed with itself is exactly what the
+  // `completedTasks` comment above records having happened once already.
+  runtime: {
+    status: 'implementing',
+    resumable: true,
+    progress: {
+      workflow: { done: 3, total: 6 },
+      implementation: { done: 3, total: 9 },
+    },
+    reviewFreshness: 'current',
+  },
 };
 
 /** Six done, one in flight, two ahead — the shape the brief asks for. */

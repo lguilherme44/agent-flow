@@ -32,6 +32,12 @@ const run = (overrides: Partial<RunDetailView> = {}): RunDetailView => ({
   // the runs where one of those three is not true.
   isolation: SEQUENTIAL,
   integrationConflicts: [],
+  runtime: {
+    status: 'implementing',
+    resumable: true,
+    progress: { workflow: { done: 3, total: 6 }, implementation: { done: 0, total: 9 } },
+    reviewFreshness: 'current',
+  },
   ...overrides,
 });
 

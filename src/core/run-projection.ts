@@ -21,86 +21,20 @@ import { buildDag, readyTasks, type DagNode, type TaskStates } from './dag.js';
  * UI a source of truth and guarantee that the CLI and the dashboard disagree.
  */
 
-/**
- * What the run is doing right now.
- *
- * Wider than `RunStatus` on purpose: `recovering`, `correcting`, `blocked_on_human` and
- * `auto_recovery_exhausted` are conditions over persisted state, the event log and the
- * DAG. None of them is a lifecycle state, and none is ever written to disk.
- */
-export const RUNTIME_STATUSES = [
-  'planning',
-  'awaiting_human_approval',
-  'plan_rejected_revisable',
-  'implementing',
-  /** At least one task is in an automatic recovery step. */
-  'recovering',
-  'verifying',
-  'reviewing',
-  /** A corrective round is in flight. */
-  'correcting',
-  /** Held at a gate. Carries which gate, and the one action that clears it. */
-  'blocked_on_human',
-  'auto_recovery_exhausted',
-  'complete',
-  'failed',
-] as const;
-
-export type RuntimeStatus = (typeof RUNTIME_STATUSES)[number];
-
-/**
- * The three progress axes (C-21).
- *
- * Three values because they answer three questions, and collapsing them into one is what
- * produced a percentage that read 100% with verification pending and then *fell* when
- * corrective tasks were appended. A number that can go down is not progress.
- */
-export interface ProgressAxes {
-  /** How far along the pipeline the run is: stages reached over stages required. */
-  readonly workflow: { readonly done: number; readonly total: number };
-  /** Planned tasks completed over planned tasks. Corrective tasks are not counted here. */
-  readonly implementation: { readonly done: number; readonly total: number };
-  /**
-   * Corrective tasks completed over corrective tasks, or `undefined` when none exist.
-   *
-   * `undefined` rather than `0/0`: a run with no corrective work has no corrective
-   * progress, and rendering `0%` would suggest something is pending.
-   */
-  readonly corrective?: { readonly done: number; readonly total: number };
-}
-
-export interface RuntimeGate {
-  /** Which gate holds the run. */
-  readonly gate: 'approval' | 'task_review' | 'agent_blocked' | 'final_acceptance';
-  /** The one action that clears it (AR §3.6). Never "inspect logs". */
-  readonly action: string;
-  /** The tasks involved, when the gate is about tasks. */
-  readonly tasks: readonly string[];
-}
-
-export interface RunProjection {
-  readonly status: RuntimeStatus;
-  /**
-   * Whether the DAG yields executable work **now** (C-19).
-   *
-   * `Resume` is offered if and only if this is true, and `run` refuses before taking the
-   * execution lock when it is false. The evidence run took and released the lock three
-   * times with nothing runnable, because nothing distinguished "held at a gate" from
-   * "resumable".
-   */
-  readonly resumable: boolean;
-  /** Present exactly when the status is `blocked_on_human`. */
-  readonly gate?: RuntimeGate;
-  readonly progress: ProgressAxes;
-  /**
-   * Whether the newest review artifact is the one describing the current state (C-20).
-   *
-   * A review is a statement about one tree at one time. A planning stage that started
-   * *after* the review was written supersedes it, and presenting it as current is how
-   * `plan_rejected` stayed on screen while revision 2 was already running.
-   */
-  readonly reviewFreshness: 'current' | 'superseded' | 'absent';
-}
+export {
+  RUNTIME_STATUSES,
+  type ProgressAxes,
+  type RunProjection,
+  type RuntimeEscalation,
+  type RuntimeGate,
+  type RuntimeStatus,
+} from '../contracts/index.js';
+import type {
+  ProgressAxes,
+  RunProjection,
+  RuntimeEscalation,
+  RuntimeGate,
+} from '../contracts/index.js';
 
 export interface ProjectionInput {
   readonly state: RunState;
@@ -172,7 +106,12 @@ export function projectRun(input: ProjectionInput): RunProjection {
 
   const exhausted = lastEventIndex(events, 'recovery_exhausted');
   if (exhausted >= 0 && exhausted > lastEventIndex(events, 'task_requeued')) {
-    return { ...base, status: 'auto_recovery_exhausted' };
+    // C-22: the status is the least of what termination owes the reader.
+    return {
+      ...base,
+      status: 'auto_recovery_exhausted',
+      escalation: projectEscalation(events, exhausted),
+    };
   }
 
   if (
@@ -364,4 +303,83 @@ function lastEventIndex(events: readonly RunEvent[], type: string): number {
  */
 function isCorrective(id: string): boolean {
   return id.startsWith('FIX-');
+}
+
+
+/**
+ * Assemble the C-22 escalation from the event log (AR-07, AR-08).
+ *
+ * Nothing is substituted. A run that predates the enrichment carries no counts and no
+ * evidence, and it reports none — `attempts: 0` would be a number nobody measured, and a
+ * person reading it would act on it.
+ */
+function projectEscalation(
+  events: readonly RunEvent[],
+  index: number,
+): RuntimeEscalation | undefined {
+  const detail = events[index]?.detail;
+  if (detail === undefined) return undefined;
+
+  const task = typeof detail['task'] === 'string' ? detail['task'] : '';
+
+  return {
+    task,
+    failureClass: typeof detail['failureClass'] === 'string' ? detail['failureClass'] : 'unknown',
+    counts: numericRecord(detail['counts']),
+    evidence: stringList(detail['evidence']),
+    attemptedRepairs: repairsFor(events.slice(0, index), task),
+    humanAction:
+      typeof detail['humanAction'] === 'string' && detail['humanAction'].trim().length > 0
+        ? detail['humanAction']
+        : 'Read the failed attempt for this task and decide what to change',
+  };
+}
+
+/**
+ * Every repair started for a task, paired with how it ended.
+ *
+ * A step started and never completed is reported as unresolved rather than omitted: a
+ * crash between the two events is exactly the case where under-reporting what the run did
+ * would mislead the person cleaning up after it.
+ */
+function repairsFor(
+  before: readonly RunEvent[],
+  task: string,
+): { step: string; outcome: string }[] {
+  const outcomes = new Map<string, string>();
+  for (const event of before) {
+    if (event.type !== 'recovery_step_completed') continue;
+    if (event.detail['task'] !== task) continue;
+    const step = event.detail['step'];
+    const outcome = event.detail['outcome'];
+    if (typeof step === 'string') {
+      outcomes.set(step, typeof outcome === 'string' ? outcome : 'completed');
+    }
+  }
+
+  const repairs: { step: string; outcome: string }[] = [];
+  const seen = new Set<string>();
+  for (const event of before) {
+    if (event.type !== 'recovery_started') continue;
+    if (event.detail['task'] !== task) continue;
+    const step = event.detail['step'];
+    if (typeof step !== 'string' || seen.has(step)) continue;
+    seen.add(step);
+    repairs.push({ step, outcome: outcomes.get(step) ?? 'did not complete' });
+  }
+
+  return repairs;
+}
+
+function numericRecord(value: unknown): Record<string, number> {
+  if (typeof value !== 'object' || value === null) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, number] => typeof entry[1] === 'number',
+    ),
+  );
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }

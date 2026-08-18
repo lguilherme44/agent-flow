@@ -36,6 +36,12 @@ const RUN: RunDetailView = {
   // shape the actions are about — nothing here is an isolation test.
   isolation: { mode: 'none', parallelism: { requested: 1, effective: 1, clamped: false }, tasksIntegrated: 0 },
   integrationConflicts: [],
+  runtime: {
+    status: 'awaiting_human_approval',
+    resumable: false,
+    progress: { workflow: { done: 1, total: 6 }, implementation: { done: 0, total: 9 } },
+    reviewFreshness: 'current',
+  },
 };
 
 const PASSING_GATE: ApprovalGateView = {

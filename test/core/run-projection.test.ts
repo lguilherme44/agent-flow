@@ -15,6 +15,7 @@ import {
   projectProgress,
   projectRun,
 } from '../../src/core/run-projection.js';
+import { isCompleteEscalation } from '../../src/core/recovery-policy.js';
 
 /**
  * The projection, against the run whose observability defects it exists to fix.
@@ -446,5 +447,143 @@ describe('purity', () => {
 
     projectRun({ state: original, nodes: evidenceNodes(), events: evidenceEvents() });
     expect(JSON.stringify(original)).toBe(snapshot);
+  });
+});
+
+/**
+ * C-22 — bounded termination, and what termination has to say for itself.
+ *
+ * The projection already reported `auto_recovery_exhausted` and stopped there. A status is
+ * not the contract: C-22 requires the projection to carry the class, the counts, redacted
+ * evidence, every repair attempted with why each failed, and **one** specific human action,
+ * precisely so no surface can render "something failed, inspect logs".
+ *
+ * A status alone is that sentence with better spelling. Everything a person needs in order
+ * to act was already in the event log, and every surface had to reassemble it — which is
+ * how three of them disagreed about what had been tried.
+ */
+describe('C-22 — an exhausted run says what happened and what to do', () => {
+  const exhaustedRun = (detail: Record<string, unknown> = {}) => ({
+    state: state({ tasks: [task('TASK-001', 'review_required')] }),
+    nodes: [{ id: 'TASK-001', dependencies: [] }],
+    events: [
+      RunEventSchema.parse({
+        at: '2026-08-17T14:00:00.000Z',
+        type: 'recovery_started',
+        detail: { task: 'TASK-001', failureClass: 'validation_unsatisfied', step: 'work_retry' },
+      }),
+      RunEventSchema.parse({
+        at: '2026-08-17T14:01:00.000Z',
+        type: 'recovery_step_completed',
+        detail: { task: 'TASK-001', step: 'work_retry', outcome: 'requeued' },
+      }),
+      RunEventSchema.parse({
+        at: '2026-08-17T14:02:00.000Z',
+        type: 'recovery_exhausted',
+        detail: {
+          task: 'TASK-001',
+          failureClass: 'validation_unsatisfied',
+          reason: 'the attempt budget is exhausted',
+          humanAction: 'Read attempt-3.failed.json for TASK-001 and fix `npm test` by hand',
+          counts: { attempts: 3, modelCalls: 3, identicalFailures: 2 },
+          evidence: ['npm test → exit 1', 'AssertionError: expected 2, got 3'],
+          ...detail,
+        },
+      }),
+    ],
+  });
+
+  it('carries the class, the counts and the evidence, not just a status', () => {
+    const projected = projectRun(exhaustedRun());
+
+    expect(projected.status).toBe('auto_recovery_exhausted');
+    expect(projected.escalation?.failureClass).toBe('validation_unsatisfied');
+    expect(projected.escalation?.counts).toEqual({
+      attempts: 3,
+      modelCalls: 3,
+      identicalFailures: 2,
+    });
+    expect(projected.escalation?.evidence).toEqual([
+      'npm test → exit 1',
+      'AssertionError: expected 2, got 3',
+    ]);
+  });
+
+  it('lists every repair attempted and how each one ended', () => {
+    // "What was already tried" is the first question anybody asks, and answering it from
+    // the event log was left to each surface — which is how they disagreed.
+    const projected = projectRun(exhaustedRun());
+
+    expect(projected.escalation?.attemptedRepairs).toEqual([
+      { step: 'work_retry', outcome: 'requeued' },
+    ]);
+  });
+
+  it('records a repair that was started and never completed as unresolved', () => {
+    // A crash between `recovery_started` and `recovery_step_completed` leaves a step with
+    // no outcome. Omitting it would under-report what the run did.
+    const run = exhaustedRun();
+    const projected = projectRun({
+      ...run,
+      events: [
+        run.events[0]!,
+        RunEventSchema.parse({
+          at: '2026-08-17T14:01:30.000Z',
+          type: 'recovery_started',
+          detail: { task: 'TASK-001', failureClass: 'validation_unsatisfied', step: 'env_repair' },
+        }),
+        run.events[2]!,
+      ],
+    });
+
+    expect(projected.escalation?.attemptedRepairs).toContainEqual({
+      step: 'env_repair',
+      outcome: 'did not complete',
+    });
+  });
+
+  it('carries exactly one human action, and it names something to do', () => {
+    const projected = projectRun(exhaustedRun());
+
+    expect(projected.escalation?.humanAction).toContain('TASK-001');
+    expect(projected.escalation?.humanAction).not.toMatch(/inspect (the )?logs/i);
+  });
+
+  it('never produces an escalation that fails its own completeness check', () => {
+    // The predicate both surfaces are held to. An escalation the projection itself would
+    // call incomplete is the "something failed" sentence with extra fields.
+    const projected = projectRun(exhaustedRun());
+
+    expect(projected.escalation).toBeDefined();
+    expect(isCompleteEscalation(projected.escalation!)).toBe(true);
+  });
+
+  it('substitutes nothing when the event carried no counts', () => {
+    // An older run predating the enrichment. Reporting `attempts: 0` would be a number
+    // nobody measured, and a person would act on it.
+    const run = exhaustedRun();
+    const projected = projectRun({
+      ...run,
+      events: [
+        run.events[0]!,
+        run.events[1]!,
+        RunEventSchema.parse({
+          at: '2026-08-17T14:02:00.000Z',
+          type: 'recovery_exhausted',
+          detail: {
+            task: 'TASK-001',
+            failureClass: 'validation_unsatisfied',
+            humanAction: 'Read the failed attempt for TASK-001',
+          },
+        }),
+      ],
+    });
+
+    expect(projected.escalation?.counts).toEqual({});
+    expect(projected.escalation?.evidence).toEqual([]);
+  });
+
+  it('reports no escalation on a run that never exhausted anything', () => {
+    expect(projectRun({ state: state(), nodes: [] }).escalation).toBeUndefined();
   });
 });

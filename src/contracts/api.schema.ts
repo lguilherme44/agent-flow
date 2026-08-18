@@ -9,6 +9,7 @@ import type {
   WorkflowClass,
 } from './state.schema.js';
 import type { TaskState } from './task.schema.js';
+import type { RunProjection } from './projection.js';
 import type { ContextTelemetryObservation } from './context-telemetry.schema.js';
 
 /**
@@ -286,6 +287,16 @@ export interface RunDetailView extends RunSummaryView {
   readonly isolation: IsolationDetailView;
   /** §15: what an integration conflict recorded, from the event it wrote. */
   readonly integrationConflicts: IntegrationConflictView[];
+  /**
+   * The AR-07 runtime projection, computed once (C-19 … C-22).
+   *
+   * Shipped rather than left to the client. Every surface used to derive its own answer
+   * from raw state, and they disagreed: `Resume` was offered on a run with nothing
+   * runnable, `plan_rejected` stayed on screen while revision 2 ran, and one collapsed
+   * percentage read 100% with verification pending and then fell. There is one answer here
+   * because there is one function that produces it.
+   */
+  readonly runtime: RunProjection;
 }
 
 export interface IntegrationConflictView {

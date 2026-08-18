@@ -2785,7 +2785,14 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
     );
   });
 
-  it('reserves tolerant audit reads for the telemetry read model', () => {
+  it('reserves tolerant audit reads for read models', () => {
+    // The tolerant read exists so one malformed legacy audit line creates a visible data
+    // gap rather than the loss of every otherwise valid projection. That reasoning belongs
+    // to anything that *renders* the log, and to nothing that decides on it.
+    //
+    // The list is exact rather than a pattern, and that is the point: `scheduler.ts`,
+    // `run-actions.ts` and `task-executor.ts` are absent, and adding one would mean a
+    // dropped line could change what the system does instead of what it shows.
     const users: string[] = [];
     for (const file of sourceFiles('src')) {
       const { path, text } = read(file);
@@ -2793,9 +2800,25 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
       if (/\.readEventsBestEffort\s*\(/.test(codeOnly(text))) users.push(path);
     }
 
-    expect(users.map((path) => path.replace(`${ROOT}/`, ''))).toEqual([
+    expect(users.map((path) => path.replace(`${ROOT}/`, '')).sort()).toEqual([
+      // The AR-07 projection, and the two surfaces that ship it.
       'src/app/telemetry.ts',
+      'src/cli/status.ts',
+      'src/server/run-reader.ts',
     ]);
+  });
+
+  it('keeps the projection off every decision path', () => {
+    // The companion to the rule above, stated positively. `projectRun` reads the event log
+    // tolerantly, so nothing that takes a lock, spends an attempt or writes state may
+    // consult it. `isResumable` is the exception by construction — it takes state and DAG
+    // nodes and never opens the log, which is why C-19 is allowed to refuse on it.
+    const DECIDERS = ['src/app/scheduler.ts', 'src/app/run-actions.ts', 'src/app/task-executor.ts'];
+
+    for (const path of DECIDERS) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      expect(code, `${path} decides on the projection`).not.toMatch(/\bprojectRun\s*\(/);
+    }
   });
 });
 
@@ -3030,14 +3053,30 @@ describe('I-26 — runtime status is projected, never persisted (AD-48)', () => 
   });
 
   it('declares the runtime statuses outside the persisted contract', () => {
-    // In the projection, which nothing writes, rather than in the schema, which everything
-    // does.
+    // One owner, and it is not a schema module. The types moved into `contracts/` when the
+    // HTTP API began shipping the projection — `core` may import `contracts` and not the
+    // reverse — but the invariant is about *persistence*, not about directories: every
+    // `*.schema.ts` file describes something written to disk, and a projected status
+    // sitting among them is how a crash mid-write comes to persist an opinion.
     const owners = sourceFiles('src')
       .map(read)
       .filter(({ text }) => /RUNTIME_STATUSES\s*=/.test(codeOnly(text)))
       .map(({ path }) => path);
 
-    expect(owners).toEqual(['src/core/run-projection.ts']);
+    expect(owners).toEqual(['src/contracts/projection.ts']);
+    expect(owners.every((path) => !path.endsWith('.schema.ts'))).toBe(true);
+  });
+
+  it('keeps every persisted schema ignorant of the projection', () => {
+    // The direct form of the invariant. A schema that named a runtime status would be one
+    // `z.object` away from writing one.
+    const naming = sourceFiles('src/contracts')
+      .filter((path) => path.endsWith('.schema.ts'))
+      .map(read)
+      .filter(({ text }) => /RuntimeStatus|RUNTIME_STATUSES/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(naming, 'a persisted schema names a projected status').toEqual([]);
   });
 
   it('never writes a runtime status to a store', () => {

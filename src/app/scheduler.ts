@@ -25,7 +25,11 @@ import type {
 } from './integrator.js';
 import type { RunRecovery, RunRecoveryOutcome } from './worktree-recovery.js';
 import { overlappingPaths } from '../core/file-overlap.js';
-import { decideTaskRecovery, type RecoveryConfig } from '../core/recovery-policy.js';
+import {
+  decideTaskRecovery,
+  escalationEvidence,
+  type RecoveryConfig,
+} from '../core/recovery-policy.js';
 import { buildFailureContextPacket } from '../core/failure-context.js';
 import { runPaths } from './paths.js';
 import type { FileSystem } from '../ports/index.js';
@@ -862,9 +866,7 @@ export class Scheduler {
     const state = await this.options.store.loadRun(runId);
     const progress = state.tasks.find((task) => task.id === result.task);
 
-    const decision = decideTaskRecovery({
-      failureClass,
-      counters: {
+    const counters = {
         attempts: progress?.attempts ?? 0,
         infrastructureFailures: progress?.infrastructureFailures ?? 0,
         environmentRepairs: progress?.infrastructureFailures ?? 0,
@@ -872,7 +874,11 @@ export class Scheduler {
         // attempt, so the two coincide until a repair loop makes them diverge.
         modelCalls: progress?.attempts ?? 0,
         identicalFailures: progress?.failureClass === failureClass ? 1 : 0,
-      },
+    };
+
+    const decision = decideTaskRecovery({
+      failureClass,
+      counters,
       config: recoveryConfig,
       maxAttempts: this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
     });
@@ -893,6 +899,12 @@ export class Scheduler {
         // AR §3.6: an escalation without one specific action is a contract violation.
         humanAction: decision.humanAction ?? 'Inspect this failure and decide',
         ...(decision.exhaustedBudget === undefined ? {} : { budget: decision.exhaustedBudget }),
+        // C-22 asks the projection to carry counts and redacted evidence, and the
+        // projection invents neither. Recorded at the moment the decision is taken because
+        // that is the last moment they exist: the counters move on, and the failing result
+        // is not kept anywhere a later reader can reach.
+        counts: counters,
+        evidence: escalationEvidence(result),
       });
       return false;
     }

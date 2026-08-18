@@ -1,7 +1,9 @@
+import { redactAndTruncateTail } from './evidence-redaction.js';
 import type {
   FailureClass,
   RecoveryDisposition,
   RecoveryConfig,
+  TaskResult,
 } from '../contracts/index.js';
 import {
   consumesAttempt,
@@ -298,9 +300,14 @@ export interface RecoveryExhaustion {
  * Whether an escalation satisfies C-22.
  *
  * Exported so both the CLI and the HTTP API can be held to it by the same predicate,
- * rather than each surface asserting its own idea of "enough detail".
+ * rather than each surface asserting its own idea of "enough detail". Structural in its
+ * parameter rather than nominal, because the projection's `RuntimeEscalation` carries the
+ * same three fields and drops the budget — a policy input, not something a reader acts on —
+ * and one predicate held by both is the entire point.
  */
-export function isCompleteEscalation(escalation: RecoveryExhaustion): boolean {
+export function isCompleteEscalation(
+  escalation: Pick<RecoveryExhaustion, 'humanAction' | 'evidence' | 'counts'>,
+): boolean {
   return (
     escalation.humanAction.trim().length > 0 &&
     escalation.evidence.length > 0 &&
@@ -321,3 +328,45 @@ function exhausted(
     reason,
   };
 }
+
+/**
+ * The evidence an escalation shows (C-22).
+ *
+ * Failing validation commands first, because a named command with an exit code is the one
+ * thing a person can re-run. Redacted here rather than relied upon: validation output is
+ * captured raw by `verification-commands.ts`, so a test that prints an environment variable
+ * would otherwise put it straight into an escalation the dashboard renders.
+ *
+ * Bounded to one line each. An escalation is read, not paged through — the attempt log is
+ * where the rest lives.
+ */
+export function escalationEvidence(result: TaskResult): string[] {
+  const failing = (result.validation?.commands ?? [])
+    .filter((command) => command.exitCode !== 0)
+    .slice(0, MAX_ESCALATION_EVIDENCE)
+    .map((command) => {
+      const head = `${command.command} \u2192 exit ${String(command.exitCode)}`;
+      // stderr before stdout: a failing command says why there. Redacted here rather than
+      // relied upon — validation output is captured raw, and a test that prints an
+      // environment variable would otherwise put it in an escalation the dashboard shows.
+      const stream = command.stderr.trim() === '' ? command.stdout : command.stderr;
+      const tail = redactAndTruncateTail(stream, ESCALATION_LINE_BYTES).text.trim();
+      return tail === '' ? head : `${head}: ${lastLine(tail)}`;
+    });
+
+  if (failing.length > 0) return failing;
+
+  // No validation to point at — a blocked agent, say. The transport code is still better
+  // than nothing, and "nothing" is the sentence C-22 forbids. It is a code rather than
+  // output, so there is nothing here to redact.
+  return result.errorCode === undefined ? [] : [`runner reported ${result.errorCode}`];
+}
+
+function lastLine(text: string): string {
+  const lines = text.split('\n').filter((line) => line.trim() !== '');
+  return lines[lines.length - 1]?.trim() ?? '';
+}
+
+const MAX_ESCALATION_EVIDENCE = 5;
+/** One line each. An escalation is read, not paged through — the log is where the rest is. */
+const ESCALATION_LINE_BYTES = 200;

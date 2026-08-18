@@ -1,3 +1,4 @@
+import { projectRun } from '../core/run-projection.js';
 import {
   PlanSchema,
   type ArtifactContentView,
@@ -5,6 +6,7 @@ import {
   type Plan,
   type RunDagView,
   type RunDetailView,
+  type RunProjection,
   type RunRefView,
   type RunStatus,
   type RunSummaryView,
@@ -189,7 +191,42 @@ export class RunReader {
       startedAt: state.createdAt,
       isolation: await this.isolationOf(project, state),
       integrationConflicts: await this.conflictsOf(project, state.runId),
+      runtime: await this.runtimeOf(project, state),
     };
+  }
+
+  /**
+   * The AR-07 projection, computed once and shipped (C-19 … C-22).
+   *
+   * Every surface used to derive its own answer from raw state, and they disagreed:
+   * `Resume` was offered on a run with nothing runnable, `plan_rejected` stayed on screen
+   * while revision 2 ran, and one collapsed percentage read 100% with verification pending
+   * and then fell. One function produces this, so there is one answer to disagree with.
+   *
+   * The plan and the event log are read best-effort. A run whose plan has not been written
+   * yet still has a status worth reporting, and a projection that threw would take the whole
+   * detail view down with it.
+   */
+  private async runtimeOf(
+    project: RegisteredProject,
+    state: RunState,
+  ): Promise<RunProjection> {
+    const store = this.storeFor(project);
+    const plan = await this.loadPlan(store, state.runId);
+    const events = await store.readEventsBestEffort(state.runId);
+
+    return projectRun({
+      state,
+      ...(plan === null
+        ? {}
+        : {
+            nodes: plan.tasks.map((task) => ({
+              id: task.id,
+              dependencies: [...task.dependencies],
+            })),
+          }),
+      events,
+    });
   }
 
   /**

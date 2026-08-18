@@ -13,3 +13,4 @@ export * from './json-schema.js';
 export * from './api.schema.js';
 export * from './context-packet.schema.js';
 export * from './context-telemetry.schema.js';
+export * from './projection.js';

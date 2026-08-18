@@ -1943,6 +1943,58 @@ describe('automatic retry (AR-03, C-08)', () => {
     expect(exhausted?.detail?.['budget']).toBeDefined();
   });
 
+  it('records the counters and the evidence the escalation is built from (C-22)', async () => {
+    // C-22 asks the projection to carry counts and redacted evidence, and the projection
+    // invents neither. If the event does not record them at the moment the decision is
+    // taken they are gone: the counters move on, and the failing result is not kept.
+    const { store, run } = await harness();
+
+    const executor = {
+      execute: async (t: Task) =>
+        TaskResultSchema.parse({
+          task: t.id,
+          status: 'review_required',
+          runner: 'fake',
+          reasoning: 'medium',
+          startedAt: '2026-08-09T20:00:00.000Z',
+          finishedAt: '2026-08-09T20:00:01.000Z',
+          failureClass: 'validation_unsatisfied',
+          validation: {
+            passed: false,
+            commands: [
+              {
+                command: 'npm test',
+                exitCode: 1,
+                durationMs: 10,
+                stdout: '',
+                stderr: 'AssertionError: expected 2, got 3',
+                truncated: false,
+              },
+            ],
+          },
+        }),
+    } as unknown as TaskExecutor;
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [withCriteria('TASK-001')] });
+    await new Scheduler({ store, executor, recoveryConfig: RECOVERY, maxAttempts: 2 }).run(
+      plan,
+      run.runId,
+      'SDD',
+    );
+
+    const exhausted = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'recovery_exhausted',
+    );
+
+    expect(exhausted?.detail?.['counts']).toMatchObject({ attempts: expect.any(Number) });
+
+    // The failing command, named — this is what makes the escalation actionable rather
+    // than a status. Redacted and bounded: never the raw runner transcript (I-21).
+    const evidence = exhausted?.detail?.['evidence'];
+    expect(Array.isArray(evidence)).toBe(true);
+    expect((evidence as string[]).join('\n')).toContain('npm test');
+  });
+
   it('terminates rather than looping on a failure that never changes', async () => {
     // `maxIdenticalFailures` is the anti-thrash rule: a loop producing the same failure
     // twice has learned nothing, whatever the other budgets allow.
