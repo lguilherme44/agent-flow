@@ -270,6 +270,13 @@ export const RECOVERY_EVENT_TYPES = [
   'corrective_plan_repaired',
   'corrective_envelope_evaluated',
   'init_during_active_run',
+  /**
+   * What one stage's prompt was made of, in bytes, by source (AR-09).
+   *
+   * Autonomy must not be bought with context explosion, and a total nobody can attribute
+   * is a number nobody can act on.
+   */
+  'stage_context_measured',
 ] as const;
 
 export type RecoveryEventType = (typeof RECOVERY_EVENT_TYPES)[number];

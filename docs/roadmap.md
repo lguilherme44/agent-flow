@@ -88,8 +88,15 @@ whose every task falls inside the approved envelope executes without reopening t
 lease when nothing is runnable, through the same pure projection every surface reads. The
 evidence run took and released that lease three times with nothing to do.
 
+`AR-09` measures what every stage's prompt is made of, by source, and warns when a task
+the planner called *trivial* receives more context than the repository's own standing
+rules. A one-`grep` call in the evidence environment reported ≈49 k input tokens before
+Agent Flow contributed anything of its own; recovery now adds a bounded packet to a number
+somebody can finally attribute.
+
 What remains is what a person *reads*: the rest of `AR-07`'s read model, the recovery UX
-(`AR-08`), cost controls (`AR-09`) and the measured dogfood (`AR-10`).
+(`AR-08`), and the measured dogfood (`AR-10`) — which is an exercise against a real
+feature rather than code to write.
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -115,7 +122,7 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | AR-05b | Autonomous corrective loop | **done** |
 | AR-07 | Runtime state projection and human gates | partial — C-19 landed |
 | AR-08 | Recovery UX and CLI ergonomics | design |
-| AR-09 | Cost and context controls | design |
+| AR-09 | Cost and context controls | **done** |
 | AR-10 | Dogfood and autonomy benchmark | design |
 
 Ordered by dependency rather than by number: `AR-05a` precedes the corrective loop because

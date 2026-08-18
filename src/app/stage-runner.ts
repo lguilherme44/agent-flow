@@ -7,6 +7,7 @@ import {
   type ReasoningLevel,
   type RunStage,
   type RunnerErrorCode,
+  type Task,
   type WorkflowRole,
 } from '../contracts/index.js';
 import type { AgentRunner, Clock, FileSystem, Host, RunProvenance } from '../ports/index.js';
@@ -17,6 +18,7 @@ import {
   type RunnerFailureClassification,
 } from '../core/failure-classification.js';
 import { redactAndTruncate, redactEvidence } from '../core/evidence-redaction.js';
+import { measurePromptComposition } from '../core/prompt-budget.js';
 import type { PromptLoader } from './prompt-loader.js';
 import type { StateStore } from './state-store.js';
 import { runPaths, type ArtifactName } from './paths.js';
@@ -188,6 +190,13 @@ export interface StageRunnerOptions {
 export interface StageRunOptions {
   /** Absolute. Defaults to the project directory. */
   readonly workingDirectory?: string;
+  /**
+   * How the plan classified this task, when a task is what is running (AR-09).
+   *
+   * Only `trivial` has a context ceiling: the ceiling is about *proportion*, and a complex
+   * task legitimately receives a lot. Absent for a pipeline stage, which is not classified.
+   */
+  readonly complexity?: Task['complexity'];
 }
 
 /**
@@ -304,6 +313,10 @@ export class StageRunner {
     // It is also part of the prompt's *base*, so a repair rebuilds from the
     // same material the failed attempt saw — never dropping the advisory.
     let basePrompt = rendered;
+    // Kept beside the prompt rather than folded into it, so AR-09 can attribute the bytes
+    // to the source that produced them. "The prompt got big" is not something anybody can
+    // act on; "the advisory block is 60% of it" names what to turn off.
+    let advisoryBlock = '';
     const advisor = this.options.advisor;
     if (advisor !== undefined) {
       try {
@@ -314,6 +327,7 @@ export class StageRunner {
           objective: vars.objective ?? stage.name,
         });
         if (advisory !== undefined && advisory.length > 0) {
+          advisoryBlock = advisory;
           basePrompt = `${rendered}\n\n${advisory}`;
         }
       } catch {
@@ -338,6 +352,34 @@ export class StageRunner {
       reasoningRequested: resolved.requestedReasoning,
       reasoningSupported: resolved.supportedReasoningLevels,
       reasoningClamped: resolved.reasoningClamped,
+    });
+
+    // **What this prompt is made of** (AR-09). A one-`grep` call in the evidence
+    // environment reported ≈49 k input tokens before Agent Flow contributed anything of
+    // its own, and recovery adds a packet on top of that. Measured per stage and recorded,
+    // because a total nobody can attribute is a number nobody can act on.
+    //
+    // `agentsMd` is counted from the rendered variables rather than re-read: what matters
+    // is what the runner received, not what is on disk.
+    const composition = measurePromptComposition(
+      {
+        stagePrompt: rendered,
+        agentsMd: vars.agentsMd ?? '',
+        advisory: advisoryBlock,
+        failureContext: vars.failureContext ?? '',
+      },
+      ...(options.complexity === undefined ? [] : [{ complexity: options.complexity }]),
+    );
+
+    await store.appendEvent(runId, 'stage_context_measured', {
+      stage: stage.name,
+      role: stage.role,
+      totalBytes: composition.totalBytes,
+      parts: composition.parts,
+      overCeiling: composition.overCeiling,
+      ...(composition.ceilingDetail === undefined
+        ? {}
+        : { ceilingDetail: composition.ceilingDetail }),
     });
 
     const logLines: string[] = [

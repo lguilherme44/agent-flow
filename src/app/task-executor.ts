@@ -199,7 +199,7 @@ export class TaskExecutor {
           projectConfig: config.project === undefined ? 'None.' : toYaml(config.project).trim(),
           agentsMd: await this.readAgentsMd(workingDirectory),
         },
-        { workingDirectory },
+        { workingDirectory, complexity: task.complexity },
       );
       text = result.text;
       execution = result.execution;

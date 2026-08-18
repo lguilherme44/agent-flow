@@ -740,3 +740,85 @@ describe('a failed stage persists what actually happened (C-05, I-21)', () => {
     expect((error as StageFailure).failureClass).toBe('runner_timeout');
   });
 });
+
+/**
+ * AR-09 — what the prompt was made of, per stage.
+ *
+ * A one-`grep` call in the evidence environment reported ≈49 000 input tokens before Agent
+ * Flow contributed anything of its own, and recovery adds a Failure Context Packet on top
+ * of that. The measurement is the deliverable: "the prompt got big" is not something
+ * anybody can act on, and "AGENTS.md is 80% of it" is.
+ */
+describe('the prompt is measured, by source (AR-09)', () => {
+  it('records a composition event with every contributing source', async () => {
+    const { stageRunner, run, store, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    const measured = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+
+    expect(measured?.detail).toMatchObject({ stage: 'sdd', overCeiling: false });
+    expect(Number(measured?.detail?.['totalBytes'])).toBeGreaterThan(0);
+  });
+
+  it('attributes AGENTS.md separately from our own prompt', async () => {
+    // Four sources, four owners. A single total cannot tell anybody which one to shrink.
+    const { stageRunner, run, store, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, {
+      featureRequest: 'x',
+      agentsMd: 'y'.repeat(4000),
+    });
+
+    const measured = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+    const parts = measured?.detail?.['parts'] as { source: string; bytes: number; share: number }[];
+
+    const agents = parts.find((part) => part.source === 'agentsMd');
+    expect(agents?.bytes).toBe(4000);
+    // Largest first, so the thing worth shrinking is the thing read first.
+    expect(parts[0]?.source).toBe('agentsMd');
+  });
+
+  it('warns when a trivial task receives more context than the ceiling', async () => {
+    const { stageRunner, run, store, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(
+      SDD_STAGE,
+      run.runId,
+      { featureRequest: 'x', agentsMd: 'y'.repeat(30 * 1024) },
+      { complexity: 'trivial' },
+    );
+
+    const measured = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+
+    expect(measured?.detail?.['overCeiling']).toBe(true);
+    expect(String(measured?.detail?.['ceilingDetail'])).toContain('agentsMd');
+  });
+
+  it('does not warn for an unclassified pipeline stage', async () => {
+    // The ceiling belongs to `trivial` alone. Discovery legitimately receives a lot, and
+    // warning there would train the reader to ignore the warning that matters.
+    const { stageRunner, run, store, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, {
+      featureRequest: 'x',
+      agentsMd: 'y'.repeat(30 * 1024),
+    });
+
+    const measured = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+
+    expect(measured?.detail?.['overCeiling']).toBe(false);
+  });
+});
