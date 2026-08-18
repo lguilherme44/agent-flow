@@ -1,9 +1,9 @@
 import { useMemo, type ReactNode } from 'react';
 import { Maximize2, Minimize2, MoreVertical, Search, Wrench } from 'lucide-react';
 import type { TaskSummaryView } from '@contracts/index.js';
-import { Empty, Panel, SectionHeader, StatusDot, StripItem, cx } from '../components/ui';
+import { Badge, Empty, Panel, SectionHeader, StatusDot, StripItem, cx } from '../components/ui';
 import { formatDuration } from '../lib/format';
-import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
+import { taskLabel, taskTone } from '../lib/status';
 import { countTasks } from './run-overview';
 
 export type StatusFilter = 'all' | 'completed' | 'running' | 'waiting' | 'failed';
@@ -293,15 +293,7 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
 
                     <Td>
                       <span className="flex min-w-0 flex-col items-start gap-0.5">
-                        <span
-                          className={cx(
-                            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium',
-                            TONE_BG[tone],
-                            TONE_TEXT[tone],
-                          )}
-                        >
-                          {taskLabel(task.state)}
-                        </span>
+                        <Badge tone={tone}>{taskLabel(task.state)}</Badge>
                         {/* §21.2's two derived facts, and the only place on this
                             screen where `running` is not the whole story.
 

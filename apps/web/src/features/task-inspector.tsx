@@ -15,7 +15,7 @@ import {
 } from '../components/ui';
 import { useRetry } from '../lib/mutations';
 import { formatDuration, formatTime } from '../lib/format';
-import { taskLabel, taskTone, TONE_BG, TONE_TEXT } from '../lib/status';
+import { taskLabel, taskTone } from '../lib/status';
 
 /**
  * The execution panel (§73–§77).
@@ -64,15 +64,9 @@ export function TaskInspector(props: {
             <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex items-center gap-2">
                 <span className="tabular text-label font-semibold text-text">{task.id}</span>
-                <span
-                  className={cx(
-                    'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-micro font-medium uppercase tracking-caps',
-                    TONE_BG[tone],
-                    TONE_TEXT[tone],
-                  )}
-                >
+                <Badge tone={tone} caps>
                   {taskLabel(task.state)}
-                </span>
+                </Badge>
               </div>
               <h2 className="truncate text-section font-semibold" title={task.title}>
                 {task.title}

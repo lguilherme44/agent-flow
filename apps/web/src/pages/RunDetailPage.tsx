@@ -161,30 +161,25 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <RunPanel
-        run={run.data}
-        stages={stages.data}
-        projectId={projectId}
-        asGraph={asGraph}
-        onToggleGraph={() => {
-          const next = new URLSearchParams(search);
-          if (asGraph) next.delete('view');
-          else next.set('view', 'dag');
-          setSearch(next, { replace: true });
-        }}
-        isFocusMode={isFocusMode}
-        onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
-      />
+    <div className="dashboard-grid h-full min-h-0">
+      <div className="section-overview surface-1 p-0 flex flex-col">
+        <RunPanel
+          run={run.data}
+          stages={stages.data}
+          projectId={projectId}
+          asGraph={asGraph}
+          onToggleGraph={() => {
+            const next = new URLSearchParams(search);
+            if (asGraph) next.delete('view');
+            else next.set('view', 'dag');
+            setSearch(next, { replace: true });
+          }}
+          isFocusMode={isFocusMode}
+          onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
+        />
+      </div>
 
-      {/* Main Workspace (Preserved across inline & fullscreen modes) */}
-      <div
-        className={cx(
-          isDagFullscreen && asGraph
-            ? 'fixed inset-0 z-50 flex flex-col bg-bg p-4 gap-3'
-            : 'flex min-h-0 flex-1 flex-col',
-        )}
-      >
+      <div className={cx("section-dag surface-1 overflow-hidden flex flex-col", isDagFullscreen && asGraph ? 'fixed inset-0 z-50 p-4 gap-3' : '')}>
         {isDagFullscreen && asGraph ? (
           <div className="glass flex h-12 shrink-0 items-center justify-between border-b border-glass-border px-4 rounded-lg shadow-md">
             <div className="flex items-center gap-3 min-w-0">
@@ -205,61 +200,56 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
             </div>
           </div>
         ) : null}
-
-        <div
-          className={
-            asPane && (!asGraph || selectedTask !== undefined)
-              ? 'grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--af-inspector-width)] gap-3'
-              : 'flex min-h-0 flex-1'
-          }
-        >
-          <TaskTable
-            tasks={tasks.data ?? []}
-            selectedId={selectedTask}
-            onSelect={setSelectedTask}
-            filter={filter}
-            onFilterChange={setFilter}
-            isFocusMode={isFocusMode}
-            onToggleFocusMode={() => {
-              setIsFocusMode((prev) => !prev);
-            }}
-            {...(asGraph
-              ? {
-                  graph: (
-                    <Suspense fallback={<Empty title="Loading the graph…" />}>
-                      <DagView
-                        dag={dag.data}
-                        tasks={tasks.data ?? []}
-                        visible={new Set(visible.map((t) => t.id))}
-                        selectedId={selectedTask}
-                        onSelect={setSelectedTask}
-                        isLoading={dag.isLoading}
-                        isDagFullscreen={isDagFullscreen}
-                        onToggleFullscreen={() => {
-                          setIsDagFullscreen((prev) => !prev);
-                        }}
-                      />
-                    </Suspense>
-                  ),
-                }
-              : {})}
-          />
-          {asPane && (!asGraph || selectedTask !== undefined) ? (
-            <TaskInspector
-              task={task.data}
-              projectId={projectId}
-              runId={runId}
-              {...(selectedTask === undefined
-                ? {}
-                : {
-                    onClose: () => {
-                      setSelectedTask(undefined);
-                    },
-                  })}
-            />
-          ) : null}
-        </div>
+        
+        <TaskTable
+          tasks={tasks.data ?? []}
+          selectedId={selectedTask}
+          onSelect={setSelectedTask}
+          filter={filter}
+          onFilterChange={setFilter}
+          isFocusMode={isFocusMode}
+          onToggleFocusMode={() => {
+            setIsFocusMode((prev) => !prev);
+          }}
+          {...(asGraph
+            ? {
+                graph: (
+                  <Suspense fallback={<Empty title="Loading the graph…" />}>
+                    <DagView
+                      dag={dag.data}
+                      tasks={tasks.data ?? []}
+                      visible={new Set(visible.map((t) => t.id))}
+                      selectedId={selectedTask}
+                      onSelect={setSelectedTask}
+                      isLoading={dag.isLoading}
+                      isDagFullscreen={isDagFullscreen}
+                      onToggleFullscreen={() => {
+                        setIsDagFullscreen((prev) => !prev);
+                      }}
+                    />
+                  </Suspense>
+                ),
+              }
+            : {})}
+        />
       </div>
+
+      {asPane && (!asGraph || selectedTask !== undefined) ? (
+        <div className="section-agents surface-1 overflow-hidden flex flex-col">
+          <TaskInspector
+            task={task.data}
+            projectId={projectId}
+            runId={runId}
+            {...(selectedTask === undefined
+              ? {}
+              : {
+                  onClose: () => {
+                    setSelectedTask(undefined);
+                  },
+                })}
+          />
+        </div>
+      ) : null}
 
       {asPane ? null : (
         <InspectorDrawer
@@ -273,13 +263,14 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         />
       )}
 
-      {/* Bottom cards: hidden when in DAG view OR in Focus Mode */}
       {asGraph || isFocusMode ? null : (
-        <div className="grid h-bottom shrink-0 grid-cols-4 gap-3">
-          <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
-          <ApprovalCard run={run.data} projectId={projectId} />
-          <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
-          <ModelUsageCard telemetry={telemetry.data} />
+        <div className="section-logs surface-1 p-0 overflow-hidden">
+          <div className="grid h-full shrink-0 grid-cols-4 gap-3 p-3">
+            <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
+            <ApprovalCard run={run.data} projectId={projectId} />
+            <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
+            <ModelUsageCard telemetry={telemetry.data} />
+          </div>
         </div>
       )}
 

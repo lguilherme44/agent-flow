@@ -140,12 +140,13 @@ export function Badge(props: {
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-px',
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px',
         'text-micro font-medium',
         // `tracking-caps` is 0.08em. `tracking-wide` was 0.025em, which is
         // under the 0.06em floor upper-case needs to stop reading as cramped.
         props.caps === true && 'uppercase tracking-caps',
         TONE_BG[tone],
+        TONE_BORDER[tone],
         TONE_TEXT[tone],
         props.className,
       )}

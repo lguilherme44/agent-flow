@@ -40,17 +40,13 @@ export function Shell(): JSX.Element {
     <I18nProvider>
       <ProjectProvider>
         <TaskSelectionProvider>
-          <div className="flex h-full min-h-0 bg-bg">
+          <div className="app-layout">
             <Sidebar />
-            <div className="flex min-w-0 flex-1 flex-col">
+            <main className="main-content">
               <Topbar />
-              <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-page">
-                <UnknownProject />
-                <div className="min-h-0 flex-1">
-                  <Outlet />
-                </div>
-              </main>
-            </div>
+              <UnknownProject />
+              <Outlet />
+            </main>
           </div>
         </TaskSelectionProvider>
       </ProjectProvider>
@@ -122,105 +118,87 @@ function Sidebar(): JSX.Element {
   const { projectId, select } = useProjectSelection();
 
   return (
-    <aside className="glass flex w-sidebar shrink-0 flex-col border-r border-glass-border shadow-lg">
-      <div className="flex h-topbar shrink-0 items-center gap-2.5 px-4">
-        <span
-          className="relative flex h-7 w-7 items-center justify-center rounded-lg bg-primary shadow-glow-primary"
-          aria-hidden
-        >
-          <span className="h-2 w-2 rounded-full bg-white" />
-          <span className="absolute inset-0 rounded-lg bg-primary-bright opacity-20 glow-pulse" />
-        </span>
-        <span className="text-body-lg font-bold tracking-caps text-text">
-          Agent<span className="text-primary-bright">Flow</span>
-        </span>
+    <aside className="sidebar">
+      <div className="sidebar-header">
+        <div className="brand">
+          <div className="brand-logo">AF</div>
+          <div className="brand-info">
+            <span className="brand-name">Agent<span className="text-primary-bright">Flow</span></span>
+            <span className="brand-env">
+              <span className="status-indicator live"></span>Local
+            </span>
+          </div>
+        </div>
       </div>
 
-      <nav className="flex flex-col gap-px px-2 py-1" aria-label="Primary">
-        {navEntries.slice(0, 3).map((entry) => (
-          <SidebarLink key={entry.to} entry={entry} />
-        ))}
-      </nav>
+      <nav className="sidebar-nav" aria-label="Primary">
+        <div className="nav-group">
+          <span className="nav-label">Operational</span>
+          {navEntries.slice(0, 3).map((entry) => (
+            <SidebarLink key={entry.to} entry={entry} />
+          ))}
+        </div>
+        <div className="nav-group">
+          <span className="nav-label">System</span>
+          {navEntries.slice(3).map((entry) => (
+            <SidebarLink key={entry.to} entry={entry} />
+          ))}
+        </div>
 
-      <div className="mx-3 my-1 border-t border-glass-border" />
+        <div className="nav-group">
+          <span className="nav-label">{t.nav.projects}</span>
+          {projects.data === undefined || projects.data.length === 0 ? (
+            <p className="px-2 text-xs text-muted">
+              {projects.isLoading
+                ? 'Loading…'
+                : projects.isError
+                  ? 'The registry could not be read.'
+                  : 'No Agent Flow project found.'}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {projects.data.map((project) => {
+                const active = project.id === projectId;
+                const tone = project.status === null ? 'muted' : runTone(project.status);
+                // §65: a name and a run per row. A column of names and coloured
+                // dots answers "which of these needs me" only by hovering each
+                // one in turn.
+                const runText =
+                  project.currentRunId === null || project.status === null
+                    ? 'idle'
+                    : `${project.currentRunId} ${runLabel(project.status).toLowerCase()}`;
 
-      <nav className="flex flex-col gap-px px-2 py-1" aria-label="Secondary">
-        {navEntries.slice(3).map((entry) => (
-          <SidebarLink key={entry.to} entry={entry} />
-        ))}
-      </nav>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <h2 className="px-2 pb-1 pt-3 text-micro uppercase tracking-caps text-faint">
-          {t.nav.projects}
-        </h2>
-
-        {projects.data === undefined || projects.data.length === 0 ? (
-          <p className="px-2 text-micro text-faint">
-            {projects.isLoading
-              ? 'Loading…'
-              : projects.isError
-                ? 'The registry could not be read.'
-                : 'No Agent Flow project found.'}
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-px">
-            {projects.data.map((project) => {
-              const active = project.id === projectId;
-              // Not a decoration: the dot is the only place the sidebar says
-              // whether a project is doing anything right now.
-              const tone = project.status === null ? 'muted' : runTone(project.status);
-
-              return (
-                <li key={project.id}>
+                return (
                   <button
+                    key={project.id}
                     type="button"
-                    onClick={() => {
-                      select(active ? undefined : project.id);
-                    }}
-                    aria-current={active ? 'true' : undefined}
-                    className={cx(
-                      'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-                      active
-                        ? 'bg-primary-soft text-text'
-                        : 'text-muted hover:bg-surface-2/50 hover:text-text',
-                    )}
+                    onClick={() => select(active ? undefined : project.id)}
+                    className={cx('nav-item', active && 'active')}
                   >
                     <span
-                      className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[tone])}
+                      className={cx('h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[tone])}
                       aria-hidden
                     />
-                    {/* Two lines, as §65 draws it: the project, and what it is
-                        doing. A workspace of six repositories where every row is
-                        a name and a coloured dot answers "which of these needs
-                        me" only by hovering each one in turn. */}
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate text-body-lg">{project.name}</span>
-                      <span className="truncate text-micro text-faint">
-                        {project.currentRunId === null || project.status === null
-                          ? 'idle'
-                          : `${project.currentRunId} ${runLabel(project.status).toLowerCase()}`}
-                      </span>
+                    <span className="flex min-w-0 flex-col items-start">
+                      <span className="truncate">{project.name}</span>
+                      <span className="truncate text-xs text-muted">{runText}</span>
                     </span>
                   </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        {/* Present because §68 lists it, disabled because adding a project means
-            writing to the registry and this milestone writes nothing. */}
-        <button
-          type="button"
-          disabled
-          title="Adding a project is not available in the read-only dashboard"
-          className="mt-1 flex w-full cursor-not-allowed items-center gap-2 rounded-sm px-2 py-1.5 text-label text-faint opacity-60"
-        >
-          <Plus className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          Add Project
-        </button>
-      </div>
+                );
+              })}
+            </div>
+          )}
+          
+          <button
+            type="button"
+            disabled
+            className="nav-item opacity-50 cursor-not-allowed mt-2"
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            Add Project
+          </button>
+        </div>
+      </nav>
 
       <SidebarFooter />
     </aside>
@@ -236,7 +214,7 @@ function SidebarLink(props: { entry: NavEntry }): JSX.Element {
       <span
         title={`${entry.label} is not implemented yet`}
         aria-disabled="true"
-        className="flex cursor-not-allowed items-center gap-2 rounded-sm px-2 py-1.5 text-body-lg text-faint opacity-55"
+        className="nav-item opacity-55 cursor-not-allowed"
       >
         <Icon className="h-4 w-4 shrink-0" aria-hidden />
         {entry.label}
@@ -249,37 +227,20 @@ function SidebarLink(props: { entry: NavEntry }): JSX.Element {
       to={entry.to}
       end
       className={({ isActive }) =>
-        cx(
-          'relative flex items-center gap-2 rounded-md px-2.5 py-1.5 text-body-lg transition-colors',
-          isActive
-            ? 'bg-primary-soft font-medium text-text'
-            : 'text-muted hover:bg-surface-2/50 hover:text-text',
-        )
+        cx('nav-item', isActive && 'active')
       }
     >
       {({ isActive }) => (
         <>
-          {isActive ? (
-            <span
-              className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-primary-bright"
-              aria-hidden
-            />
-          ) : null}
-          <Icon className="h-4 w-4 shrink-0" aria-hidden />
+          <Icon aria-hidden />
           {entry.label}
+          {isActive && <span className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-color-running" aria-hidden />}
         </>
       )}
     </NavLink>
   );
 }
 
-/**
- * Version, mode, and runner health.
- *
- * Runner health is the shallow check — the same one `doctor` runs for free. A
- * dashboard that probed for real on every poll would spend quota nobody asked it
- * to, which is exactly why `doctor --deep` is a separate, explicit act.
- */
 function SidebarFooter(): JSX.Element {
   const { projectId } = useProjectSelection();
   const health = useRunnerHealth(projectId);
@@ -289,76 +250,43 @@ function SidebarFooter(): JSX.Element {
     (runner) => !runner.installed || !runner.executable || runner.auth === 'not_configured',
   );
 
-  /**
-   * What is wrong, in words, and never what it would do about it.
-   *
-   * §94's example reads "Codex unavailable. Workflow can continue using Claude
-   * fallback." — and that second sentence is a claim this indicator cannot make.
-   * Whether a fallback exists depends on the *role*: it is configured per role,
-   * it must satisfy that role's requirements, and it may be disabled outright.
-   * Agents & Models resolves all of that and reports three distinct reasons a
-   * role can have no fallback. Saying "Claude will take over" from here would be
-   * a guess, and the times it was wrong would be exactly the times somebody was
-   * relying on it.
-   */
-  const summary =
-    runners.length === 0
-      ? 'Runner health unknown'
-      : down.length === 0
-        ? 'All runners ready'
-        : `${String(down.length)} runner${down.length === 1 ? '' : 's'} unavailable`;
-
   return (
-    <div className="shrink-0 p-2">
-      <div className="flex flex-col gap-1.5 rounded-lg border border-glass-border bg-surface-2/40 px-2.5 py-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <span className="truncate text-micro text-muted">Agent Flow v0.1.0</span>
-            <span className="flex items-center gap-1.5 text-micro text-faint">
-              Local mode
-              <span
-                className={cx(
-                  'h-1.5 w-1.5 rounded-full',
-                  runners.length === 0
-                    ? 'bg-faint'
-                    : down.length === 0
-                      ? 'bg-success'
-                      : 'bg-warning',
-                )}
-                aria-hidden
-              />
-            </span>
-          </div>
-          <span
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-border text-faint"
-            title={
-              runners.length === 0
-                ? summary
-                : runners.map((runner) => `${runner.id}: ${runner.auth}`).join('\n')
-            }
-          >
-            <Terminal className="h-3 w-3" aria-hidden />
+    <div className="sidebar-footer">
+      <div className="user-profile">
+        <div className="avatar">
+          <Terminal className="h-4 w-4" aria-hidden />
+        </div>
+        <div className="user-details">
+          <span className="user-name">Agent Flow v0.1.0</span>
+          <span className="user-role flex items-center gap-1">
+            Local mode
+            <span
+              className={cx(
+                'status-indicator',
+                runners.length === 0
+                  ? 'bg-neutral'
+                  : down.length === 0
+                    ? 'live'
+                    : 'offline',
+              )}
+              aria-hidden
+            />
           </span>
         </div>
-
-        {/* Visible, not only in a tooltip. A coloured dot is not a status (§97),
-            and a person who has to hover to learn that a runner is down will
-            learn it from a failed run instead. */}
-        {down.length === 0 ? (
-          <span className="sr-only">{summary}</span>
-        ) : (
-          <NavLink
-            to="/agents"
-            className="flex items-center gap-1.5 rounded-sm text-micro text-warning hover:underline"
-          >
-            <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
-            <span className="truncate">{summary}</span>
-          </NavLink>
-        )}
       </div>
+      
+      {down.length > 0 && (
+        <NavLink
+          to="/agents"
+          className="mt-2 flex items-center gap-1.5 rounded-sm text-xs text-color-warning hover:underline"
+        >
+          <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="truncate">{`${down.length} runner${down.length === 1 ? '' : 's'} unavailable`}</span>
+        </NavLink>
+      )}
 
-      <div className="flex items-center justify-between border-t border-glass-border px-3 py-2">
-        <span className="text-micro text-faint">Language</span>
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-xs text-muted">Language</span>
         <LanguageSelector />
       </div>
     </div>
@@ -374,24 +302,26 @@ function Topbar(): JSX.Element {
   const connection = useLiveEvents(projectId);
 
   return (
-    <header className="glass flex h-topbar shrink-0 items-center justify-between gap-4 border-b border-glass-border px-page">
-      <Breadcrumbs selectedTaskId={selectedTaskId} />
+    <header className="command-bar glass-panel">
+      <div className="run-context">
+        <Breadcrumbs selectedTaskId={selectedTaskId} />
+      </div>
 
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="command-actions">
         <LiveIndicator connection={connection} />
 
         <a
           href="https://github.com/lguilherme44/agent-flow#readme"
           target="_blank"
           rel="noreferrer"
-          className="flex h-7 items-center gap-1.5 rounded-md border border-glass-border bg-surface-2/60 px-2.5 text-label text-muted transition-colors hover:border-border hover:text-text"
+          className="btn btn-outline btn-sm flex items-center gap-1.5"
         >
           <BookOpen className="h-3.5 w-3.5" aria-hidden />
           Docs
         </a>
 
         <span
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-primary-border bg-primary-soft text-micro font-semibold text-text"
+          className="flex h-7 w-7 items-center justify-center rounded-full border border-border-strong bg-surface-2 text-xs font-semibold text-text"
           title="Local mode — this server has no authentication"
         >
           L
@@ -401,12 +331,6 @@ function Topbar(): JSX.Element {
   );
 }
 
-/**
- * Whether the stream is up.
- *
- * A stream that silently died and a run that is simply idle look identical on
- * screen, and only one of those is worth telling somebody about.
- */
 function LiveIndicator(props: { connection: ConnectionState }): JSX.Element {
   const { t } = useI18n();
   const { connection } = props;
@@ -414,22 +338,22 @@ function LiveIndicator(props: { connection: ConnectionState }): JSX.Element {
   return (
     <span
       className={cx(
-        'flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-label transition-colors',
+        'badge',
         connection === 'live'
-          ? 'border-success/20 bg-success-soft text-success'
+          ? 'badge-success'
           : connection === 'polling'
-            ? 'border-warning/20 bg-warning-soft text-warning'
-            : 'border-glass-border bg-surface-2/60 text-faint',
+            ? 'badge-blocked'
+            : 'badge-neutral',
       )}
     >
       <span
         className={cx(
-          'h-1.5 w-1.5 rounded-full',
+          'pulse-dot',
           connection === 'live'
-            ? 'bg-success glow-pulse'
+            ? 'bg-color-success'
             : connection === 'polling'
-              ? 'bg-warning'
-              : 'bg-faint',
+              ? 'bg-color-warning'
+              : 'bg-text-secondary',
         )}
         aria-hidden
       />
