@@ -1,3 +1,7 @@
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   RunStageSchema,
   WorkflowClassSchema,
@@ -9,6 +13,12 @@ import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-c
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
 import { revise } from '../app/run-actions.js';
+import {
+  chooseInstructionSource,
+  readInstruction,
+  type InstructionFlags,
+  type InstructionIO,
+} from './instruction-source.js';
 import { actionDeps, currentRunId, exitCodeFor, render } from './approve.js';
 import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
@@ -142,16 +152,35 @@ export async function runFeatureCommand(
  * leaving the flag set would let unreviewed work execute.
  */
 export async function runReviseCommand(
-  instruction: string,
+  flags: InstructionFlags,
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
   try {
+    // AR-08: the instruction may arrive as an argument, a file, stdin or an editor buffer.
+    // Which one is decided first because it is pure and free, and a bad invocation should
+    // not reach the filesystem at all.
+    const source = chooseInstructionSource(flags);
+    if (source.kind === 'refused') {
+      process.stderr.write(`${source.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
     const deps = actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run to revise.\n');
       return ExitCode.GATE_NOT_SATISFIED;
     }
+
+    // Read only once there is something to revise. `--edit` opens an editor and waits, and
+    // asking someone to compose a revision for a run that does not exist is the kind of
+    // wasted effort a check costing one state read prevents.
+    const read = await readInstruction(source, nodeInstructionIO());
+    if (!read.ok) {
+      process.stderr.write(`${read.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+    const instruction = read.instruction;
 
     const outcome = await revise(deps, runId, instruction);
 
@@ -179,6 +208,46 @@ export async function runReviseCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+/**
+ * The four sources, wired to the machine.
+ *
+ * `$VISUAL` before `$EDITOR` before `vi`, which is the order every other tool that opens an
+ * editor uses. `stdio: 'inherit'` because the editor owns the terminal while it runs.
+ */
+function nodeInstructionIO(): InstructionIO {
+  return {
+    readFile: (path) => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
+    readStdin: async () => {
+      let text = '';
+      process.stdin.setEncoding('utf8');
+      for await (const chunk of process.stdin) text += chunk as string;
+      return text;
+    },
+    openEditor: async () => {
+      const file = join(mkdtempSync(join(tmpdir(), 'agent-flow-revise-')), 'INSTRUCTION.md');
+      writeFileSync(
+        file,
+        [
+          '',
+          '# Write the revision below. Lines starting with # are ignored.',
+          '# Save an empty file to cancel.',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const editor = process.env['VISUAL'] ?? process.env['EDITOR'] ?? 'vi';
+      const result = spawnSync(editor, [file], { stdio: 'inherit', shell: true });
+      if (result.status !== 0) return '';
+
+      return readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => !line.startsWith('#'))
+        .join('\n');
+    },
+  };
 }
 
 function parseStage(value: string): RunStage {

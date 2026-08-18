@@ -168,10 +168,23 @@ export async function main(argv: string[]): Promise<number> {
   program
     .command('revise')
     .description('Re-plan with an extra instruction, invalidating any approval')
-    .argument('<instruction>', 'what to change about the plan')
-    .action(async (instruction: string, _options: unknown, command: Command) => {
-      exitCode = await runReviseCommand(instruction, globalOptions(command));
-    });
+    // Optional, because the instruction may come from a file, stdin or an editor instead.
+    // A multi-paragraph revision does not survive being a shell argument (AR-08).
+    .argument('[instruction]', 'what to change about the plan, or - to read stdin')
+    .option('--file <path>', 'read the instruction from a file')
+    .option('--edit', 'write the instruction in $EDITOR')
+    .action(
+      async (
+        instruction: string | undefined,
+        options: { file?: string; edit?: boolean },
+        command: Command,
+      ) => {
+        exitCode = await runReviseCommand(
+          { argument: instruction, file: options.file, edit: options.edit },
+          globalOptions(command),
+        );
+      },
+    );
 
   program
     .command('run')
