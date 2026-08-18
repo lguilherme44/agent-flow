@@ -94,9 +94,13 @@ rules. A one-`grep` call in the evidence environment reported ≈49 k input toke
 Agent Flow contributed anything of its own; recovery now adds a bounded packet to a number
 somebody can finally attribute.
 
-What remains is what a person *reads*: the rest of `AR-07`'s read model, the recovery UX
-(`AR-08`), and the measured dogfood (`AR-10`) — which is an exercise against a real
-feature rather than code to write.
+`AR-10`'s scenario list from §10.1 runs as a suite against scripted runners: every seeded
+failure is one the evidence run actually hit, and every assertion is a row of §10.2. What
+that suite cannot produce is §10.3's wall-clock and model-time numbers — those need a live
+run against real runners, which is an exercise with a real cost and the owner's to spend.
+
+What remains is what a person *reads*: the rest of `AR-07`'s read model and the recovery
+UX (`AR-08`).
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -123,7 +127,7 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | AR-07 | Runtime state projection and human gates | partial — C-19 landed |
 | AR-08 | Recovery UX and CLI ergonomics | design |
 | AR-09 | Cost and context controls | **done** |
-| AR-10 | Dogfood and autonomy benchmark | design |
+| AR-10 | Dogfood and autonomy benchmark | harness done — live run is the owner's |
 
 Ordered by dependency rather than by number: `AR-05a` precedes the corrective loop because
 correcting damage the system is still creating would be building the loop backwards, and
