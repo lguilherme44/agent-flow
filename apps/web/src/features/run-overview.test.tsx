@@ -311,6 +311,42 @@ describe('RunHeader', () => {
     expect(screen.queryByRole('button', { name: 'View as DAG' })).toBeNull();
   });
 
+  it('shows the C-22 escalation the CLI has rendered since AR-08, once the dashboard has it too', () => {
+    render(
+      withTooltips(
+        <RunHeader
+          run={run({
+            runtime: {
+              status: 'auto_recovery_exhausted',
+              resumable: false,
+              progress: { workflow: { done: 4, total: 7 }, implementation: { done: 3, total: 9 } },
+              reviewFreshness: 'current',
+              escalation: {
+                task: 'TASK-002',
+                failureClass: 'validation_unsatisfied',
+                counts: { attempts: 2, infrastructureFailures: 0 },
+                evidence: ['npm test -- recurrence: 1 failing'],
+                attemptedRepairs: [{ step: 'work_retry', outcome: 'requeued' }],
+                humanAction: 'Read the failed attempt for TASK-002 and decide what to change',
+              },
+            },
+          })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
+
+    expect(screen.getByText(/Automatic recovery stopped on TASK-002/)).toBeInTheDocument();
+    expect(screen.getByText(/Validation Unsatisfied/)).toBeInTheDocument();
+    expect(screen.getByText(/npm test -- recurrence: 1 failing/)).toBeInTheDocument();
+    expect(screen.getByText(/Work Retry → requeued/)).toBeInTheDocument();
+    expect(
+      screen.getByText('Do this: Read the failed attempt for TASK-002 and decide what to change'),
+    ).toBeInTheDocument();
+  });
+
   it('reports overall progress from the workflow axis, never 100% with a later stage pending', () => {
     // AF-2026-002 read 100% the moment every planned task completed, with
     // verification and final-review still ahead of it. `workflow` is stage-based:

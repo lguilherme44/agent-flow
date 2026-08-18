@@ -13,6 +13,7 @@ import type {
   IsolationDetailView,
   IntegrationConflictView,
   RunDetailView,
+  RuntimeEscalation,
   StageViewResponse,
   TaskSummaryView,
 } from '@contracts/index.js';
@@ -397,6 +398,15 @@ export function RunHeader(props: {
         </div>
       </div>
 
+      {/* C-22's last line is a prohibition: no surface renders "something failed,
+          inspect logs". The run holds the class, the counters, every repair it
+          attempted and the evidence — the CLI has rendered all of it since AR-08
+          (`cli/render/escalation.ts`); this is the same contract, once the
+          dashboard is the surface open when a run stops. */}
+      {run.runtime.escalation === undefined ? null : (
+        <EscalationBanner escalation={run.runtime.escalation} />
+      )}
+
       {/* Degradations are not a footnote. A run that reviewed itself, ran below
           its configured effort, or had its gate forced reached its verdict on
           weaker terms, and this is where somebody reads the verdict. */}
@@ -414,6 +424,77 @@ export function RunHeader(props: {
         </ul>
       )}
     </header>
+  );
+}
+
+/**
+ * The C-22 escalation, on the surface a person is most likely open when a run
+ * stops (AR-08). Same content as `cli/render/escalation.ts`, in this palette: the
+ * run holds the class, the counters, every repair it attempted and the redacted
+ * evidence, and none of it reached the dashboard until now.
+ */
+function EscalationBanner(props: { escalation: RuntimeEscalation }): JSX.Element {
+  const { escalation } = props;
+  const counts = Object.entries(escalation.counts);
+  // Same predicate as `isCompleteEscalation` (`core/recovery-policy.ts`), inlined
+  // rather than imported: the dashboard depends on `@contracts`, never on `core`.
+  const complete =
+    escalation.humanAction.trim().length > 0 && escalation.evidence.length > 0 && counts.length > 0;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-danger/25 bg-danger-soft px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden />
+        <span className="text-body-lg text-text">
+          Automatic recovery stopped on {escalation.task} — {humanise(escalation.failureClass)}.
+        </span>
+      </div>
+
+      {counts.length === 0 ? null : (
+        <p className="text-label text-muted">
+          Budgets spent{' '}
+          {counts.map(([key, value], index) => (
+            <span key={key}>
+              {index === 0 ? '' : ' · '}
+              {humanise(key)} {value}
+            </span>
+          ))}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-0.5">
+        <span className="text-micro uppercase tracking-caps text-faint">Repairs attempted</span>
+        {escalation.attemptedRepairs.length === 0 ? (
+          <span className="text-label text-muted">No automatic repair applied.</span>
+        ) : (
+          <ul className="flex flex-col gap-0.5">
+            {escalation.attemptedRepairs.map((repair) => (
+              <li key={repair.step} className="text-label text-muted">
+                {humanise(repair.step)} → {repair.outcome}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {escalation.evidence.length === 0 ? null : (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-micro uppercase tracking-caps text-faint">Evidence</span>
+          <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-sm border border-border bg-sunken p-2 font-mono text-label text-muted">
+            {escalation.evidence.join('\n')}
+          </pre>
+        </div>
+      )}
+
+      {complete ? null : (
+        <p className="text-label text-faint">
+          Recorded before this run captured full evidence — the attempt log holds
+          what is missing here.
+        </p>
+      )}
+
+      <p className="text-body-lg font-medium text-text">Do this: {escalation.humanAction}</p>
+    </div>
   );
 }
 
