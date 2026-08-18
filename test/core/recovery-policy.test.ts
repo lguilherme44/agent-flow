@@ -56,10 +56,33 @@ describe('the defaults are the ones AR §6 declares', () => {
     });
   });
 
-  it('ships recovery disabled, because AR-00 changes no behaviour', () => {
-    // A budget nothing enforces must not read as a feature that is on. AR-03 is the
-    // milestone that flips this, and its own acceptance criteria require the switch.
-    expect(CONFIG.enabled).toBe(false);
+  it('ships recovery enabled, because AR-03 is the milestone that reads the budgets', () => {
+    // AR-00 shipped this `false` with a stated expiry — "a budget nothing enforces must
+    // not read as a feature that is on… turning it on is a later milestone's decision" —
+    // and AR-03 is that milestone. The scheduler reads every budget above, and each one
+    // has a test proving it terminates its loop.
+    //
+    // A recovery engine that is built, tested and switched off is a run that still stops
+    // on a failing validation command and asks a person to re-explain the failure by
+    // hand, which is the behaviour the milestone exists to remove.
+    expect(CONFIG.enabled).toBe(true);
+  });
+
+  it('still accepts false, which restores the previous behaviour exactly', () => {
+    // The kill switch is an acceptance criterion, not a convenience: the scheduler's
+    // standing rule that it never retries on its own has to remain reachable from
+    // configuration, and a default is not a removal.
+    const shipped = parseYaml(DEFAULT_GLOBAL_CONFIG_YAML) as Record<string, unknown>;
+    const off = GlobalConfigSchema.parse({
+      ...shipped,
+      recovery: { ...(shipped['recovery'] as object), enabled: false },
+    }).recovery;
+
+    expect(off.enabled).toBe(false);
+    // And nothing else moves with it — turning recovery off must not quietly change what
+    // a budget means if it is turned back on.
+    expect(off.maxIdenticalFailures).toBe(CONFIG.maxIdenticalFailures);
+    expect(off.maxAutonomousModelCalls).toBe(CONFIG.maxAutonomousModelCalls);
   });
 });
 

@@ -112,15 +112,26 @@ export const GlobalConfigSchema = z.object({
    * attempts, it is what `retry` already gates on, and moving it would migrate every
    * config file for no gain. What is new is everything beside it.
    *
-   * `enabled` is the kill switch AR-03 requires: `false` restores today's behaviour
-   * exactly, because the scheduler's standing rule that it never retries on its own has
-   * to remain available as configuration. Default `false` in AR-00 — this milestone
-   * lands contracts and changes no behaviour, so a budget that nothing reads must not
-   * read as a feature that is on.
+   * `enabled` is the kill switch AR-03 requires: `false` restores the previous behaviour
+   * exactly, because the scheduler's standing rule that it never retried on its own has
+   * to remain available as configuration.
+   *
+   * **Default `true` since AR-03.** AR-00 shipped it `false` with a stated expiry — "a
+   * budget that nothing reads must not read as a feature that is on… turning it on is a
+   * later milestone's decision" — and AR-03 is that milestone: the scheduler now reads
+   * every budget here, and each one is covered by a test that proves it terminates its
+   * loop.
+   *
+   * Leaving it off would have been the more comfortable choice and the less honest one.
+   * A recovery engine that is built, tested and switched off is a run that still stops on
+   * a failing validation command and asks a person to re-explain the failure by hand,
+   * which is the behaviour the whole milestone exists to remove. The bounds are what make
+   * this safe rather than the switch: the class outranks the budget, `maxIdenticalFailures`
+   * stops a loop that has learned nothing, and every exhaustion names one human action.
    */
   recovery: z
     .object({
-      enabled: z.boolean().default(false),
+      enabled: z.boolean().default(true),
       // Per task (AR §6.1).
       maxEnvironmentRepairs: z.number().int().min(0).default(2),
       /**

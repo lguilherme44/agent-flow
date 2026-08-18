@@ -121,9 +121,18 @@ recovery:
   # Bounds on autonomous recovery. Every budget here ends its loop when exhausted,
   # and says which one ran out, what was tried, and the one action that clears it.
   #
-  # Off by default: nothing reads these yet, and a budget nothing enforces must not
-  # read as a feature that is on. Turning it on is a later milestone's decision.
-  enabled: false
+  # On. A recoverable failure — a validation command that did not pass, a runner
+  # that timed out — is requeued with a Failure Context Packet naming the failing
+  # command, its exit code and its output, and the run carries on.
+  #
+  # What makes that safe is the bounds rather than the switch: a class the
+  # taxonomy marks requires_human is never retried however much budget is left,
+  # maxIdenticalFailures stops a loop that keeps producing one failure, and
+  # every exhausted budget names one specific human action.
+  #
+  # Set it to false to get the previous behaviour exactly: the run stops on the
+  # first failure and waits for you.
+  enabled: true
 
   # Per task.
   maxEnvironmentRepairs: 2
