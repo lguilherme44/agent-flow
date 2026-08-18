@@ -104,9 +104,12 @@ run against real runners, which is an exercise with a real cost and the owner's 
 rather than four derivations. `AR-08`'s CLI half is done — `revise` reads a file, stdin or
 `$EDITOR`, and `status` renders the full C-22 escalation.
 
-What remains is what the dashboard *renders* from that projection, and the two AR-08 items
-that live only there: per-task attempt history with each attempt's log, and a copy action on
-artifacts.
+Attempt history is reachable too: `TaskDetailView.attemptHistory` carries what each attempt
+did, paired with its own log. That one was not a rendering gap — the outcomes had never left
+the disk, and with `AR-03` making retry automatic they stopped being a rare question.
+
+What remains is what the dashboard *renders* from all of it, and the one AR-08 item that
+lives only there: a copy action on artifacts.
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
