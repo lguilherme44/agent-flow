@@ -7,11 +7,11 @@ colors:
   surface-2: "#0f1622"
   surface-3: "#151d2b"
   sunken: "#04070d"
-  border: "rgba(148, 163, 184, 0.1)"
-  border-strong: "rgba(148, 163, 184, 0.2)"
+  border: "rgba(148, 163, 184, 0.3)"
+  border-strong: "rgba(148, 163, 184, 0.45)"
   text: "#f1f5f9"
   muted: "#a3b0c2"
-  faint: "#6b7a90"
+  faint: "#7d8b9f"
   primary: "#7c3aed"
   primary-bright: "#9366f5"
   primary-soft: "rgba(124, 58, 237, 0.16)"
@@ -27,9 +27,9 @@ colors:
 typography:
   hero:
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif"
-    fontSize: "24px"
+    fontSize: "26px"
     fontWeight: 700
-    lineHeight: "30px"
+    lineHeight: "32px"
     letterSpacing: "-0.025em"
   title:
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif"
@@ -64,11 +64,23 @@ typography:
     lineHeight: "14px"
   mono:
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace"
+  glass-bg: "rgba(11, 17, 28, 0.72)"
+  glass-border: "rgba(148, 163, 184, 0.12)"
+  ambient-1: "rgba(124, 58, 237, 0.045)"
+  ambient-2: "rgba(59, 130, 246, 0.03)"
 rounded:
   focus: "4px"
-  sm: "6px"
-  md: "8px"
-  lg: "10px"
+  sm: "8px"
+  md: "10px"
+  lg: "12px"
+shadows:
+  sm: "0 1px 3px rgba(0, 0, 0, 0.4)"
+  md: "0 4px 12px rgba(0, 0, 0, 0.5)"
+  lg: "0 8px 28px rgba(0, 0, 0, 0.6)"
+  glow: "0 0 40px rgba(124, 58, 237, 0.12)"
+  glow-primary: "0 0 24px rgba(124, 58, 237, 0.35)"
+glass:
+  blur: "20px"
 spacing:
   sidebar: "216px"
   topbar: "56px"

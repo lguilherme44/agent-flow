@@ -554,3 +554,116 @@ describe('blocked retries split by provenance (dependency vs agent)', () => {
     expect(refusal(refused).code).toBe('task_blocked');
   });
 });
+
+/**
+ * C-19 (AR-07) — the lock is not taken for a run with nothing to run.
+ *
+ * The evidence run acquired and released the execution lease three times with nothing
+ * runnable: every gate below `start` lives *inside* the lock, so a refusal still cost a
+ * full acquire/refuse/release cycle and wrote two events describing work that never
+ * happened. Whether a run has anything to do is answerable from persisted state.
+ */
+describe('run refuses before it takes the lock (C-19)', () => {
+  const lockPath = (runId: string) => `/repo/.agent-flow/runs/${runId}/execution.lock`;
+
+  it('does not take the lock for a run whose only task is at a gate', async () => {
+    const world = await project();
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      approved: true,
+      status: 'approved',
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'review_required', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    const outcome = await start(world.deps, world.runId);
+
+    expect(outcome.ok).toBe(false);
+    // The whole point: no lease file was ever written.
+    expect(await world.fs.exists(lockPath(world.runId))).toBe(false);
+
+    const types = (await world.store.readEvents(world.runId)).map((event) => event.type);
+    expect(types).not.toContain('execution_lock_acquired');
+  });
+
+  it('names the gate and the one action that clears it', async () => {
+    const world = await project();
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      approved: true,
+      status: 'approved',
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'review_required', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    const outcome = await start(world.deps, world.runId);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect((outcome.error.action ?? '').length).toBeGreaterThan(0);
+    expect(`${outcome.error.message} ${outcome.error.action ?? ''}`).toMatch(/review_required|review|TASK-001/i);
+  });
+
+  it('does not take the lock for a run that is already finished', async () => {
+    const world = await project();
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      status: 'completed',
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      status: 'completed',
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    const outcome = await start(world.deps, world.runId);
+
+    expect(outcome.ok).toBe(false);
+    expect(await world.fs.exists(lockPath(world.runId))).toBe(false);
+  });
+
+  it('still takes the lock when there is genuinely something to run', async () => {
+    // The control. A guard that refused everything would pass every test above and make
+    // the product useless.
+    const world = await project();
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      approved: true,
+      approvedPlanHash: planHash(PlanSchema.parse(PLAN)),
+      status: 'approved',
+      tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0, infrastructureFailures: 0 }],
+    }));
+
+    await start(world.deps, world.runId);
+
+    const types = (await world.store.readEvents(world.runId)).map((event) => event.type);
+    expect(types).toContain('execution_lock_acquired');
+  });
+
+  it('leaves a run with no plan to the gate inside, which has the better message', async () => {
+    // Not every refusal belongs out here. `isResumable` answers "is there work"; a run
+    // with no plan at all has a different answer and its own sentence, and duplicating
+    // that judgement in two places is how the two start to disagree.
+    const world = await project();
+    await world.fs.remove(`/repo/.agent-flow/runs/${world.runId}/plan.json`);
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      approved: true,
+      status: 'approved',
+      tasks: [],
+    }));
+
+    const outcome = await start(world.deps, world.runId);
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error.code).toBe('no_plan');
+  });
+});

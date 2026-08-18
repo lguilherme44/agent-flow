@@ -84,8 +84,12 @@ being *knowable* to a run correcting itself. `recovery.enabled` ships **true**: 
 recoverable failure requeues itself with a Failure Context Packet, and a corrective round
 whose every task falls inside the approved envelope executes without reopening the gate.
 
-What remains is what a person *reads*: the runtime projection (`AR-07`), the recovery
-UX (`AR-08`), cost controls (`AR-09`) and the measured dogfood (`AR-10`).
+`AR-07`'s mechanical half has landed too: `run` refuses before it takes the execution
+lease when nothing is runnable, through the same pure projection every surface reads. The
+evidence run took and released that lease three times with nothing to do.
+
+What remains is what a person *reads*: the rest of `AR-07`'s read model, the recovery UX
+(`AR-08`), cost controls (`AR-09`) and the measured dogfood (`AR-10`).
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -109,7 +113,7 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | AR-03 | Autonomous retry and Failure Context Packet | **done** |
 | AR-04 | Verification environment readiness | **done** |
 | AR-05b | Autonomous corrective loop | **done** |
-| AR-07 | Runtime state projection and human gates | design |
+| AR-07 | Runtime state projection and human gates | partial — C-19 landed |
 | AR-08 | Recovery UX and CLI ergonomics | design |
 | AR-09 | Cost and context controls | design |
 | AR-10 | Dogfood and autonomy benchmark | design |

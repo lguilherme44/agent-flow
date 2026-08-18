@@ -59,6 +59,7 @@ import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js'
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { extractRequirementIds } from '../core/sdd-validator.js';
+import { isResumable } from '../core/run-projection.js';
 import {
   checkDefinitionOfDone,
   type DoneCheck,
@@ -120,6 +121,14 @@ export type ActionErrorCode =
   | 'attempts_exhausted'
   | 'unmet_dependencies'
   | 'run_busy'
+  /**
+   * The run has no task that could start (C-19).
+   *
+   * Distinct from `run_busy`, which means "wait", and from the gate codes, which mean
+   * "fix something": this one means the run is at a gate a *person* clears, and it is
+   * refused before the execution lease is taken.
+   */
+  | 'nothing_to_run'
   | 'invalid_input'
   | 'ceremony_budget_exceeded'
   // MVP 2 §6.3. Every one of these names a repository state a user changes with
@@ -833,7 +842,80 @@ export async function start(
   options: StartOptions = {},
 ): Promise<ActionOutcome<StartResult>> {
   const store = storeFor(deps);
+
+  // **Refused before the lock, not inside it** (C-19).
+  //
+  // Every gate in `execute` lives under the lease, so a run with nothing to do still cost
+  // a full acquire/refuse/release cycle and wrote two events describing work that never
+  // happened — the evidence run did it three times. Whether a run has anything runnable is
+  // answerable from persisted state alone, so it is answered here.
+  //
+  // Deliberately only this question. A run with no plan, an unapproved plan or a moved
+  // planning base has its own gate below with a better sentence, and asking any of them
+  // twice is how the two answers start to disagree.
+  const notRunnable = await refuseUnrunnable(store, runId);
+  if (notRunnable !== undefined) return failed(notRunnable);
+
   return withExecutionLock(deps, store, runId, 'run', () => execute(deps, runId, options));
+}
+
+/**
+ * Is there anything for `run` to do? (C-19, I-26)
+ *
+ * Derived through the same pure projection the CLI and the HTTP API read, so "Resume is
+ * offered" and "resuming is allowed" cannot disagree — they are one function.
+ *
+ * Silent when it cannot tell. A missing run, an unreadable plan or a state this projection
+ * has no opinion on all fall through to the gates inside, which are the ones that own
+ * those questions.
+ */
+async function refuseUnrunnable(
+  store: StateStore,
+  runId: string,
+): Promise<ActionError | undefined> {
+  const state = await loadRun(store, runId);
+  if (state === null) return undefined;
+
+  // Statuses that already have a gate of their own inside, with a better sentence than
+  // "nothing to run": a rejected plan says it was rejected and how to revise it, and one
+  // waiting for approval says which gate is open. Answering either here would replace a
+  // specific message with a general one — and put the same judgement in two places.
+  if (state.status === 'plan_rejected' || state.status === 'waiting_for_approval') {
+    return undefined;
+  }
+
+  const plan = await loadPlanArtifact(store, runId);
+  const nodes = plan?.tasks.map((task) => ({
+    id: task.id,
+    dependencies: task.dependencies,
+  }));
+
+  if (isResumable({ state, ...(nodes === undefined ? {} : { nodes }) })) return undefined;
+
+  // The gate, named. "Nothing to run" without saying what is holding it is the sentence
+  // AR §3.6 calls a contract violation.
+  const waiting = state.tasks.filter((task) => task.state === 'review_required');
+  const blocked = state.tasks.filter((task) => task.state === 'blocked');
+
+  return {
+    code: 'nothing_to_run',
+    message:
+      state.status === 'completed' || state.status === 'failed'
+        ? `${runId} has finished (${state.status}), so there is nothing to run.`
+        : waiting.length > 0
+          ? `${runId} has no runnable task: ${waiting.map((task) => task.id).join(', ')} ` +
+            `${waiting.length === 1 ? 'is' : 'are'} at review_required.`
+          : blocked.length > 0
+            ? `${runId} has no runnable task: ${blocked.map((task) => task.id).join(', ')} ` +
+              `${blocked.length === 1 ? 'is' : 'are'} blocked.`
+            : `${runId} has no runnable task in its current state (${state.status}).`,
+    action:
+      waiting.length > 0
+        ? `Review the task's evidence, then \`agent-flow retry ${waiting[0]?.id ?? ''}\`.`
+        : blocked.length > 0
+          ? 'Answer what the blocked task reported, then retry it.'
+          : 'Start a new run, or check `agent-flow status` for what this one is waiting on.',
+  };
 }
 
 async function execute(
