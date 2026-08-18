@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import type { TaskDetailView } from '@contracts/index.js';
 import { createQueryClient } from '../app/App';
@@ -164,5 +165,69 @@ describe('integration provenance', () => {
     const text = document.body.textContent ?? '';
     expect(text).not.toMatch(/\/(Users|home|tmp|var)\//);
     expect(text).not.toMatch(/\.agent-flow\/worktrees/);
+  });
+});
+
+/**
+ * AR-08 — what each attempt did, not only the newest one.
+ *
+ * `attemptHistory` existed on the wire before this tab did: `server/run-reader.ts`
+ * assembled it from `attempt-<n>.json` and nothing rendered it, so a task retried
+ * twice before succeeding had two attempts nobody could see.
+ */
+describe('Attempts', () => {
+  it('says nothing was recorded rather than showing an empty table', async () => {
+    show(task({ state: 'completed' }));
+    await userEvent.click(screen.getByRole('tab', { name: /Attempts/ }));
+
+    expect(screen.getByText('No recorded attempts.')).toBeInTheDocument();
+  });
+
+  it('shows every attempt, its failure class and its own log — oldest first', async () => {
+    show(
+      task({
+        state: 'completed',
+        attempts: 2,
+        attemptHistory: [
+          {
+            attempt: 1,
+            outcome: 'failed',
+            runner: 'agy',
+            model: 'gemini-3.1-pro-high',
+            reasoning: 'medium',
+            reasoningClamped: false,
+            startedAt: '2026-08-10T19:40:00.000Z',
+            finishedAt: '2026-08-10T19:41:30.000Z',
+            failureClass: 'validation_unsatisfied',
+            failedCommands: ['npm test -- recurrence'],
+            log: ['[19:41:29] 1 failing'],
+          },
+          {
+            attempt: 2,
+            outcome: 'succeeded',
+            runner: 'agy',
+            model: 'gemini-3.1-pro-high',
+            reasoning: 'medium',
+            reasoningClamped: false,
+            startedAt: '2026-08-10T19:42:00.000Z',
+            finishedAt: '2026-08-10T19:43:00.000Z',
+            failedCommands: [],
+            log: ['[19:42:59] all tests passing'],
+          },
+        ],
+      }),
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: /Attempts/ }));
+
+    const first = screen.getByText('Attempt 1').closest('div');
+    expect(first).not.toBeNull();
+    expect(first?.parentElement).toHaveTextContent('failed');
+    expect(screen.getByText(/validation unsatisfied/)).toBeInTheDocument();
+    expect(screen.getByText(/npm test -- recurrence/)).toBeInTheDocument();
+    expect(screen.getByText(/1 failing/)).toBeInTheDocument();
+
+    expect(screen.getByText('Attempt 2')).toBeInTheDocument();
+    expect(screen.getByText(/all tests passing/)).toBeInTheDocument();
   });
 });

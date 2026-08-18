@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { ArrowDownToLine, Copy, Pause, RotateCcw, X } from 'lucide-react';
-import type { TaskDetailView } from '@contracts/index.js';
+import type { AttemptHistoryView, TaskDetailView } from '@contracts/index.js';
 import {
   ActionRefusal,
   Badge,
@@ -11,6 +11,7 @@ import {
   MetaCell,
   Notice,
   Panel,
+  Tooltip,
   cx,
 } from '../components/ui';
 import { useRetry } from '../lib/mutations';
@@ -137,6 +138,7 @@ export function TaskInspector(props: {
             ['logs', 'Logs'],
             ['files', `Files (${String(task.filesChanged.length)})`],
             ['tests', `Tests (${String(task.commands.length)})`],
+            ['attempts', `Attempts (${String(task.attemptHistory?.length ?? 0)})`],
             ['context', 'Context'],
           ].map(([value, label]) => (
             <TabsPrimitive.Trigger
@@ -161,6 +163,9 @@ export function TaskInspector(props: {
         </TabsPrimitive.Content>
         <TabsPrimitive.Content value="tests" className="min-h-0 flex-1 overflow-auto p-3.5">
           <TestsTab task={task} />
+        </TabsPrimitive.Content>
+        <TabsPrimitive.Content value="attempts" className="min-h-0 flex-1 overflow-auto p-3.5">
+          <AttemptsTab task={task} />
         </TabsPrimitive.Content>
         <TabsPrimitive.Content value="context" className="min-h-0 flex-1 overflow-auto p-3.5">
           <ContextTab task={task} />
@@ -564,6 +569,117 @@ function TestsTab(props: { task: TaskDetailView }): JSX.Element {
       ))}
     </div>
   );
+}
+
+/**
+ * Attempts (AR-08). What each attempt did, oldest first — including the ones that
+ * failed, which the flattened fields above this panel describe only the newest of.
+ *
+ * The data existed before this tab did: `server/run-reader.ts` has assembled
+ * `attemptHistory` from `attempt-<n>.json` and `attempt-<n>.failed.json` since AR-08
+ * landed, and nothing rendered it. A task retried twice before succeeding had two
+ * attempts nobody could see — what failed the first time, whether it cost a budget,
+ * whether the retry ran on the same model — which AR-03 made the normal case rather
+ * than the rare one `retry --force` used to gate.
+ */
+function AttemptsTab(props: { task: TaskDetailView }): JSX.Element {
+  const history = props.task.attemptHistory ?? [];
+
+  if (history.length === 0) {
+    return (
+      <Empty
+        title="No recorded attempts."
+        hint="Only a run isolated in its own worktree keeps one attempt artifact per try; a sequential run keeps the newest."
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {history.map((attempt) => (
+        <AttemptCard key={attempt.attempt} attempt={attempt} />
+      ))}
+    </div>
+  );
+}
+
+function AttemptCard(props: { attempt: AttemptHistoryView }): JSX.Element {
+  const { attempt } = props;
+  const durationMs = Date.parse(attempt.finishedAt) - Date.parse(attempt.startedAt);
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-2 p-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="tabular text-body-lg font-medium text-text">
+            Attempt {attempt.attempt}
+          </span>
+          <Badge tone={attempt.outcome === 'succeeded' ? 'success' : 'danger'} caps>
+            {attempt.outcome}
+          </Badge>
+          {attempt.consumedAttempt === false ? (
+            <Tooltip content="This failure was mechanical — a preflight or environment gap — and did not spend a work attempt (I-22).">
+              <Badge tone="muted" caps>
+                free
+              </Badge>
+            </Tooltip>
+          ) : null}
+        </div>
+        <span className="text-micro text-faint">
+          {Number.isNaN(durationMs) ? '—' : formatDuration(durationMs)}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-micro text-faint">
+        <span>
+          {attempt.runner}
+          {attempt.model === undefined ? '' : ` · ${attempt.model}`}
+        </span>
+        <span>
+          {attempt.reasoning}
+          {attempt.reasoningClamped ? ' (clamped)' : ''}
+        </span>
+        {attempt.contextBytes === undefined ? null : (
+          <span>{formatBytes(attempt.contextBytes)} prompt</span>
+        )}
+        {attempt.recoveryCost === undefined ? null : (
+          <span>
+            {attempt.recoveryCost.addedBytes >= 0 ? '+' : ''}
+            {formatBytes(attempt.recoveryCost.addedBytes)} over the first attempt (
+            {Math.round(attempt.recoveryCost.addedShare * 100)}%)
+          </span>
+        )}
+      </div>
+
+      {attempt.failureClass === undefined ? null : (
+        <p className="text-label text-warning">
+          {humaniseFailureClass(attempt.failureClass)}
+          {attempt.failedCommands.length === 0
+            ? ''
+            : `: ${attempt.failedCommands.join(', ')}`}
+        </p>
+      )}
+
+      {attempt.log.length === 0 ? null : (
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-sm border border-border bg-sunken p-2 font-mono text-label text-muted">
+          {attempt.log.join('\n')}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** `runner_execution_failed` → `runner execution failed`. Same rule as `taskLabel`. */
+function humaniseFailureClass(failureClass: string): string {
+  return failureClass.replace(/_/g, ' ');
+}
+
+/** 214000 → "214 KB". Bytes are what AR-09 measures; nobody reads them raw. */
+function formatBytes(bytes: number): string {
+  const magnitude = Math.abs(bytes);
+  if (magnitude < 1_000) return `${String(bytes)} B`;
+  if (magnitude < 1_000_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 /** Context (§77). Task metadata only — never a secret, never an environment. */
