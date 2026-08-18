@@ -99,8 +99,14 @@ failure is one the evidence run actually hit, and every assertion is a row of §
 that suite cannot produce is §10.3's wall-clock and model-time numbers — those need a live
 run against real runners, which is an exercise with a real cost and the owner's to spend.
 
-What remains is what a person *reads*: the rest of `AR-07`'s read model and the recovery
-UX (`AR-08`).
+`AR-07`'s read model now reaches both surfaces: the server ships the projection on
+`RunDetailView` and the CLI projects the same function, so C-19 … C-22 have one answer
+rather than four derivations. `AR-08`'s CLI half is done — `revise` reads a file, stdin or
+`$EDITOR`, and `status` renders the full C-22 escalation.
+
+What remains is what the dashboard *renders* from that projection, and the two AR-08 items
+that live only there: per-task attempt history with each attempt's log, and a copy action on
+artifacts.
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -125,7 +131,7 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | AR-04 | Verification environment readiness | **done** |
 | AR-05b | Autonomous corrective loop | **done** |
 | AR-07 | Runtime state projection and human gates | partial — C-19 landed |
-| AR-08 | Recovery UX and CLI ergonomics | design |
+| AR-08 | Recovery UX and CLI ergonomics | CLI done — dashboard rendering open |
 | AR-09 | Cost and context controls | **done** |
 | AR-10 | Dogfood and autonomy benchmark | harness done — live run is the owner's |
 
