@@ -99,17 +99,27 @@ failure is one the evidence run actually hit, and every assertion is a row of §
 that suite cannot produce is §10.3's wall-clock and model-time numbers — those need a live
 run against real runners, which is an exercise with a real cost and the owner's to spend.
 
-`AR-07`'s read model now reaches both surfaces: the server ships the projection on
-`RunDetailView` and the CLI projects the same function, so C-19 … C-22 have one answer
-rather than four derivations. `AR-08`'s CLI half is done — `revise` reads a file, stdin or
-`$EDITOR`, and `status` renders the full C-22 escalation.
+`AR-07`'s read model reached both surfaces earlier than its rendering did, and that gap
+was this milestone's own instance of the pattern a new architecture test now guards
+against elsewhere — a module built, tested and never called: `projectRun` was computed
+on `RunDetailView` and projected by the CLI, so C-19 … C-22 had one answer rather than
+four derivations — but neither surface's headline, its
+progress bar, its Resume button or its DAG toggle *read* that answer. `state.status`
+stayed the CLI's headline through a whole revision and `run.status` stayed the
+dashboard's; `completedTasks / taskCount` stayed the progress bar and reached 100% with
+verification still pending, exactly as it had in the evidence run. Both now read
+`runtime.status` and `runtime.progress.workflow` — the stage-based axis, monotonic by
+construction — for the headline and the bar; `runtime.resumable` gates Resume and
+`taskCount > 0` gates the DAG toggle. Progress is shown as that one axis rather than as
+three separate bars, and no test yet pins CLI and dashboard text to the same projected
+value across a shared fixture — both are still open, not silently closed.
 
-Attempt history is reachable too: `TaskDetailView.attemptHistory` carries what each attempt
-did, paired with its own log. That one was not a rendering gap — the outcomes had never left
-the disk, and with `AR-03` making retry automatic they stopped being a rare question.
-
-What remains is what the dashboard *renders* from all of it, and the one AR-08 item that
-lives only there: a copy action on artifacts.
+`AR-08`'s CLI half was done first — `revise` reads a file, stdin or `$EDITOR`, and
+`status` renders the full C-22 escalation — and the dashboard now renders the same two
+things the CLI already did: the escalation banner, and `TaskDetailView.attemptHistory`
+with each attempt's failure class and its own log, in a new Attempts tab. The artifact
+copy action shipped earlier still and was never actually missing; the milestone's own
+table just said so after the fact.
 
 Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
 244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
@@ -133,8 +143,8 @@ budgets, and escalated with a specific action when a budget is exhausted.
 | AR-03 | Autonomous retry and Failure Context Packet | **done** |
 | AR-04 | Verification environment readiness | **done** |
 | AR-05b | Autonomous corrective loop | **done** |
-| AR-07 | Runtime state projection and human gates | partial — C-19 landed |
-| AR-08 | Recovery UX and CLI ergonomics | CLI done — dashboard rendering open |
+| AR-07 | Runtime state projection and human gates | mostly done — headline, progress, Resume and DAG-toggle gating on both surfaces read `runtime`; progress is one axis rather than three, no cross-surface pin yet |
+| AR-08 | Recovery UX and CLI ergonomics | **done** — escalation, attempt history and failure class now render on the dashboard, matching the CLI |
 | AR-09 | Cost and context controls | **done** |
 | AR-10 | Dogfood and autonomy benchmark | harness done — live run is the owner's |
 
