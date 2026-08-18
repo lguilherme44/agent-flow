@@ -499,12 +499,29 @@ export function StripItem(props: {
   tone?: Tone;
   icon?: ReactNode;
 }): JSX.Element {
+  /**
+   * A zero is an absence, and absence does not get a colour.
+   *
+   * The strip painted its tone on every count unconditionally, so a run with
+   * nothing wrong rendered `FAILED 0` in danger red and `RUNNING 0` in info blue
+   * at the same weight as the counts that carried news. Two of the five loudest
+   * things on the panel were reporting that nothing had happened.
+   *
+   * Colour here is meant to say "look at this". When the value is zero there is
+   * nothing to look at, so the item recedes to the neutral pair and the eye lands
+   * on the counts that are actually non-zero. Nothing is hidden: the label, the
+   * number and the position are unchanged, which is what keeps the strip
+   * scannable as a fixed set rather than a list that reshuffles.
+   */
+  const empty = props.value === 0 || props.value === '0';
+  const tone = empty ? undefined : props.tone;
+
   return (
     <div className="flex flex-col gap-0.5 px-4 first:pl-0 last:pr-0">
       <span
         className={cx(
           'whitespace-nowrap text-micro uppercase tracking-caps',
-          props.tone === undefined ? 'text-faint' : TONE_TEXT[props.tone],
+          tone === undefined ? 'text-faint' : TONE_TEXT[tone],
         )}
       >
         {props.label}
@@ -514,7 +531,7 @@ export function StripItem(props: {
         <span
           className={cx(
             'tabular text-metric font-semibold',
-            props.tone === undefined ? 'text-text' : TONE_TEXT[props.tone],
+            tone === undefined ? (empty ? 'text-faint' : 'text-text') : TONE_TEXT[tone],
           )}
         >
           {props.value}

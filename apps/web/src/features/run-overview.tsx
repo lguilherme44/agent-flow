@@ -343,19 +343,17 @@ export function RunHeader(props: {
                 {formatPercent(run.progress)}
               </span>
             </div>
-            {/* Green, as the reference has it. Progress is a quantity, not a
-                status — and purple is spoken for: it marks the running step of
-                the pipeline, which only reads as special while nothing else
-                shares it. */}
-            <Progress
-              value={run.progress}
-              tone={
-                run.status === 'failed' || run.status === 'plan_rejected'
-                  ? 'danger'
-                  : 'success'
-              }
-              label="Overall progress"
-            />
+            {/* Green, always. Progress is a quantity, not a status — and the two
+                lines above this one said so while the code did the opposite,
+                turning the bar red whenever the run's *verdict* was bad.
+                AF-2026-002 read `67%` in the colour of failure over six tasks
+                that had genuinely completed, which tells the reader the number
+                itself is wrong.
+                The verdict has its own channel and it is louder: the status
+                badge sits beside the title. Purple is spoken for too — it marks
+                the running pipeline step, and only reads as special while
+                nothing else shares it. */}
+            <Progress value={run.progress} tone="success" label="Overall progress" />
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -523,7 +521,12 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
             // Tight padding and a small gap, because nine steps across
             // ~1180px leave each chip about 130px and "Implementation" is
             // a single unbreakable word that needs nearly all of it.
-            'flex min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-md border px-1.5 py-1.5',
+            //
+            // `gap-1` rather than `gap-1.5`, and the 2px is the whole reason:
+            // measured at 1440, the word wanted 88px and its column gave 86.
+            // One pixel short is still short, and the wrap below — which is the
+            // safety net, not the plan — folded a single "n" onto a second line.
+            'flex min-w-0 flex-1 cursor-default items-center gap-1 rounded-md border px-1.5 py-1.5',
             running
               ? 'border-primary-border bg-primary-soft'
               : pending
@@ -553,10 +556,18 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
             {/* Wraps to a second line rather than truncating. Nine steps
                 across 1200px cannot all fit on one line, and
                 "Architectu…" beside "Implemen…" is a pipeline nobody can
-                read — the reference wraps for exactly this reason. */}
+                read — the reference wraps for exactly this reason.
+
+                `overflow-wrap: anywhere` is what makes that sentence true for
+                the one label it was false for. Every other stage name has a
+                space to break at; "Implementation" does not, so `line-clamp-2`
+                had nowhere to fold it and clipped instead — silently, because a
+                clamp shows no ellipsis when it never reaches a second line.
+                Measured at 1440: the word overflowed its column by 3px, which
+                is exactly the width of its final letter. */}
             <span
               className={cx(
-                'line-clamp-2 text-label leading-tight',
+                'line-clamp-2 text-label leading-tight [overflow-wrap:anywhere]',
                 running ? 'font-medium text-text' : pending ? 'text-muted' : 'text-text',
               )}
               title={humanise(stage.stage)}

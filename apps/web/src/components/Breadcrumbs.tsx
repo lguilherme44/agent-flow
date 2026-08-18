@@ -177,7 +177,17 @@ export function Breadcrumbs(props: { selectedTaskId?: string | undefined }): JSX
             <li
               key={item.id}
               className={cx(
-                'flex min-w-0 items-center gap-1.5',
+                'flex items-center gap-1.5',
+                // **The place you are does not shrink.** Every item carried
+                // `min-w-0` and `truncate`, so flexbox took the shortfall out of
+                // all of them equally and a narrow window produced
+                // "worksp… › agent-fl… › Ru… › AF-2026-…" — four truncations that
+                // between them say nothing, in a component whose only job is to
+                // tell you where you are.
+                //
+                // The ancestors are the ones that can afford it: they are still
+                // recognisable clipped, and each keeps its full name in `title`.
+                item.current ? 'shrink-0' : 'min-w-0',
                 item.collapseOnNarrow && 'hidden sm:flex',
               )}
             >
