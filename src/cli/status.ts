@@ -8,7 +8,7 @@ import { summariseTelemetry } from '../core/telemetry.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { renderEscalation } from './render/escalation.js';
-import { projectRun } from '../core/run-projection.js';
+import { projectRun, type RunProjection } from '../core/run-projection.js';
 import { loadConfig } from '../config/loader.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
 import { integrationRef } from '../core/worktree-policy.js';
@@ -96,20 +96,10 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
           : [],
       }));
 
-    process.stdout.write(
-      `${render(
-        state,
-        plan?.success ? plan.data.tasks.length : 0,
-        review?.success ? review.data : null,
-        completedStages,
-        isolation,
-        conflicts,
-      )}\n`,
-    );
-
-    // C-22, at the one surface a person is most likely to be looking at when a run stops.
-    // Rendered after the run summary rather than instead of it: the escalation says what to
-    // do, and the summary is the context that makes the instruction make sense.
+    // Computed before rendering rather than after (C-19, C-20): the headline and its
+    // hint come from what the run is doing *now*, not from the last gate it persisted.
+    // `state.status` alone is a record of that gate — it stays `plan_rejected` while a
+    // revision is already running, and `approved` for the whole of implementation.
     const runtime = projectRun({
       state,
       ...(plan?.success === true
@@ -123,6 +113,21 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
       events: await store.readEventsBestEffort(state.runId),
     });
 
+    process.stdout.write(
+      `${render(
+        state,
+        runtime,
+        plan?.success ? plan.data.tasks.length : 0,
+        review?.success ? review.data : null,
+        completedStages,
+        isolation,
+        conflicts,
+      )}\n`,
+    );
+
+    // C-22, at the one surface a person is most likely to be looking at when a run stops.
+    // Rendered after the run summary rather than instead of it: the escalation says what to
+    // do, and the summary is the context that makes the instruction make sense.
     if (runtime.escalation !== undefined) {
       process.stdout.write(`\n${renderEscalation(runtime.escalation)}\n`);
     }
@@ -240,8 +245,9 @@ export function renderIsolatedProgress(
   return lines;
 }
 
-function render(
+export function render(
   state: RunState,
+  runtime: RunProjection,
   taskCount: number,
   review: ReturnType<typeof ReviewResultSchema.parse> | null,
   completedStages: readonly string[],
@@ -307,12 +313,15 @@ function render(
     lines.push('');
   }
 
-  lines.push(`Status:\n${state.status.toUpperCase()}`);
+  lines.push(`Status:\n${runtime.status.toUpperCase()}`);
 
-  if (state.status === 'waiting_for_approval') {
-    lines.push('', 'Read the SDD and the plan, then: agent-flow approve');
+  // One hint, from one source (AR §3.6): a gate always names the single action that
+  // clears it, and printing anything else here is how a second wording of the same
+  // instruction starts to drift from the first.
+  if (runtime.gate !== undefined) {
+    lines.push('', runtime.gate.action);
   }
-  if (state.status === 'plan_rejected') {
+  if (runtime.status === 'plan_rejected_revisable') {
     lines.push('', 'The review rejected this plan. Revise it with: agent-flow revise "<instruction>"');
   }
 

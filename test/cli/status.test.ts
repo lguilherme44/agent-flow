@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { renderIsolatedProgress, renderPlanningProgress } from '../../src/cli/status.js';
-import { RunStateSchema, type RunState } from '../../src/contracts/index.js';
+import { render, renderIsolatedProgress, renderPlanningProgress } from '../../src/cli/status.js';
+import { RunStateSchema, type RunProjection, type RunState } from '../../src/contracts/index.js';
 
 /**
  * Found by killing a run mid-discovery, not by reading the code.
@@ -60,6 +60,106 @@ describe('planning progress is read from what completed', () => {
     const lines = renderPlanningProgress([], 'discovery', 'running');
 
     expect(lines).toHaveLength(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The headline comes from the runtime projection, not the persisted status
+// (C-19, C-20). `state.status` is a record of the last gate reached; it stays
+// `plan_rejected` while a revision is already running and `approved` for the
+// whole of implementation. `render` used to read it directly and reproduced
+// both defects — this is the regression a code review would need file:line
+// to catch, and a test does not.
+// ---------------------------------------------------------------------------
+
+describe('the headline comes from the runtime projection, not the persisted status', () => {
+  const state = (patch: Partial<RunState> = {}): RunState =>
+    RunStateSchema.parse({
+      runId: 'AF-2026-002',
+      feature: 'f',
+      stage: 'plan-review',
+      status: 'plan_rejected',
+      createdAt: '2026-08-17T13:34:15.000Z',
+      updatedAt: '2026-08-17T17:38:44.000Z',
+      ...patch,
+    });
+
+  const projection = (patch: Partial<RunProjection> = {}): RunProjection => ({
+    status: 'planning',
+    resumable: true,
+    reviewFreshness: 'current',
+    progress: { workflow: { done: 4, total: 7 }, implementation: { done: 0, total: 0 } },
+    ...patch,
+  });
+
+  const headline = (rendered: string): string | undefined =>
+    rendered.split('\n').find((line, index, lines) => lines[index - 1] === 'Status:');
+
+  it('shows PLANNING, not PLAN_REJECTED, while a revision is running', () => {
+    const rendered = render(
+      state({ status: 'plan_rejected' }),
+      projection({ status: 'planning' }),
+      0,
+      null,
+      [],
+      null,
+      [],
+    );
+
+    expect(headline(rendered)).toBe('PLANNING');
+    expect(rendered).not.toContain('agent-flow revise');
+  });
+
+  it('shows IMPLEMENTING, not APPROVED, once implementation has started', () => {
+    const rendered = render(
+      state({ status: 'approved', stage: 'implementation' }),
+      projection({ status: 'implementing' }),
+      3,
+      null,
+      [],
+      null,
+      [],
+    );
+
+    expect(headline(rendered)).toBe('IMPLEMENTING');
+  });
+
+  it('still tells a genuinely revisable rejection apart from one being revised', () => {
+    const rendered = render(
+      state({ status: 'plan_rejected' }),
+      projection({ status: 'plan_rejected_revisable' }),
+      0,
+      null,
+      [],
+      null,
+      [],
+    );
+
+    expect(headline(rendered)).toBe('PLAN_REJECTED_REVISABLE');
+    expect(rendered).toContain('agent-flow revise "<instruction>"');
+  });
+
+  it('prints the gate\'s own action as the hint, whichever gate it is (AR §3.6)', () => {
+    // `blocked_on_human` has no hint of its own in `render` — the gate names the
+    // one action that clears it, and the CLI must not word a second version of it.
+    const rendered = render(
+      state({ status: 'running', stage: 'implementation' }),
+      projection({
+        status: 'blocked_on_human',
+        gate: {
+          gate: 'agent_blocked',
+          action: 'Answer what TASK-002 reported as blocking, then requeue',
+          tasks: ['TASK-002'],
+        },
+      }),
+      2,
+      null,
+      [],
+      null,
+      [],
+    );
+
+    expect(rendered).toContain('Answer what TASK-002 reported as blocking, then requeue');
   });
 });
 
