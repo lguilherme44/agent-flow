@@ -45,5 +45,14 @@ export default defineConfig({
     // browser and their own runner; collected here they fail on an import of
     // `@playwright/test` and take the unit suite red with them.
     exclude: ['node_modules/**', 'dist/**', 'visual/**', 'e2e/**'],
+    // Same cap as the root vitest.config.ts, for the same reason: up to 8
+    // worktrees can run `npm run check` (which reaches this suite) at once, and
+    // an auto-sized pool per invocation is what exhausted RAM on 2026-08-17.
+    poolOptions: {
+      threads: {
+        minThreads: 1,
+        maxThreads: 2,
+      },
+    },
   },
 });

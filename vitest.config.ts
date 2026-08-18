@@ -22,6 +22,21 @@ export default defineConfig({
      * was relaxed to arrive at this number.**
      */
     testTimeout: 30_000,
+    /**
+     * Left unset, Vitest sizes its worker pool to the machine's core count —
+     * fine for one invocation, not for eight. `MAX_ISOLATED_TASK_CONCURRENCY`
+     * (src/core/concurrency.ts) lets 8 worktrees validate at once, each running
+     * this suite; 8 concurrent auto-sized pools on a 10-core/16GB machine is
+     * what put ~16GB of `node` in the process list and forced a hard reboot on
+     * 2026-08-17. Capped so the worst case (8 tasks × 2 threads) stays inside
+     * what the machine actually has.
+     */
+    poolOptions: {
+      threads: {
+        minThreads: 1,
+        maxThreads: 2,
+      },
+    },
     coverage: {
       provider: 'v8',
       clean: true,
