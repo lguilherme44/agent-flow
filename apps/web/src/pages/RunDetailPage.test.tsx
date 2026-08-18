@@ -36,6 +36,12 @@ const RUN = {
   progress: 50,
   startedAt: '2026-08-10T19:34:00.000Z',
   durationMs: 2_482_000,
+  runtime: {
+    status: 'implementing',
+    resumable: true,
+    progress: { workflow: { done: 5, total: 7 }, implementation: { done: 1, total: 2 } },
+    reviewFreshness: 'current',
+  },
 };
 
 const STAGES = [

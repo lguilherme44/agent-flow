@@ -1,4 +1,4 @@
-import type { PipelineStatus, RunStatus, TaskState } from '@contracts/index.js';
+import type { PipelineStatus, RunStatus, RuntimeStatus, TaskState } from '@contracts/index.js';
 
 /**
  * The one place a status becomes a colour.
@@ -168,6 +168,47 @@ const RUN_LABELS: Partial<Record<RunStatus, string>> = {
 
 export function runLabel(status: RunStatus): string {
   return RUN_LABELS[status] ?? status.replace(/_/g, ' ').toUpperCase();
+}
+
+/**
+ * Tone and label for the AR-07 runtime projection (C-19, C-20).
+ *
+ * A distinct pair from `runTone`/`runLabel` because the two vocabularies genuinely
+ * differ — `implementing`, `recovering`, `correcting` and `plan_rejected_revisable`
+ * have no `RunStatus` counterpart, and the reverse is true of `running`. Reusing the
+ * persisted-status functions with a cast would be the one place this file did not
+ * write a colour down before choosing it.
+ *
+ * `running`'s stage-level counterparts — `planning`, `implementing`, `verifying`,
+ * `reviewing`, `correcting`, `recovering` — get the same violet the pipeline's
+ * running step uses: each one *is* the pipeline actively moving, just named for
+ * where rather than restated as "running".
+ */
+export function runtimeTone(status: RuntimeStatus): Tone {
+  switch (status) {
+    case 'complete':
+      return 'success';
+    case 'failed':
+    case 'plan_rejected_revisable':
+    case 'auto_recovery_exhausted':
+      return 'danger';
+    case 'awaiting_human_approval':
+    case 'blocked_on_human':
+      return 'warning';
+    case 'planning':
+    case 'implementing':
+    case 'verifying':
+    case 'reviewing':
+    case 'correcting':
+    case 'recovering':
+      return 'primary';
+    default:
+      return 'muted';
+  }
+}
+
+export function runtimeLabel(status: RuntimeStatus): string {
+  return status.replace(/_/g, ' ').toUpperCase();
 }
 
 /**

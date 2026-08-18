@@ -134,7 +134,9 @@ describe('RunHeader', () => {
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('AF-2026-001');
     expect(screen.getByText('Add weekly recurrence')).toBeInTheDocument();
-    expect(screen.getByText('RUNNING')).toBeInTheDocument();
+    // From `runtime.status` (C-19, C-20), not `run.status`: the persisted status stays
+    // `running` for the whole of implementation, verification and final review alike.
+    expect(screen.getByText('IMPLEMENTING')).toBeInTheDocument();
     expect(screen.getByText('7 / 14')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
   });
@@ -178,7 +180,22 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
-          run={run({ status: 'approved', approved: true, progress: 100 })}
+          run={run({
+            status: 'approved',
+            approved: true,
+            progress: 100,
+            runtime: {
+              status: 'blocked_on_human',
+              resumable: false,
+              gate: {
+                gate: 'final_acceptance',
+                action: 'Run `agent-flow review`, then accept and merge',
+                tasks: [],
+              },
+              progress: { workflow: { done: 6, total: 7 }, implementation: { done: 9, total: 9 } },
+              reviewFreshness: 'current',
+            },
+          })}
           projectId="demo"
           asGraph={false}
           onToggleGraph={() => undefined}
@@ -229,7 +246,22 @@ describe('RunHeader', () => {
   it('offers nothing to change on a finished run', () => {
     render(
       withTooltips(
-        <RunHeader run={run({ status: 'completed', approved: true, progress: 100 })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />,
+        <RunHeader
+          run={run({
+            status: 'completed',
+            approved: true,
+            progress: 100,
+            runtime: {
+              status: 'complete',
+              resumable: false,
+              progress: { workflow: { done: 7, total: 7 }, implementation: { done: 9, total: 9 } },
+              reviewFreshness: 'current',
+            },
+          })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
       ),
     );
 
@@ -262,6 +294,51 @@ describe('RunHeader', () => {
 
     expect(screen.getByText('the plan was approved with --force')).toBeInTheDocument();
     expect(screen.getByText('the review gate did not hold for this run')).toBeInTheDocument();
+  });
+
+  it('does not offer View as DAG when there is no plan to graph', () => {
+    render(
+      withTooltips(
+        <RunHeader
+          run={run({ taskCount: 0, completedTasks: 0 })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
+
+    expect(screen.queryByRole('button', { name: 'View as DAG' })).toBeNull();
+  });
+
+  it('reports overall progress from the workflow axis, never 100% with a later stage pending', () => {
+    // AF-2026-002 read 100% the moment every planned task completed, with
+    // verification and final-review still ahead of it. `workflow` is stage-based:
+    // four of seven required stages reached is 57%, whatever the task count says.
+    render(
+      withTooltips(
+        <RunHeader
+          run={run({
+            taskCount: 6,
+            completedTasks: 6,
+            runtime: {
+              status: 'verifying',
+              resumable: false,
+              progress: {
+                workflow: { done: 4, total: 7 },
+                implementation: { done: 6, total: 6 },
+              },
+              reviewFreshness: 'current',
+            },
+          })}
+          projectId="demo"
+          asGraph={false}
+          onToggleGraph={() => undefined}
+        />,
+      ),
+    );
+
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '57');
   });
 });
 

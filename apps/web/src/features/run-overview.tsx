@@ -20,7 +20,7 @@ import { Badge, Button, Progress, StatusDot, Tooltip, cx } from '../components/u
 import { useHorizontalOverflow } from '../hooks/use-horizontal-overflow';
 import { RunActions } from './run-actions';
 import { formatDuration, formatPercent, formatWhen, humanise } from '../lib/format';
-import { TONE_BG, TONE_TEXT, runLabel, runTone, stageTone } from '../lib/status';
+import { TONE_BG, TONE_TEXT, runtimeLabel, runtimeTone, stageTone } from '../lib/status';
 
 /**
  * The run, as one surface (§70, §71).
@@ -49,8 +49,8 @@ export function RunPanel(props: {
       <section className="glass relative shrink-0 flex items-center justify-between rounded-lg border border-glass-border px-4 py-2 shadow-sm">
         <div className="flex items-center gap-3 min-w-0">
           <span className="tabular font-bold text-title text-text">{props.run.runId}</span>
-          <Badge tone={runTone(props.run.status)} caps className="shrink-0 px-2 py-0.5 text-label">
-            {runLabel(props.run.status)}
+          <Badge tone={runtimeTone(props.run.runtime.status)} caps className="shrink-0 px-2 py-0.5 text-label">
+            {runtimeLabel(props.run.runtime.status)}
           </Badge>
           <span className="min-w-0 truncate text-body-lg text-muted" title={props.run.feature}>
             {props.run.feature}
@@ -282,6 +282,9 @@ export function RunHeader(props: {
   onToggleGraph: () => void;
 }): JSX.Element {
   const { run } = props;
+  const workflow = run.runtime.progress.workflow;
+  const workflowPercent =
+    workflow.total === 0 ? 0 : Math.round((workflow.done / workflow.total) * 100);
 
   return (
     <header className="flex flex-col gap-2.5 px-4 pb-3 pt-3.5">
@@ -291,8 +294,8 @@ export function RunHeader(props: {
               cost the header a row of height for no information. */}
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="tabular shrink-0 text-hero font-bold tracking-tight">{run.runId}</h1>
-            <Badge tone={runTone(run.status)} caps className="shrink-0 px-2 py-0.5 text-label">
-              {runLabel(run.status)}
+            <Badge tone={runtimeTone(run.runtime.status)} caps className="shrink-0 px-2 py-0.5 text-label">
+              {runtimeLabel(run.runtime.status)}
             </Badge>
             {/* Regular weight, not medium. The run id carries the hierarchy by
                 size *and* weight, as the reference does; matching the title's
@@ -340,7 +343,7 @@ export function RunHeader(props: {
                 Overall progress
               </span>
               <span className="tabular text-body-lg font-medium text-text">
-                {formatPercent(run.progress)}
+                {formatPercent(workflowPercent)}
               </span>
             </div>
             {/* Green, always. Progress is a quantity, not a status — and the two
@@ -352,8 +355,14 @@ export function RunHeader(props: {
                 The verdict has its own channel and it is louder: the status
                 badge sits beside the title. Purple is spoken for too — it marks
                 the running pipeline step, and only reads as special while
-                nothing else shares it. */}
-            <Progress value={run.progress} tone="success" label="Overall progress" />
+                nothing else shares it.
+
+                Derived from `runtime.progress.workflow` (C-21), not from tasks
+                completed over tasks planned: that number reached 100% with
+                verification and final-review still pending, and *fell* the
+                moment a corrective task was appended — this axis is stage-based
+                and monotonic by construction, so neither can happen again. */}
+            <Progress value={workflowPercent} tone="success" label="Overall progress" />
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -365,15 +374,20 @@ export function RunHeader(props: {
                 renderings of the same task list, with the same filter and the
                 same selection, so leaving the page to see one of them would be
                 the thing that loses the reader's place. */}
-            <Button
-              variant={props.asGraph ? 'primary' : 'surface'}
-              onClick={props.onToggleGraph}
-              title={props.asGraph ? 'Back to the task table' : 'Show the tasks as a graph'}
-              pressed={props.asGraph}
-            >
-              <GitBranch className="h-3.5 w-3.5" aria-hidden />
-              <span className="sr-only wide:not-sr-only">View as DAG</span>
-            </Button>
+            {/* Offered only once an implementation DAG can exist: a plan with no
+                tasks has nothing to graph, and the toggle would open to an empty
+                canvas rather than refuse. */}
+            {run.taskCount > 0 && (
+              <Button
+                variant={props.asGraph ? 'primary' : 'surface'}
+                onClick={props.onToggleGraph}
+                title={props.asGraph ? 'Back to the task table' : 'Show the tasks as a graph'}
+                pressed={props.asGraph}
+              >
+                <GitBranch className="h-3.5 w-3.5" aria-hidden />
+                <span className="sr-only wide:not-sr-only">View as DAG</span>
+              </Button>
+            )}
 
             {/* Real now, and driven by where the run is: a Start button on an
                 unapproved plan is a button whose only outcome is a refusal, and

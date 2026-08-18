@@ -60,7 +60,13 @@ export function RunActions(props: {
   const busy = active !== undefined;
 
   const terminal = run.status === 'completed' || run.status === 'plan_rejected' || run.status === 'failed';
-  const canStart = run.approved && !terminal && run.progress < 100;
+  // `resumable` (C-19) is the DAG's own answer to "is there executable work right
+  // now", and it is stricter than `!terminal && progress < 100`: a run whose only
+  // incomplete task sits in `review_required` is neither terminal nor at 100%, but
+  // nothing in it is ready to run, and offering Resume there sends a person to a
+  // task that needs a decision, not a restart. `approved` stays a separate check —
+  // the gate is a human's, and the DAG does not know whether it has been cleared.
+  const canStart = run.approved && run.runtime.resumable;
   const isWaitingApproval = run.status === 'waiting_for_approval';
   const isPlanning = run.status === 'running' && !run.approved;
 

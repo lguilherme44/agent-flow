@@ -44,6 +44,22 @@ const RUN: RunDetailView = {
   },
 };
 
+/**
+ * An approved run with executable work waiting (C-19).
+ *
+ * `approved: true, status: 'approved'` alone used to be enough to make Start/Resume
+ * appear — the button read `run.progress`, which this fixture never touched. Now it
+ * reads `runtime.resumable`, and a fixture that only patches the persisted status
+ * without its runtime counterpart is exactly the drift that let the two disagree in
+ * the first place.
+ */
+const APPROVED_RUN: RunDetailView = {
+  ...RUN,
+  approved: true,
+  status: 'approved',
+  runtime: { ...RUN.runtime, status: 'implementing', resumable: true },
+};
+
 const PASSING_GATE: ApprovalGateView = {
   runId: RUN.runId,
   approved: false,
@@ -447,7 +463,7 @@ describe('revision', () => {
   });
 
   it('warns that a revision clears an approval, before it happens', async () => {
-    renderActions({ ...RUN, approved: true, status: 'approved' });
+    renderActions(APPROVED_RUN);
     await userEvent.click(screen.getByRole('button', { name: 'Revise' }));
 
     const dialog = await screen.findByRole('dialog');
@@ -492,7 +508,7 @@ describe('reject', () => {
 
 describe('start', () => {
   it('starts an approved run and says it is running', async () => {
-    renderActions({ ...RUN, approved: true, status: 'approved' });
+    renderActions(APPROVED_RUN);
 
     await userEvent.click(screen.getByRole('button', { name: 'Start run' }));
 
@@ -512,7 +528,7 @@ describe('start', () => {
       startedAt: '2026-08-10T20:16:00.000Z',
       status: 'running',
     };
-    renderActions({ ...RUN, approved: true, status: 'approved' });
+    renderActions(APPROVED_RUN);
 
     // Two schedulers on one run would spawn the same agent twice, so the button
     // that could ask for that is not on screen while one is going.
@@ -532,7 +548,7 @@ describe('a run another process is executing (AF-L01)', () => {
         detail: { holder: { owner: 'cli', operation: 'run', pid: 31_337 }, sameHost: true },
       },
     };
-    renderActions({ ...RUN, approved: true, status: 'approved' });
+    renderActions(APPROVED_RUN);
 
     await userEvent.click(screen.getByRole('button', { name: 'Start run' }));
 
@@ -547,7 +563,7 @@ describe('a run another process is executing (AF-L01)', () => {
 
 describe('what the browser never sends', () => {
   it('posts no path, command or hash on any action', async () => {
-    renderActions({ ...RUN, approved: true, status: 'approved' });
+    renderActions(APPROVED_RUN);
 
     await userEvent.click(screen.getByRole('button', { name: 'Start run' }));
     await userEvent.click(screen.getByRole('button', { name: 'Revise' }));
