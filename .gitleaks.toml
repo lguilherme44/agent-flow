@@ -1,0 +1,78 @@
+# Secret scanning, and the small number of places a secret-shaped string is the point.
+#
+# The baseline scan over all 170 commits found 32 matches and zero secrets: every one is
+# in test material, and they fall into three groups, each allowlisted by *what it is*
+# rather than by where it lives. `test/**` is deliberately not exempt — a real credential
+# pasted into a fixture is exactly the mistake this catches, and a blanket path exemption
+# would make the scanner agree with it.
+#
+# Re-run locally with:  gitleaks git --no-banner --redact -v
+
+[extend]
+useDefault = true
+
+[[rules]]
+# Kept from the default set, with an allowlist for Agent Flow's own vocabulary.
+id = "generic-api-key"
+
+[rules.allowlist]
+regexTarget = "match"
+regexes = [
+  # **The run key is not a credential.** It is a per-run random token that namespaces
+  # this run's Git refs and worktree paths so two runs cannot collide — it authenticates
+  # nothing, grants nothing, and appears in commit trailers on purpose. The rule fires on
+  # the word "key". Spelled here in every form the codebase uses it.
+  '''(?i)(agent-flow-run-key|gitRunKey|RUN_KEY)["'\s:=]+[A-Za-z0-9._-]+''',
+
+  # The same token by its *shape*, for the places it is assigned to a plainly-named
+  # constant: `AF-<year>-<seq>-<hex>`. Matching the value rather than the variable name is
+  # the stronger form — a run key renamed tomorrow is still not a credential.
+  '''AF-\d{4}-\d{3}-[0-9a-f]{8,}''',
+
+  # A variable *name*, never a value. `apiKeyEnv` is how the UtilityModel config names the
+  # environment variable to read at the composition boundary; §7.1 forbids the value ever
+  # reaching a config file, and `test/contracts/utility-model-security.test.ts` is the
+  # test that holds it to that.
+  '''apiKeyEnv["'\s:=]+[A-Za-z0-9_]+''',
+]
+
+[allowlist]
+description = "Fixtures whose whole purpose is to contain credential-shaped text"
+
+paths = [
+  # The redaction module's own tests. `core/evidence-redaction.ts` exists to strip bearer
+  # tokens, vendor key prefixes, `key = value` assignments, URL userinfo and PEM blocks
+  # out of anything persisted — so its tests must contain one of each, including a private
+  # key block. A scanner that passed on this file would be reporting that the feature is
+  # untested.
+  '''test/core/evidence-redaction\.test\.ts''',
+
+  # Frozen copies of a real run's `state.json` and `events.jsonl`, kept byte-for-byte so
+  # schema-compatibility tests read what an older version actually wrote. Editing them to
+  # please a scanner would destroy what they are for. Their only match is `gitRunKey`.
+  '''test/fixtures/legacy-artifacts/.*''',
+
+  # Three more tests that must contain a credential to prove one is removed. Each was read
+  # before being listed here, and each match is a fake token written by the test itself:
+  #
+  #   test/app/stage-runner.test.ts        "redacts before persisting, in the log and in
+  #                                        the event" (I-21) — a runner's output carrying
+  #                                        `export API_KEY=…` and a bearer header.
+  #   test/contracts/utility-model-security.test.ts
+  #                                        §7.1 — the resolved key must never reach a
+  #                                        config file, an artifact or a log. The marker
+  #                                        is searched for across every output.
+  #   apps/web/src/pages/AgentsPage.test.tsx
+  #                                        the Settings page must render an endpoint with
+  #                                        its userinfo and query credentials stripped.
+  #   test/adapters/utility-model/openai-utility-model.test.ts
+  #                                        "53. API key never leaks in failure message" —
+  #                                        the adapter is handed a key and made to fail,
+  #                                        and the message must not contain it.
+  #
+  # A scanner that passed on these would be reporting that redaction is untested.
+  '''test/app/stage-runner\.test\.ts''',
+  '''test/contracts/utility-model-security\.test\.ts''',
+  '''apps/web/src/pages/AgentsPage\.test\.tsx''',
+  '''test/adapters/utility-model/openai-utility-model\.test\.ts''',
+]
