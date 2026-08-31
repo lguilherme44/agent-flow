@@ -113,6 +113,63 @@ describe('C-19 — Resume is offered only when work exists', () => {
     ).toBe(true);
   });
 
+  it.each(['running', 'interrupted'] as const)(
+    'is resumable when a %s task is what a killed coordinator left',
+    (crashed) => {
+      // The regression this exists for. C-19 answers "is there executable work" by asking
+      // the DAG, and the DAG admits only `queued` and `ready` — so a wave graph with three
+      // tasks integrated and the fourth in flight looked exactly like a run with nothing
+      // to do. `agent-flow run`, the documented way to resume a crashed run, then refused
+      // before taking the execution lock, which is *before* the recovery that reconciles
+      // those tasks. Every attempt after a crash answered the same.
+      expect(
+        isResumable({
+          state: state({
+            status: 'approved',
+            tasks: [
+              task('TASK-001', 'completed'),
+              task('TASK-002', 'completed'),
+              task('TASK-003', crashed),
+            ],
+          }),
+          nodes: [
+            { id: 'TASK-001', dependencies: [] },
+            { id: 'TASK-002', dependencies: [] },
+            { id: 'TASK-003', dependencies: ['TASK-001', 'TASK-002'] },
+          ],
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it('offers Resume rather than a gate for a crashed run', () => {
+    // The projection the CLI headline and the dashboard both read. A crashed run that
+    // reports `blocked_on_human` sends a person looking for a gate that does not exist.
+    const projection = projectRun({
+      state: state({ status: 'approved', tasks: [task('TASK-001', 'running')] }),
+      nodes: [{ id: 'TASK-001', dependencies: [] }],
+    });
+
+    expect(projection.resumable).toBe(true);
+    expect(projection.gate).toBeUndefined();
+    expect(projection.status).not.toBe('blocked_on_human');
+  });
+
+  it('still refuses a finished run, whatever its tasks say', () => {
+    // The crash branch must not outrank a terminal status: a `completed` run with a stale
+    // `running` entry is finished, and offering Resume would send a person to a command
+    // that refuses.
+    for (const status of ['completed', 'failed'] as const) {
+      expect(
+        isResumable({
+          state: state({ status, tasks: [task('TASK-001', 'running')] }),
+          nodes: [{ id: 'TASK-001', dependencies: [] }],
+        }),
+        status,
+      ).toBe(false);
+    }
+  });
+
   it('is not resumable when a queued task is still waiting on a failed dependency', () => {
     expect(
       isResumable({

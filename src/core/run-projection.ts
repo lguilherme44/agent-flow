@@ -155,6 +155,23 @@ export function projectRun(input: ProjectionInput): RunProjection {
  * *not*, and it is not an exception either — a plan whose DAG cannot be built cannot be
  * scheduled, and reporting that as "resumable" would send a person to a command that
  * will refuse.
+ *
+ * **A task left `running` or `interrupted` is resumable work, and asking the DAG alone
+ * missed it.** Those two states are what a killed coordinator leaves, and the DAG admits
+ * only `queued` and `ready` — so a run crashed mid-graph looked exactly like a run with
+ * nothing to do. C-19 then refused `agent-flow run` before the execution lock, which is
+ * *before* the recovery that reconciles those tasks: the documented way to resume a
+ * crashed run answered "no runnable task in its current state", and every attempt after
+ * a crash answered the same. Measured on the wave-graph E2E, where three tasks had
+ * integrated and the fourth was in flight.
+ *
+ * The DAG is still right about what it knows. It knows which tasks are *ready*; it does
+ * not know that recovery is about to make one of these runnable, because recovery runs
+ * inside `start` and reads durable evidence this projection never sees.
+ *
+ * A task genuinely running in another process reaches the execution lock and is refused
+ * there as `run_busy` — the honest answer, and one this function is not the place to
+ * give.
  */
 export function isResumable(input: ProjectionInput): boolean {
   const { state } = input;
@@ -169,6 +186,12 @@ export function isResumable(input: ProjectionInput): boolean {
 
   const nodes = input.nodes;
   if (nodes === undefined || nodes.length === 0) return true;
+
+  // What a killed coordinator leaves. Checked before the DAG because the DAG cannot see
+  // it: recovery decides these, from evidence on disk, inside `start`.
+  if (state.tasks.some((task) => task.state === 'running' || task.state === 'interrupted')) {
+    return true;
+  }
 
   const states: TaskStates = Object.fromEntries(state.tasks.map((task) => [task.id, task.state]));
 
