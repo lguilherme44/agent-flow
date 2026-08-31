@@ -124,13 +124,30 @@ of its artifact, so re-running `commit-tree` after a crash yields the same SHA a
 
 ---
 
-## PRI-07 — Retry is bounded
+## PRI-07 — The machine's retry loop is bounded; every continuation past the bound costs a human act
 
-A task has a maximum attempt count. Reaching it produces a terminal, named state — never
-another attempt.
+`retry.maxAttempts` bounds a streak of attempts made **with nobody watching**. Reaching it
+stops the automatic loop and produces a terminal, named state carrying one human action.
 
-- **MECHANISM:** `core/recovery-policy.ts`, `app/task-executor.ts`
-- **TEST:** `test/app/retry-attempts.integration.test.ts`
+An explicit operator retry ends the streak. It is never refused for budget, because a
+budget that exists to bound unattended work has nothing to say to an attended request —
+the principle `app/autonomy-budget.ts` already states about the run-level counters. The
+lifetime `attempts` count is evidence and never moves; the streak is the difference
+between it and `attemptsBeforeHumanRetry`.
+
+**This invariant was rewritten after the code was read, and the first draft was wrong.**
+It said "a task has a maximum attempt count", which describes the product before AR-03
+turned `recovery.enabled` on by default. After that the repair loop spent the whole budget
+before anybody was asked — so the run escalated with `retry` as its one named human action,
+and `retry` then answered `attempts_exhausted` and offered `--force`. The machine refused
+the action it had just asked for, and the E2E suite that encoded the old behaviour has been
+red on `master` since commit `ab8a460`.
+
+- **MECHANISM:** `core/recovery-policy.ts` (`unattendedAttempts`), `app/run-actions.ts`
+- **TEST:** `test/core/recovery-policy.test.ts` — "bounds the unattended streak, not the
+  lifetime count"; `test/app/run-actions.gate.test.ts` — "does not refuse the very action
+  the machine stopped to ask for", "gives the recovery loop one fresh budget per
+  intervention, and no more"; `apps/web/e2e/execute.spec.ts`
 - **STATUS:** enforced
 
 ---

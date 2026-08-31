@@ -23,14 +23,26 @@ const CONFIG: RecoveryConfig = GlobalConfigSchema.parse(
   parseYaml(DEFAULT_GLOBAL_CONFIG_YAML),
 ).recovery;
 
-const counters = (overrides: Partial<TaskRecoveryCounters> = {}): TaskRecoveryCounters => ({
-  attempts: 0,
-  infrastructureFailures: 0,
-  environmentRepairs: 0,
-  modelCalls: 0,
-  identicalFailures: 1,
-  ...overrides,
-});
+/**
+ * A task nobody has intervened in, unless a case says otherwise.
+ *
+ * `unattendedAttempts` follows `attempts` rather than defaulting to zero, because that is
+ * what every case below describes: an automatic loop running on its own. Defaulting it to
+ * zero would silently give each of them an unspent budget and turn the exhaustion cases
+ * into permissions.
+ */
+const counters = (overrides: Partial<TaskRecoveryCounters> = {}): TaskRecoveryCounters => {
+  const base = {
+    attempts: 0,
+    infrastructureFailures: 0,
+    environmentRepairs: 0,
+    modelCalls: 0,
+    identicalFailures: 1,
+    ...overrides,
+  };
+
+  return { unattendedAttempts: base.attempts, ...base };
+};
 
 const decide = (
   failureClass: Parameters<typeof decideTaskRecovery>[0]['failureClass'],
@@ -173,7 +185,36 @@ describe('work retries respect the attempt budget', () => {
 
     expect(decision.disposition).toBe('recovery_exhausted');
     expect(decision.exhaustedBudget).toBe('retry.maxAttempts');
-    expect(decision.humanAction).toMatch(/--force/);
+    // Retry, not `retry --force`. The action this hands a person has to be the one that
+    // works: `--force` is for overruling a gate, and after this exhaustion there is no
+    // gate left to overrule — the loop stopped precisely so that somebody would ask.
+    expect(decision.humanAction).toMatch(/retry the task/);
+    expect(decision.humanAction).not.toMatch(/--force/);
+  });
+
+  it('bounds the unattended streak, not the lifetime count', () => {
+    // The defect AR-03 shipped: with `recovery.enabled` on by default the repair loop
+    // spent the same budget `retry` gates on, so a task that a person had already
+    // rescued still read as exhausted and the only remaining action was `--force`.
+    const afterHumanRetry = decide(
+      'validation_unsatisfied',
+      { attempts: 5, unattendedAttempts: 0 },
+      2,
+    );
+
+    expect(afterHumanRetry.mayProceedAutomatically).toBe(true);
+    expect(afterHumanRetry.step).toBe('work_retry');
+
+    // And the streak still bounds it — a person's intervention buys a budget, not an
+    // exemption.
+    const streakSpent = decide(
+      'validation_unsatisfied',
+      { attempts: 7, unattendedAttempts: 2 },
+      2,
+    );
+
+    expect(streakSpent.disposition).toBe('recovery_exhausted');
+    expect(streakSpent.exhaustedBudget).toBe('retry.maxAttempts');
   });
 
   it('stops on the per-task model-call ceiling before spending another attempt', () => {

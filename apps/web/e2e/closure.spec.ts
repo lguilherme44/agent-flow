@@ -56,6 +56,8 @@ interface TaskView {
   readonly id: string;
   readonly state: string;
   readonly attempts: number;
+  /** Absent until a person has asked for this task to run again. */
+  readonly attemptsBeforeHumanRetry?: number;
 }
 
 async function tasksOf(world: World): Promise<TaskView[]> {
@@ -350,7 +352,11 @@ test.describe('MVP 2, end to end', () => {
 
     await world.cli('booking-api', ['approve']);
 
-    // Attempt 1: the agent works, and validation refuses what it produced.
+    // The first `run` spends the whole unattended budget, not one attempt. `recovery`
+    // ships enabled and `retry.maxAttempts` is 2, so validation refuses attempt 1, the
+    // repair loop opens attempt 2 on its own, validation refuses that too, and the run
+    // stops and asks. Two attempts, two worktrees, two artifacts — before a person has
+    // touched anything.
     const failed = await world.cli('booking-api', ['run']);
     expect(failed.code, 'a failed validation was reported as success').not.toBe(0);
 
@@ -369,13 +375,22 @@ test.describe('MVP 2, end to end', () => {
     ]);
 
     // Retry, and this time validation is satisfied.
+    //
+    // The retry must not be refused, and that is half of what this asserts. The budget
+    // the repair loop just spent bounds *unattended* work; this line is somebody asking,
+    // so it is not what the budget is about. Before that distinction existed, this call
+    // answered `attempts_exhausted` and offered `--force` — the run escalated naming
+    // `retry` as its one human action and then refused it.
     const retried = await world.cli('booking-api', ['retry', 'TASK-001']);
     expect(retried.code, `retry refused: ${retried.stderr}`).toBe(0);
     const second = await world.cli('booking-api', ['run'], { AF_GATE: '1' });
 
     const afterRetry = await tasksOf(world);
     const task = afterRetry.find((entry) => entry.id === 'TASK-001');
-    expect(task?.attempts, 'the retry did not open a new attempt').toBe(2);
+    // Three: two the machine spent on its own, and one a person asked for. The lifetime
+    // count never resets — it is the evidence — so what a retry restarts is the streak.
+    expect(task?.attempts, 'the retry did not open a new attempt').toBe(3);
+    expect(task?.attemptsBeforeHumanRetry, 'the streak did not restart').toBe(2);
 
     // A *fresh* branch, not a reused one — and attempt 1's ref is still there.
     const refsAfter = await world.git('booking-api', [
@@ -383,16 +398,16 @@ test.describe('MVP 2, end to end', () => {
       '--format=%(refname:short)',
       'refs/heads/agent-flow',
     ]);
-    expect(refsAfter).toContain('/TASK-001/attempt-2');
+    expect(refsAfter).toContain('/TASK-001/attempt-3');
     expect(refsBefore, 'attempt 1 had no ref to keep').toContain('/TASK-001/attempt-1');
-    expect(refsAfter, 'the retry deleted the failed attempt’s ref').toContain(
-      '/TASK-001/attempt-1',
-    );
+    for (const attempt of ['attempt-1', 'attempt-2']) {
+      expect(refsAfter, `the retry deleted ${attempt}'s ref`).toContain(`/TASK-001/${attempt}`);
+    }
 
     // A *fresh* worktree: two distinct paths for the two attempts, and they differ
     // in the attempt segment rather than by having been reused.
     const listed = await world.git('booking-api', ['worktree', 'list', '--porcelain']);
-    expect(listed).toMatch(/TASK-001[\\/]attempt-2/);
+    expect(listed).toMatch(/TASK-001[\\/]attempt-3/);
 
     // And attempt 1's evidence is byte-identical to what it was: retention, not
     // rewriting (§20.3). This is the file a person reads to find out why it failed.
