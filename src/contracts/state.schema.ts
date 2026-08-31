@@ -154,6 +154,35 @@ export const TaskProgressSchema = z.object({
    * what those runs could observe.
    */
   infrastructureFailures: z.number().int().min(0).default(0),
+  /**
+   * The value of {@link TaskProgressSchema.shape.attempts} when a person last asked for
+   * this task to run again.
+   *
+   * **A counter, not a reset**, for the same reason `infrastructureFailures` is one:
+   * arithmetic that hides history is not an audit trail. `attempts` keeps counting every
+   * work attempt this task ever made; the difference between the two is the streak that
+   * happened *with nobody watching*, and that streak is what `retry.maxAttempts` bounds.
+   *
+   * The distinction was free until AR-03 turned autonomous recovery on by default. After
+   * it, the repair loop spent the same budget `retry` gates on — so with the shipped
+   * defaults every ordinary failure reached the operator with nothing left, and the
+   * dashboard's Retry button refused every time it was pressed. `agent-flow retry`
+   * answered `attempts_exhausted` and offered `--force`: a limit you must override to do
+   * the normal thing.
+   *
+   * The principle is the one `app/autonomy-budget.ts` already states about the run-level
+   * counters — "a call a person asked for is not autonomous and must not count against a
+   * budget that exists to bound unattended work". This applies it to the counter that was
+   * missed.
+   *
+   * **Optional rather than defaulted to `0`**, unlike `infrastructureFailures` beside it,
+   * and the difference is that `0` is a fact there and an absence here. A task nobody has
+   * intervened in has no such moment to record, and a field that appears only when the
+   * event it describes has happened keeps `state.json` readable by a person. Every state
+   * file written before this field existed therefore parses unchanged and reads as "no
+   * person has intervened", which is exactly what those runs could observe.
+   */
+  attemptsBeforeHumanRetry: z.number().int().min(0).optional(),
   /** The class of the most recent failure (AD-36). Absent until one is classified. */
   failureClass: FailureClassSchema.optional(),
   lastFailureAt: IsoTimestampSchema.optional(),

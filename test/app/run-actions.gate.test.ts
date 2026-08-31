@@ -16,7 +16,16 @@ import {
   type ActionOutcome,
   type RunActionDeps,
 } from '../../src/app/run-actions.js';
+import { decideTaskRecovery } from '../../src/core/recovery-policy.js';
+import { GlobalConfigSchema } from '../../src/contracts/index.js';
+import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
+import { parse as parseYaml } from 'yaml';
 import type { ProcessResult, ProcessRunner, ProcessSpawnOptions } from '../../src/ports/index.js';
+
+/** The shipped recovery budgets, read from what is shipped rather than restated here. */
+const RECOVERY_DEFAULTS = GlobalConfigSchema.parse(
+  parseYaml(DEFAULT_GLOBAL_CONFIG_YAML),
+).recovery;
 
 /**
  * AF-L01.2 — moving the gate versus executing the plan.
@@ -538,6 +547,63 @@ describe('blocked retries split by provenance (dependency vs agent)', () => {
     const forced = await retryTask(deps, runId, 'TASK-001', { force: true });
     expect(forced.ok).toBe(true);
     expect((await store.loadRun(runId)).tasks[0]?.state).toBe('queued');
+  });
+
+  it('does not refuse the very action the machine stopped to ask for', async () => {
+    // The defect AR-03 shipped, at the layer a person meets it. `retry.maxAttempts`
+    // defaults to 2 and `recovery.enabled` to `true`, so the repair loop spent the whole
+    // budget before anybody was asked. It then escalated with one named human action —
+    // retry — and `agent-flow retry` answered `attempts_exhausted`, offering `--force`.
+    // A limit you must override to do the thing you were just told to do is not a limit.
+    const { store, deps, runId } = await project();
+    await putTaskIn(store, runId, 'failed', 2);
+
+    const retried = await retryTask(deps, runId, 'TASK-001');
+
+    expect(retried.ok, 'the action the escalation named must not need --force').toBe(true);
+
+    const after = await store.loadRun(runId);
+    expect(after.tasks[0]?.state).toBe('queued');
+    // The lifetime count is evidence and does not move. What restarts is the streak,
+    // which is what bounds the machine.
+    expect(after.tasks[0]?.attempts).toBe(2);
+    expect(after.tasks[0]?.attemptsBeforeHumanRetry).toBe(2);
+  });
+
+  it('gives the recovery loop one fresh budget per intervention, and no more', async () => {
+    // The other half: a person asking buys the machine a budget, not an exemption. The
+    // assertion runs through `decideTaskRecovery` — the function that actually spends the
+    // budget — rather than through arithmetic restated here, because a streak this file
+    // computes for itself would agree with this file and with nothing else.
+    const { store, deps, runId } = await project();
+    await putTaskIn(store, runId, 'failed', 2);
+    await retryTask(deps, runId, 'TASK-001');
+
+    const entry = (await store.loadRun(runId)).tasks[0];
+    const streakOf = (attempts: number): number =>
+      attempts - (entry?.attemptsBeforeHumanRetry ?? 0);
+
+    const budget = (attempts: number) =>
+      decideTaskRecovery({
+        failureClass: 'validation_unsatisfied',
+        counters: {
+          attempts,
+          unattendedAttempts: streakOf(attempts),
+          infrastructureFailures: 0,
+          environmentRepairs: 0,
+          modelCalls: 0,
+          identicalFailures: 1,
+        },
+        config: RECOVERY_DEFAULTS,
+        maxAttempts: 2,
+      });
+
+    // Two attempts of head-room, granted by the retry — not by forgetting the four the
+    // task has actually made.
+    expect(budget(2).mayProceedAutomatically, 'the grant bought nothing').toBe(true);
+    expect(budget(3).mayProceedAutomatically).toBe(true);
+    expect(budget(4).mayProceedAutomatically, 'the grant became an exemption').toBe(false);
+    expect(budget(4).exhaustedBudget).toBe('retry.maxAttempts');
   });
 
   it('treats a blocked task with no recorded reason as agent-blocked (fail-closed)', async () => {

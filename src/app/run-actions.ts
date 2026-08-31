@@ -119,7 +119,6 @@ export type ActionErrorCode =
   // is a stack trace where a person needed a sentence.
   | 'task_completed'
   | 'task_in_flight'
-  | 'attempts_exhausted'
   | 'unmet_dependencies'
   | 'run_busy'
   /**
@@ -790,23 +789,39 @@ async function requeue(
   // A *dependency*-derived block took no answer (§20): the task never ran, so
   // there is nothing §23 protects. It retries without force, and the scheduler
   // also releases it on the next `run` the moment its dependency completes.
-  const maxAttempts = context.config.global.retry.maxAttempts;
-  if (entry.attempts >= maxAttempts && options.force !== true) {
-    return failed({
-      code: 'attempts_exhausted',
-      message:
-        `${taskId} has already been attempted ${String(entry.attempts)} times ` +
-        `(limit ${String(maxAttempts)}).`,
-      action: 'Force the retry to try again beyond the limit.',
-      forcible: true,
-      detail: { attempts: entry.attempts, maxAttempts },
-    });
-  }
+  // **No attempt budget is checked here, and that is the fix rather than the omission.**
+  //
+  // `retry.maxAttempts` bounds attempts made with nobody watching. This function is
+  // reached from exactly two places — `agent-flow retry` and the dashboard's Retry
+  // button — so reaching it *is* somebody watching, and the budget has nothing to say
+  // about it. `app/autonomy-budget.ts` already states the principle for the run-level
+  // counters: "a call a person asked for is not autonomous and must not count against a
+  // budget that exists to bound unattended work."
+  //
+  // It was applied to those counters and not to this one, which was free until AR-03
+  // turned `recovery.enabled` on by default. After that the repair loop spent the whole
+  // budget before anybody was asked, so every ordinary failure arrived here exhausted:
+  // the dashboard's Retry button refused every press, and the CLI answered
+  // `attempts_exhausted` and offered `--force`. The machine stopped to ask for a human
+  // action and then refused the action it asked for.
+  //
+  // What stays bounded is the machine. `attemptsBeforeHumanRetry` below restarts the
+  // unattended streak, so the recovery loop gets one fresh budget per intervention and
+  // no more — every continuation past the bound costs a deliberate human act.
 
   await context.store.updateRun(runId, (current) => ({
     ...current,
     tasks: current.tasks.map((task) =>
-      task.id === taskId ? { ...task, state: 'queued' as const, blockReason: undefined } : task,
+      task.id === taskId
+        ? {
+            ...task,
+            state: 'queued' as const,
+            blockReason: undefined,
+            // A person acted, so the unattended streak restarts here. `attempts` is left
+            // alone: it is evidence, and evidence that moves is not evidence.
+            attemptsBeforeHumanRetry: task.attempts,
+          }
+        : task,
     ),
   }));
   await context.store.appendEvent(runId, 'task_requeued', {

@@ -41,6 +41,18 @@ export type { RecoveryConfig };
 export interface TaskRecoveryCounters {
   /** Work attempts spent (AD-37). */
   readonly attempts: number;
+  /**
+   * Work attempts spent since a person last asked for this task to run again.
+   *
+   * `retry.maxAttempts` bounds *this*, not {@link attempts}. The two are equal until
+   * somebody intervenes, which is why the difference went unnoticed: before AR-03
+   * nothing retried on its own, so every attempt was one a person had asked for.
+   *
+   * Required rather than optional with a fallback. A caller that forgot it would
+   * silently get the lifetime count — which is the defect this field exists to fix, and
+   * a defect that reintroduces itself by omission is worse than one written down.
+   */
+  readonly unattendedAttempts: number;
   /** Preflight and environment failures spent (AD-37). */
   readonly infrastructureFailures: number;
   /** Environment repairs already applied for this task. */
@@ -193,11 +205,15 @@ export function decideTaskRecovery(input: {
     };
   }
 
-  if (counters.attempts >= maxAttempts) {
+  // The *unattended* streak, not the lifetime count. A person who pressed Retry has
+  // already done the thing this budget exists to force them to do — stop and look — so
+  // spending their intervention on a refusal would be the budget working against itself.
+  if (counters.unattendedAttempts >= maxAttempts) {
     return exhausted(
       'retry.maxAttempts',
-      `this task has already been attempted ${String(counters.attempts)} times`,
-      'Review the attempt evidence, then retry with --force if the work is still wanted',
+      `this task has already been attempted ${String(counters.unattendedAttempts)} times ` +
+        'without anybody being asked',
+      'Review the attempt evidence, then retry the task',
     );
   }
 
@@ -205,7 +221,7 @@ export function decideTaskRecovery(input: {
     disposition: 'recoverable',
     mayProceedAutomatically: true,
     step: 'work_retry',
-    reason: `${failureClass} is recoverable and ${String(maxAttempts - counters.attempts)} attempt(s) remain`,
+    reason: `${failureClass} is recoverable and ${String(maxAttempts - counters.unattendedAttempts)} attempt(s) remain`,
   };
 }
 

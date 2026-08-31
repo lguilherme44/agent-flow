@@ -873,6 +873,10 @@ export class Scheduler {
 
     const counters = {
         attempts: progress?.attempts ?? 0,
+        // What this loop has spent since the last human action, which is what
+        // `retry.maxAttempts` bounds. Equal to `attempts` until somebody presses Retry.
+        unattendedAttempts:
+          (progress?.attempts ?? 0) - (progress?.attemptsBeforeHumanRetry ?? 0),
         infrastructureFailures: progress?.infrastructureFailures ?? 0,
         environmentRepairs: progress?.infrastructureFailures ?? 0,
         // Bounded by the attempts already spent: this scheduler makes one agent call per
@@ -1009,19 +1013,28 @@ export class Scheduler {
       tasks: Object.entries(states).map(([id, taskState]) => {
         const entry = state.tasks.find((item) => item.id === id);
         const attempts = entry?.attempts ?? 0;
+
+        // **Spread first, then override.** This used to name each field it wanted to
+        // keep, which makes "keep" the thing a person has to remember and "drop" the
+        // thing that happens by itself — and a counter that drops is a budget that
+        // silently refills. `attemptsBeforeHumanRetry` was added and lost here on the
+        // very next scheduler write, invisibly, because the field is optional and the
+        // compiler had nothing to object to. The comment that used to sit on
+        // `infrastructureFailures` predicted exactly that, one field early.
+        //
+        // So the default is now "carried", and everything below is a deliberate
+        // exception. `blockReason` is the only removal, and it is written as one.
+        const carried = { ...entry };
+        if (taskState !== 'blocked') delete carried.blockReason;
+
         return {
+          ...carried,
           id,
           state: taskState,
           attempts: starting.has(id) ? attempts + 1 : attempts,
-          // Carried forward, never recomputed. AR-00 splits the counter (AD-37) and
-          // nothing yet increments this one — but a rebuild of the task list that
-          // dropped it would silently reset a budget the moment AR-03 starts using it,
-          // and the reset would look like an environment that had never faulted.
           infrastructureFailures: entry?.infrastructureFailures ?? 0,
-          ...(entry?.failureClass === undefined ? {} : { failureClass: entry.failureClass }),
-          ...(entry?.lastFailureAt === undefined ? {} : { lastFailureAt: entry.lastFailureAt }),
-          // Provenance travels with the block: a task leaving `blocked` drops
-          // its reason, and one that stays blocked keeps or learns its own.
+          // Provenance travels with the block: a task leaving `blocked` drops its
+          // reason above, and one that stays blocked keeps or learns its own.
           ...(taskState === 'blocked'
             ? { blockReason: blockReasons[id] ?? entry?.blockReason ?? 'agent' }
             : {}),
