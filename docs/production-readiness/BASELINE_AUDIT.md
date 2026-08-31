@@ -91,6 +91,11 @@ below are about what surrounds them.
 
 #### **P0-1 · The local dashboard accepts writes from any web page the operator visits**
 
+> **CLOSED** on `hardening/production-readiness` — `src/server/request-guard.ts`, proven by
+> `test/server/request-guard.test.ts` (66 cases, including the exact request transcribed
+> below). Kept here in full because the finding is the reason the guard exists, and a fix
+> with no record of what it fixed is a fix nobody can review.
+
 **Status: proven by execution, not by reading.**
 
 `src/server/server.ts` performs no `Origin` check, no `Host` check, no CSRF token, and

@@ -73,6 +73,12 @@ export async function runUiCommand(
       projectDir: workspace,
     });
 
+    const allowedHosts = await resolveAllowedHosts({
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: workspace,
+    });
+
     const discovered = await discoverProjects({ fs, roots: [workspace], depth });
 
     if (discovered.projects.length === 0) {
@@ -117,6 +123,10 @@ export async function runUiCommand(
       // pipeline. The server takes it as an argument rather than discovering it
       // again, so there is one answer to "where are the prompts".
       promptsDir: resolvePromptsDir(),
+      // What the operator declared, and nothing more. An empty list means the server
+      // answers only to address literals and `localhost`, which is what closes DNS
+      // rebinding for the default install (§93).
+      allowedHosts,
       ...(webDir === undefined ? {} : { webDir }),
     });
 
@@ -158,6 +168,10 @@ export async function runUiCommand(
         `⚠ Bound to ${host}, not loopback.`,
         '  This server has no authentication. Anything that can reach this port',
         '  can read every run, artifact and project path on this machine.',
+        '',
+        '  It answers to addresses, not to names: reach it at an IP, or declare the',
+        '  name under ui.allowedHosts. A name it was not told about is refused,',
+        '  because a name an attacker controls can be pointed back at this machine.',
         '',
       );
     }
@@ -250,6 +264,28 @@ export async function resolveDepth(
     return Math.min(config.global.ui.workspaceDepth, MAX_WORKSPACE_DEPTH);
   } catch {
     return DEFAULT_WORKSPACE_DEPTH;
+  }
+}
+
+/**
+ * Host names the operator declared this server may answer to (§93).
+ *
+ * Same failure posture as `resolveDepth`, and for the same reason: `agent-flow ui` is
+ * often what somebody opens *because* the configuration is broken, and refusing to start
+ * would take away the page that shows them why. A configuration that will not load
+ * yields the empty list, which is the strict answer rather than the lenient one — the
+ * degradation cannot open the server to a name.
+ */
+export async function resolveAllowedHosts(options: {
+  fs: FileSystem;
+  globalConfigPath: string;
+  projectDir: string;
+}): Promise<readonly string[]> {
+  try {
+    const config = await loadConfig(options);
+    return config.global.ui.allowedHosts;
+  } catch {
+    return [];
   }
 }
 

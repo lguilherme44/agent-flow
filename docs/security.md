@@ -151,6 +151,74 @@ makes.
 
 ---
 
+## Loopback is not a boundary against the browser
+
+**This section replaces a wrong assumption, and the wrongness was measured rather than
+argued.** "Only this machine can reach the port" was taken to mean "only the operator can
+reach the port". It does not. The operator's browser is on this machine, and every page
+it has open can issue requests to `127.0.0.1`. Against the server before this guard
+existed, from `Origin: https://evil.example`:
+
+```
+POST /api/v1/runs/:id/start   (no body)  →  202  {"status":"running"}
+```
+
+`start` spawns coding agents with **write** permission inside the repository and then runs
+that project's validation commands. Nothing about CORS prevented it: a `POST` with no body
+and no unusual header is a *simple request*, which the browser sends without a preflight.
+CORS withholds the **response**, not the effect.
+
+Two vectors, closed by two independent guards, because each one is blind to the other.
+
+### Cross-origin writes
+
+Every `POST`, `PUT`, `PATCH` and `DELETE` is decided before routing:
+
+- an `Origin` is accepted only when it names this server's own authority;
+- a request with no `Origin` — a script, `curl`, the CLI — must carry
+  `x-agent-flow-client`. Setting a custom header makes a cross-origin request
+  *non-simple*, so it earns a preflight, and this server answers none.
+
+Reads are deliberately left to the host guard alone. A cross-origin read is already
+useless to a page: this server sends no `Access-Control-Allow-Origin`, so the browser
+withholds the body. Adding an origin check there would break nothing and prove nothing.
+
+```bash
+curl -X POST -H 'x-agent-flow-client: 1' \
+  http://127.0.0.1:4782/api/v1/runs/AF-2026-001/approve
+```
+
+### DNS rebinding
+
+A hostile domain whose DNS answer flips to `127.0.0.1` becomes **same-origin** to the
+browser. Origin and Host then agree, CORS is out of the picture entirely, and the origin
+guard above sees nothing wrong — which is why it cannot be the only guard.
+
+So the `Host` header is checked on **every** request, read included, against one rule:
+
+> An address literal cannot be rebound, because it asks no DNS question.
+
+`127.0.0.1`, `[::1]`, `192.168.1.9`, `[::ffff:127.0.0.1]` — all accepted, whatever the
+address. `localhost` is accepted as the one name the operating system resolves and an
+attacker cannot move. **Every other name is refused**, including on reads, because
+`GET /api/v1/projects` returns the absolute path of every repository on the machine and
+the artifact endpoints return plans, SDDs and diffs.
+
+A reverse proxy under a real name is the one legitimate exception, and it is declared:
+
+```yaml
+ui:
+  allowedHosts: [flow.internal]
+```
+
+Empty by default. The emptiness is the defence.
+
+Enforced in `src/server/request-guard.ts`, ahead of body parsing and ahead of routing, so
+a refusal cannot have had an effect. Proven in `test/server/request-guard.test.ts`,
+including the exact request that used to answer 202.
+
+---
+
 ## An attempt's evidence cannot be confused with the agent's output
 
 An implementation agent runs with write permission inside its own worktree. Files,
@@ -253,9 +321,12 @@ when *you* merge the integration branch — the repository's configuration is ne
 modified, and `agent-flow` never writes to `git config`. Hooks are also **not** isolated
 from `project.commands.*`: those are your commands, run as you wrote them.
 
-**There is no authorisation model.** Anyone who can reach the port can approve a plan and
-start a run. On loopback that is the person at the keyboard; bound elsewhere, it is
-everybody.
+**There is no authorisation model.** Anyone who can reach the port *and satisfy the
+request guard* can approve a plan and start a run. The guard establishes that the request
+came from this server's own dashboard or from a non-browser client on this machine; it
+does not establish **who**. On loopback that is the person at the keyboard and any local
+process that can open a socket. Bound elsewhere, it is everybody on that network — the
+guard does not change that, and `--host 0.0.0.0` still warrants the warning it prints.
 
 **The process timeout cannot signal a process tree on Windows.** Elsewhere the child runs
 in its own process group and the whole tree is signalled; on Windows only the direct

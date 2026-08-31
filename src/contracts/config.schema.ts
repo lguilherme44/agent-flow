@@ -182,7 +182,23 @@ export const GlobalConfigSchema = z.object({
    * a home directory reads places nobody asked it to and takes minutes to start.
    */
   ui: z
-    .object({ workspaceDepth: z.number().int().min(0).max(6).default(2) })
+    .object({
+      workspaceDepth: z.number().int().min(0).max(6).default(2),
+      /**
+       * Extra host names the dashboard answers to (§93, PRI-05).
+       *
+       * Empty by default, and that emptiness is the defence. The server refuses any
+       * `Host` header that is a *name* it was not told about, because a name an
+       * attacker controls can be pointed at `127.0.0.1` — which makes their page
+       * same-origin with this server and takes CORS out of the picture entirely.
+       * Address literals need no entry here: an address answers no DNS question and
+       * therefore cannot be rebound.
+       *
+       * Add one only when something legitimate sits in front of the server under a
+       * name, such as a reverse proxy.
+       */
+      allowedHosts: z.array(z.string().trim().min(1)).default([]),
+    })
     .prefault({}),
   /**
    * The optional local UtilityModel that *advisory* context comes from (§18).
