@@ -102,6 +102,33 @@ export const GlobalConfigSchema = z.object({
     .prefault({}),
   retry: z.object({ maxAttempts: z.number().int().min(1).default(2) }).prefault({}),
   /**
+   * How work is spawned (PRI-17).
+   *
+   * `passEnv` names variables a coding agent may inherit beyond the built-in list in
+   * `core/process-environment.ts`. Empty by default, and the emptiness is the defence: a
+   * child used to receive `{ ...process.env }`, which is every credential the operator's
+   * shell exports — cloud keys, database URLs, registry tokens — handed to a program with
+   * a model inside it reading a repository somebody else wrote.
+   *
+   * An entry ending in `_` is a prefix; anything else is an exact name, and `MY_VAR` does
+   * **not** admit `MY_VAR_SECRET`. Deliberately not a regular expression: this is a list
+   * somebody has to be able to audit, and a pattern matching more than intended would be
+   * invisible.
+   *
+   * `agent-flow doctor` prints what was dropped, so a runner that stops authenticating
+   * after a CLI upgrade has one obvious thing to check.
+   *
+   * Global only, and absent from `OVERRIDABLE_KEYS` for the reason `ui` and `utilityModel`
+   * are: what a spawned agent may read is a fact about the *machine*, and letting a
+   * discovered project widen it would let a repository decide which secrets its own agent
+   * receives.
+   */
+  execution: z
+    .object({
+      passEnv: z.array(z.string().trim().min(1).max(256)).default([]),
+    })
+    .prefault({}),
+  /**
    * The budgets that bound autonomous recovery (AR §6).
    *
    * Every one is configurable, every one has a default, and exhausting any of them

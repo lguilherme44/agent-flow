@@ -219,6 +219,70 @@ including the exact request that used to answer 202.
 
 ---
 
+## What a coding agent inherits
+
+A coding CLI is a program with a model inside it, reading a repository somebody else wrote.
+Until this was measured it received `{ ...process.env }`: the orchestrator's whole
+environment, including every credential that has nothing to do with the task. On the
+machine this was built on that was **77 variables, of which 17 are needed** — the rest
+included cloud keys, a Kubernetes config, registry tokens and an SSH agent socket.
+
+The list is of what the runners **need**, not of what is dangerous. A denylist of
+credential-shaped names is a race against every product that ever invents an environment
+variable; this direction fails closed. It lives in `src/core/process-environment.ts` and
+each group carries the reason removing it would break something.
+
+Kept: `PATH`, `HOME` and the rest of being a process · locale and terminal · proxy and
+certificate-authority settings, without which nothing authenticates behind a corporate
+proxy · the runtime prefixes (`NODE_`, `NVM_`, `XDG_`, …) · and **vendor authentication by
+prefix** (`ANTHROPIC_`, `OPENAI_`, `CODEX_`, `GOOGLE_`, `AGY_`, …). Those last are
+credentials and they are kept on purpose: they are the ones the runner is *for*.
+
+Widen it deliberately, never by accident:
+
+```yaml
+execution:
+  passEnv: [ACME_, MY_TOOL_HOME]     # trailing `_` is a prefix; otherwise an exact name
+```
+
+### Two things that are deliberately dropped
+
+**A parent agent session.** Running Agent Flow from inside a coding CLI is ordinary, and
+the vendor prefixes passed that session's id, socket and token straight through to the
+spawned agent. §3.6 promises planning, execution and review get *fresh* contexts; an
+executor holding a channel back to the orchestrating session has left one. A short,
+auditable exception list names them.
+
+**An inherited effort.** Reasoning level is a kernel decision: resolved from the role's
+configuration, clamped to what the (runner, model) pair supports, and recorded as
+`reasoningClamped` when the two differ. An environment variable that quietly outranked the
+flag would reintroduce exactly the defect
+[`runner-capabilities.md`](runner-capabilities.md) records against AGY — an invocation
+accepted at an effort nobody asked for, with nothing saying so.
+
+### What this costs, stated plainly
+
+**An agent no longer has your SSH agent.** `SSH_AUTH_SOCK` is dropped, so an agent cannot
+push with your key or fetch from a private remote in its own shell. Git keeps it — the Git
+boundary asks to inherit — so signing, remotes and credential helpers are unaffected for
+everything Agent Flow does itself.
+
+**Two callers still inherit everything, and both say why.** The Git boundary subtracts the
+eleven variables that can redirect a repository instead, because a scrubbed environment
+would lose commit signing and SSH access. And `project.commands.*` are your own commands,
+run as you wrote them — an integration test that needs a database URL is not this
+boundary's business, and this page already said those are not isolated.
+
+**This bounds reach, not intent.** A model influenced by repository content (T6, T7) is
+still influenced. What changed is how much a successfully-influenced one can pick up.
+
+Verified by running the CLIs under it rather than by reasoning about the list —
+`scripts/env-allowlist-probe.ts` invokes each installed runner with this environment and
+nothing else, and re-runs any failure with the full environment before blaming the list.
+Claude Code 2.1.251, Codex 0.149.0 and AGY 1.1.22 all authenticated.
+
+---
+
 ## An attempt's evidence cannot be confused with the agent's output
 
 An implementation agent runs with write permission inside its own worktree. Files,

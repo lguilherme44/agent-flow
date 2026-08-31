@@ -42,6 +42,46 @@ probed would clamp work for no evidence, and claiming a wider one is the defect 
 
 ---
 
+## `openai-compatible`, against a real server
+
+**Probed:** 2026-08-30 · macOS (darwin 25.6.0), Node v24.13.0
+**Server:** `llama.cpp` (`b1-cd644c3`) on `lellis-dev` (RTX 3060 Ti), reached over an SSH
+tunnel at `http://127.0.0.1:8151/v1`
+**Model:** `moe` — Qwen3.6 35B-A3B `UD-IQ4_NL`, 49152 context, `-ngl 99 --n-cpu-moe 30`
+
+**This adapter shipped with no live evidence at all.** Its unit tests stub `fetch`, and its
+fixtures were written from a specification rather than from a serialisation — the shape
+that agrees with a bug rather than catching one. Everything below was executed through the
+adapter's own port, by `scripts/live-runner-probe.ts`.
+
+| Capability | Verdict | Proven by |
+|---|---|---|
+| `healthCheck` reaches the server | ✅ | `installed=true auth=configured version=moe` |
+| Declares it cannot write or hold a cwd | ✅ | `supportsWorkingDirectory=false`, `fileEdit=false` |
+| Plain prompt round-trips | ✅ | 195 ms, answered `ok` |
+| **Structured output, natively** | ✅ | schema in → `{"verdict":"PASS","findings":["none"]}` out |
+| A refused key normalises to `auth_required` | ✅ | server answered `401 Invalid API Key` |
+| An unreachable server is `runner_unavailable` | ✅ | `fetch failed` against a closed port |
+
+**The structured-output row is the one that was a guess.** The adapter declares
+`structuredOutputStrategy: 'native'`, which is a claim about the *server* — and this server
+is `llama.cpp`, not OpenAI. It holds: the schema was enforced and the response parsed
+without the repair loop. Had it not held, every stage routed to a local endpoint would have
+been paying for a repair round nobody could see.
+
+Not probed, and therefore not claimed: rate limiting (a local server has none), cancellation
+mid-stream, and behaviour under a model that emits a partial envelope.
+
+Reproduce with the server up:
+
+```bash
+ssh lellis-dev '~/local-llm-lab/linux/llm-server.sh start moe'
+ssh -f -N llm-dev
+node --experimental-strip-types scripts/live-runner-probe.ts
+```
+
+---
+
 ## Claude Code
 
 **Version probed:** `2.1.226`

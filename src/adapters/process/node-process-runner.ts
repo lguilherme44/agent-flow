@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { agentEnvironment } from '../../core/process-environment.js';
 import type {
   ProcessResult,
   ProcessRunner,
@@ -57,15 +58,35 @@ class BoundedBuffer {
 }
 
 /**
- * The parent environment, minus `unsetEnv`, plus `env`.
+ * The environment the child is given.
  *
- * `delete` rather than assigning an empty string, because for the variables this
- * exists for the two are not the same: Git reads `GIT_DIR=''` as a repository
- * path that happens to be empty and fails, rather than as an absent variable.
- * `undefined` values would also survive into `spawn` on some Node versions as
- * the literal string, so the key is removed outright.
+ * Two shapes, chosen by the caller (PRI-17). `allowlist` is the default and builds an
+ * environment from what a runner needs; `inherit` is the parent's, minus `unsetEnv`.
+ *
+ * Under `inherit`, `delete` rather than assigning an empty string, because for the
+ * variables that mode exists for the two are not the same: Git reads `GIT_DIR=''` as a
+ * repository path that happens to be empty and fails, rather than as an absent variable.
+ * `undefined` values would also survive into `spawn` on some Node versions as the literal
+ * string, so the key is removed outright.
  */
 function environmentFor(options: ProcessSpawnOptions): NodeJS.ProcessEnv {
+  if ((options.envMode ?? 'allowlist') === 'allowlist') {
+    // `unsetEnv` is honoured here too, for the caller that wants both — a removal is a
+    // stronger statement than the allowlist's silence, and a name that is both allowed
+    // and explicitly unset must not survive.
+    const { env } = agentEnvironment(
+      process.env,
+      options.env ?? {},
+      options.envPass === undefined ? {} : { pass: options.envPass },
+    );
+
+    for (const name of options.unsetEnv ?? []) {
+      delete env[name];
+    }
+
+    return env;
+  }
+
   const env: NodeJS.ProcessEnv = { ...process.env };
 
   for (const name of options.unsetEnv ?? []) {
@@ -89,24 +110,39 @@ export class NodeProcessRunner implements ProcessRunner {
     const graceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
     const startedAt = Date.now();
 
+    // Asked before spawning. A signal that is already aborted must not start a process
+    // and then immediately kill it: the child would run for whatever time the spawn takes,
+    // and on a cancelled run that is an agent invocation somebody is billed for.
+    if (options.signal?.aborted === true) {
+      return {
+        exitCode: null,
+        signal: null,
+        stdout: '',
+        stderr: '',
+        durationMs: 0,
+        timedOut: false,
+        cancelled: true,
+        spawnFailed: false,
+        truncated: false,
+      };
+    }
+
     return new Promise<ProcessResult>((resolve) => {
       const stdout = new BoundedBuffer(maxBytes);
       const stderr = new BoundedBuffer(maxBytes);
 
       let timedOut = false;
+      let cancelled = false;
       let settled = false;
       let killTimer: NodeJS.Timeout | undefined;
+      let onAbort: (() => void) | undefined;
 
       const child = spawn(options.command, [...options.args], {
         cwd: options.cwd,
-        // Inherit the parent environment: the runners depend on each CLI's own
-        // local authentication (§54), which lives in the environment and the
-        // user's home directory. Wiping it would break the whole premise.
-        //
-        // `unsetEnv` is the one subtraction, applied before the overrides so a
-        // caller can remove a variable and set it again in the same call. Only
-        // the Git boundary uses it, and only for the variables that would let an
-        // inherited value decide which repository a command acts on.
+        // Built, not inherited, unless the caller asked for inheritance and said why
+        // (PRI-17). The runners still receive each CLI's own local authentication (§54);
+        // what they no longer receive is every other credential the operator's shell
+        // exports.
         env: environmentFor(options),
         stdio: ['pipe', 'pipe', 'pipe'],
         // Puts the child in its own process group so the whole tree can be
@@ -139,18 +175,40 @@ export class NodeProcessRunner implements ProcessRunner {
         }
       };
 
+      /**
+       * SIGTERM now, SIGKILL after the grace period.
+       *
+       * Shared by the timeout and the cancellation, which is the point: a cancel that
+       * signalled only the direct child would leave exactly the orphans the `detached`
+       * flag above exists to prevent, and the two paths would drift.
+       */
+      const stopTree = (): void => {
+        killTree('SIGTERM');
+        killTimer = setTimeout(() => killTree('SIGKILL'), graceMs);
+      };
+
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
-        killTree('SIGTERM');
-        // Escalate if the tree ignores the polite request.
-        killTimer = setTimeout(() => killTree('SIGKILL'), graceMs);
+        stopTree();
       }, options.timeoutSeconds * 1000);
+
+      if (options.signal !== undefined) {
+        onAbort = (): void => {
+          cancelled = true;
+          stopTree();
+        };
+        // `once`, so a signal reused across several spawns does not accumulate listeners
+        // and warn at ten. The matching `removeEventListener` is in `finish`, for the
+        // ordinary case where the child exits first and the signal outlives it.
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
 
       const finish = (result: Omit<ProcessResult, 'durationMs' | 'truncated'>): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutTimer);
         clearTimeout(killTimer);
+        if (onAbort !== undefined) options.signal?.removeEventListener('abort', onAbort);
 
         resolve({
           ...result,
@@ -173,6 +231,7 @@ export class NodeProcessRunner implements ProcessRunner {
           stdout: stdout.toString(),
           stderr: `${stderr.toString()}${error.message}`,
           timedOut: false,
+          cancelled,
           spawnFailed: true,
         });
       });
@@ -183,7 +242,11 @@ export class NodeProcessRunner implements ProcessRunner {
           signal,
           stdout: stdout.toString(),
           stderr: stderr.toString(),
-          timedOut,
+          // A cancelled child that also passed its timeout is reported as cancelled: the
+          // operator's decision is the reason it stopped, and classifying it as a timeout
+          // would record the work as having failed.
+          timedOut: timedOut && !cancelled,
+          cancelled,
           spawnFailed: false,
         });
       });

@@ -187,3 +187,44 @@ describe('health', () => {
     expect(health['claude']?.executable).toBe(false);
   });
 });
+
+describe('execution.passEnv reaches the adapters (PRI-17)', () => {
+  it('hands every CLI adapter what the operator declared', async () => {
+    // The wiring test, not the policy test — `core/process-environment.ts` decides what
+    // the list *means*, and this asserts the list arrives at all. It is the kind of thing
+    // that typechecks while doing nothing: `envPass` is optional at every hop, so an
+    // adapter that dropped it would compile, pass its own tests, and quietly give the
+    // operator's declared variable to nobody.
+    const processRunner = new FakeProcessRunner().always({ exitCode: 0, stdout: 'ok' });
+
+    const registry = buildRegistry(
+      config({
+        execution: { passEnv: ['ACME_'] },
+        runners: {
+          claude: { type: 'claude-code-cli', enabled: true },
+          codex: { type: 'codex-cli', enabled: true },
+          agy: { type: 'agy-cli', enabled: true },
+        },
+      }),
+      { processRunner, fs: new InMemoryFileSystem() },
+    );
+
+    for (const id of ['claude', 'codex', 'agy']) {
+      processRunner.calls.length = 0;
+
+      await registry.get(id).run({
+        prompt: 'hello',
+        reasoning: 'low',
+        workingDirectory: '/repo',
+        permissions: 'read-only',
+        timeoutSeconds: 30,
+      });
+
+      const spawned = processRunner.calls.at(-1);
+      expect(spawned?.envPass, `${id} dropped execution.passEnv`).toEqual(['ACME_']);
+      // And it never asks to inherit: that is reserved for Git and for the operator's own
+      // validation commands, both of which say why at their call site.
+      expect(spawned?.envMode, `${id} asked to inherit the whole environment`).toBeUndefined();
+    }
+  });
+});

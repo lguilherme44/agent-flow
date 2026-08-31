@@ -373,6 +373,13 @@ export class GitCommand {
       args: argv,
       cwd: invocation.cwd,
       env: environmentFor(invocation.dates),
+      // Git keeps the operator's environment, and subtracts from it (PRI-06, PRI-17).
+      // The allowlist is the wrong tool here: `commit.gpgsign`, `GIT_SSH_COMMAND`,
+      // `SSH_AUTH_SOCK` and a credential helper are all things a working repository may
+      // depend on, and a scrubbed environment would break them for a security gain this
+      // boundary already achieves more precisely — by naming the eleven variables that
+      // can redirect which repository is acted on or what a commit says.
+      envMode: 'inherit',
       unsetEnv: GIT_HOSTILE_ENVIRONMENT,
       timeoutSeconds: invocation.timeoutSeconds ?? GIT_TIMEOUT_SECONDS.read,
       maxOutputBytes: invocation.maxOutputBytes ?? GIT_DEFAULT_MAX_OUTPUT_BYTES,

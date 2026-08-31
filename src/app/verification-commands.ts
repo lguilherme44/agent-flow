@@ -62,6 +62,12 @@ export async function runVerification(
       command: '/bin/sh',
       args: ['-c', command],
       cwd,
+      // The operator's own commands, run as they wrote them (PRI-17). `npm test` may
+      // need a database URL, a registry token or a language toolchain nobody can enumerate
+      // from here, and an allowlist would break real projects to protect against the
+      // operator's own configuration. `docs/security.md` already says `project.commands.*`
+      // are not isolated; this keeps that true rather than half-true.
+      envMode: 'inherit',
       timeoutSeconds: options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
     });
@@ -112,6 +118,12 @@ export async function runCommands(options: RunCommandsOptions): Promise<Verifica
       command: '/bin/sh',
       args: ['-c', command],
       cwd: options.cwd,
+      // The operator's own commands, run as they wrote them (PRI-17). `npm test` may
+      // need a database URL, a registry token or a language toolchain nobody can enumerate
+      // from here, and an allowlist would break real projects to protect against the
+      // operator's own configuration. `docs/security.md` already says `project.commands.*`
+      // are not isolated; this keeps that true rather than half-true.
+      envMode: 'inherit',
       timeoutSeconds: options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
     });

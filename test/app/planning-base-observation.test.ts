@@ -92,6 +92,7 @@ class GitOnlyProcessRunner implements ProcessRunner {
       stderr: 'no coding CLI in this test',
       durationMs: 0,
       timedOut: false,
+      cancelled: false,
       spawnFailed: true,
       truncated: false,
     };

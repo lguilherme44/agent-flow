@@ -170,9 +170,20 @@ group is signalled — `SIGTERM`, then `SIGKILL` after a bounded grace period.
 
 This must hold for **both** paths: the child's own timeout, and an operator cancellation.
 
-- **MECHANISM:** `adapters/process/node-process-runner.ts` — `detached`, `process.kill(-pid)`
-- **TEST:** `test/adapters/node-process-runner.test.ts` (timeout path); cancel path pending
-- **STATUS:** enforced for timeout; **cancel path does not exist** until P0-2/P0-3 close
+The two paths share one kill. A cancellation that signalled only the direct child would be
+the defect the timeout path already documents: agent CLIs spawn children, those children
+hold the stdout pipes, and Node reports `close` only once every stream is closed.
+
+An already-aborted signal spawns nothing — on a cancelled run, a process started and
+immediately killed is still an agent invocation somebody is billed for.
+
+- **MECHANISM:** `adapters/process/node-process-runner.ts` — `detached`,
+  `process.kill(-pid)`, `ProcessSpawnOptions.signal`
+- **TEST:** `test/adapters/node-process-runner.test.ts` — "reaches the whole process group,
+  leaving no grandchild behind", on both the timeout and the cancel path, against real
+  process trees
+- **STATUS:** enforced at the process boundary; **no operator command reaches it yet**
+  (PR-03, P0-2)
 
 ---
 
@@ -273,14 +284,29 @@ or a test — never to a sentence a model wrote.
 
 ### PRI-17 — A child process inherits only the environment it needs
 
-The environment handed to a spawned runner is **constructed**, not inherited wholesale.
-It carries what the platform and the vendor's own authentication require, and nothing
-else. Additions are declared, reviewed, and documented — not acquired by accident from
-whatever the operator had exported.
+The environment handed to a spawned runner is **constructed**, not inherited wholesale. It
+carries what the platform, the network path and the vendor's own authentication require,
+and nothing else. Measured on the machine this was built on: 77 variables in, 17 out.
 
-- **MECHANISM:** to be built (PR-06)
-- **TEST:** pending
-- **STATUS:** **not implemented** (P0-3)
+Two callers inherit instead, and each states why at its call site — the Git boundary, which
+subtracts the eleven repository-redirecting variables and would otherwise lose commit
+signing and SSH access; and `project.commands.*`, which are the operator's own commands.
+Additions are declared in `execution.passEnv`, never acquired by accident.
+
+Two things are dropped that a vendor prefix would otherwise have passed: a **parent agent
+session's** id, socket and token — §3.6 promises fresh contexts, and a channel back to the
+orchestrating session is not one — and an **inherited effort**, because reasoning level is
+a kernel decision (PRI-03).
+
+- **MECHANISM:** `core/process-environment.ts`, `adapters/process/node-process-runner.ts`
+- **TEST:** `test/core/process-environment.test.ts`,
+  `test/adapters/node-process-runner.test.ts` — "does not hand a coding agent a credential
+  it was never given"; `test/adapters/registry.test.ts` — the wiring;
+  **and `scripts/env-allowlist-probe.ts`, which runs the real CLIs under it.** A list of
+  names cannot prove a CLI still logs in, and the probe re-runs any failure with the full
+  environment before blaming the list. Claude Code 2.1.251, Codex 0.149.0 and AGY 1.1.22
+  authenticated on 2026-08-30.
+- **STATUS:** enforced
 
 ### PRI-18 — Every shipped adapter satisfies one contract
 
