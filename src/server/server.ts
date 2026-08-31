@@ -35,7 +35,10 @@ import { describeRoleRoutes } from '../app/role-routes.js';
 import { RunExecutionLock, type LockRefusal } from '../app/run-execution-lock.js';
 import {
   approve,
+  cancel,
   describeApprovalGate,
+  pause,
+  resume,
   reject,
   retryTask,
   revise,
@@ -709,6 +712,69 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     reply.code(202);
     return jobView(outcome.started);
   };
+
+  /**
+   * Lifecycle, from the browser (PRI-14, PRI-15).
+   *
+   * Ordinary handlers rather than jobs, and the difference from `start` is the point:
+   * these three do not spawn anything. `pause` and `cancel` write an intent and return —
+   * whatever is executing the run, in this server or in somebody's terminal, observes it.
+   * `resume` does start work, so it goes through the job machinery like `start` does.
+   *
+   * None of them takes the execution lease. That is what makes them the commands they
+   * are: a pause that had to wait for the run to finish would be a no-op with extra steps.
+   */
+  app.post('/api/v1/runs/:runId/pause', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const outcome = await pause(depsFor(scope.project), scope.runId);
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+
+    return actionResult(scope.runId, outcome.warnings, {
+      pauseRequestedAt: outcome.value.pauseRequestedAt,
+      alreadyPaused: outcome.value.alreadyPaused,
+      executing: outcome.value.executing,
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/cancel', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const outcome = await cancel(depsFor(scope.project), scope.runId);
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+
+    return actionResult(scope.runId, outcome.warnings, {
+      cancelledAt: outcome.value.cancelledAt,
+      alreadyCancelled: outcome.value.alreadyCancelled,
+      interrupted: [...outcome.value.interrupted],
+      executing: outcome.value.executing,
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/resume', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const deps = depsFor(scope.project);
+    const runId = scope.runId;
+
+    // A job, because resuming executes the plan — minutes of work and spawned runners.
+    // The refusals `resume` owns (not paused, cancelled, still executing) come back
+    // through the job, exactly as `start`'s gates do.
+    return await startJob(reply, scope.project, 'start', runId, async () => {
+      const outcome = await resume(deps, runId);
+      if (!outcome.ok) return { error: outcome.error };
+
+      const scheduled = outcome.value.outcome;
+      return {
+        summary: scheduled.planComplete
+          ? 'Every task completed.'
+          : `Stopped: ${scheduled.haltedBy ?? 'not all tasks completed'}.`,
+      };
+    });
+  });
 
   app.post('/api/v1/runs/:runId/start', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);

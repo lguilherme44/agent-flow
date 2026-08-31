@@ -149,6 +149,9 @@ export abstract class BaseRunner implements AgentRunner {
         // a coding CLI is a program with a model inside it reading a repository somebody
         // else wrote, and it now receives what it needs rather than everything.
         ...(this.envPass === undefined ? {} : { envPass: this.envPass }),
+        // Straight through to the kill that already reaches the whole process group on
+        // timeout. Cancel must not grow a second termination mechanism (PRI-09).
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(invocation.stdin === undefined ? {} : { stdin: invocation.stdin }),
       });
 

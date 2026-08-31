@@ -139,6 +139,35 @@ export interface RunOptions {
    * applied by the DAG; only the set of tasks allowed to *start* is narrowed.
    */
   readonly only?: ReadonlySet<string>;
+  /**
+   * Stops the scheduler dispatching further work (PRI-15, PRI-14).
+   *
+   * **Read between tasks, never during one**, and that is the whole design rather than a
+   * limitation. A task is the unit of atomicity here: its result file is written once, at
+   * the end, and there is no partial result to keep. Severing one mid-flight throws away
+   * work already paid for and leaves the workspace half-edited, so what this signal means
+   * is "start nothing more" — the task in flight runs to its natural end.
+   *
+   * So the observable behaviour of a pause is "pausing…" and then "paused". Anything
+   * claiming to be immediate would be the same lie a fire-and-forget endpoint tells.
+   *
+   * Aborted by **both** pause and cancel: neither starts new work.
+   */
+  readonly signal?: AbortSignal;
+  /**
+   * Ends the attempts that are already running, and their process trees (PRI-14).
+   *
+   * **A second signal, and the separation is the entire difference between pause and
+   * cancel.** One signal serving both would make a pause terminate the task in flight,
+   * which is precisely what pause exists not to do — the work is already paid for and its
+   * result file is written once, at the end.
+   *
+   * So: pause aborts `signal` alone; cancel aborts both. This one travels to the agent
+   * through the process boundary that already kills whole groups on timeout, and an
+   * aborted attempt returns as an ordinary failure — so its evidence is written exactly
+   * as any other attempt's is. Cancel retains evidence; it does not erase it.
+   */
+  readonly terminateSignal?: AbortSignal;
 }
 
 export interface SchedulerOutcome {
@@ -345,6 +374,18 @@ export class Scheduler {
       // re-derives a release it cannot see.
       if (releasable.length > 0) await this.persist(runId, states, [], blockReasons);
 
+      // The pause boundary (PRI-15). Checked at the top of the dispatch loop, after any
+      // release has been persisted and before anything new starts — so a paused run
+      // leaves the same durable state it would have left one task later, and a resume
+      // re-derives nothing.
+      //
+      // Placed here rather than after `ready` is computed on purpose: a run paused with
+      // nothing ready must still report `paused`, not "the plan has not completed".
+      if (options.signal?.aborted === true) {
+        haltedBy = 'paused';
+        break;
+      }
+
       const ready = readyTasks(dag, states)
         .filter((id) => states[id] !== 'completed')
         // Dependency rules were already applied against the complete graph;
@@ -421,6 +462,12 @@ export class Scheduler {
             runId,
             sdd,
             prepared.workspace,
+            // `terminateSignal`, not `signal` (PRI-14, PRI-15). The dispatch signal is
+            // aborted by a pause too, and handing it here would make pause kill the task
+            // in flight — the one thing pause is defined not to do. Only cancel aborts
+            // this one, and without it a cancel would stop dispatching and leave the
+            // agent running, spending quota with nothing watching it.
+            options.terminateSignal,
           );
           // Only an execution reaches this callback, because its argument is a
           // `TaskResult` and there is no honest one to pass for a refusal.

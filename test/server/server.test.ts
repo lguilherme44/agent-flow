@@ -1732,21 +1732,35 @@ describe('UI-27 — the write API', () => {
   });
 
   describe('what the write API refuses to have', () => {
-    it('has no pause, resume or cancel', async () => {
-      // §86 lists all three and the core has semantics for none: RUN_STATUSES has
-      // no paused or cancelled, and the scheduler cannot be interrupted between
-      // tasks. An endpoint that set a status field to satisfy the list would be a
-      // button that lies about what it did.
+    it('answers pause, resume and cancel through the same use cases the CLI calls', async () => {
+      // This test used to assert all three were **absent**, and it was right to: the core
+      // had semantics for none of them, and an endpoint that set a status field to satisfy
+      // §86's list would have been a button that lied about what it did.
+      //
+      // They exist now (PRI-14, PRI-15), so what it asserts is the property that made
+      // their absence correct — the browser reaches `app/run-actions.ts`, not a second
+      // state machine. A route answering anything but a use case's own refusal would be
+      // the parallel implementation §60 forbids.
       const { server, run } = await serve();
 
-      for (const action of ['pause', 'resume', 'cancel']) {
+      // `pause` on a run at the approval gate: legal, and returns the use case's answer.
+      const paused = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/pause`,
+        payload: {},
+      });
+      expect(paused.statusCode).toBe(200);
+
+      // `resume` and `cancel` reach their own gates rather than a generic 404.
+      for (const action of ['resume', 'cancel']) {
         const response = await server.app.inject({
           method: 'POST',
           headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/${action}`,
           payload: {},
         });
-        expect(response.statusCode).toBe(404);
+        expect([200, 202, 409], action).toContain(response.statusCode);
       }
     });
 

@@ -31,6 +31,7 @@ import {
 } from './run-execution-lock.js';
 import type { SchedulerOutcome } from './scheduler.js';
 import { StateStore } from './state-store.js';
+import { watchLifecycle } from './run-lifecycle.js';
 import type { Host } from '../ports/index.js';
 import {
   checkWorktreePreconditions,
@@ -129,6 +130,18 @@ export type ActionErrorCode =
    * refused before the execution lease is taken.
    */
   | 'nothing_to_run'
+  /**
+   * An operator asked this run to stop, and it has not been resumed (PRI-15).
+   *
+   * Distinct from `nothing_to_run`, which means the run is at a gate: this one means the
+   * run has work and a person said not yet. It names `resume` rather than offering a
+   * force, because overriding a pause is what `resume` *is*.
+   */
+  | 'run_paused'
+  /** Terminal by an operator's decision (PRI-14). Nothing reopens it; a new run does. */
+  | 'run_cancelled'
+  /** `resume` on a run nobody paused. Starting it is a different command. */
+  | 'not_paused'
   | 'invalid_input'
   | 'ceremony_budget_exceeded'
   // MVP 2 §6.3. Every one of these names a repository state a user changes with
@@ -231,6 +244,36 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
  *   throwing from a `finally` would swap a real execution error for a logging one. The
  *   loss is still visible anyway: an `execution_lock_acquired` with nothing closing it.
  */
+/**
+ * The execution lease, for the two commands that need to *read* it without taking it.
+ *
+ * `pause` and `cancel` both have to work while another process holds the lease — that is
+ * what makes them the commands they are. Asking who holds it is how they tell "the run
+ * will observe this shortly" apart from "nothing is running, so this took effect now",
+ * and the difference is the sentence an operator reads.
+ */
+/**
+ * "(pid 1234 on some-host)", or nothing when the claim could not be read.
+ *
+ * `LockRefusal.holder` is optional because a claim can be observed after creation and
+ * before its contents are written — a known diagnosis gap. The mutual exclusion is
+ * unaffected either way, so this reports what it has rather than asserting a pid it does
+ * not.
+ */
+function describeHolder(held: LockRefusal | undefined): string {
+  if (held?.holder === undefined) return '';
+  return ` (pid ${String(held.holder.pid)} on ${held.holder.hostname})`;
+}
+
+function lockFor(deps: RunActionDeps, _runId: string): RunExecutionLock {
+  return new RunExecutionLock({
+    fs: deps.fs,
+    clock: deps.clock,
+    host: deps.host,
+    projectDir: deps.projectDir,
+  });
+}
+
 async function withExecutionLock<T>(
   deps: RunActionDeps,
   store: StateStore,
@@ -915,6 +958,36 @@ async function refuseUnrunnable(
     return undefined;
   }
 
+  // Both entry points, or neither (PRI-15). The request is on disk, so `agent-flow run`
+  // typed after a pause has to meet it here — in the use case the CLI and the HTTP API
+  // both call — rather than in one of them. A pause only the dashboard honoured would be
+  // a pause the terminal silently overrode.
+  //
+  // Ahead of `isResumable` below, which also answers `false` for a paused run: it would
+  // report "nothing to run", which is true of the projection and useless to a person
+  // holding the one command that fixes it.
+  if (state.pauseRequestedAt !== undefined) {
+    return {
+      code: 'run_paused',
+      message: `${runId} was paused at ${state.pauseRequestedAt}.`,
+      action: 'Resume it with `agent-flow resume`.',
+      forcible: false,
+    };
+  }
+
+  if (state.status === 'cancelled') {
+    return {
+      code: 'run_cancelled',
+      message: `${runId} was cancelled${
+        state.cancelledAt === undefined ? '' : ` at ${state.cancelledAt}`
+      }, and a cancelled run is terminal.`,
+      action:
+        'Its evidence, its integration branch and its worktrees are all still on disk. ' +
+        'Start a new run with `agent-flow feature`.',
+      forcible: false,
+    };
+  }
+
   const plan = await loadPlanArtifact(store, runId);
   const nodes = plan?.tasks.map((task) => ({
     id: task.id,
@@ -1103,9 +1176,40 @@ async function execute(
     });
   }
 
-  const outcome = await context.scheduler.run(plan, runId, effectiveSdd, previous, {
-    ...(target === undefined ? {} : { only: new Set([target.id]) }),
-  }, previousBlockReasons);
+  // **The operator and the run are not the same process** (PRI-14, PRI-15).
+  //
+  // `agent-flow pause` is typed in another terminal; the dashboard's Cancel is clicked in
+  // a browser. Neither can abort a controller that lives in this process, so the intent
+  // goes on disk and this — the one participant that can act on it — watches for it.
+  //
+  // Stopped in `finally`, so a run that ends on its own does not leave a poll behind.
+  const lifecycle = watchLifecycle({ store: context.store, runId });
+
+  let outcome: SchedulerOutcome;
+  try {
+    outcome = await context.scheduler.run(
+      plan,
+      runId,
+      effectiveSdd,
+      previous,
+      {
+        ...(target === undefined ? {} : { only: new Set([target.id]) }),
+        signal: lifecycle.signal,
+        terminateSignal: lifecycle.terminateSignal,
+      },
+      previousBlockReasons,
+    );
+  } finally {
+    lifecycle.stop();
+  }
+
+  // The scheduler stopped at its boundary because a signal aborted; it does not know
+  // which of the two it was, and it should not — its job is to stop, not to interpret why.
+  // The watcher does know, and reporting a cancelled run as "paused" would be the kind of
+  // small lie an audit trail cannot survive.
+  if (lifecycle.observed() === 'cancelled') {
+    outcome = { ...outcome, haltedBy: 'cancelled by an operator' };
+  }
 
   // Only a complete plan may advance the stage. `complete` describes the
   // invocation; `planComplete` describes the run, and this is the run's record.
@@ -1142,6 +1246,263 @@ export interface ReviseResult {
  * The new plan comes out of the existing planning pipeline, writing the same
  * artifacts through the same StateStore. Nothing here edits `plan.json`.
  */
+// ---------------------------------------------------------------------------
+// pause · resume · cancel  (PRI-14, PRI-15)
+// ---------------------------------------------------------------------------
+
+export interface PauseResult {
+  readonly runId: string;
+  readonly pauseRequestedAt: string;
+  /** True when the run was already paused. `pause` is idempotent. */
+  readonly alreadyPaused: boolean;
+  /** True when something is executing this run right now, so the pause is not yet in effect. */
+  readonly executing: boolean;
+}
+
+/**
+ * Asks a run to stop at its next safe boundary.
+ *
+ * **Takes no execution lock, and that is deliberate.** Every other write here runs under
+ * the lease because it changes what the run *is*; this one changes what the run has been
+ * asked to do, and the whole point is that it works while something else holds the lease.
+ * A pause that had to wait for the run to finish would be a no-op with extra steps.
+ *
+ * What it writes is one timestamp. The executing process observes it at the top of its
+ * dispatch loop and stops starting work; the task in flight runs to its natural end,
+ * because its result file is written once, at the end, and there is no partial result to
+ * keep. So the honest report is "pausing…", and `executing` is how a caller knows to say
+ * that rather than "paused".
+ *
+ * Idempotent. Pausing an already-paused run keeps the original timestamp — the answer to
+ * "when did somebody ask this to stop" must not move because they asked twice.
+ */
+export async function pause(
+  deps: RunActionDeps,
+  runId: string,
+): Promise<ActionOutcome<PauseResult>> {
+  const store = storeFor(deps);
+
+  const state = await loadRun(store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  if (state.status === 'cancelled') {
+    return failed({
+      code: 'run_cancelled',
+      message: `${runId} was cancelled, so there is nothing left to pause.`,
+      action: 'Start a new run with `agent-flow feature`.',
+      forcible: false,
+    });
+  }
+
+  if (state.status === 'completed' || state.status === 'failed') {
+    return failed({
+      code: 'run_completed',
+      message: `${runId} has finished (${state.status}), so there is nothing to pause.`,
+      action: 'Start a new run with `agent-flow feature`.',
+      forcible: false,
+    });
+  }
+
+  const alreadyPaused = state.pauseRequestedAt !== undefined;
+  const at = alreadyPaused ? state.pauseRequestedAt : deps.clock.now();
+
+  if (!alreadyPaused) {
+    await store.updateRun(runId, (current) => ({ ...current, pauseRequestedAt: at }));
+    await store.appendEvent(runId, 'run_paused', { at });
+  }
+
+  // Read after the write, not before. A run that started executing between the two would
+  // otherwise be reported as idle, and the operator would be told "paused" about a run
+  // that is about to dispatch one more task.
+  const held = await lockFor(deps, runId).describe(runId);
+
+  return done(
+    {
+      runId,
+      pauseRequestedAt: at ?? deps.clock.now(),
+      alreadyPaused,
+      executing: held !== undefined,
+    },
+    held === undefined
+      ? []
+      : ['A task is in flight. It will finish; nothing further will start.'],
+  );
+}
+
+export interface ResumeResult {
+  readonly runId: string;
+  readonly outcome: SchedulerOutcome;
+}
+
+/**
+ * Clears a pause and continues, through the same `start` this repository already has.
+ *
+ * **Not a second execution path.** If resume ran its own scheduler, every gate `start`
+ * owns — approval, the planning base, the execution lease, the isolation mode — would have
+ * to be duplicated into it, and the copy would eventually disagree. So resume does exactly
+ * two things: it removes the request, and it calls `start`.
+ *
+ * A run nobody paused is refused rather than started. `resume` and `run` are not aliases,
+ * and a command that silently did the other's job would make "did my pause take effect"
+ * unanswerable.
+ */
+export async function resume(
+  deps: RunActionDeps,
+  runId: string,
+): Promise<ActionOutcome<ResumeResult>> {
+  const store = storeFor(deps);
+
+  const state = await loadRun(store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  if (state.status === 'cancelled') {
+    return failed({
+      code: 'run_cancelled',
+      message: `${runId} was cancelled, and a cancelled run is terminal.`,
+      action:
+        'Its evidence, its integration branch and its worktrees are all still on disk. ' +
+        'Start a new run with `agent-flow feature`.',
+      forcible: false,
+    });
+  }
+
+  if (state.pauseRequestedAt === undefined) {
+    return failed({
+      code: 'not_paused',
+      message: `${runId} is not paused.`,
+      action: 'Run it with `agent-flow run`.',
+      forcible: false,
+    });
+  }
+
+  // Something is still executing: resume must not mean "start a second scheduler", which
+  // is exactly what the execution lease exists to prevent. Asked before the request is
+  // cleared, so a refusal leaves the run paused rather than half-resumed.
+  const held = await lockFor(deps, runId).describe(runId);
+  if (held !== undefined) {
+    return failed({
+      code: 'run_busy',
+      message: `${runId} is still executing${describeHolder(held)}.`,
+      action: 'Wait for the paused run to reach its boundary, then resume.',
+      forcible: false,
+    });
+  }
+
+  await store.updateRun(runId, (current) => ({ ...current, pauseRequestedAt: undefined }));
+  await store.appendEvent(runId, 'run_resumed', { at: deps.clock.now() });
+
+  const started = await start(deps, runId);
+  if (!started.ok) return started;
+
+  return done({ runId, outcome: started.value.outcome }, started.warnings);
+}
+
+export interface CancelResult {
+  readonly runId: string;
+  readonly cancelledAt: string;
+  /** True when the run was already cancelled. `cancel` is idempotent. */
+  readonly alreadyCancelled: boolean;
+  /** Tasks moved from `running` to `interrupted`. */
+  readonly interrupted: readonly string[];
+  /** True when a process was executing this run and will observe the cancellation. */
+  readonly executing: boolean;
+}
+
+/**
+ * Ends a run: no new work, running processes terminated, evidence kept.
+ *
+ * The four halves of PRI-14, and each is a decision:
+ *
+ *  - **No new dispatch.** The terminal status is on disk before anything else, so a
+ *    scheduler reaching its next boundary — in this process or another — stops there.
+ *  - **Processes terminated.** The executing process observes the status and aborts its
+ *    attempts, which reaches the agents' process groups through the same kill the timeout
+ *    already uses. That is why `cancel` writes state rather than signalling a pid: the
+ *    coordinator is the only participant that can end an attempt *and* record it.
+ *  - **Evidence retained.** Nothing is deleted. Not the integration branch, not the failed
+ *    worktrees, not an attempt artifact. A cancelled run is the one somebody is most
+ *    likely to want to read.
+ *  - **The checkout untouched.** Nothing here writes to the working tree, as nothing else
+ *    does.
+ *
+ * Takes no execution lock, for the same reason `pause` does not: it has to work while
+ * something else holds it. That is what cancelling *is*.
+ *
+ * Idempotent, and terminal. There is no un-cancel — reopening a run whose agents were
+ * killed mid-edit would resume from a state nobody observed.
+ */
+export async function cancel(
+  deps: RunActionDeps,
+  runId: string,
+): Promise<ActionOutcome<CancelResult>> {
+  const store = storeFor(deps);
+
+  const state = await loadRun(store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  if (state.status === 'cancelled') {
+    return done({
+      runId,
+      cancelledAt: state.cancelledAt ?? deps.clock.now(),
+      alreadyCancelled: true,
+      interrupted: [],
+      executing: false,
+    });
+  }
+
+  if (state.status === 'completed' || state.status === 'failed') {
+    return failed({
+      code: 'run_completed',
+      message: `${runId} has finished (${state.status}), so there is nothing to cancel.`,
+      action: 'Start a new run with `agent-flow feature`.',
+      forcible: false,
+    });
+  }
+
+  const held = await lockFor(deps, runId).describe(runId);
+  const at = deps.clock.now();
+  const interrupted = state.tasks.filter((task) => task.state === 'running').map((task) => task.id);
+
+  await store.updateRun(runId, (current) => ({
+    ...current,
+    status: 'cancelled',
+    cancelledAt: at,
+    // The pause request goes with it. A cancelled run that still carried one would report
+    // two intents, and the weaker one would be the confusing half.
+    pauseRequestedAt: undefined,
+    tasks: current.tasks.map((task) =>
+      // `interrupted` already exists and already means "was running and nothing is
+      // executing it". A `cancelled` task state would differ only in *why*, and the why
+      // is the event below.
+      task.state === 'running' ? { ...task, state: 'interrupted' as const } : task,
+    ),
+  }));
+
+  await store.appendEvent(runId, 'run_cancelled', {
+    at,
+    interrupted,
+    ...(held?.holder === undefined
+      ? {}
+      : { pid: held.holder.pid, hostname: held.holder.hostname }),
+  });
+
+  return done(
+    {
+      runId,
+      cancelledAt: at,
+      alreadyCancelled: false,
+      interrupted,
+      executing: held !== undefined,
+    },
+    held === undefined
+      ? []
+      : [
+          `A process was executing this run${describeHolder(held)}. ` +
+            'It observes the cancellation and terminates its agents.',
+        ],
+  );
+}
+
 export async function revise(
   deps: RunActionDeps,
   runId: string,

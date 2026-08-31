@@ -133,9 +133,42 @@ Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
 | Git-aware `clean` (worktrees, refs, branch retention) | Available |
 | Isolation and concurrency facts in the dashboard | Available |
 | More than one task at a time | Available — worktree mode, up to 8 |
-| `pause` / `resume` / `cancel` | Designed, not built |
+| `pause` / `resume` / `cancel` | Available |
 | Configuration writes from the dashboard | Designed, not built |
 | Remote or distributed execution | Out of scope for MVP 2 |
+
+---
+
+## Stopping a run
+
+Two operations, and they are not the same one.
+
+```bash
+agent-flow pause          # stop starting work; the task in flight finishes
+agent-flow resume         # clear the pause and carry on
+agent-flow cancel --yes   # end it, terminate the agents, keep everything
+```
+
+**Pause is cooperative.** It records a request and returns. The scheduler reads it at the
+top of its dispatch loop, between tasks — never during one, because a task's result file is
+written once at the end and severing it would throw away work already paid for. So the
+report is "pausing…", then "paused", and `agent-flow run` typed afterwards is refused with
+`resume` as the way out. The request is on disk, so it holds across processes: pause in one
+terminal, and the run in another meets it.
+
+**Cancel is not.** It terminates the running agents' whole process groups, moves the tasks
+that were running to `interrupted`, and leaves the run in a terminal `cancelled` status
+that is neither `completed` nor `failed` — reporting an operator's decision as a failure
+would make every surface describe a choice as a defect.
+
+**Cancel deletes nothing.** Not the integration branch, not the failed worktrees, not a
+single attempt artifact. A cancelled run is the one you are most likely to want to read.
+Cleaning up stays a separate, deliberate act: `agent-flow clean`.
+
+What neither can do is un-edit files. In worktree mode a cancelled task's edits are
+confined to its own workspace and your checkout is untouched, as always; without worktrees,
+a cancelled task leaves the working tree wherever the agent had reached, and the
+confirmation says so in those words.
 
 ---
 

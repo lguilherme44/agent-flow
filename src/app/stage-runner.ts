@@ -191,6 +191,15 @@ export interface StageRunOptions {
   /** Absolute. Defaults to the project directory. */
   readonly workingDirectory?: string;
   /**
+   * Ends this stage's invocation, and its process tree, before its timeout (PRI-14).
+   *
+   * Passed through rather than acted on here: the repair loop below is bounded and short,
+   * and a cancelled stage's next repair round would be work nobody is waiting for — so the
+   * signal reaches the runner, and an aborted invocation returns as an ordinary failure
+   * that ends the loop.
+   */
+  readonly signal?: AbortSignal;
+  /**
    * How the plan classified this task, when a task is what is running (AR-09).
    *
    * Only `trivial` has a context ceiling: the ceiling is about *proportion*, and a complex
@@ -425,6 +434,7 @@ export class StageRunner {
         permissions: prompt.meta.permissions,
         timeoutSeconds: resolved.timeoutSeconds,
         ...(resolved.model === undefined ? {} : { model: resolved.model }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(stage.outputSchema === undefined
           ? {}
           : { outputSchema: toJsonSchema(stage.outputSchema) }),

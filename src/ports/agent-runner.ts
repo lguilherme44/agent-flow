@@ -41,6 +41,18 @@ export interface AgentRunInput {
 
   /** Extra directories the agent may read, beyond the working directory. */
   readonly additionalReadPaths?: readonly string[];
+  /**
+   * Ends this invocation before its timeout, and its whole process tree with it (PRI-14).
+   *
+   * Threaded from the operator's `cancel` all the way down, because a cancel that stopped
+   * at the scheduler would stop dispatching and leave the agent running — spending quota,
+   * writing files, with nothing left watching it. `agent-flow cancel` promises the
+   * processes are terminated, and this is the only path by which that can be true.
+   *
+   * An adapter that ignores it is not wrong so much as unfinished: it degrades to "the
+   * run stops dispatching", which is pause.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**

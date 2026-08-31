@@ -182,8 +182,8 @@ immediately killed is still an agent invocation somebody is billed for.
 - **TEST:** `test/adapters/node-process-runner.test.ts` — "reaches the whole process group,
   leaving no grandchild behind", on both the timeout and the cancel path, against real
   process trees
-- **STATUS:** enforced at the process boundary; **no operator command reaches it yet**
-  (PR-03, P0-2)
+- **STATUS:** enforced, on both paths. `agent-flow cancel` reaches it through
+  `terminateSignal`.
 
 ---
 
@@ -251,9 +251,20 @@ terminated · diagnostic evidence is retained · the integration branch and fail
 are **not** deleted · the operator's checkout is untouched · the run reaches an unambiguous
 terminal state · calling it again is a no-op.
 
-- **MECHANISM:** does not exist
-- **TEST:** none
-- **STATUS:** **not implemented** (P0-2)
+Cancel takes no execution lease, and that is what makes it cancel: it has to work while
+something else holds one. The intent goes on disk as the terminal `cancelled` status, and
+the executing process — in this terminal or another — observes it and aborts its attempts,
+which reaches the agents' process groups through the same kill the timeout already uses.
+
+Nothing is deleted. Not the integration branch, not the failed worktrees, not an attempt
+artifact: a cancelled run is the one somebody is most likely to want to read.
+
+- **MECHANISM:** `app/run-actions.ts:cancel`, `app/run-lifecycle.ts:watchLifecycle`,
+  `RunOptions.terminateSignal` → `AgentRunInput.signal` → `ProcessSpawnOptions.signal`
+- **TEST:** `test/app/run-lifecycle.test.ts`, `apps/web/e2e/lifecycle.spec.ts` — the E2E
+  drives the built binary against a real repository, because the property that matters is
+  that the intent survives *between* two invocations of it
+- **STATUS:** enforced
 
 ---
 
@@ -263,9 +274,22 @@ terminal state · calling it again is a no-op.
 to its safe boundary rather than being severed · nothing is marked with a state it did not
 reach · the intent survives a restart · `resume` is idempotent.
 
-- **MECHANISM:** does not exist
-- **TEST:** none
-- **STATUS:** **not implemented** (P0-2)
+`pauseRequestedAt` is a **request, not a status**. A run's `status` says where it is in the
+workflow; "paused" says what a person asked for, and folding the two together would make
+`waiting_for_approval` and `paused` mutually exclusive when they plainly are not.
+
+Two signals, and the separation is the entire difference from cancel: pause aborts only the
+dispatch signal, so the task in flight runs to its natural end. Its result file is written
+once, at the end — there is no partial result to keep, and severing it would throw away
+work already paid for. So the honest report is "pausing…", then "paused".
+
+`start` reads the request too, so `agent-flow run` typed after a pause is refused rather
+than quietly overriding it. Both entry points, or neither.
+
+- **MECHANISM:** `app/run-actions.ts:pause` / `resume`, `app/run-lifecycle.ts`,
+  `Scheduler` dispatch boundary, `refuseUnrunnable`
+- **TEST:** `test/app/run-lifecycle.test.ts`, `apps/web/e2e/lifecycle.spec.ts`
+- **STATUS:** enforced
 
 ---
 

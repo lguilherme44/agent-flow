@@ -160,6 +160,13 @@ export class TaskExecutor {
     runId: string,
     sdd: string,
     workspace?: TaskWorkspace,
+    /**
+     * Ends this attempt, and the agent's process tree, before its timeout (PRI-14).
+     *
+     * Per execution rather than on the executor, because it belongs to the *run* that is
+     * being cancelled and one executor serves many attempts.
+     */
+    signal?: AbortSignal,
   ): Promise<TaskResult> {
     const { store, clock, stageRunner, config } = this.options;
     const projectDir = this.options.projectDir;
@@ -208,6 +215,10 @@ export class TaskExecutor {
           // AR-09: what this attempt's context cost, attributable to this attempt.
           task: task.id,
           ...(workspace?.attempt === undefined ? {} : { attempt: workspace.attempt }),
+          // Reaches the agent's process group (PRI-14). An aborted invocation comes back
+          // as an ordinary failure, so the `catch` below records the attempt exactly as it
+          // records any other — cancel keeps evidence, it does not erase it.
+          ...(signal === undefined ? {} : { signal }),
         },
       );
       text = result.text;
