@@ -314,9 +314,11 @@ export async function buildExecutionContext(
     // discriminant, and it was captured before anything observed the repository.
     concurrencyFor: (state) => concurrencyFor(state.isolationMode).effective,
     maxAttempts: config.global.retry.maxAttempts,
-    // AR-03. Ships `enabled: false`, so the scheduler keeps its standing rule of never
-    // retrying on its own until a project turns it on — automatic retry is new behaviour,
-    // and the kill switch is an acceptance criterion rather than a convenience.
+    // AR-03. Ships `enabled: true`: a recoverable failure requeues itself with a Failure
+    // Context Packet rather than stopping the run. What makes that safe is the bounds
+    // rather than the switch — a class the taxonomy marks `requires_human` is never
+    // retried however much budget is left. `enabled: false` restores the previous
+    // behaviour exactly, which is why the switch exists at all.
     recoveryConfig: config.global.recovery,
     fs,
     projectDir: options.projectDir,

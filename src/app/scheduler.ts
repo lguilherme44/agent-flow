@@ -114,10 +114,14 @@ export interface SchedulerOptions {
   /**
    * Autonomy budgets and the kill switch (AR-03, §6).
    *
-   * Absent — and, shipped, `enabled: false` — means the scheduler never retries on its
-   * own, which is exactly what it did before this milestone. Automatic retry is new
-   * behaviour, and being able to turn it off is an acceptance criterion rather than a
-   * convenience.
+   * Absent, or `enabled: false`, means the scheduler never retries on its own — which is
+   * exactly what it did before this milestone. Being able to turn it off is an acceptance
+   * criterion rather than a convenience.
+   *
+   * **It ships `true`.** AR-00 shipped the budgets with the switch off and a stated
+   * expiry, because a budget nothing reads must not look like a feature that is on; AR-03
+   * is the milestone that made every budget load-bearing and flipped it. This comment said
+   * `false` for both milestones after that was true.
    */
   readonly recoveryConfig?: RecoveryConfig;
   /** Where the Failure Context Packet is written. Absent, no packet is persisted. */

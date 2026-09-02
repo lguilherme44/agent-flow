@@ -160,13 +160,25 @@ export const GlobalConfigSchema = z.object({
     })
     .prefault({}),
   /**
-   * Reserved for task isolation (MVP 2), and inert.
+   * Task isolation: one Git worktree and one branch per attempt (MVP 2).
    *
-   * Kept because it is part of a design that is coming and removing it would
-   * churn config files twice. Read by nothing that executes anything: no
-   * execution path creates a worktree, so switching it on isolates nothing and
-   * — deliberately — raises no limit. An architecture test pins the list of
-   * modules allowed to name it.
+   * **Live since M2-04, and this comment used to say the opposite.** It read
+   * "reserved… and inert. Read by nothing that executes anything: no execution
+   * path creates a worktree" — true when it was written and false from the
+   * milestone that built `TaskWorkspaces`, the Integrator and worktree recovery.
+   * A comment that describes a flag as dead is worse than no comment: it is the
+   * one a reader trusts instead of tracing the callers.
+   *
+   * What is true is the containment around it. Exactly one module *decides*
+   * anything from this value — `app/run-git-identity.ts`, which turns it into the
+   * run's `isolationMode` once, at creation. Everything downstream reads the
+   * run's mode and never this flag (I-13), so editing it changes the next run and
+   * never one in flight. An architecture test pins the list of modules allowed to
+   * name it, and a second pins that only the deciding module assigns from it.
+   *
+   * Off by default because isolation is not free: a worktree per task costs a
+   * checkout and a dependency install, and the repository has to satisfy
+   * preconditions the sequential path never asks about.
    */
   git: z.object({ useWorktrees: z.boolean().default(false) }).prefault({}),
   approval: z.object({ requiredBeforeImplementation: z.boolean().default(true) }).prefault({}),

@@ -281,7 +281,9 @@ Detalhes, incluindo o que não ter autenticação significa e não significa:
 - **git** — qualquer versão para o modo sequencial; **2.33.0 ou mais novo** para o
   isolamento por worktree, que precisa de `git worktree add --lock --reason`. O
   `agent-flow doctor` reporta sua versão contra esse piso.
-- Pelo menos uma CLI de agente, instalada e autenticada (ex.: AGY, OpenCode, Claude Code, Codex CLI).
+- Pelo menos uma CLI de agente, instalada e autenticada: **Claude Code**, **Codex CLI**
+  ou **AGY (Antigravity)**. Esses três são os adapters de agente de código que existem;
+  veja [Agentes de código](#agentes-de-código).
 - *(Opcional)* Um endpoint local ou remoto de modelo compatível com OpenAI (ex.: Ollama, llama.cpp, vLLM) para inteligência de contexto consultiva e triagem mecânica.
 
 **Credenciais e Privacidade:**
@@ -455,12 +457,21 @@ mesma tree, e o que faz um attempt falho continuar legível.
 
 ## Agentes de código
 
-Existem dois adapters, os dois dirigindo uma CLI que você já autenticou:
+Existem quatro adapters. Três dirigem uma CLI que você já autenticou; o quarto é um
+endpoint de inferência e não um agente de código — e ele diz isso.
 
 | Runner | `type` | Exige | Auth | Modo read-only |
 |---|---|---|---|---|
 | Claude Code | `claude-code-cli` | o binário `claude` no `PATH` | o login que você já tem na CLI | `--permission-mode plan` |
 | Codex | `codex-cli` | o binário `codex` no `PATH` | o login que você já tem na CLI | `-s read-only` |
+| AGY (Antigravity) | `agy-cli` | o binário `agy` no `PATH` | o login que você já tem na CLI | `--read-only` |
+| Compatível com OpenAI | `openai-compatible` | uma `baseUrl` e, opcionalmente, um `apiKeyEnv` | a variável de ambiente nomeada | n/a — ele não escreve de jeito nenhum |
+
+O último não tem working directory e não escreve, e **declara as duas coisas** — então o
+resolvedor de papéis o recusa para `discovery` e para os executores, e o aceita para os
+nove prompts que carregam toda a entrada dentro deles. Isso é a maior parte do workflow,
+e é o que permite um llama.cpp ou vLLM local atender `sdd`, `planning`, as duas reviews,
+`verification`, `final-review` e `architecture-impact`.
 
 ```yaml
 runners:
@@ -477,9 +488,12 @@ que nunca instalou uma segunda CLI. Ligar a segunda é o que torna plan review e
 review genuinamente cross-provider — e o `doctor` reporta o estado de provider único
 como `DEGRADED`, então a perda nunca é silenciosa.
 
-Nenhum terceiro adapter é declarado. Uma interface abstrata não é compatibilidade; o
+Nenhum quinto adapter é declarado. Uma interface abstrata não é compatibilidade; o
 [`docs/runner-capabilities.md`](docs/runner-capabilities.md) registra o que cada CLI de
-fato faz, com o comando que comprova cada afirmação e a versão em que foi testada.
+fato faz, com o comando que comprova cada afirmação e a versão em que foi testada. O
+**OpenCode não está entre eles** — esta página o listou em Requisitos por várias revisões
+e nunca existiu um adapter `opencode`, que é exatamente o tipo de afirmação que aquela
+página existe para tornar impossível.
 
 ---
 

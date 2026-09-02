@@ -279,7 +279,9 @@ Details, including what having no authentication does and does not mean:
 - **git** — any version for sequential mode; **2.33.0 or newer** for worktree
   isolation, which needs `git worktree add --lock --reason`. `agent-flow doctor`
   reports your version against that floor.
-- At least one agent CLI, installed and logged in (e.g. AGY, OpenCode, Claude Code, Codex CLI).
+- At least one agent CLI, installed and logged in: **Claude Code**, **Codex CLI** or
+  **AGY (Antigravity)**. Those three are the coding-agent adapters that exist; see
+  [Coding agents](#coding-agents).
 - *(Optional)* A local or remote OpenAI-compatible model endpoint (e.g. Ollama, llama.cpp, vLLM) for advisory context intelligence and mechanical triage.
 
 **Credentials & Privacy:**
@@ -451,12 +453,21 @@ writing into one tree, and what makes a failed attempt something you can still r
 
 ## Coding agents
 
-Two adapters exist, both driving a CLI you have already authenticated:
+Four adapters exist. Three drive a CLI you have already authenticated; the fourth is
+an inference endpoint rather than a coding agent, and says so.
 
 | Runner | `type` | Requires | Auth | Read-only mode |
 |---|---|---|---|---|
 | Claude Code | `claude-code-cli` | the `claude` binary on `PATH` | your existing CLI login | `--permission-mode plan` |
 | Codex | `codex-cli` | the `codex` binary on `PATH` | your existing CLI login | `-s read-only` |
+| AGY (Antigravity) | `agy-cli` | the `agy` binary on `PATH` | your existing CLI login | `--read-only` |
+| OpenAI-compatible | `openai-compatible` | a `baseUrl` and, optionally, an `apiKeyEnv` | the named environment variable | n/a — it cannot write at all |
+
+The last one has no working directory and cannot write, and it **declares both** — so
+the role resolver refuses it for `discovery` and the executors, and accepts it for the
+nine shipped prompts that carry their whole input. That is most of the workflow, and it
+is what lets a local llama.cpp or vLLM server serve `sdd`, `planning`, both reviews,
+`verification`, `final-review` and `architecture-impact`.
 
 ```yaml
 runners:
@@ -473,10 +484,12 @@ that never installed a second CLI. Enabling the second is what makes plan review
 final review genuinely cross-provider — and `doctor` reports the single-provider state
 as `DEGRADED`, so the loss is never silent.
 
-No third adapter is claimed. An abstract interface is not compatibility;
+No fifth adapter is claimed. An abstract interface is not compatibility;
 [`docs/runner-capabilities.md`](docs/runner-capabilities.md) records what each CLI
 actually does, with the command that proves each claim and the version it was probed
-against.
+against. **OpenCode is not among them** — this page listed it under Requirements for
+several revisions and no `opencode` adapter has ever existed, which is exactly the kind
+of claim that page is meant to make impossible.
 
 ---
 

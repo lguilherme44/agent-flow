@@ -11,8 +11,10 @@ specification and the code disagree, **the code is the current truth**.
 MVP 1  ─────────────────────────────────►  the execution foundation, complete
 MVP 2  ─────────────────────────────────►  safe parallel execution, complete
 MVP 3  ─────────────────────────────────►  context intelligence & advisory local model, complete
+AR     ─────────────────────────────────►  autonomous execution & recovery, in progress
+M4     ─────────────────────────────────►  collaboration foundation, in progress
                                         ▲
-                                        you are here: MVP3 corrective audit closure complete
+                                        you are here: M4-00 specified
 ```
 
 ---
@@ -227,6 +229,67 @@ and confines the per-model table to `src/adapters/runners/`.
 - **I-24 — No verdict is rendered under a borrowed label**: mechanical verification, semantic review and the Definition of Done are distinct, and `NOT_RUN` is never shown as `PASS`.
 - **I-25 — Bounded corrective autonomy**: a corrective round proceeds without human approval only when every task is inside a mechanically-decided envelope and the budget holds.
 - **I-26 — Runtime status is projected, never persisted**: the CLI and the HTTP API derive status from one pure projection.
+
+---
+
+---
+
+## M4 — Collaboration Foundation · in progress
+
+Specified in [`specs/m4-collaboration-foundation.md`](specs/m4-collaboration-foundation.md).
+
+The milestone that gives a run **agents** rather than only roles: a persistent identity,
+a durable channel between them, and a structured place to put a decision so the next
+agent finds it. Nothing more — teams, skills-based assignment, resource ownership, the
+review protocol and the forge are M5 … M7, and the specification says where each door is
+left open.
+
+The three things that make it safe are the three the product already had, applied to a
+new kind of input:
+
+- **An agent's message is a proposal, never an instruction.** It is harvested after the
+  process exits, schema-validated, redacted, bounded and re-keyed — the same ordering
+  that makes a validation receipt trustworthy (I-27 … I-29).
+- **Nothing is silently overwritten.** The blackboard is append-only; a supersession by
+  a different author leaves both entries live and *contested*, and both reach the next
+  agent (I-30).
+- **Everything is bounded.** Messages per task, bytes per message, thread depth,
+  handoffs per task, and the byte budget of the block that reaches a prompt — measured
+  through AR-09's existing per-source attribution rather than a second counter (I-31).
+
+`collaboration.enabled` ships **false**, and with it off not one byte of any prompt
+differs from before the milestone. That is AR-00's rule applied: a channel whose first
+real traffic nobody has seen must not read as a feature that is on. M4-08's dogfood is
+what earns the flip.
+
+| | Milestone | Status |
+|---|---|---|
+| M4-00 | Specification, and the three false documentation claims it found | **done** |
+| M4-01 | Agent identity | in progress |
+| M4-02 | Mailbox, outbox harvest and budgets | not started |
+| M4-03 | Threads | not started |
+| M4-04 | Handoffs | not started |
+| M4-05 | Shared blackboard | not started |
+| M4-06 | Context integration | not started |
+| M4-07 | Read model, CLI and dashboard | not started |
+| M4-08 | Dogfood and audit | not started |
+
+### What M4-00 corrected on its way past
+
+Three documentation claims that were false at the moment the audit read them. Recorded
+here rather than fixed silently, because each one had been true once and stopped being
+so without anything noticing:
+
+- **`git.useWorktrees` was documented as inert.** Its schema comment said "read by
+  nothing that executes anything: no execution path creates a worktree" — true when
+  written, false since M2-04 built `TaskWorkspaces`. What is still true is the
+  containment, and the comment now says that instead.
+- **`recovery.enabled` was documented as shipping `false`** in `scheduler.ts` and
+  `execution-context.ts`. It has shipped `true` since AR-03; the schema and the config
+  template both said so, and two comments did not.
+- **Both READMEs listed OpenCode as a runner you can use.** No `opencode` adapter has
+  ever existed. The four that do — `claude-code-cli`, `codex-cli`, `agy-cli`,
+  `openai-compatible` — are now all in the table, which listed two.
 
 ---
 
