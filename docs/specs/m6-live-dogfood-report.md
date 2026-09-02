@@ -218,6 +218,100 @@ That is the defect and the fix, on one screen, from a real run.
 
 ---
 
+## Scenario 3 — `AF-2026-002`, the completion pass
+
+Run on the completion charter's build, and it produced the milestone's two clearest pieces
+of evidence.
+
+| | |
+|---|---|
+| Repository | `~/wk/m6-dogfood2` |
+| Feature | `truncateSlug(title, maxLength)`, test-first |
+| Providers · agents | 2 · 3 (`dev` on agy; `reviewer`, `qa` on claude) |
+| Context cost | **402 KB** across 13 stage prompts |
+| Reviews | 3 · independence 1, 3, 1 |
+| Findings | 6 — 1 critical, 1 high, 2 low, 2 info |
+
+### The review caught a green gate that was lying
+
+`TASK-002` reported completion. Its two required gates both passed, exit 0. The reviewer
+read the tree and returned `blocked`:
+
+> **[critical] FIND-0004** — `truncateSlug` does not exist. `src/slug.js` ends at line 11
+> with the original slugify function.
+>
+> **[info] FIND-0006** — The reported green gate cannot distinguish 'implemented correctly'
+> from 'not implemented'.
+
+The second finding is the diagnosis of the first: the tests never imported the function, so
+`npm test` passed by not exercising anything. A deterministic gate said yes about work that
+did not exist, and a semantic review is what noticed — which is §9–§12's whole argument,
+arrived at from the other direction.
+
+Then the Definition of Done:
+
+```
+✓ SDD approved
+✓ all tasks completed
+✓ lint, tests and build passing
+✓ final review PASS
+✗ no blocking review finding is open — still open: FIND-0004, FIND-0005
+```
+
+**Every condition M4 knew about passed on a tree where the feature does not exist.** Without
+the fifth — added in this milestone because §43 asks for it — this run ships as DONE with
+nothing implemented. That is the milestone justified in five lines of its own output.
+
+### The runner fix, before and after in one log
+
+`qa` declares `runner: claude`. `executor.normal` points at `agy`.
+
+```
+TASK-001  runner=agy       ← old build: the role won
+TASK-002  runner=agy
+TASK-003  runner=agy
+FIX-001   runner=claude    ← after the fix: the member wins
+```
+
+Same run, same config, same member. **M6-ACC-03, answered live.**
+
+### Why four milestones of silence — answered
+
+The refusal diagnostic added earlier in this milestone finally said what a malformed outbox
+got wrong:
+
+```
+entries.0.affects.0: invalid_value
+entries.0.affects.2: invalid_value
+entries.1.affects.1: invalid_value
+```
+
+The QA agent wrote two well-formed blackboard entries and the *only* invalid thing in the
+file was one field. `affects` takes the nine workflow roles; the bootstrap sketched it as
+`"affects":["<role>"]` and never said what a role is, while everything else in the same
+block names members by id — which is what a team makes natural to write there.
+
+So the channel was not unused. It was unusable, over an enum nobody was shown. The
+bootstrap now lists the nine values, at ~120 bytes on a 32–50 KB prompt. `affects` still
+rejects a member id, which is the follow-up: widening it is an M4 contract change and the
+audience filter has to learn about members.
+
+### Two more defects, both found by running it
+
+**The corrective task took the whole validation registry.** The plan review named the
+consequence exactly: `install` resolves to `npm install`, this repository has no
+dependencies, npm writes a `package-lock.json` that `.gitignore` does not cover, and
+TASK-003's change-surface criterion then fails. Every human-planned task omitted `install`;
+every generated fix put it back. A correction now validates with what the corrected task
+validated with — the third thing it inherits, after its origin and its expectation.
+
+**A revision plus a block crashed the run.** `agent-flow revise` gave the already-completed
+TASK-003 a dependency on FIX-001; FIX-001 blocked; the cascade returned TASK-003; the
+scheduler wrote `completed → blocked`; the state machine refused, correctly, and the
+unhandled `TaskStateError` killed the run *after* the corrective task had done its work.
+The cascade's own comment said "none of them ran, so this is dependency-derived by
+construction" — and a revision is exactly the case where that stops being true.
+
 ## Defects this dogfood found
 
 Every one of them survived 3893 green tests, and every fix carries a positive control.
@@ -405,156 +499,6 @@ Removed. The suite now requires an emitter for every type in `REVIEW_EVENT_TYPES
 reachability rule of defect 1, applied to data instead of to code.
 
 ---
-
-## Limitations, stated rather than fixed
-
-### A required quality gate no task runs stays `not_run` forever
-
-`lint` is `required: true`, and the planner gave TASK-001 and TASK-003 `validation: ['test']`.
-So `lint` never ran for them, the projection reports `not_run`, and — correctly — that
-blocks. But nothing forces a required gate onto a task, so those two tasks can never reach
-a quality decision, and no command in the product resolves it.
-
-Not changed, deliberately. The behaviour **fails safe**: nothing is falsely green, the
-`✗` is visible, and a person sees exactly which gate did not run. Making a task's validation
-the union of its declared ids and the applicable required gates is the right fix and it is
-a change to execution semantics — the wrong thing to land late in a milestone on the
-evidence of one scenario. Recommended for M7.
-
-### A corrective task is not ordered against the criteria that depend on it
-
-Described above. The generator orders by declared file overlap; a fix to a *test* that an
-*implementation* task's acceptance criteria reference shares no file with it. The plan
-review catches it, which costs a model call and a human revision. Making it mechanical
-would mean reading acceptance-criteria prose for task references, which is exactly the kind
-of inference this product refuses to make silently.
-
-### `collaboration.enabled` — the recommendation, with the data
-
-| Milestone | Invocations | Messages delivered | Outbox attempts |
-|---|---|---|---|
-| M4 | 12 | 1 | 1 |
-| M5 + gap closure | 9 | 0 | 0 |
-| M6 scenario 1 | 6 | **0** | **4** |
-
-The earlier conclusion was "nobody uses it". That is now wrong. After Phase A gave the
-bootstrap a handoff form and stated ownership, agents used the channel in four of six
-implementation prompts — and the product rejected all four as malformed.
-
-So the honest reading is not *unused*, it is **unusable as specified**: the shape is
-described in prose and cannot be reproduced from prose. Defect 3 above is what will produce
-the evidence to fix it; until a run shows which fields agents actually get wrong,
-`collaboration.enabled` stays `false` and the cost stays measured — 910–1081 bytes per
-implementation prompt, about 2% of a 50 KB prompt.
-
-### What review actually costs
-
-| Stage | Prompts | Bytes | Per prompt |
-|---|---|---|---|
-| implementation | 6 | 317,811 | 52,969 |
-| **code-review** | **2** | **13,679** | **6,840** |
-| final-review | 2 | 131,326 | 65,663 |
-
-The spec's own §17 critique argued that per-task review doubles the model calls and that
-nobody had priced it. Priced: it doubles the *calls* and adds **13%** of an implementation
-prompt in context. The selective review context of §45 is why — the reviewer sees the
-change and the criteria, not the repository.
-
----
-
-## Scenario 3 — `AF-2026-002`, the completion pass
-
-Run on the completion charter's build, and it produced the milestone's two clearest pieces
-of evidence.
-
-| | |
-|---|---|
-| Repository | `~/wk/m6-dogfood2` |
-| Feature | `truncateSlug(title, maxLength)`, test-first |
-| Providers · agents | 2 · 3 (`dev` on agy; `reviewer`, `qa` on claude) |
-| Context cost | **402 KB** across 13 stage prompts |
-| Reviews | 3 · independence 1, 3, 1 |
-| Findings | 6 — 1 critical, 1 high, 2 low, 2 info |
-
-### The review caught a green gate that was lying
-
-`TASK-002` reported completion. Its two required gates both passed, exit 0. The reviewer
-read the tree and returned `blocked`:
-
-> **[critical] FIND-0004** — `truncateSlug` does not exist. `src/slug.js` ends at line 11
-> with the original slugify function.
->
-> **[info] FIND-0006** — The reported green gate cannot distinguish 'implemented correctly'
-> from 'not implemented'.
-
-The second finding is the diagnosis of the first: the tests never imported the function, so
-`npm test` passed by not exercising anything. A deterministic gate said yes about work that
-did not exist, and a semantic review is what noticed — which is §9–§12's whole argument,
-arrived at from the other direction.
-
-Then the Definition of Done:
-
-```
-✓ SDD approved
-✓ all tasks completed
-✓ lint, tests and build passing
-✓ final review PASS
-✗ no blocking review finding is open — still open: FIND-0004, FIND-0005
-```
-
-**Every condition M4 knew about passed on a tree where the feature does not exist.** Without
-the fifth — added in this milestone because §43 asks for it — this run ships as DONE with
-nothing implemented. That is the milestone justified in five lines of its own output.
-
-### The runner fix, before and after in one log
-
-`qa` declares `runner: claude`. `executor.normal` points at `agy`.
-
-```
-TASK-001  runner=agy       ← old build: the role won
-TASK-002  runner=agy
-TASK-003  runner=agy
-FIX-001   runner=claude    ← after the fix: the member wins
-```
-
-Same run, same config, same member. **M6-ACC-03, answered live.**
-
-### Why four milestones of silence — answered
-
-The refusal diagnostic added earlier in this milestone finally said what a malformed outbox
-got wrong:
-
-```
-entries.0.affects.0: invalid_value
-entries.0.affects.2: invalid_value
-entries.1.affects.1: invalid_value
-```
-
-The QA agent wrote two well-formed blackboard entries and the *only* invalid thing in the
-file was one field. `affects` takes the nine workflow roles; the bootstrap sketched it as
-`"affects":["<role>"]` and never said what a role is, while everything else in the same
-block names members by id — which is what a team makes natural to write there.
-
-So the channel was not unused. It was unusable, over an enum nobody was shown. The
-bootstrap now lists the nine values, at ~120 bytes on a 32–50 KB prompt. `affects` still
-rejects a member id, which is the follow-up: widening it is an M4 contract change and the
-audience filter has to learn about members.
-
-### Two more defects, both found by running it
-
-**The corrective task took the whole validation registry.** The plan review named the
-consequence exactly: `install` resolves to `npm install`, this repository has no
-dependencies, npm writes a `package-lock.json` that `.gitignore` does not cover, and
-TASK-003's change-surface criterion then fails. Every human-planned task omitted `install`;
-every generated fix put it back. A correction now validates with what the corrected task
-validated with — the third thing it inherits, after its origin and its expectation.
-
-**A revision plus a block crashed the run.** `agent-flow revise` gave the already-completed
-TASK-003 a dependency on FIX-001; FIX-001 blocked; the cascade returned TASK-003; the
-scheduler wrote `completed → blocked`; the state machine refused, correctly, and the
-unhandled `TaskStateError` killed the run *after* the corrective task had done its work.
-The cascade's own comment said "none of them ran, so this is dependency-derived by
-construction" — and a revision is exactly the case where that stops being true.
 
 ## Acceptance criteria, one by one
 
@@ -790,6 +734,11 @@ refusal.
    Flow only through the collaboration outbox and nothing has ever come through it.
 6. **Independence is measured, not enforced.** A team with one provider gets level 1 and a
    recorded degradation, which is the honest answer, not a block.
+7. **Per-task review costs 13% of an implementation prompt** — 6.8–7.4 KB against 32–53 KB,
+   measured across all three scenarios. It doubles the model *calls*, which the spec's own
+   §17 critique worried about and nobody had priced. Selective review context (§45) is why
+   the number is that low: the reviewer sees the change and the criteria, not the
+   repository.
 
 ---
 
@@ -807,50 +756,63 @@ refusal.
 
 ## Verdict
 
-**M6 is incomplete.** Not because the suite is red — every gate is green — but because two
-of twenty-eight acceptance criteria are unmet and a third is undermined by a defect found
-in the last hour of the dogfood.
+Twenty-eight criteria: **25 met, 1 partial, 2 released by the completion charter.**
 
 | | |
 |---|---|
-| M6-ACC-03 | ✅ fixed in the completion pass — see defect 0 |
-| M6-ACC-24 | ⊘ released by the completion charter's §53: not required when no honest scenario produces one |
-| M6-ACC-25 | ⊘ released by §54, for the same reason |
+| M6-ACC-03 | ✅ was wrong three times in five; fixed in this pass (defect 0) |
+| M6-ACC-24 | ⊘ released by §53 — module decomposition tracks the ownership boundary here, and fabricating a bad plan to force a handoff is forbidden |
+| M6-ACC-25 | ⊘ released by §54 — and the *cause* is now known rather than guessed, which is the useful part |
+| M6-ACC-27 | ◐ the loop ran end to end live; `fixed` deriving is proven by a test that drives the real emitter into the real projection, not by a run |
 
-Everything else holds, and most of it holds on live evidence rather than on a fixture.
+### What the completion pass changed
 
-### What the next cycle should do, in order
+The first pass ended `M6 INCOMPLETE` on three counts. Two of them (§53, §54) the charter
+released. The third was mine to fix and is fixed. Then running it again on the fixed build
+found four more, of which one was worse than anything in the first pass:
 
-1. **Thread the member's runner into the dispatch.** `resolveRole` already takes the
-   override; `stageRunner.run` never passes it. Until then every independence figure in
-   the product describes a configuration rather than a run. M5 work, not M6 work.
-2. **Run one scenario-1-shaped team on the current build** and read the outbox refusal
-   diagnostics. Four agents tried to use the collaboration channel and the product could
-   not tell anyone why it refused them; now it can. That is the shortest path to M6-ACC-25.
-3. **Force the handoff.** One task whose declared files straddle two members' exclusive
-   patterns, dispatched with `agent-flow task` so no planner can decompose the conflict
-   away. That is the experiment M6-ACC-24 needs and the one nobody has run.
-4. **Insert a corrective task into the chain**, not merely beside it — a fix to a test that
-   a later task's criteria depend on should precede that task. Needs task states in the
-   generator.
-5. **Make a required quality gate run.** A task's validation should be the union of what
-   the planner declared and the required gates that apply, so `lint` cannot sit at
-   `not_run` forever with no command able to resolve it.
+**The reviewer had been reading the wrong tree.** Not the record — `reviewedTree` named the
+right commit every time — the *reading*. In worktree mode the reviewer ran in the
+operator's own checkout, which does not contain the change. The mechanism was correct and
+the content was formed against the wrong bytes, and no test could see it because every test
+checked the field.
 
-### What M6 actually delivered
+The product had said so twice. Scenario 2's reviewer filed it as `info` — "the checked-out
+working tree does not contain this change" — and I wrote that up as the model being
+careful. Scenario 3 then produced a `critical` about a function that existed, and the QA
+agent sent to fix it refused with `git log -S` to prove the finding false. **A corrective
+task correctly declining to correct a false positive** is not a demonstration anyone plans
+for, and it is the sharpest thing either pass produced.
 
-Seven defects found and fixed, every one of them past a green suite of 3900+ tests, every
-fix carrying a positive control that fails when the fix is reverted. Three of the seven
-were reachability defects — code, an event, and a key — where the mechanism existed, the
-tests passed, and no real agent could ever traverse the path. Two architecture rules now
-ask that question mechanically, one for exported functions and one for declared events.
+### What M6 delivered
 
-The reviewer found real defects in two unrelated repositories, including the same class of
-defect twice unprompted, and one finding predicted the exact reason a run would fail before
-the implementation ran. A finding became a task, the task routed itself to QA by the
-finding's own category, and the corrected tree was reviewed again. Per-task review costs
-13% of an implementation prompt.
+Eleven defects across the two passes, every one of them past a suite that was green, every
+fix carrying a positive control that fails when the fix is reverted. Four were the same
+shape — **written, tested, and unreachable**: a function nothing called, an event nothing
+emitted, a key the emitter and reader disagreed about, and a runner override the dispatch
+never passed. Two of the eleven were found in the *test suite itself*: a walker reading
+none of the dashboard's 47 components, and fixtures that hand-wrote the event an emitter
+was supposed to produce.
 
-And the Definition of Done, which knew four conditions and now knows five, held a run open
-that would otherwise have been declared done with a blocking finding open. That one line of
-live output is the milestone in miniature: the gate was the thing missing, not the model.
+Five architecture rules now ask the question mechanically — reachable exports, emitted
+events, browser-side derivation, both ends of the runner thread, and one place that opens
+an integration checkout.
+
+And the evidence a milestone is for, in five lines of a real run's own output:
+
+```
+✓ SDD approved
+✓ all tasks completed
+✓ lint, tests and build passing
+✓ final review PASS
+✗ no blocking review finding is open — still open: FIND-0004, FIND-0005
+```
+
+Every condition M4 knew about passed on a tree where the feature did not exist. The gate
+that held it open is the one this milestone added.
+
+### What M7 inherits
+
+The six limitations above, `affects` accepting a member id first — it is the difference
+between a protocol agents can obey and one they cannot, and after this pass it is the only
+thing between the channel and its first delivered message.
