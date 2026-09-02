@@ -18,6 +18,8 @@ import {
   type GlobalConfig,
 } from '../../src/contracts/index.js';
 import { CollaborationService } from '../../src/app/collaboration-service.js';
+import { CollaborationStore } from '../../src/app/collaboration-store.js';
+import { deriveAgentRoster } from '../../src/core/collaboration/roster.js';
 import { attemptLogName, runPaths } from '../../src/app/paths.js';
 import { createRunnerFactory } from '../../src/app/runner-factory.js';
 import { FakeHost } from '../fakes/fake-host.js';
@@ -88,7 +90,7 @@ NOTES:
 - none
 `;
 
-async function harness(options: { processRunner?: FakeProcessRunner; config?: GlobalConfig; collaboration?: CollaborationService } = {}) {
+async function harness(options: { processRunner?: FakeProcessRunner; config?: GlobalConfig } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const runner = new FakeAgentRunner('claude', CAPS);
@@ -123,7 +125,23 @@ async function harness(options: { processRunner?: FakeProcessRunner; config?: Gl
     stageRunner,
     processRunner,
     capabilities: { claude: CAPS, agy: CAPS },
-    ...(options.collaboration === undefined ? {} : { collaboration: options.collaboration }),
+    // **Built here, against this store.** A team in the config means the assignment
+    // policy decides who runs the task, and the policy has to read the same run the
+    // executor is executing — a service wired to a different store answers about
+    // somebody else's state, which is §34's fixture question answered wrongly.
+    ...(config.teams === undefined
+      ? {}
+      : {
+          collaboration: new CollaborationService({
+            fs,
+            clock,
+            store,
+            collaboration: new CollaborationStore({ fs, projectDir: PROJECT }),
+            roster: deriveAgentRoster(config),
+            config: config.collaboration,
+            globalConfig: config,
+          }),
+        }),
     config: {
       global: config,
       project: ProjectConfigSchema.parse({
@@ -1756,24 +1774,15 @@ describe('a team member runs on the runner it declares (§8, I-42)', () => {
     },
   });
 
-  async function teamHarness() {
-    const h = await harness({ config: TEAM });
-    const { CollaborationStore } = await import('../../src/app/collaboration-store.js');
-    const { deriveAgentRoster } = await import('../../src/core/collaboration/roster.js');
-
-    const collaboration = new CollaborationService({
-      fs: h.fs,
-      clock: h.clock,
-      store: h.store,
-      collaboration: new CollaborationStore({ fs: h.fs, projectDir: PROJECT }),
-      roster: deriveAgentRoster(TEAM),
-      config: TEAM.collaboration,
-      globalConfig: TEAM,
-      projectDir: PROJECT,
-    });
-
-    return harness({ config: TEAM, collaboration });
-  }
+  /**
+   * One harness, and the collaboration service built against *its* store.
+   *
+   * The first version made a service against one harness and handed it to a second, so
+   * the policy read a different run's state from the executor it was advising. It passed,
+   * which is worse — §34's question answered wrongly: that fixture did not represent the
+   * production state the test claimed to be about.
+   */
+  const teamHarness = () => harness({ config: TEAM });
 
   it('dispatches to the member’s runner, not the role’s', async () => {
     const h = await teamHarness();

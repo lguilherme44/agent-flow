@@ -4,6 +4,7 @@ import { FixedClock } from '../fakes/fixed-clock.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { ReviewStore } from '../../src/app/review-store.js';
 import { projectFindings } from '../../src/core/review/findings.js';
+import { correctiveSelection } from '../../src/core/review/corrective.js';
 import { decideQuality } from '../../src/core/review/decision.js';
 import { projectQualityGates } from '../../src/core/review/gates.js';
 import { buildValidationRegistry } from '../../src/core/validation-registry.js';
@@ -157,6 +158,40 @@ describe('killed after the findings were persisted, before any corrective task',
 
     expect(await h.resumed().nextReviewId(h.run.runId)).toBe('REV-0002');
     expect(await h.resumed().nextFindingNumber(h.run.runId)).toBe(2);
+  });
+
+  /**
+   * §37's actual requirement: resume generates the corrective work *once*.
+   *
+   * The crash lands in the window where a finding is blocking, open, and has no task yet,
+   * so a resume must select it — and a second resume, after the task exists, must not.
+   * The live M6 run got this wrong before the selector learned to read the plan: two
+   * `review --fix` invocations produced FIX-001 and FIX-003 for one `FIND-0001`.
+   */
+  it('generates corrective work on the resume, and only on the first one', async () => {
+    const h = await persisted([record()]);
+
+    const findings = projectFindings({
+      reviews: await h.resumed().readReviews(h.run.runId),
+      messages: [],
+      events: await h.store.readEvents(h.run.runId),
+    });
+
+    const first = correctiveSelection({
+      findings,
+      quality: QualityConfigSchema.parse({}),
+      reviewer: 'reviewer',
+    });
+    expect(first?.findings.map((held) => held.finding.id)).toEqual(['FIND-0001']);
+
+    // The second resume sees a plan that already carries the task.
+    const second = correctiveSelection({
+      findings,
+      quality: QualityConfigSchema.parse({}),
+      reviewer: 'reviewer',
+      alreadyCorrected: ['FIND-0001'],
+    });
+    expect(second).toBeUndefined();
   });
 });
 

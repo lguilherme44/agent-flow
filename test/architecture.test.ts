@@ -20,7 +20,12 @@ function sourceFiles(dir: string): string[] {
     for (const entry of readdirSync(current)) {
       const full = join(current, entry);
       if (statSync(full).isDirectory()) walk(full);
-      else if (entry.endsWith('.ts')) out.push(full);
+      // **`.tsx` too, and its absence was a hole rather than an oversight.** Every rule
+      // scanning `apps/web/src` was reading 0 of its 47 components, so a rule forbidding
+      // the browser from deciding anything passed while the browser was free to decide
+      // everything — proved by mutation: a `decideQuality` planted in `review.tsx` did not
+      // fail the suite. Nothing under `src/` is `.tsx`, so no existing rule changes scope.
+      else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) out.push(full);
     }
   };
   walk(abs);
@@ -4051,5 +4056,84 @@ describe('the runner that runs is the one the member declares (§8, I-42)', () =
       .map(({ path }) => path);
 
     expect(choosers).toEqual(['src/core/role.ts']);
+  });
+});
+
+/**
+ * §47, §48 and §52 — the three of §66's eleven that had no rule.
+ *
+ * The dashboard reads verdicts; it does not reach them. The distinction is not stylistic:
+ * a browser that computes "this may proceed" from a findings array will disagree with the
+ * server the first time the severity policy changes, and the disagreement will look like a
+ * caching bug.
+ *
+ * M6 already fixed one of these by hand — `assessReviewFreshness` lived in the browser and
+ * decided staleness there, which §59 forbids by name. A rule is what stops it coming back.
+ */
+describe('the browser renders verdicts and never reaches them (§47, §48, §52)', () => {
+  const WEB = sourceFiles('apps/web/src').map(read);
+
+  it('reimplements no decision the core owns', () => {
+    // The functions that answer "may this proceed", "does this block", "is this stale".
+    // Any of them redefined under apps/web is a second answer.
+    const owned = [
+      'decideQuality',
+      'blockingFindings',
+      'unsatisfiedRequired',
+      'projectFindings',
+      'projectQualityGates',
+      'assessReviewFreshness',
+      'severityAtLeast',
+    ];
+
+    const offenders: string[] = [];
+    for (const { path, text } of WEB) {
+      const code = codeOnly(text);
+      for (const name of owned) {
+        if (new RegExp(`(?:function|const)\\s+${name}\\b`).test(code)) {
+          offenders.push(`${path}: ${name}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('never folds a gate list into a pass or a fail', () => {
+    // The shape of the defect: iterating gates and reducing to a boolean. The server sends
+    // `unsatisfiedGates` and `decision` precisely so nothing here has to.
+    const offenders = WEB.filter(({ text }) =>
+      /\bgates\b[\s\S]{0,120}\.(?:every|some|reduce)\s*\(/.test(codeOnly(text)),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('never derives a review status from the findings under it', () => {
+    const offenders = WEB.filter(({ text }) =>
+      /\bfindings\b[\s\S]{0,120}\.(?:every|some|reduce)\s*\(/.test(codeOnly(text)),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('has one seam where a review is actually executed', () => {
+    // §52. A review in the scheduler and another in the final-review path would answer the
+    // same question twice, and the second answer would be whichever ran last.
+    const callers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /\breviewer\??\.review\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(callers).toEqual(['src/app/scheduler.ts']);
+  });
+
+  it('builds that reviewer in exactly one place', () => {
+    const builders = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /new ChangeReviewAdapter\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(builders).toEqual(['src/app/execution-context.ts']);
   });
 });
