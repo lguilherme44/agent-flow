@@ -217,7 +217,11 @@ describe('what the channel costs across ten tasks (M5-ACC-19 … 22)', () => {
     const measured = await costs();
 
     for (const task of measured) {
-      expect(task.bootstrap, task.taskId).toBeLessThan(900);
+      // Raised from 900 with the M6 dogfood's reason: the `affects` enum. A QA agent
+      // wrote two well-formed blackboard entries and the only invalid thing in the file
+      // was that one field, so the whole outbox was discarded — twice, in one task. The
+      // enum is now named in the bootstrap, at ~120 bytes against a 32–50 KB prompt.
+      expect(task.bootstrap, task.taskId).toBeLessThan(1_040);
     }
   });
 

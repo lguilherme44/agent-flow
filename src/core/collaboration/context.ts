@@ -1,5 +1,6 @@
 import {
   AGENT_OUTBOX_FILENAME,
+  WORKFLOW_ROLES,
   type AgentId,
   type AgentIdentity,
   type CollaborationConfig,
@@ -119,6 +120,18 @@ export function buildCollaborationBootstrap(briefing?: AgentBriefing): string {
     '"inReplyTo":"MSG-0000"}],',
     ' "entries":[{"kind":"decision|contract|constraint|discovery|risk","subject":"<topic>",',
     '"statement":"<what is true>","rationale":"<why>","affects":["<role>"]}]}',
+    '',
+    // **The roles, named.** `<role>` was a placeholder for a closed enum the agent was
+    // never shown, and the live M6 run proved the cost: a QA agent wrote two well-formed
+    // blackboard entries and the *only* thing wrong with them was this field —
+    // `entries.0.affects.0: invalid_value` — so the whole outbox was discarded. Twice, in
+    // one task. Four milestones of "the channel is unused" had a mechanical cause, and it
+    // was one enum an agent could not guess.
+    //
+    // Everything else in this block names members by id, which is what a team makes
+    // natural to write here; until `affects` accepts one, saying so is the difference
+    // between a usable protocol and a wall.
+    `"affects" is only these, [] means everyone: ${WORKFLOW_ROLES.join(' ')}`,
     '',
     // **The handoff, because the prose alone was not actionable.** The line below used to
     // say "use it for a real question, blocker, finding, handoff or shared decision" over

@@ -300,10 +300,16 @@ describe('buildCollaborationBootstrap (M5, I-40)', () => {
     // buy a message that arrived once; this is what availability alone should cost.
     const bytes = new TextEncoder().encode(buildCollaborationBootstrap()).length;
 
-    // **900, and the 105 bytes over M5's 772 are the handoff's form.** A protocol an
-    // agent cannot act on costs the same and buys nothing; this is what the two facts a
-    // reader could not guess — the type names and the extra field — cost to state. Still
-    // well under M4's 1 373, which it is measured against.
-    expect(bytes).toBeLessThan(900);
+    // **1 040, and every raise has been bought.** M5's 772 became 900 for the handoff's
+    // form, and 900 becomes this for the `affects` enum — because the live M6 run showed
+    // what the placeholder cost: a QA agent wrote two well-formed blackboard entries and
+    // the only invalid thing in the file was that one field, so the whole outbox was
+    // discarded, twice, in one task. Four milestones of "nobody uses the channel" had a
+    // mechanical cause and it was an enum an agent could not guess.
+    //
+    // ~120 bytes against a 32–50 KB implementation prompt is 0.3%, and it is the
+    // difference between a protocol that can be obeyed and one that cannot. Still below
+    // M4's 1 373, which this is measured against.
+    expect(bytes).toBeLessThan(1_040);
   });
 });
