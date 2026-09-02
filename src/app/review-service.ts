@@ -81,6 +81,24 @@ export interface ReviewRequest {
   readonly commandResults: readonly CommandResult[];
   readonly agentsMd: string;
   readonly inFlight: ReadonlyMap<AgentId, number>;
+  /**
+   * The checkout the reviewer reads. **The tree it judges, not the one the operator has open.**
+   *
+   * Absent meant the project directory, which in worktree mode is the operator's `master`
+   * — so every review read a tree without the change in it. The live M6 run made that
+   * undeniable: a reviewer returned `[critical] truncateSlug does not exist, src/slug.js
+   * ends at line 11` about a function that was on the integration branch, and a second
+   * agent later reported the finding as a false positive with `git log -S` to prove it.
+   * An earlier scenario's reviewer had said so itself and filed it as `info` — "the
+   * checked-out working tree does not contain this change" — which was the product
+   * telling us and nobody listening.
+   *
+   * `reviewedTree` was always recorded correctly, which is what made this dangerous: the
+   * record named the right commit and the model had read a different one (I-41).
+   *
+   * Still absent in sequential mode, where the project directory *is* the tree.
+   */
+  readonly workingDirectory?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -257,6 +275,9 @@ export class ReviewService {
         },
         {
           task: request.task.id,
+          ...(request.workingDirectory === undefined
+            ? {}
+            : { workingDirectory: request.workingDirectory }),
           ...(request.signal === undefined ? {} : { signal: request.signal }),
         },
       );
@@ -352,6 +373,11 @@ export class ChangeReviewAdapter {
       /** Produces the change's shape. Absent in sequential mode, where there is no range. */
       readonly diffStat?: (base: string, head: string) => Promise<string>;
       readonly inFlight: (runId: string) => Promise<ReadonlyMap<AgentId, number>>;
+      /**
+       * Where the integration branch is checked out, so the reviewer reads the tree it is
+       * judging. `undefined` in sequential mode, where the project directory is that tree.
+       */
+      readonly reviewWorkspace?: (runId: string) => Promise<string | undefined>;
     },
   ) {}
 
@@ -360,12 +386,19 @@ export class ChangeReviewAdapter {
 
     try {
       const integration = result.integration;
+      // **Resolved before the review, and its absence is not fatal.** A reviewer with no
+      // integration checkout reads the project directory, which is what the defect was —
+      // so if this cannot be opened the review is skipped by the `catch` below rather than
+      // run against the wrong tree.
+      const workingDirectory =
+        integration === undefined ? undefined : await this.options.reviewWorkspace?.(runId);
 
       await this.options.service.review({
         runId,
         task,
         author: await this.authorOf(runId, task.id, result),
         ...(integration === undefined ? {} : { integratedTree: integration.mergeCommit }),
+        ...(workingDirectory === undefined ? {} : { workingDirectory }),
         diffStat: await this.shapeOf(result),
         changedFiles: result.filesChanged,
         commandResults: result.validation.commands,

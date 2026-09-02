@@ -380,6 +380,21 @@ export async function buildExecutionContext(
     // The same derivation the executor uses, so a reviewer's capacity is counted the way
     // an implementer's is. No task is exempt from itself here: a review is new work.
     inFlight: async (runId) => inFlightFromRun(store, runId),
+    // **Where the integration branch is checked out** (§4, I-41).
+    //
+    // Without it the reviewer ran in the project directory — the operator's own checkout,
+    // which in worktree mode does not have the change. `reviewedTree` was recorded
+    // correctly the whole time, so the record named one commit and the model had read
+    // another; the live M6 run produced a `critical` finding saying a function did not
+    // exist while it sat on the integration branch.
+    //
+    // The same `openForReview` the run-level review and the Definition of Done already
+    // use. `sequential` and `refused` both mean "no separate tree", and the project
+    // directory is then the right answer — which is what `undefined` says.
+    reviewWorkspace: async (runId) => {
+      const opened = await integrator.openForReview(runId);
+      return opened.kind === 'ready' ? opened.workspace.path : undefined;
+    },
   });
 
   const scheduler = new Scheduler({

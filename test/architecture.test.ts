@@ -4137,3 +4137,39 @@ describe('the browser renders verdicts and never reaches them (§47, §48, §52)
     expect(builders).toEqual(['src/app/execution-context.ts']);
   });
 });
+
+/**
+ * §4: `reviewedTree == tree intended for review`, and never a stale working tree.
+ *
+ * The record was always right and the *reading* was wrong — the reviewer ran in the
+ * project directory, which in worktree mode is the operator's own checkout without the
+ * change in it. That combination is the dangerous one: the audit trail named the correct
+ * commit while the model had read a different one.
+ */
+describe('a review reads the tree it names (§4, I-41)', () => {
+  it('gives the review stage a working directory rather than defaulting to the project', () => {
+    const service = codeOnly(read(join(ROOT, 'src/app/review-service.ts')).text);
+
+    // The request carries it, and the dispatch passes it on. Both halves, because a rule
+    // that checks one end is how the runner override broke.
+    expect(service).toMatch(/readonly workingDirectory\?: string;/);
+    expect(service).toMatch(/workingDirectory: request\.workingDirectory/);
+  });
+
+  it('takes it from the integration preparation the rest of the product uses', () => {
+    const context = codeOnly(read(join(ROOT, 'src/app/execution-context.ts')).text);
+
+    expect(context).toMatch(/reviewWorkspace:[\s\S]{0,200}openForReview\(/);
+  });
+
+  it('opens that preparation in exactly one place', () => {
+    // A second way to check out the integration branch is a second answer to "which tree",
+    // and §14's guarantee is that there is one.
+    const openers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /async openForReview\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(openers).toEqual(['src/app/integrator.ts']);
+  });
+});

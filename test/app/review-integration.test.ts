@@ -127,11 +127,18 @@ function result(overrides: Record<string, unknown> = {}): TaskResult {
 
 /** A stage runner that answers with whatever the test scripted. */
 function scriptedRunner(answer: unknown | (() => never)) {
-  const calls: { vars: Record<string, string> }[] = [];
+  // The options matter as much as the variables: the working directory is *which tree the
+  // reviewer reads*, and the first version of this harness dropped it on the floor.
+  const calls: { vars: Record<string, string>; options?: { workingDirectory?: string } }[] = [];
 
   const runner = {
-    run: async (_stage: unknown, _runId: string, vars: Record<string, string>) => {
-      calls.push({ vars });
+    run: async (
+      _stage: unknown,
+      _runId: string,
+      vars: Record<string, string>,
+      options?: { workingDirectory?: string },
+    ) => {
+      calls.push({ vars, ...(options === undefined ? {} : { options }) });
       if (typeof answer === 'function') (answer as () => never)();
       return { text: JSON.stringify(answer), data: answer, runner: 'claude', repairs: 0 };
     },
@@ -145,6 +152,7 @@ async function harness(options: {
   answer?: unknown | (() => never);
   author?: string;
   review?: Record<string, unknown>;
+  reviewWorkspace?: (runId: string) => Promise<string | undefined>;
 } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
@@ -182,6 +190,9 @@ async function harness(options: {
     fs,
     projectDir: PROJECT,
     inFlight: async () => new Map(),
+    ...(options.reviewWorkspace === undefined
+      ? {}
+      : { reviewWorkspace: options.reviewWorkspace }),
   });
 
   return { fs, store, run, reviews, service, adapter, calls };
@@ -273,6 +284,45 @@ describe('what the audit trail records', () => {
     );
 
     expect(gate?.detail).toMatchObject({ gate: 'test', required: true, status: 'passed' });
+  });
+});
+
+/**
+ * §4 and I-41: the reviewer reads the tree it is judging.
+ *
+ * It read the project directory — the operator's own checkout, which in worktree mode does
+ * not have the change. `reviewedTree` was recorded correctly the whole time, which is what
+ * made it dangerous: the record named the right commit and the model had read a different
+ * one. The live M6 run produced `[critical] truncateSlug does not exist` about a function
+ * sitting on the integration branch, and an earlier reviewer had filed the cause itself as
+ * `info` — "the checked-out working tree does not contain this change".
+ */
+describe('the reviewer reads the tree under review (§4, I-41)', () => {
+  it('runs in the integration checkout, not in the project directory', async () => {
+    const h = await harness({ reviewWorkspace: async () => '/wk/integration/AF-2026-001' });
+
+    await h.adapter.review(h.run.runId, task(), result());
+
+    expect(h.calls[0]?.options?.workingDirectory).toBe('/wk/integration/AF-2026-001');
+  });
+
+  it('falls back to the project directory when there is no separate tree', async () => {
+    // Sequential mode, and a refused preparation. Both mean the project directory *is* the
+    // tree, and `undefined` is how the stage runner says so.
+    const h = await harness({ reviewWorkspace: async () => undefined });
+
+    await h.adapter.review(h.run.runId, task(), result());
+
+    expect(h.calls[0]?.options?.workingDirectory).toBeUndefined();
+  });
+
+  it('names the same commit it reads', async () => {
+    const h = await harness({ reviewWorkspace: async () => '/wk/integration/AF-2026-001' });
+
+    await h.adapter.review(h.run.runId, task(), result());
+
+    const [record] = await h.reviews.readReviews(h.run.runId);
+    expect(record?.reviewedTree).toBe(TREE);
   });
 });
 
