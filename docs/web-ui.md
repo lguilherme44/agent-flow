@@ -281,6 +281,46 @@ which: *off* invites the operator to turn it on, and *on, and quiet* does not.
 
 ---
 
+## What the reviewer found
+
+`GET /runs/:runId/review` returns the review threads, their findings, the quality gates and
+the unsatisfied ones in **one** response, for the reason the collaboration endpoint does:
+a finding's status and a gate's verdict are folds over the same logs, and two calls would
+let a repaint show a change as approved beside the gate that blocks it.
+
+**The browser derives nothing here, and one of these regressed once.** `assessReviewFreshness`
+lived in `apps/web` and decided staleness in the browser — a rule the charter forbids by
+name — so it moved to the core and what remains under `apps/web` turns an answer into a
+label. Architecture rules now forbid the dashboard from defining `decideQuality`,
+`blockingFindings`, `projectFindings` or their neighbours, from folding a gate list into a
+boolean, and from reducing a findings array into a status. `unsatisfiedGates` arrives from
+the server precisely so nothing recomputes it.
+
+Like the collaboration panel, the card is **absent** rather than empty when a run has no
+reviewer. Most runs have none, and a permanent empty box teaches people to skip the row.
+
+What it shows, in the order that matters:
+
+1. **the unsatisfied required gates**, above everything, with the reason each one is
+   unsatisfied. A required gate that did not run is not a gate that passed, and it must not
+   read as a detail.
+2. **one row per reviewed change** — its status in words, a stale badge when the tree moved
+   under it, the count of what is still open, and the reviewer with its independence.
+3. **every gate**, including the ones that did not apply.
+4. **a footer** with the totals.
+
+A row expands to its findings: severity, id, category, the file and line, the corrective
+task when one exists, and — when the change is blocked — the *reason* rather than the name
+of the condition. That last distinction was a real defect: the panel rendered condition
+names, so a change blocked by an open finding displayed the line "no blocking finding is
+open", which reads as its own opposite.
+
+`failed` and `not run` render in the same red and that is deliberate: the colour carries
+the consequence, because both block, and the word carries the cause. `not applicable` is
+grey, because it does not block. Status is always in words as well as colour.
+
+---
+
 ## Flags
 
 | | |

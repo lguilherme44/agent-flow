@@ -211,6 +211,45 @@ existed, and they did; the screenshot showed the second thread and the whole bla
 section cut off below the fold of a 288-pixel box. **"The element exists" is not "the
 layout is right"**, and only a picture tells the difference.
 
+## Review — the layers M6 needed, and the one that found everything
+
+M6's suites are shaped by a single discovery: **a mechanism can be written, reviewed,
+covered by tests, and unreachable by any real agent.** Three of the milestone's defects
+were that exact shape — a function nothing called, an event nothing emitted, and a key the
+emitter and the reader disagreed about — and every one of them passed a suite of 3900
+tests.
+
+So the instrument is a rule rather than a habit. Two architecture rules ask §70's question
+mechanically:
+
+| Rule | What it forbids |
+|---|---|
+| reachability | an export under `src/core/review/` with no *transitive* caller in shipped code. `test/` is excluded from the reachable set on purpose — a caller that exists only in a test is the situation being rejected |
+| emitters | a type in `REVIEW_EVENT_TYPES` that nothing outside `src/contracts/` writes |
+
+Writing the browser rules found a third instance of the same shape in the test suite
+itself: `sourceFiles` walked `.ts` only, so every rule scanning `apps/web/src` was reading
+**0 of its 47 components**. A rule forbidding the browser from deciding anything passed
+while the browser was free to decide everything. The proof was a mutation — a
+`decideQuality` planted in `review.tsx` did not fail the suite — and the fix was one
+`endsWith`.
+
+The other layers exist for failures a unit test cannot reach:
+
+| Layer | What it proves |
+|---|---|
+| crash (`test/e2e/review-crash.test.ts`) | the five kill points of the charter. Resume duplicates no review, loses no finding, generates corrective work exactly once, approves no stale tree, re-runs no recorded gate |
+| adversarial | a malformed review is not an approval; a traversal path is *removed* from a finding rather than flagged; an oversized proposal is truncated before it is parsed |
+| acceptance (`test/e2e/review-acceptance.test.ts`) | the 28 criteria, each tagged so a scan can produce the table rather than a person reading it |
+| visual | four states that only a picture distinguishes — `failed` against `not run`, `stale` against `current`, an approved thread against a blocked one, and a gate list that fits on one line at 1024 |
+
+**The fixture question is the one that keeps being answered wrongly.** Every test of
+`projectFindings` handed it an event literal, and in production an *emitter* writes that
+event — so the literal did not represent the state the test claimed to be about, and the
+key mismatch survived. There is now one test that runs the real corrective round, appends
+a real `task_finished`, and asserts the real projection reports `fixed`. It is worth more
+than the six that surround it.
+
 ## Dogfood — the real CLIs, never in CI
 
 The layers above are free, fast and deterministic because no coding CLI is ever
