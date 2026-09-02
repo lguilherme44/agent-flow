@@ -101,6 +101,12 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
       description: finding.description,
       ...(finding.file === undefined ? {} : { file: finding.file }),
     },
+    // **The finding's category becomes the task's scope**, which is the field
+    // `deriveTaskRequirements` already turns into a required skill. A `test-gap` finding
+    // therefore asks for a member who declares `test-gap`, and a `security` one for a
+    // member who declares `security` — which is how QA picks up the work that is QA's
+    // (§34) without a role, a router or a mapping table to get wrong.
+    scope: finding.type,
     files: { likely: finding.file === undefined ? [] : [finding.file] },
     acceptanceCriteria: [finding.suggestedAction],
     // The generator this replaces emitted an empty list, so a fix for a review

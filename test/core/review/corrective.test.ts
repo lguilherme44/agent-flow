@@ -190,3 +190,28 @@ describe('the link that makes fixed a fact', () => {
     expect(correctiveLinks(next.tasks.slice(PLAN.tasks.length))).toEqual([]);
   });
 });
+
+describe('M6-ACC-15 — QA picks up the work that is QA’s (§34)', () => {
+  it('asks for the finding’s category as a skill, through the scope the plan already has', () => {
+    // No role, no router, no mapping table. `deriveTaskRequirements` already turns a
+    // task's `scope` into a required skill, so a `test-gap` finding asks for a member
+    // who declares `test-gap` — and a member with QA skills is a member, which is §33.
+    const selection = select([finding({ type: 'test-gap', severity: 'high' })]);
+    const next = applyFixes(PLAN, selection!.review, {
+      validation: ['test'],
+      origin: 'code-review',
+    });
+
+    expect(next.tasks.slice(PLAN.tasks.length)[0]?.scope).toBe('test-gap');
+  });
+
+  it('carries a security category the same way', () => {
+    const selection = select([finding({ type: 'security', severity: 'critical' })]);
+    const next = applyFixes(PLAN, selection!.review, {
+      validation: ['test'],
+      origin: 'code-review',
+    });
+
+    expect(next.tasks.slice(PLAN.tasks.length)[0]?.scope).toBe('security');
+  });
+});
