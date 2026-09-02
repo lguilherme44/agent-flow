@@ -4016,3 +4016,40 @@ describe('every review event type has something that emits it (§64, I-43)', () 
     expect(unwritten).toEqual([]);
   });
 });
+
+/**
+ * §8: the effective independence level is only persistable if the effective runner runs.
+ *
+ * `resolveRole` has accepted a member override since M5 and the dispatch never passed it,
+ * so a member's declared runner reached the capability check and the independence
+ * calculation and stopped there. Three of five live M6 independence levels were wrong.
+ *
+ * The rule is structural rather than a name scan: the executor must hand the stage runner
+ * a member, and the stage runner must hand it to the resolver.
+ */
+describe('the runner that runs is the one the member declares (§8, I-42)', () => {
+  it('passes the assigned member from the executor into the stage', () => {
+    const executor = codeOnly(read(join(ROOT, 'src/app/task-executor.ts')).text);
+
+    // Looked up from the assignment, not from the role.
+    expect(executor).toMatch(/member:\s*memberOf\(/);
+    expect(executor).toMatch(/function memberOf\(/);
+  });
+
+  it('gives the resolver the member the stage was handed', () => {
+    const stage = codeOnly(read(join(ROOT, 'src/app/stage-runner.ts')).text);
+
+    // `resolveRole`'s fifth argument is the override. A call that stops at the fourth is
+    // the defect this rule exists to catch.
+    expect(stage).toMatch(/resolveRole\([\s\S]{0,600}?options\.member,?\s*\)/);
+  });
+
+  it('leaves role resolution the only place a runner is chosen', () => {
+    const choosers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export function resolveRole\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(choosers).toEqual(['src/core/role.ts']);
+  });
+});

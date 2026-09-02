@@ -15,7 +15,9 @@ import {
   ProjectConfigSchema,
   TaskAttemptResultSchema,
   TaskSchema,
+  type GlobalConfig,
 } from '../../src/contracts/index.js';
+import { CollaborationService } from '../../src/app/collaboration-service.js';
 import { attemptLogName, runPaths } from '../../src/app/paths.js';
 import { createRunnerFactory } from '../../src/app/runner-factory.js';
 import { FakeHost } from '../fakes/fake-host.js';
@@ -86,10 +88,12 @@ NOTES:
 - none
 `;
 
-async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
+async function harness(options: { processRunner?: FakeProcessRunner; config?: GlobalConfig; collaboration?: CollaborationService } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const runner = new FakeAgentRunner('claude', CAPS);
+  const agy = new FakeAgentRunner('agy', CAPS);
+  const config = options.config ?? globalConfig;
   const processRunner = options.processRunner ?? new FakeProcessRunner().always({ exitCode: 0 });
 
   for (const file of readdirSync(REAL_PROMPTS)) {
@@ -105,10 +109,10 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     fs,
     clock,
     store,
-    config: globalConfig,
-    capabilities: { claude: CAPS },
+    config,
+    capabilities: { claude: CAPS, agy: CAPS },
     promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
-    getRunner: () => runner,
+    getRunner: (resolved) => (resolved.runner === 'agy' ? agy : runner),
     projectDir: PROJECT,
   });
 
@@ -118,8 +122,10 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     store,
     stageRunner,
     processRunner,
+    capabilities: { claude: CAPS, agy: CAPS },
+    ...(options.collaboration === undefined ? {} : { collaboration: options.collaboration }),
     config: {
-      global: globalConfig,
+      global: config,
       project: ProjectConfigSchema.parse({
         project: { name: 'x', type: 'node' },
         commands: { test: 'npm test' },
@@ -129,7 +135,7 @@ async function harness(options: { processRunner?: FakeProcessRunner } = {}) {
     projectDir: PROJECT,
   });
 
-  return { fs, store, run, runner, processRunner, executor };
+  return { fs, clock, store, run, runner, agy, processRunner, executor, config };
 }
 
 describe('parseResultBlock', () => {
@@ -1701,5 +1707,104 @@ describe('a task must prove it did its work (AD-38, AD-39, C-12, C-13, C-14)', (
 
       expect(result.status).toBe('completed');
     });
+  });
+});
+
+/**
+ * §8: the system must persist the *effective* independence level.
+ *
+ * It could not. A team member declares `runner:`, and `resolveRole` has accepted that
+ * override since M5 — its own comment explains why — but `stageRunner.run` was handed a
+ * role and nothing else, so the dispatch resolved the `roles:` table and the member's
+ * declaration was honoured only by the capability check and the independence calculation.
+ *
+ * The live M6 log said it in two lines: `task_assigned agent=qa` then `task_finished
+ * runner=agy`, with `qa` declaring `claude`. Three of five recorded independence levels
+ * were wrong, one of them recording *maximum* independence for a review where the same
+ * provider wrote the code and judged it — the exact thing I-42 exists to prevent,
+ * reported as its opposite.
+ */
+describe('a team member runs on the runner it declares (§8, I-42)', () => {
+  const TEAM = GlobalConfigSchema.parse({
+    runners: { claude: { type: 'claude-code-cli' }, agy: { type: 'agy-cli' } },
+    roles: {
+      architect: { runner: 'claude', effort: 'high' },
+      sdd: { runner: 'claude', effort: 'high' },
+      planner: { runner: 'claude', effort: 'high' },
+      planReviewer: { runner: 'claude', effort: 'high' },
+      executors: {
+        // The role points at claude. The member below points at agy. Before the fix the
+        // role won and nothing said so.
+        trivial: { runner: 'claude', effort: 'low' },
+        normal: { runner: 'claude', effort: 'medium' },
+        complex: { runner: 'claude', effort: 'high' },
+      },
+      verification: { runner: 'claude', effort: 'medium' },
+      finalReviewer: { runner: 'claude', effort: 'very_high' },
+    },
+    collaboration: { enabled: true },
+    teams: {
+      core: {
+        members: {
+          dev: {
+            roles: ['executor.normal', 'executor.complex', 'executor.trivial'],
+            runner: 'agy',
+            skills: ['javascript'],
+          },
+        },
+      },
+    },
+  });
+
+  async function teamHarness() {
+    const h = await harness({ config: TEAM });
+    const { CollaborationStore } = await import('../../src/app/collaboration-store.js');
+    const { deriveAgentRoster } = await import('../../src/core/collaboration/roster.js');
+
+    const collaboration = new CollaborationService({
+      fs: h.fs,
+      clock: h.clock,
+      store: h.store,
+      collaboration: new CollaborationStore({ fs: h.fs, projectDir: PROJECT }),
+      roster: deriveAgentRoster(TEAM),
+      config: TEAM.collaboration,
+      globalConfig: TEAM,
+      projectDir: PROJECT,
+    });
+
+    return harness({ config: TEAM, collaboration });
+  }
+
+  it('dispatches to the member’s runner, not the role’s', async () => {
+    const h = await teamHarness();
+    h.agy.pushText(COMPLETED);
+    h.runner.pushText(COMPLETED);
+
+    const result = await h.executor.execute(task(), h.run.runId, 'SDD');
+
+    expect(result.runner).toBe('agy');
+  });
+
+  it('records that runner in the audit trail, which is what independence reads', async () => {
+    const h = await teamHarness();
+    h.agy.pushText(COMPLETED);
+    h.runner.pushText(COMPLETED);
+
+    await h.executor.execute(task(), h.run.runId, 'SDD');
+
+    const finished = (await h.store.readEvents(h.run.runId)).find(
+      (event) => event.type === 'task_finished',
+    );
+
+    expect(finished?.detail).toMatchObject({ runner: 'agy' });
+  });
+
+  it('leaves a run with no team resolving the role exactly as before', async () => {
+    const h = await harness();
+    h.runner.pushText(COMPLETED);
+
+    const result = await h.executor.execute(task(), h.run.runId, 'SDD');
+
+    expect(result.runner).toBe('claude');
   });
 });

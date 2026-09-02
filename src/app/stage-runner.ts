@@ -241,6 +241,21 @@ export interface StageRunOptions {
    * and this field exists to make structurally impossible.
    */
   readonly collaborationBootstrap?: string;
+  /**
+   * The team member answering for this role, when one is (M5, §8).
+   *
+   * **`resolveRole` has taken this override since M5 and the execution path never passed
+   * it.** A member declares `runner:`; the capability check honoured it and the
+   * independence calculation honoured it, while the dispatch resolved the role and ran on
+   * whatever `roles:` pointed at. The live M6 log said it in two lines — `task_assigned
+   * agent=qa` then `task_finished runner=agy`, with `qa` declaring `claude` — and three of
+   * five recorded independence levels were wrong as a result, one of them recording
+   * *maximum* independence for a review where the same provider wrote and judged.
+   *
+   * §8 asks the system to persist the *effective* level. That is only possible if the
+   * effective runner is the one that runs.
+   */
+  readonly member?: { readonly runner: string; readonly model?: string };
 }
 
 /**
@@ -320,13 +335,21 @@ export class StageRunner {
 
     // Resolution validates capabilities against what the prompt declares, so a
     // misconfiguration fails here rather than after a process is spawned.
-    const resolved = resolveRole(stage.role, config, capabilities, {
-      readOnly: prompt.meta.permissions === 'read-only',
-      nativeStructuredOutput: prompt.meta.nativeStructuredOutput,
-      // The prompt decides, exactly as it does for `readOnly` (AD-12). A stage that opens
-      // no file may run on a runner that has no filesystem.
-      workingDirectory: prompt.meta.workingDirectory,
-    });
+    const resolved = resolveRole(
+      stage.role,
+      config,
+      capabilities,
+      {
+        readOnly: prompt.meta.permissions === 'read-only',
+        nativeStructuredOutput: prompt.meta.nativeStructuredOutput,
+        // The prompt decides, exactly as it does for `readOnly` (AD-12). A stage that opens
+        // no file may run on a runner that has no filesystem.
+        workingDirectory: prompt.meta.workingDirectory,
+      },
+      // Absent for every pipeline stage, which genuinely answers to a role rather than to
+      // a member — so a run with no team resolves exactly as it did before M5.
+      options.member,
+    );
 
     // Raises on a missing variable — before anything is spawned or spent.
     const rendered = prompt.render(vars);

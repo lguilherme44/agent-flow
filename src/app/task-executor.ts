@@ -79,6 +79,7 @@ import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
 import { resolveRole, type RunnerCapabilitiesMap } from '../core/role.js';
 import type { GlobalConfig, TaskAssignment } from '../contracts/index.js';
+import { teamMembers } from '../core/collaboration/roster.js';
 import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
@@ -301,6 +302,13 @@ export class TaskExecutor {
           ...(collaborationBlocks.context === undefined
             ? {}
             : { collaborationContext: collaborationBlocks.context }),
+          // **Who is actually running this** (M5, §8). Without it the dispatch resolves the
+          // *role*, so a member's declared runner was honoured by the capability check and
+          // by the independence calculation and ignored by the process that ran — and the
+          // independence a review recorded described a configuration rather than a run.
+          ...(memberOf(config.global, assignment.agentId) === undefined
+            ? {}
+            : { member: memberOf(config.global, assignment.agentId) }),
           // Reaches the agent's process group (PRI-14). An aborted invocation comes back
           // as an ordinary failure, so the `catch` below records the attempt exactly as it
           // records any other — cancel keeps evidence, it does not erase it.
@@ -1214,6 +1222,24 @@ export function canImplementWith(
     } catch {
       return false;
     }
+  };
+}
+
+/**
+ * The runner and model a team member declares, when the assignment names one.
+ *
+ * `undefined` for a routed assignment with no team, which resolves the role exactly as
+ * every run did before M5.
+ */
+function memberOf(
+  config: GlobalConfig,
+  agentId: string,
+): { runner: string; model?: string } | undefined {
+  const found = teamMembers(config).find((entry) => entry.agentId === agentId);
+  if (found === undefined) return undefined;
+  return {
+    runner: found.member.runner,
+    ...(found.member.model === undefined ? {} : { model: found.member.model }),
   };
 }
 
