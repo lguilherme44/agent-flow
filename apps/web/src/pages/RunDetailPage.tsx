@@ -273,7 +273,16 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
       {asGraph || isFocusMode ? null : (
         <div className="section-logs surface-1 p-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col gap-3 p-3">
-            <div className="grid shrink-0 grid-cols-4 gap-3">
+            {/* **Two columns below 1280, four above** — and the reason is measured
+                rather than aesthetic. At 1024 four cards leave each one 167px of
+                content, and the DOM clipping instrument reports two casualties: the
+                `Model usage` card's own `<h2>` ellipsised at 87px in an 85px box, and
+                an artifact row reading `Architecture Impac…` at 114px in 100px. A card
+                whose own name does not fit is not a narrow card, it is a broken one.
+                A 2px nudge to the gap would have silenced the heading and left the
+                artifact label clipped; the row was designed at 1440 and simply has too
+                many columns for the widths below it. */}
+            <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
               <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
               <ApprovalCard run={run.data} projectId={projectId} />
               <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />

@@ -58,12 +58,17 @@ test.describe('run detail', () => {
       await expect(drawer).toHaveCount(0);
     }
 
-    // Either way, one panel describing this task. Never two. Scoped to the
-    // content area: the breadcrumb in the header legitimately names the same
-    // task, but it is navigation, not a second description of the task.
-    await expect(page.locator('main').getByText('Recurrence Repository')).toHaveCount(
-      width >= 1200 ? 2 : 1,
-    );
+    // Either way, one panel describing this task. Never two.
+    //
+    // **Scoped to `main`'s non-header children, not to `main`.** The comment above this
+    // assertion always said the breadcrumb was excluded as navigation; the selector never
+    // excluded it, because `<Topbar>` — and therefore the breadcrumb — is rendered *inside*
+    // `<main className="main-content">`. That was harmless until the breadcrumb learned to
+    // name the selected task, at which point this counted three and the check had been
+    // asserting something other than what it says for as long as it had been failing.
+    await expect(
+      page.locator('main > *:not(header)').getByText('Recurrence Repository'),
+    ).toHaveCount(width >= 1200 ? 2 : 1);
   });
 
   test('the drawer traps focus, closes on the overlay, and hands focus back', async ({
