@@ -320,7 +320,65 @@ describe('the totals a dashboard header and a CLI line both read (§41)', () => 
       capacityDeferrals: 1,
       ownershipDeferrals: 0,
       candidatesConsidered: 2,
+      exclusions: {},
     });
+  });
+
+  it('counts how often each filter fired, across every ranking', () => {
+    // §41's aggregate: "capacity fired forty times" is a configuration to change, and
+    // forty rows each saying `capacity` is a list to count.
+    const view = project({
+      config: config({ backend: {}, frontend: {}, reviewer: { role: 'finalReviewer' } }),
+      events: [
+        event('task_assigned', {
+          task: 'TASK-001',
+          agent: 'backend',
+          role: 'executor.normal',
+          reason: 'team_match',
+          candidates: [
+            { agentId: 'backend', score: 0.5 },
+            { agentId: 'frontend', score: 0.2, excludedBy: 'capacity' },
+            { agentId: 'reviewer', score: 0, excludedBy: 'role_mismatch' },
+          ],
+        }),
+        event('task_assigned', {
+          task: 'TASK-002',
+          agent: 'frontend',
+          role: 'executor.normal',
+          reason: 'team_match',
+          candidates: [
+            { agentId: 'frontend', score: 0.5 },
+            { agentId: 'backend', score: 0.2, excludedBy: 'capacity' },
+          ],
+        }),
+      ],
+    });
+
+    expect(view.totals.exclusions).toEqual({ capacity: 2, role_mismatch: 1 });
+  });
+
+  it('orders the exclusions by name, so two reads of one log agree', () => {
+    const view = project({
+      events: [
+        event('task_assigned', {
+          task: 'TASK-001',
+          agent: 'backend',
+          role: 'executor.normal',
+          reason: 'team_match',
+          candidates: [
+            { agentId: 'z', score: 0, excludedBy: 'runner_capability' },
+            { agentId: 'a', score: 0, excludedBy: 'capacity' },
+            { agentId: 'm', score: 0, excludedBy: 'ownership' },
+          ],
+        }),
+      ],
+    });
+
+    expect(Object.keys(view.totals.exclusions)).toEqual([
+      'capacity',
+      'ownership',
+      'runner_capability',
+    ]);
   });
 });
 

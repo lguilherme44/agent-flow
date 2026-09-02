@@ -46,6 +46,7 @@ const EMPTY_TOTALS: TeamTotals = {
   capacityDeferrals: 0,
   ownershipDeferrals: 0,
   candidatesConsidered: 0,
+  exclusions: {},
 };
 
 export const EMPTY_TEAM: TeamView = {
@@ -113,6 +114,7 @@ export function projectTeam(input: TeamProjectionInput): TeamView {
       capacityDeferrals: deferrals.filter((held) => held.reason === 'capacity').length,
       ownershipDeferrals: deferrals.filter((held) => held.reason === 'ownership').length,
       candidatesConsidered: assignments.reduce((sum, held) => sum + held.candidates.length, 0),
+      exclusions: exclusionsOf(assignments),
     },
   };
 }
@@ -187,6 +189,25 @@ function candidatesOf(raw: unknown, roster: AgentRoster | undefined): CandidateV
   }
 
   return views;
+}
+
+/**
+ * How often each filter fired, across every ranking the run recorded.
+ *
+ * Sorted by key so two reads of one log produce the same object, which is what lets a
+ * dashboard diff a run against itself without reporting a change that is only key order.
+ */
+function exclusionsOf(assignments: readonly TaskAssignmentView[]): Record<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const assignment of assignments) {
+    for (const candidate of assignment.candidates) {
+      if (candidate.excludedBy === undefined) continue;
+      counts.set(candidate.excludedBy, (counts.get(candidate.excludedBy) ?? 0) + 1);
+    }
+  }
+
+  return Object.fromEntries([...counts].sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 
 function deferralsOf(events: readonly RunEvent[]): WaveDeferralView[] {

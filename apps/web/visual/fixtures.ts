@@ -1134,6 +1134,7 @@ export const TEAM_NONE = {
     capacityDeferrals: 0,
     ownershipDeferrals: 0,
     candidatesConsidered: 0,
+    exclusions: {},
   },
 };
 
@@ -1256,6 +1257,7 @@ export const TEAM = {
     capacityDeferrals: 1,
     ownershipDeferrals: 1,
     candidatesConsidered: 8,
+    exclusions: { capacity: 3, role_mismatch: 2 },
   },
 };
 

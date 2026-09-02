@@ -50,6 +50,17 @@ export function renderTeam(team: TeamView): string | undefined {
         : ` · ${String(team.totals.reassignments)} reassignment(s)`),
   );
 
+  // Which filter fired, and how often — the aggregate that says whether the shape of the
+  // configuration is wrong rather than one task's luck (§41).
+  const exclusions = Object.entries(team.totals.exclusions);
+  if (exclusions.length > 0) {
+    lines.push(
+      `  ruled out: ${exclusions
+        .map(([reason, count]) => `${String(count)} ${reason.replace(/_/g, ' ')}`)
+        .join(', ')}`,
+    );
+  }
+
   const refused = team.assignments.filter(
     (assignment) => assignment.reason === 'no_eligible_member',
   );

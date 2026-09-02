@@ -44,6 +44,14 @@ export function TeamPanel(props: { team: TeamView | undefined; className?: strin
             {totals.reassignments === 0
               ? null
               : ` · ${String(totals.reassignments)} reassignment(s)`}
+            {/* Which filter fired and how often (§41). In the footer rather than the
+                body: it is a fact about the configuration's shape, read after the
+                members rather than instead of them. */}
+            {Object.keys(totals.exclusions).length === 0
+              ? null
+              : ` · ruled out ${Object.entries(totals.exclusions)
+                  .map(([reason, count]) => `${String(count)} ${reason.replace(/_/g, ' ')}`)
+                  .join(', ')}`}
           </span>
         )
       }

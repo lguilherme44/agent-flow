@@ -53,6 +53,7 @@ const view = (overrides: Partial<TeamView> = {}): TeamView => ({
     capacityDeferrals: 0,
     ownershipDeferrals: 0,
     candidatesConsidered: 0,
+    exclusions: {},
   },
   ...overrides,
 });
@@ -147,12 +148,23 @@ describe('TeamPanel', () => {
   it('carries the totals in the footer', () => {
     render(
       <TeamPanel
-        team={view({ totals: { assignments: 5, reassignments: 1, capacityDeferrals: 2, ownershipDeferrals: 0, candidatesConsidered: 10 } })}
+        team={view({
+          totals: {
+            assignments: 5,
+            reassignments: 1,
+            capacityDeferrals: 2,
+            ownershipDeferrals: 0,
+            candidatesConsidered: 10,
+            exclusions: { capacity: 3, role_mismatch: 1 },
+          },
+        })}
       />,
     );
 
     expect(screen.getByText(/5 assignment\(s\), 10 candidate\(s\) considered/)).toBeInTheDocument();
     expect(screen.getByText(/1 reassignment\(s\)/)).toBeInTheDocument();
+    // §41: which filter fired and how often, spelled out rather than pasted as an enum.
+    expect(screen.getByText(/ruled out 3 capacity, 1 role mismatch/)).toBeInTheDocument();
   });
 });
 

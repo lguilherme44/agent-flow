@@ -1013,6 +1013,15 @@ export interface TeamTotals {
   readonly capacityDeferrals: number;
   readonly ownershipDeferrals: number;
   readonly candidatesConsidered: number;
+  /**
+   * How often each filter ruled a candidate out, across the run (§41).
+   *
+   * The aggregate a per-candidate `excludedBy` cannot give: "capacity fired forty times"
+   * is a configuration to change, and forty rows each saying `capacity` is a list to
+   * count. Keyed by the exclusion, so a reason this product has not invented yet appears
+   * without a schema change.
+   */
+  readonly exclusions: Readonly<Record<string, number>>;
 }
 
 /**
