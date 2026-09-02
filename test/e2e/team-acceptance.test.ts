@@ -162,6 +162,16 @@ async function harness(global: GlobalConfig, capabilities: Record<string, unknow
 
   const caps = capabilities as NonNullable<Parameters<typeof canImplementWith>[1]>;
 
+  const collaborationService = new CollaborationService({
+    fs,
+    clock,
+    store,
+    collaboration: collaborationStore,
+    roster: deriveAgentRoster(global),
+    globalConfig: global,
+    config: global.collaboration,
+  });
+
   const executor = new TaskExecutor({
     fs,
     clock,
@@ -185,15 +195,7 @@ async function harness(global: GlobalConfig, capabilities: Record<string, unknow
       }),
     },
     projectDir: PROJECT,
-    collaboration: new CollaborationService({
-      fs,
-      clock,
-      store,
-      collaboration: collaborationStore,
-      roster: deriveAgentRoster(global),
-      globalConfig: global,
-      config: global.collaboration,
-    }),
+    collaboration: collaborationService,
     capabilities: caps,
   });
 
@@ -223,7 +225,26 @@ async function harness(global: GlobalConfig, capabilities: Record<string, unknow
       events: await store.readEvents(run.runId),
     });
 
-  return { fs, clock, store, run, runner, executor, scheduler, collaborationStore, team };
+  const collaborationServiceContextFor = (agentId: string) =>
+    collaborationService.contextFor({
+      runId: run.runId,
+      taskId: 'TASK-001',
+      agentId,
+      files: ['src/server/a.ts'],
+    });
+
+  return {
+    fs,
+    clock,
+    store,
+    run,
+    runner,
+    executor,
+    scheduler,
+    collaborationStore,
+    collaborationServiceContextFor,
+    team,
+  };
 }
 
 /** The assignment the run recorded for a task, or nothing. */
@@ -833,6 +854,53 @@ describe('M5-ACC-17 — empty collaboration history still advertises bootstrap',
 
     expect(bootstrap?.bytes).toBeGreaterThan(0);
     expect(h.runner.calls[0]?.prompt).toContain('[COORDINATION]');
+  });
+});
+
+describe('M5-ACC-17 — the deadlock cannot come back through a fallback', () => {
+  it('advertises the channel to a task no team member could take', async () => {
+    // **The live dogfood found this, and it is the M4 condition exactly.** When nobody is
+    // eligible the assignment falls back to the router's *role*, and a team roster holds
+    // a legacy role identity only for the roles no member staffs — so the fallback id
+    // resolved to nobody, the context builder returned silence, and one implementation
+    // prompt in six went out with no mention of the channel.
+    //
+    // It needs a team, a task the team cannot take, and the fallback: no scripted test
+    // had all three.
+    //
+    // The shape is exact: the *fallback role must be one a member staffs*, so the legacy
+    // identity for it is deliberately absent from the roster. Here `slow` serves
+    // `executor.normal` and cannot implement — its runner has no working directory — so
+    // the fallback is `executor.normal`, and nothing answers to that id.
+    const global = config({
+      runners: {
+        claude: { type: 'claude-code-cli' },
+        remote: { type: 'openai-compatible', baseUrl: 'http://x', model: 'm' },
+      },
+      members: { slow: { roles: 'executor.normal', runner: 'remote' } },
+    });
+    const h = await harness(global, { claude: CAPS, remote: NO_TOOLS });
+
+    await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
+
+    expect((await assignmentOf(h, 'TASK-001'))?.['reason']).toBe('no_eligible_member');
+    expect(h.runner.calls[0]?.prompt).toContain('[COORDINATION]');
+
+    const measured = (await h.store.readEvents(h.run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+    const parts = measured?.detail['parts'] as { source: string; bytes: number }[];
+    expect(parts.find((part) => part.source === 'collaborationBootstrap')?.bytes ?? 0).toBeGreaterThan(0);
+  });
+
+  it('advertises it to an agent id the roster has never heard of', async () => {
+    // The invitation says nothing about who is reading it, so there is nothing about an
+    // unknown reader that could make it wrong to send.
+    const h = await harness(config({ members: { backend: {} } }));
+    const blocks = await h.collaborationServiceContextFor('nobody-at-all');
+
+    expect(blocks.bootstrap).toContain('[COORDINATION]');
+    expect(blocks.context).toBeUndefined();
   });
 });
 

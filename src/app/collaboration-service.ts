@@ -155,13 +155,24 @@ export class CollaborationService {
   }): Promise<CollaborationBlocks> {
     if (!this.enabled) return SILENT_BLOCKS;
 
-    const agent = this.options.roster.byId(request.agentId);
-    if (agent === undefined) return SILENT_BLOCKS;
-
     // **The invitation is unconditional** (I-40). It does not depend on the log, the
-    // task or the agent, so it is composed before anything is read: an agent that is
-    // not told the channel exists never uses it, which is the deadlock M4 shipped.
+    // task or the agent, so it is composed before anything is read — and before the
+    // roster is consulted: an agent that is not told the channel exists never uses it,
+    // which is the deadlock M4 shipped.
+    //
+    // **The roster lookup used to gate this, and the live dogfood caught it.** When no
+    // team member is eligible the assignment falls back to the router's *role*, and a
+    // team roster contains a legacy role identity only for the roles no member staffs —
+    // so `executor.trivial` resolved to nobody, this returned silence, and one
+    // implementation prompt in six went out with no mention of the channel at all. That
+    // is the M4 condition, reintroduced through a path nothing scripted exercises: it
+    // needs a team, a task the team cannot take, and a retry.
     const bootstrap = buildCollaborationBootstrap();
+
+    // Only the *context* needs to know who is reading it. An unknown agent gets the
+    // invitation and no payload, which is the same shape a quiet run produces.
+    const agent = this.options.roster.byId(request.agentId);
+    if (agent === undefined) return { bootstrap };
 
     const messages = await this.options.collaboration.readMessages(request.runId);
     const entries = await this.options.collaboration.readEntries(request.runId);
