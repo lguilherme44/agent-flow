@@ -12,9 +12,10 @@ MVP 1  ────────────────────────�
 MVP 2  ─────────────────────────────────►  safe parallel execution, complete
 MVP 3  ─────────────────────────────────►  context intelligence & advisory local model, complete
 AR     ─────────────────────────────────►  autonomous execution & recovery, in progress
-M4     ─────────────────────────────────►  collaboration foundation, complete — and off
+M4     ─────────────────────────────────►  collaboration foundation, dogfooded live — and still off
+M5     ─────────────────────────────────►  team orchestration, specified
                                         ▲
-                                        you are here: M4 built, awaiting a live dogfood
+                                        you are here: M4 proved live; M5 specified, not built
 ```
 
 ---
@@ -272,7 +273,8 @@ what earns the flip.
 | M4-05 | Shared blackboard | **done** |
 | M4-06 | Context integration | **done** |
 | M4-07 | Read model, CLI and dashboard | **done** |
-| M4-08 | Acceptance suite and documentation | **done** — the live dogfood is the owner's |
+| M4-08 | Acceptance suite and documentation | **done** |
+| M4-09 | Live dogfood, `AF-2026-002` | **done** — [report](m4-live-dogfood-report.md); `enabled` stays `false` |
 
 ### What M4-08 could prove, and what it could not
 
@@ -329,6 +331,50 @@ so without anything noticing:
 - **Both READMEs listed OpenCode as a runner you can use.** No `opencode` adapter has
   ever existed. The four that do — `claude-code-cli`, `codex-cli`, `agy-cli`,
   `openai-compatible` — are now all in the table, which listed two.
+
+---
+
+## M5 — Team Orchestration · specified, not built
+
+Specified in [`specs/m5-team-orchestration.md`](specs/m5-team-orchestration.md).
+
+M4 answered *who the agents are*, *what they said* and *what they know*. M5 answers
+*which agents form a team*, *what each can do*, *who should receive a task*, *who owns
+what* and *which work may happen at once*.
+
+The structural decision the specification rests on: **`resolveTaskAgent` already exists
+and is already called on every task.** M4 built that seam deliberately, so M5 replaces
+its body and keeps its position — there is no second router and no second scheduler, and
+`core/router.ts` survives as both the fallback path and a *term* in the new score, so a
+high-risk task still gravitates to `executor.complex` even when a trivial executor has
+the skills.
+
+Nothing is implemented. The specification is the deliverable, and it was written after
+the live dogfood rather than before, so it rests on what a real run actually did.
+
+---
+
+## What the live dogfood changed about M4
+
+Recorded here because it is the milestone's most useful outcome and it was not planned.
+
+**M4 shipped a channel that could never carry its first message.** A fresh run's log is
+empty, so no block reached the prompt, so the agent never learned the outbox existed, so
+it wrote none, so the log stayed empty — for every agent, on every run. 366 tests passed,
+because every one of them either seeded the log first or called the harvest directly, and
+one of them asserted the deadlock as though it were the contract.
+
+Fixed, and then the run produced the traffic: a Codex agent on a blocked task wrote a
+`blocker` to the architect and a `risk` to the blackboard, both technically correct and
+both about work another agent had done.
+
+The finding no acceptance criterion asks about: **five agents received the invitation and
+only the blocked one used it.** That is not a defect — a task with a complete SDD and a
+reviewed plan has nothing to ask — but it means the channel's value is concentrated
+exactly where the plan failed, and a default of `true` would put 1 373 bytes on every
+prompt to buy a message that arrives only when something has already gone wrong.
+`collaboration.enabled` stays `false` until a second dogfood reaches an answer and an
+acknowledgement.
 
 ---
 
