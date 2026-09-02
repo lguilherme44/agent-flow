@@ -331,8 +331,17 @@ could not have seen them; here it read them, and reasoned about what they assert
 The second finding is also the third independent time a reviewer has caught an assertion
 that cannot fail, in a third repository, unprompted.
 
-And the verdict is `approve` with two findings open — §44's severity policy doing the thing
-it exists to do rather than blocking everything (M6-ACC-07, live).
+`REV-0002` on `TASK-002` is the other half of the answer: **`approve`, independence 3, zero
+findings.** The first clean review in the milestone, from a reviewer on the other provider
+from the author, reading the implementation it was given. §62 says do not invent a finding
+if there is none; here there was none, and the run said so.
+
+Two approvals, one with two non-blocking findings and one with nothing — §44's severity
+policy doing the thing it exists to do rather than blocking everything (M6-ACC-07, live).
+
+And the runner, in both directions in one run: `TASK-001` on `claude` because `qa` declares
+it, `TASK-002` on `agy` because `dev` does, with the `roles:` table pointing at `agy` for
+both. Defect 0, closed and visible.
 
 ---
 
