@@ -130,7 +130,20 @@ export const ResourcePatternSchema = z
   .regex(
     /^[A-Za-z0-9_.*/-]+$/,
     'expected a repository-relative path pattern, such as src/server/**',
-  );
+  )
+  // **A `..` segment is refused here rather than left to fail silently.** The character
+  // class admits `.` and `/`, so `../../etc/**` satisfies it — and the matcher, which
+  // validates the *path* it is given rather than the pattern, would then own nothing at
+  // all. Fail-closed is the right direction and a silent one is the wrong shape: an
+  // operator who wrote that rule would see a member quietly own nothing and have no
+  // reason to look at the pattern. Refusing it says which line to fix.
+  .refine(
+    (pattern) => !pattern.split('/').includes('..'),
+    'a pattern may not step outside the repository with ..',
+  )
+  // Absolute for the same reason. `/etc/**` is a path on the machine, not an area of the
+  // repository, and it would own nothing — silently.
+  .refine((pattern) => !pattern.startsWith('/'), 'a pattern is repository-relative');
 export type ResourcePattern = z.infer<typeof ResourcePatternSchema>;
 
 export const OwnershipRuleSchema = z.object({
