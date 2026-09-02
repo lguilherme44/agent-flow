@@ -17,6 +17,15 @@ export const RUN_STAGES = [
   'planning',
   'plan-review',
   'implementation',
+  /**
+   * One change, reviewed by somebody who did not write it (M6).
+   *
+   * Distinct from `verification` and `final-review`, which are run-level and ask about
+   * the whole feature. This runs per task, against the tree that task integrated as, and
+   * it is the only review whose freshness can be checked — because it is the only one
+   * that names a single tree.
+   */
+  'code-review',
   'verification',
   'final-review',
 ] as const;
@@ -27,11 +36,15 @@ export type RunStage = z.infer<typeof RunStageSchema>;
 /**
  * The pipeline as a person sees it (§71).
  *
- * Nine entries where `RUN_STAGES` has eight: `approval` is a step in the user's
+ * Ten entries where `RUN_STAGES` has nine: `approval` is a step in the user's
  * mental model and in the specification's pipeline, but nothing *executes* for
  * it — so it has no events and can never appear in `state.stage`. Keeping the
  * two lists separate is what stops a display concern from becoming a stage the
  * state machine has to pretend to run.
+ *
+ * `code-review` joined both in M6. It executes — once per task, like
+ * `implementation` — and it is a phase a person watching a run expects to see,
+ * so leaving it out of the picture would have hidden the thing the milestone adds.
  */
 export const PIPELINE_STAGES = [
   'discovery',
@@ -41,6 +54,7 @@ export const PIPELINE_STAGES = [
   'plan-review',
   'approval',
   'implementation',
+  'code-review',
   'verification',
   'final-review',
 ] as const;

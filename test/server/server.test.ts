@@ -341,7 +341,8 @@ describe('UI-04 — the run read API', () => {
       await server.app.inject(`/api/v1/runs/${run.runId}/stages`)
     ).json<StageViewResponse[]>();
 
-    expect(stages).toHaveLength(9);
+    // Ten since M6: `code-review` executes per task and shows as a phase.
+    expect(stages).toHaveLength(10);
     expect(stages.find((stage) => stage.stage === 'discovery')).toMatchObject({
       status: 'completed',
       runner: 'claude',

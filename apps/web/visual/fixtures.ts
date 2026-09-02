@@ -850,6 +850,7 @@ export const APPROVAL_GATE: ApprovalGateView = {
         type: 'missing_test',
         description: 'TASK-005 changes the expansion window and declares no validation.',
         suggestedAction: 'Give it a validation id the project config declares.',
+        evidence: [],
       },
       {
         severity: 'medium',
@@ -857,6 +858,7 @@ export const APPROVAL_GATE: ApprovalGateView = {
         description: 'TASK-004 covers the service and the scheduling rules at once.',
         suggestedAction: 'Split it so each half can fail on its own.',
         requirement: 'FR-004',
+        evidence: [],
       },
     ],
   },

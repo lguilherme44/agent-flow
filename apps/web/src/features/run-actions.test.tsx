@@ -94,6 +94,7 @@ const FAILING_GATE: ApprovalGateView = {
         type: 'missing_test',
         description: 'TASK-004 has no validation command.',
         suggestedAction: 'Add a validation id the project config declares.',
+        evidence: [],
       },
     ],
   },

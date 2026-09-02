@@ -20,11 +20,15 @@ const find = (views: ReturnType<typeof buildStageTimeline>, stage: string) =>
   views.find((view) => view.stage === stage);
 
 describe('the pipeline is read out of the run, not stored on it', () => {
-  it('has nine entries, because approval is one of them', () => {
-    // `RUN_STAGES` has eight: nothing executes for approval, so it has no
+  it('has ten entries, because approval is one of them', () => {
+    // `RUN_STAGES` has nine: nothing executes for approval, so it has no
     // events and can never appear in `state.stage`. Adding it to the state
     // machine to satisfy a display would be inventing a stage.
-    expect(buildStageTimeline([], state())).toHaveLength(9);
+    //
+    // Ten rather than nine since M6: `code-review` executes, once per task like
+    // `implementation`, and it is the phase a person watching a run most expects to
+    // see — leaving it out of the picture would hide what the milestone adds.
+    expect(buildStageTimeline([], state())).toHaveLength(10);
   });
 
   it('marks a stage completed only when the log says it finished', () => {

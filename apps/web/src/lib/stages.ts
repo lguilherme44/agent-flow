@@ -11,7 +11,7 @@
  * copy is checked by a test rather than by a comment.
  */
 
-/** The eight stages a run's `stage` field can name. Mirrors `RUN_STAGES`. */
+/** The nine stages a run's `stage` field can name. Mirrors `RUN_STAGES`. */
 export const RUN_STAGE_ORDER = [
   'discovery',
   'architecture-impact',
@@ -19,12 +19,13 @@ export const RUN_STAGE_ORDER = [
   'planning',
   'plan-review',
   'implementation',
+  'code-review',
   'verification',
   'final-review',
 ] as const;
 
 /**
- * The nine steps the pipeline *shows*. Mirrors `PIPELINE_STAGES`.
+ * The ten steps the pipeline *shows*. Mirrors `PIPELINE_STAGES`.
  *
  * One more than the list above: `approval` is a step in the reader's mental model
  * with nothing that executes for it, so it can appear in a pipeline and never in
@@ -38,6 +39,7 @@ export const PIPELINE_STAGE_ORDER = [
   'plan-review',
   'approval',
   'implementation',
+  'code-review',
   'verification',
   'final-review',
 ] as const;
