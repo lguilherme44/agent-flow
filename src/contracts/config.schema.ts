@@ -10,6 +10,7 @@ import { UtilityModelConfigSchema } from './utility-model-config.schema.js';
 import { CollaborationConfigSchema } from './collaboration-config.schema.js';
 import { TeamsConfigSchema } from './team.schema.js';
 import { QualityConfigSchema } from './review.schema.js';
+import { ForgeConfigSchema } from './forge.schema.js';
 
 /** Default per-role timeout. A hung CLI must not stall a run forever (R-11). */
 export const DEFAULT_TIMEOUT_SECONDS = 900;
@@ -324,6 +325,14 @@ export const GlobalConfigSchema = z.object({
    * would eventually disagree.
    */
   review: ReviewPolicySchema.prefault({}),
+  /**
+   * Remote delivery (M7). Off by default, and every write separately opt-in.
+   *
+   * Global rather than project-overridable: a repository overlay that could enable a
+   * network write, name the token variable or move the API host would let a checked-in
+   * file spend the operator credentials.
+   */
+  forge: ForgeConfigSchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

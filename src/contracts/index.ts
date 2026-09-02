@@ -8,6 +8,7 @@ export * from './task.schema.js';
 export * from './plan.schema.js';
 export * from './state.schema.js';
 export * from './review.schema.js';
+export * from './forge.schema.js';
 export * from './verification.schema.js';
 export * from './result.schema.js';
 export * from './attempt.schema.js';
