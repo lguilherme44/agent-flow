@@ -9,6 +9,9 @@ import {
   type ProjectedEntry,
   type ThreadView,
   type AgentMessage,
+  type RunEvent,
+  type TeamView,
+  RunEventSchema,
 } from '../contracts/index.js';
 import { CollaborationStore } from '../app/collaboration-store.js';
 import { runPaths } from '../app/paths.js';
@@ -17,6 +20,7 @@ import { projectBlackboard } from '../core/collaboration/blackboard.js';
 import { projectHandoffs } from '../core/collaboration/handoffs.js';
 import { projectThreads } from '../core/collaboration/threads.js';
 import { deriveAgentRoster, type AgentRoster } from '../core/collaboration/roster.js';
+import { EMPTY_TEAM, projectTeam } from '../core/team/view.js';
 import type { FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
 
@@ -50,6 +54,17 @@ export interface CollaborationReaderOptions {
    */
   readonly globalConfigPath?: string;
 }
+
+/**
+ * How far back a team projection reads, and how long a line it will parse.
+ *
+ * Bounded for the same reason the context-telemetry reader is: an events log is written
+ * by the run and read by a browser, and an unbounded read is a way to make one request
+ * cost a run's whole history. The most recent window is the one an operator is looking
+ * at — an assignment from four hundred events ago belongs to a task that has finished.
+ */
+const MAX_TEAM_EVENT_SCAN = 2_000;
+const MAX_TEAM_EVENT_LINE_CHARACTERS = 65_536;
 
 const EMPTY: CollaborationView = {
   enabled: false,
@@ -97,6 +112,70 @@ export class CollaborationReader {
       handoffs: projectHandoffs(messages, { runTerminated }).map(handoffView),
       entries: projectBlackboard(entries).map((projected) => entryView(projected, roster)),
     };
+  }
+
+  /**
+   * The run's team, or `null` when the run does not exist (M5-08, M5-ACC-15).
+   *
+   * **Beside the collaboration rather than in it**, and in the same class rather than a
+   * second reader, because both fold the same roster out of the same configuration. Two
+   * readers deriving a roster is two rosters, and they would disagree the first time a
+   * member was renamed — which is the failure this class's own doc comment describes for
+   * threads and entries.
+   *
+   * Separate responses because they are separate tabs read at separate moments; a team is
+   * a fold over the audit log and a conversation is a fold over the message log, and
+   * neither has to be read at the other's instant.
+   *
+   * A run with no `teams:` block answers `configured: false` with empty lists. That is
+   * not an error, and it is a different empty state from a configured team with nothing
+   * assigned yet.
+   */
+  async team(project: RegisteredProject, runId: string): Promise<TeamView | null> {
+    const state = await this.readState(project, runId);
+    if (state === null) return null;
+
+    const config = await this.configOf(project);
+    if (config === undefined) return EMPTY_TEAM;
+
+    return projectTeam({
+      config,
+      roster: deriveAgentRoster(config),
+      tasks: state.tasks.map((task) => ({ id: task.id, state: task.state })),
+      events: await this.readEvents(project, runId),
+    });
+  }
+
+  /**
+   * The run's audit events, bounded and tolerant.
+   *
+   * A malformed line is skipped rather than fatal: this renders a screen an operator
+   * opens *because* something is wrong, and a log a crash truncated mid-write must not be
+   * the reason they cannot see the run. The strict read belongs to the workflow, which
+   * has to fail closed; a read model has to show what it can.
+   */
+  private async readEvents(project: RegisteredProject, runId: string): Promise<RunEvent[]> {
+    const path = runPaths(project.path, runId).events;
+    if (!(await this.options.fs.exists(path))) return [];
+
+    try {
+      const raw = await this.options.fs.readFile(path);
+      const events: RunEvent[] = [];
+
+      for (const line of raw.split('\n').slice(-MAX_TEAM_EVENT_SCAN)) {
+        if (line.length === 0 || line.length > MAX_TEAM_EVENT_LINE_CHARACTERS) continue;
+        try {
+          const parsed = RunEventSchema.safeParse(JSON.parse(line));
+          if (parsed.success) events.push(parsed.data);
+        } catch {
+          continue;
+        }
+      }
+
+      return events;
+    } catch {
+      return [];
+    }
   }
 
   /**

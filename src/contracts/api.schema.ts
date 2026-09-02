@@ -924,3 +924,114 @@ export interface CollaborationView {
   readonly handoffs: readonly HandoffView[];
   readonly entries: readonly BlackboardEntryView[];
 }
+
+/* ─── Team (M5) ────────────────────────────────────────────────────────────── */
+
+/**
+ * One member of a configured team, as the dashboard and the CLI both see it (§37).
+ *
+ * **`status` is derived, never stored.** A member is `working` because a task the run
+ * says is running was assigned to it, and `full` because it has as many as its capacity
+ * allows. A persisted `busy` flag would be a second copy of task state, and it would be
+ * the copy that survives a crash saying somebody is working on a task that is not.
+ *
+ * Carries no credential and no path: a runner id is a configuration key, the model is the
+ * opaque string AD-13 keeps it as, and an ownership pattern is repository-relative by the
+ * schema that accepted it.
+ */
+export interface TeamMemberView {
+  readonly id: string;
+  readonly displayName: string;
+  readonly role: string;
+  readonly runner: string;
+  readonly model?: string;
+  readonly skills: readonly string[];
+  readonly specializations: readonly string[];
+  readonly maxConcurrentTasks: number;
+  readonly ownership: {
+    readonly preferred: readonly string[];
+    readonly exclusive: readonly string[];
+    readonly shared: readonly string[];
+  };
+  /** Task ids the run currently has running with this member. */
+  readonly assigned: readonly string[];
+  /** How many tasks this member has been assigned across the whole run. */
+  readonly assignedTotal: number;
+  readonly status: 'idle' | 'working' | 'full';
+}
+
+/** One member's place in a ranking, with the reason it was ruled out if it was. */
+export interface CandidateView {
+  readonly agentId: string;
+  readonly agentName: string;
+  readonly score: number;
+  readonly skillMatch: number;
+  readonly ownership: number;
+  readonly riskFit: number;
+  readonly matchedSkills: readonly string[];
+  readonly excludedBy?: string;
+}
+
+/**
+ * Why this task went to this agent (§38).
+ *
+ * The ranking rides along because "the AI decided" is not an answer (I-34): an operator
+ * asking why Backend did not get a task is asking about the candidate that lost, and a
+ * view holding only the winner cannot say.
+ */
+export interface TaskAssignmentView {
+  readonly taskId: string;
+  readonly agentId: string;
+  readonly agentName: string;
+  readonly role: string;
+  readonly reason: string;
+  readonly detail?: string;
+  readonly previousAgentId?: string;
+  readonly assignedAt: string;
+  readonly candidates: readonly CandidateView[];
+}
+
+/** A task a wave would not take, and what it waited for. */
+export interface WaveDeferralView {
+  readonly taskId: string;
+  readonly reason: 'capacity' | 'ownership';
+  readonly detail: string;
+  readonly waitsFor?: string;
+  readonly patterns: readonly string[];
+  readonly agents: readonly string[];
+}
+
+/**
+ * What the run's assignments amount to, counted (§41).
+ *
+ * Counted here rather than at each caller, so the CLI's summary line and the dashboard's
+ * header cannot disagree about how many times a task changed hands.
+ */
+export interface TeamTotals {
+  readonly assignments: number;
+  readonly reassignments: number;
+  readonly capacityDeferrals: number;
+  readonly ownershipDeferrals: number;
+  readonly candidatesConsidered: number;
+}
+
+/**
+ * A run's team, in one response (M5-ACC-15).
+ *
+ * **One projection, three surfaces.** The CLI, the HTTP API and the dashboard all render
+ * this and none of them computes an assignment: a browser that ranked candidates would be
+ * a second assignment authority, and the first time it disagreed with the run the operator
+ * would be looking at a screen that describes a decision nobody made (I-33).
+ *
+ * `configured` is whether a `teams:` block exists, not whether anything was assigned. A
+ * legacy run is `configured: false` with an empty member list, which is a different empty
+ * state from a configured team that has not started — one invites configuration and the
+ * other does not.
+ */
+export interface TeamView {
+  readonly configured: boolean;
+  readonly members: readonly TeamMemberView[];
+  readonly assignments: readonly TaskAssignmentView[];
+  readonly deferrals: readonly WaveDeferralView[];
+  readonly totals: TeamTotals;
+}

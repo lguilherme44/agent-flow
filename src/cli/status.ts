@@ -14,6 +14,9 @@ import { describeIsolation, type IsolationReport } from '../app/run-git-identity
 import { integrationRef } from '../core/worktree-policy.js';
 import { CollaborationStore } from '../app/collaboration-store.js';
 import { renderCollaboration } from './render/collaboration.js';
+import { renderTeam } from './render/team.js';
+import { projectTeam } from '../core/team/view.js';
+import { deriveAgentRoster } from '../core/collaboration/roster.js';
 import { projectThreads } from '../core/collaboration/threads.js';
 import { projectHandoffs } from '../core/collaboration/handoffs.js';
 import { projectBlackboard } from '../core/collaboration/blackboard.js';
@@ -122,6 +125,10 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     // dashboard renders, so three surfaces cannot describe one thread differently.
     const collaboration = await readCollaboration(store, state, fs, globals);
 
+    // M5-ACC-15, and the same rule the line above follows: folded by `core/team/view.ts`,
+    // which is what the API returns and what the dashboard draws.
+    const team = await readTeam(store, state, fs, globals);
+
     process.stdout.write(
       `${render(
         state,
@@ -132,6 +139,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         isolation,
         conflicts,
         collaboration,
+        team,
       )}\n`,
     );
 
@@ -264,6 +272,7 @@ export function render(
   isolation: IsolationReport | null,
   conflicts: readonly { task: string; attempt: number; paths: readonly string[] }[],
   collaboration: string | undefined,
+  team?: string | undefined,
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -319,6 +328,11 @@ export function render(
   // something about this run a person weighs before deciding it can move on.
   if (collaboration !== undefined) lines.push(collaboration, '');
 
+  // After the conversation and before the degradations. Who is doing the work is the
+  // context that makes an open thread legible — "executor.normal is blocked" reads
+  // differently once the screen has said which member that is and what else it holds.
+  if (team !== undefined) lines.push(team, '');
+
   if (state.degradations.length > 0) {
     lines.push('Degraded:');
     for (const degradation of state.degradations) {
@@ -373,6 +387,44 @@ async function readCollaboration(
       handoffs: projectHandoffs(messages, { runTerminated }),
       entries: projectBlackboard(entries),
     });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The run's team, folded exactly as the API and the dashboard fold it.
+ *
+ * `undefined` on every unhappy path and never an exception, for the same reason
+ * `readCollaboration` is: `status` is what a person runs when something is already wrong,
+ * and an events log a crash truncated mid-write must not be why they cannot see the gate.
+ */
+async function readTeam(
+  store: StateStore,
+  state: RunState,
+  fs: NodeFileSystem,
+  globals: GlobalOptions,
+): Promise<string | undefined> {
+  try {
+    // Loaded here rather than passed in, exactly as `readIsolation` loads it: a
+    // configuration that will not parse is a reason to omit one section, never a reason
+    // for `status` to fail.
+    const { global: config } = await loadConfig({
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: globals.cwd,
+    });
+
+    return renderTeam(
+      projectTeam({
+        config,
+        roster: deriveAgentRoster(config),
+        tasks: state.tasks.map((task) => ({ id: task.id, state: task.state })),
+        // Best-effort, because this is a read model. The workflow's own reads are strict
+        // and fail closed; a screen has to show what it can.
+        events: await store.readEventsBestEffort(state.runId),
+      }),
+    );
   } catch {
     return undefined;
   }

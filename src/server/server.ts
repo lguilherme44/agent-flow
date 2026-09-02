@@ -359,6 +359,23 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return view === null ? notFound(reply, 'no such run') : view;
   });
 
+  /**
+   * The run's team: who is configured, who holds what, and why each task went where.
+   *
+   * **The browser renders this and computes none of it** (M5-ACC-15, I-33). A candidate
+   * ranking is the assignment policy's output, folded out of the audit log by
+   * `core/team/view.ts` — the same function the CLI folds with. A dashboard that ranked
+   * its own candidates would be a second assignment authority whose first disagreement
+   * with the run puts a decision nobody made on screen.
+   */
+  app.get('/api/v1/runs/:runId/team', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const view = await collaboration.team(scope.project, scope.runId);
+    return view === null ? notFound(reply, 'no such run') : view;
+  });
+
   app.get('/api/v1/runs/:runId/artifacts', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;

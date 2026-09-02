@@ -581,8 +581,10 @@ export class TaskExecutor {
       });
 
       // Recorded whenever the answer is not the router's, which is the only case a
-      // reader needs an explanation for. I-34: the candidate ranking rides on the event
-      // so "why did Backend not get this" is answerable from the audit trail alone.
+      // reader needs an explanation for. I-34: the whole ranking rides on the event, with
+      // each term kept apart, so "why did Backend not get this" is answerable from the
+      // audit trail alone — and answerable in the terms the decision was made in rather
+      // than as one number a person has to take on trust.
       if (assignment.reason !== 'routed') {
         await this.options.store.appendEvent(runId, 'task_assigned', {
           task: task.id,
@@ -590,9 +592,16 @@ export class TaskExecutor {
           role: assignment.role,
           reason: assignment.reason,
           ...(assignment.detail === undefined ? {} : { detail: assignment.detail }),
+          ...(assignment.previousAgentId === undefined
+            ? {}
+            : { previousAgent: assignment.previousAgentId }),
           candidates: assignment.candidates.map((candidate) => ({
-            agent: candidate.agentId,
-            score: Number(candidate.score.toFixed(3)),
+            agentId: candidate.agentId,
+            score: round(candidate.score),
+            skillMatch: round(candidate.skillMatch),
+            ownership: round(candidate.ownership),
+            riskFit: round(candidate.riskFit),
+            matchedSkills: [...candidate.matchedSkills],
             ...(candidate.excludedBy === undefined ? {} : { excludedBy: candidate.excludedBy }),
           })),
         });
@@ -1186,4 +1195,14 @@ export function canImplementWith(
       return false;
     }
   };
+}
+
+/**
+ * A score as an audit row should carry it.
+ *
+ * Three places rather than the float's own precision, because `0.7150000000000001` in a
+ * log is a number a reader distrusts and a diff that changes between machines.
+ */
+function round(value: number): number {
+  return Number(value.toFixed(3));
 }
