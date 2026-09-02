@@ -213,6 +213,21 @@ export function blockedByFailure(dag: Dag, states: TaskStates): string[] {
   const walk = (id: string): void => {
     for (const dependent of dag.dependentsOf(id)) {
       if (blocked.has(dependent) || poisoned.has(dependent)) continue;
+
+      // **A task that already completed is not blocked, and the walk stops at it.**
+      //
+      // Ordinarily a dependent cannot finish before its dependency, so this never fires.
+      // `agent-flow revise` breaks that: it can add a dependency to a task that already
+      // ran, and the live M6 run did exactly that — TASK-003 was `completed`, the revision
+      // made it depend on FIX-001, FIX-001 blocked, and the cascade tried to write
+      // `completed → blocked`. The state machine refused, correctly, and the *run crashed*
+      // with an unhandled `TaskStateError`.
+      //
+      // Stopping the walk here as well as skipping the node: a completed task produced its
+      // output, so whatever depends on *it* has its input regardless of what happened
+      // upstream. Anything genuinely poisoned is reached by its own edge.
+      if (stateOf(states, dependent) === 'completed') continue;
+
       blocked.add(dependent);
       walk(dependent);
     }

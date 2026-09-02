@@ -198,6 +198,43 @@ describe('blockedByFailure', () => {
   it('returns nothing when everything is healthy', () => {
     expect(blockedByFailure(dag, { 'TASK-001': 'completed' })).toEqual([]);
   });
+
+  /**
+   * `agent-flow revise` can add a dependency to a task that already ran.
+   *
+   * The live M6 run did exactly that: TASK-003 was `completed`, a revision made it depend
+   * on FIX-001, FIX-001 blocked, and this function returned TASK-003 — so the scheduler
+   * wrote `completed → blocked`, the state machine refused, and the run **crashed** with
+   * an unhandled `TaskStateError`. The state machine was right; the caller was asking for
+   * something incoherent.
+   */
+  it('does not block a task that already completed', () => {
+    expect(blockedByFailure(dag, { 'TASK-002': 'blocked', 'TASK-003': 'completed' })).toEqual([]);
+  });
+
+  it('stops walking at it, because its output exists whatever happened upstream', () => {
+    const chain = buildDag([
+      node('TASK-001'),
+      node('TASK-002', ['TASK-001']),
+      node('TASK-003', ['TASK-002']),
+    ]);
+
+    expect(
+      blockedByFailure(chain, { 'TASK-001': 'failed', 'TASK-002': 'completed' }),
+    ).toEqual([]);
+  });
+
+  it('still blocks a dependent that has its own edge to the failure', () => {
+    const both = buildDag([
+      node('TASK-001'),
+      node('TASK-002', ['TASK-001']),
+      node('TASK-003', ['TASK-002', 'TASK-001']),
+    ]);
+
+    expect(blockedByFailure(both, { 'TASK-001': 'failed', 'TASK-002': 'completed' })).toEqual([
+      'TASK-003',
+    ]);
+  });
 });
 
 describe('readyTasks and blockedByFailure agree', () => {
