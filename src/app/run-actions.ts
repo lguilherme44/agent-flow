@@ -62,7 +62,7 @@ import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js'
 import { ReviewStore } from './review-store.js';
 import { CollaborationStore } from './collaboration-store.js';
 import { projectFindings } from '../core/review/findings.js';
-import { correctiveSelection } from '../core/review/corrective.js';
+import { correctiveLinks, correctiveSelection } from '../core/review/corrective.js';
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { extractRequirementIds } from '../core/sdd-validator.js';
@@ -2096,6 +2096,9 @@ async function codeReviewFindings(
   const selection = correctiveSelection({
     findings,
     quality: context.config.global.quality,
+    // Read off the plan rather than off the events: the plan is what a second `--fix`
+    // would be adding to, and a task in it is a task that exists whether it has run or not.
+    alreadyCorrected: correctiveLinks(plan.tasks).map((link) => link.finding),
     // Whoever wrote the most recent review. Provenance on the generated task, and a member
     // id rather than a runner — which is what a team makes it.
     reviewer: reviews[reviews.length - 1]?.reviewer ?? 'reviewer',

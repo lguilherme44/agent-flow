@@ -42,10 +42,30 @@ export function correctiveSelection(input: {
   readonly findings: readonly ProjectedFinding[];
   readonly quality: QualityConfig;
   readonly reviewer: string;
+  /**
+   * Findings a corrective task already exists for, whether or not it has run.
+   *
+   * **One task per finding, ever.** `status` alone is not enough: a finding is `fixed` only
+   * once its corrective task *completes*, so between generating that task and running it
+   * the finding is still `open` — and a second `review --fix` generates a second task for
+   * it. The live M6 run produced exactly that: FIX-001 and FIX-003 with byte-identical
+   * descriptions and the same `FIND-0001`, which the plan review caught as "three tasks
+   * for one assertion; whichever runs first satisfies the criterion, so the other two are
+   * no-ops".
+   *
+   * A task that runs and fails is the retry mechanism's problem. A fix that lands without
+   * actually fixing anything produces a *new* finding at the next review, with its own id.
+   * Neither is a reason to generate a duplicate.
+   */
+  readonly alreadyCorrected?: readonly string[];
 }): CorrectiveSelection | undefined {
-  const actionable = blockingFindings(input.findings, input.quality).filter(
-    (held) => held.status === 'open' || held.status === 'acknowledged' || held.status === 'disputed',
-  );
+  const generated = new Set(input.alreadyCorrected ?? []);
+  const actionable = blockingFindings(input.findings, input.quality)
+    .filter(
+      (held) =>
+        held.status === 'open' || held.status === 'acknowledged' || held.status === 'disputed',
+    )
+    .filter((held) => !generated.has(held.finding.id));
 
   if (actionable.length === 0) return undefined;
 

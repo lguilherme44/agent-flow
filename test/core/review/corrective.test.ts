@@ -215,3 +215,49 @@ describe('M6-ACC-15 — QA picks up the work that is QA’s (§34)', () => {
     expect(next.tasks.slice(PLAN.tasks.length)[0]?.scope).toBe('security');
   });
 });
+
+/**
+ * One task per finding, ever.
+ *
+ * A finding is `fixed` only once its corrective task *completes*, so between generating
+ * that task and running it the finding is still `open`. The live M6 run ran `review --fix`
+ * twice and got FIX-001 and FIX-003 with byte-identical descriptions and the same
+ * `FIND-0001` — caught by the plan review as "three tasks for one assertion; whichever runs
+ * first satisfies the criterion, so the other two are no-ops".
+ */
+describe('a finding that already has a corrective task does not get a second', () => {
+  it('is skipped once a task carries its id', () => {
+    const findings = [finding({ id: 'FIND-0001', severity: 'high' })];
+
+    expect(
+      correctiveSelection({
+        findings,
+        quality: QUALITY,
+        reviewer: 'reviewer',
+        alreadyCorrected: ['FIND-0001'],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('still selects the findings nothing has been generated for', () => {
+    const findings = [
+      finding({ id: 'FIND-0001', severity: 'high' }),
+      finding({ id: 'FIND-0002', severity: 'high' }),
+    ];
+
+    const selection = correctiveSelection({
+      findings,
+      quality: QUALITY,
+      reviewer: 'reviewer',
+      alreadyCorrected: ['FIND-0001'],
+    });
+
+    expect(selection?.findings.map((f) => f.finding.id)).toEqual(['FIND-0002']);
+  });
+
+  it('behaves exactly as before when nothing has been generated', () => {
+    const findings = [finding({ id: 'FIND-0001', severity: 'high' })];
+
+    expect(correctiveSelection({ findings, quality: QUALITY, reviewer: 'r' })).toBeDefined();
+  });
+});
