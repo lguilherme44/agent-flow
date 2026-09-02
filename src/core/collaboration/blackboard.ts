@@ -3,6 +3,7 @@ import type {
   EntryId,
   EntryStatus,
   ProjectedEntry,
+  CollaborationAudience,
   WorkflowRole,
 } from '../../contracts/index.js';
 
@@ -88,10 +89,39 @@ export function projectBlackboard(entries: readonly BlackboardEntry[]): Projecte
  * it names that agent's role, or because it concerns this task or one of its files. No
  * model call, no score, no nondeterminism.
  */
+/**
+ * Whether one audience names this agent.
+ *
+ * Exhaustive over the union, so the day a fourth addressing mode is added this stops
+ * compiling — which is the notification you want rather than an entry that silently
+ * reaches nobody.
+ */
+function reaches(
+  to: CollaborationAudience,
+  audience: { readonly role: WorkflowRole; readonly agentId?: string },
+): boolean {
+  switch (to.kind) {
+    case 'everyone':
+      return true;
+    case 'role':
+      return to.role === audience.role;
+    case 'agent':
+      return to.id === audience.agentId;
+  }
+}
+
 export function entriesFor(
   projected: readonly ProjectedEntry[],
   audience: {
     readonly role: WorkflowRole;
+    /**
+     * Who this agent *is*, when a team named it (M7 §2).
+     *
+     * Optional, because a run with no team has roles and nothing else — and an entry
+     * addressed to a member then reaches nobody, which is the honest answer rather than
+     * a widened one.
+     */
+    readonly agentId?: string;
     readonly taskId?: string;
     readonly files?: readonly string[];
   },
@@ -104,7 +134,7 @@ export function entriesFor(
     // Addressed to everyone. The honest default for a discovery whose audience the
     // author could not know.
     if (entry.affects.length === 0) return true;
-    if (entry.affects.includes(audience.role)) return true;
+    if (entry.affects.some((to) => reaches(to, audience))) return true;
 
     return entry.references.some((reference) => {
       if (reference.kind === 'task') return reference.id === audience.taskId;

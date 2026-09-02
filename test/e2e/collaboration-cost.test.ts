@@ -221,7 +221,7 @@ describe('what the channel costs across ten tasks (M5-ACC-19 … 22)', () => {
       // wrote two well-formed blackboard entries and the only invalid thing in the file
       // was that one field, so the whole outbox was discarded — twice, in one task. The
       // enum is now named in the bootstrap, at ~120 bytes against a 32–50 KB prompt.
-      expect(task.bootstrap, task.taskId).toBeLessThan(1_040);
+      expect(task.bootstrap, task.taskId).toBeLessThan(1_080);
     }
   });
 

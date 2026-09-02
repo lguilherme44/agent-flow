@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { z } from 'zod';
 import { projectThreads, threadsFor } from '../../../src/core/collaboration/threads.js';
 import { projectHandoffs } from '../../../src/core/collaboration/handoffs.js';
 import { entriesFor, projectBlackboard } from '../../../src/core/collaboration/blackboard.js';
@@ -33,7 +34,12 @@ function message(overrides: Partial<AgentMessage> = {}): AgentMessage {
   });
 }
 
-function entry(overrides: Partial<BlackboardEntry> = {}): BlackboardEntry {
+/**
+ * Typed by the schema's *input*, so a legacy `affects: ['planner']` is what it always was:
+ * a valid thing to write, normalised on the way in. Typing it by the output would make
+ * every pre-M7 fixture a compile error and hide that the reading still works.
+ */
+function entry(overrides: Partial<z.input<typeof BlackboardEntrySchema>> = {}): BlackboardEntry {
   return BlackboardEntrySchema.parse({
     id: 'DEC-001',
     runId: RUN,
@@ -384,5 +390,47 @@ describe('entriesFor — who is shown what (M4-06)', () => {
       'DSC-002',
     ]);
     expect(entriesFor(disputed, { role: 'executor.normal' })).toHaveLength(2);
+  });
+});
+
+/**
+ * The half that makes the contract change worth making: an entry addressed to a member
+ * reaches that member.
+ *
+ * `entriesFor` matched `affects` against the audience's *role* only, and the call site in
+ * `context.ts` built an `agentId` one line above and then passed three of its four fields.
+ * Harmless while `affects` held roles; the reason an entry addressed to a teammate reached
+ * nobody once it could hold members.
+ */
+describe('an entry addressed to a member reaches that member (M7 §2)', () => {
+  const named = () =>
+    projectBlackboard([entry({ affects: [{ kind: 'agent', id: 'qa' }] })]);
+
+  it('reaches the agent it names', () => {
+    expect(entriesFor(named(), { role: 'executor.normal', agentId: 'qa' })).toHaveLength(1);
+  });
+
+  it('does not reach a different member of the same role', () => {
+    expect(entriesFor(named(), { role: 'executor.normal', agentId: 'dev' })).toEqual([]);
+  });
+
+  it('reaches nobody in a run with no team, rather than everybody', () => {
+    // No `agentId` at all. Widening here would deliver the one entry that tried to be
+    // specific to every agent in the run.
+    expect(entriesFor(named(), { role: 'executor.normal' })).toEqual([]);
+  });
+
+  it('reaches everyone when the author said so explicitly', () => {
+    const all = projectBlackboard([entry({ affects: [{ kind: 'everyone' }] })]);
+
+    expect(entriesFor(all, { role: 'planner' })).toHaveLength(1);
+    expect(entriesFor(all, { role: 'executor.trivial', agentId: 'dev' })).toHaveLength(1);
+  });
+
+  it('still matches a legacy role, which is most of the history on disk', () => {
+    const legacy = projectBlackboard([entry({ affects: ['planner'] })]);
+
+    expect(entriesFor(legacy, { role: 'planner', agentId: 'anyone' })).toHaveLength(1);
+    expect(entriesFor(legacy, { role: 'executor.normal', agentId: 'anyone' })).toEqual([]);
   });
 });

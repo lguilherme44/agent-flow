@@ -497,7 +497,7 @@ describe('harvestOutbox — the blackboard', () => {
 
     expect(outcome.entries[0]?.id).toBe('DSC-001');
     expect(outcome.entries[0]?.author).toBe('executor.normal');
-    expect(outcome.entries[0]?.affects).toEqual(['executor.complex']);
+    expect(outcome.entries[0]?.affects).toEqual([{ kind: 'role', role: 'executor.complex' }]);
   });
 
   it('numbers each kind in its own sequence', async () => {
@@ -701,5 +701,106 @@ describe('harvestOutbox — determinism', () => {
 
     expect(first.outcome.messages).toEqual(second.outcome.messages);
     expect(first.outcome.entries).toEqual(second.outcome.entries);
+  });
+});
+
+/**
+ * M7-ACC-29 and M7-ACC-30: a blackboard entry can name a teammate, and every entry
+ * written before it still reads.
+ *
+ * `affects` took a bare `WorkflowRole` from M4 through M6, and M5 then gave runs teams
+ * whose members have names. The live M6 dogfood is what made the gap concrete: a QA agent
+ * addressed two entries to members, one field failed, and the whole outbox was discarded —
+ * twice, in one task, with the event saying only "schema_invalid" until the diagnostic
+ * added later in that milestone could name the path.
+ */
+describe('a blackboard entry can be addressed to a member (M7 §2, §3)', () => {
+  it('accepts a named agent', async () => {
+    const { outcome } = await harvest({
+      outbox: {
+        entries: [
+          { kind: 'discovery', subject: 's', statement: 'x', affects: [{ kind: 'agent', id: 'qa' }] },
+        ],
+      },
+    });
+
+    expect(outcome.entries[0]?.affects).toEqual([{ kind: 'agent', id: 'qa' }]);
+  });
+
+  it('accepts "everyone" said explicitly, which is not the same as saying nothing', async () => {
+    const { outcome } = await harvest({
+      outbox: {
+        entries: [
+          { kind: 'discovery', subject: 's', statement: 'x', affects: [{ kind: 'everyone' }] },
+        ],
+      },
+    });
+
+    expect(outcome.entries[0]?.affects).toEqual([{ kind: 'everyone' }]);
+  });
+
+  it('still reads a bare role, and normalises it', async () => {
+    const { outcome } = await harvest({
+      outbox: {
+        entries: [{ kind: 'discovery', subject: 's', statement: 'x', affects: ['planner'] }],
+      },
+    });
+
+    expect(outcome.entries[0]?.affects).toEqual([{ kind: 'role', role: 'planner' }]);
+  });
+
+  it('mixes the two forms in one list', async () => {
+    const { outcome } = await harvest({
+      outbox: {
+        entries: [
+          {
+            kind: 'discovery',
+            subject: 's',
+            statement: 'x',
+            affects: ['planner', { kind: 'agent', id: 'qa' }],
+          },
+        ],
+      },
+    });
+
+    expect(outcome.entries[0]?.affects).toEqual([
+      { kind: 'role', role: 'planner' },
+      { kind: 'agent', id: 'qa' },
+    ]);
+  });
+
+  /** One bad value used to take the whole file with it. */
+  it('keeps the audiences it understands and records what it dropped', async () => {
+    const { outcome } = await harvest({
+      outbox: {
+        entries: [
+          { kind: 'discovery', subject: 's', statement: 'x', affects: ['planner', 'not-a-role'] },
+        ],
+      },
+    });
+
+    expect(outcome.refused).toBe(false);
+    expect(outcome.entries[0]?.affects).toEqual([{ kind: 'role', role: 'planner' }]);
+    expect(outcome.rejections[0]?.detail).toContain('1 audience value(s)');
+  });
+
+  /** §3: never silently delivered to everyone. */
+  it('refuses an entry whose whole audience was unreadable, rather than widening it', async () => {
+    const { outcome } = await harvest({
+      outbox: {
+        entries: [{ kind: 'discovery', subject: 's', statement: 'x', affects: ['nonsense'] }],
+      },
+    });
+
+    expect(outcome.entries).toEqual([]);
+    expect(outcome.rejections.some((r) => r.detail.includes('not widened to everyone'))).toBe(true);
+  });
+
+  it('leaves an empty audience meaning everyone, as it always did', async () => {
+    const { outcome } = await harvest({
+      outbox: { entries: [{ kind: 'discovery', subject: 's', statement: 'x' }] },
+    });
+
+    expect(outcome.entries[0]?.affects).toEqual([]);
   });
 });

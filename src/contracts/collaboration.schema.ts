@@ -252,6 +252,26 @@ export const MessageRecipientSchema = z.discriminatedUnion('kind', [
 ]);
 export type MessageRecipient = z.infer<typeof MessageRecipientSchema>;
 
+/**
+ * Who a blackboard entry is addressed to (M7 §2).
+ *
+ * **The same union a message already used, rather than a second language for the same
+ * idea.** M4 shipped `MessageRecipientSchema` as `agent | role | everyone` and M5 then
+ * introduced teams whose members are named — and `affects` stayed a bare `WorkflowRole`,
+ * so the one field naming an audience could not name a teammate. The live M6 run paid for
+ * it: a QA agent wrote two well-formed entries addressed to members, the only invalid
+ * thing in the file was that field, and the whole outbox was discarded.
+ *
+ * **A bare role string is still read**, because every entry written before M7 is one and
+ * the logs are not rewritten (§3). It normalises to `{ kind: 'role' }` on the way in, so
+ * nothing downstream has to know two shapes existed.
+ */
+export const CollaborationAudienceSchema = z.union([
+  WorkflowRoleSchema.transform((role) => ({ kind: 'role', role }) as const),
+  MessageRecipientSchema,
+]);
+export type CollaborationAudience = z.infer<typeof CollaborationAudienceSchema>;
+
 /** The types that must name exactly one agent and one task. */
 const DIRECTED_TYPES: ReadonlySet<MessageType> = new Set([
   'handoff_request',
@@ -339,14 +359,18 @@ export const BlackboardEntrySchema = z
     statement: z.string().min(1).max(4_000),
     rationale: z.string().max(4_000).optional(),
     /**
-     * Which roles this is addressed to. Roles rather than agent ids on purpose: an
-     * entry outlives the agent that wrote it and should reach whoever holds the role
-     * next, which is precisely what M5's teams will change about who that is.
+     * Who this is addressed to: a role, a named member, or everyone.
      *
-     * Empty means "everyone", and is the honest default for a discovery nobody knew
-     * the audience of.
+     * **Roles were the only option until M7, and the reasoning was sound and incomplete.**
+     * An entry outlives the agent that wrote it and should reach whoever holds the role
+     * next — true, and it is also true that a team has members, that `qa` is a real
+     * audience, and that an agent told about its teammates will address them by name.
+     *
+     * Empty means "everyone", and is the honest default for a discovery nobody knew the
+     * audience of. That is different from an audience that was named and not understood,
+     * which is refused rather than widened (§3).
      */
-    affects: z.array(WorkflowRoleSchema).max(16).default([]),
+    affects: z.array(CollaborationAudienceSchema).max(16).default([]),
     references: z.array(CollaborationReferenceSchema).max(20).default([]),
     /**
      * The entry this one replaces, when it replaces one.
@@ -417,7 +441,16 @@ export const ProposedEntrySchema = z.object({
   subject: z.string().min(1).max(120),
   statement: z.string().min(1),
   rationale: z.string().optional(),
-  affects: z.array(WorkflowRoleSchema).max(16).default([]),
+  /**
+   * Left `unknown` on purpose, and narrowed by the harvest.
+   *
+   * A strict union here would fail `AgentOutboxSchema` for the whole file over one
+   * unrecognised audience — which is precisely what happened in the live M6 run, twice in
+   * one task. The harvest parses each value, keeps what it understands, and records what
+   * it did not (§3). An entry whose entire audience was dropped is refused rather than
+   * delivered to everyone.
+   */
+  affects: z.array(z.unknown()).max(16).default([]),
   references: z.array(CollaborationReferenceSchema).max(20).default([]),
   supersedes: EntryIdSchema.optional(),
 });

@@ -119,19 +119,19 @@ export function buildCollaborationBootstrap(briefing?: AgentBriefing): string {
     'acknowledge|information|finding|decision|blocker","subject":"<short>","body":"<text>",',
     '"inReplyTo":"MSG-0000"}],',
     ' "entries":[{"kind":"decision|contract|constraint|discovery|risk","subject":"<topic>",',
-    '"statement":"<what is true>","rationale":"<why>","affects":["<role>"]}]}',
+    '"statement":"<what is true>","rationale":"<why>","affects":[<audience>]}]}',
     '',
-    // **The roles, named.** `<role>` was a placeholder for a closed enum the agent was
-    // never shown, and the live M6 run proved the cost: a QA agent wrote two well-formed
-    // blackboard entries and the *only* thing wrong with them was this field —
-    // `entries.0.affects.0: invalid_value` — so the whole outbox was discarded. Twice, in
-    // one task. Four milestones of "the channel is unused" had a mechanical cause, and it
-    // was one enum an agent could not guess.
+    // **What an audience may be, spelled out.** `<role>` was a placeholder for a closed
+    // enum the agent was never shown, and the live M6 run proved the cost: a QA agent
+    // wrote two well-formed entries, the *only* invalid thing in the file was this field
+    // — `entries.0.affects.0: invalid_value` — and the whole outbox was discarded. Twice,
+    // in one task.
     //
-    // Everything else in this block names members by id, which is what a team makes
-    // natural to write here; until `affects` accepts one, saying so is the difference
-    // between a usable protocol and a wall.
-    `"affects" is only these, [] means everyone: ${WORKFLOW_ROLES.join(' ')}`,
+    // M7 widened the field to the union a message always had, so the natural thing to
+    // write here is now also the correct one. Saying the role list anyway, because a role
+    // is the audience that outlives whoever currently holds it.
+    `"affects" takes what "to" takes, or {"kind":"everyone"}; [] means everyone.`,
+    `Roles: ${WORKFLOW_ROLES.join(' ')}`,
     '',
     // **The handoff, because the prose alone was not actionable.** The line below used to
     // say "use it for a real question, blocker, finding, handoff or shared decision" over
@@ -195,11 +195,12 @@ export function buildCollaborationContext(
   const audience = { agentId: input.agent.id, role: input.agent.role, taskId: input.taskId };
   // Newest first within each category: the most recent question is the one still waiting.
   const threads = [...threadsFor(input.threads, audience)].reverse();
-  const entries = [...entriesFor(input.entries, {
-    role: input.agent.role,
-    taskId: input.taskId,
-    files: input.files,
-  })].reverse();
+  // **`audience` whole, rather than three of its four fields.** The agent id was built
+  // one line above and dropped here, which was harmless while `affects` held roles only
+  // and became the reason an entry addressed to a teammate reached nobody.
+  const entries = [
+    ...entriesFor(input.entries, { ...audience, ...(input.files === undefined ? {} : { files: input.files }) }),
+  ].reverse();
   const handoffs = (input.handoffs ?? []).filter(
     (handoff) =>
       handoff.status !== 'rejected' &&

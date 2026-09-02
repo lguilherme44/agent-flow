@@ -390,7 +390,13 @@ function entryView(
     authorName: nameOf(roster, entry.author),
     statement: entry.statement,
     ...(entry.rationale === undefined ? {} : { rationale: entry.rationale }),
-    affects: [...entry.affects],
+    // **Rendered here, not in the browser.** An audience is a union now, and turning it
+    // into something a person reads is a decision — a member id shown raw would be
+    // indistinguishable from a role name. The view type stays `string[]`, so nothing on
+    // the page changes and nothing on the page derives.
+    affects: entry.affects.map((to) =>
+      to.kind === 'everyone' ? 'everyone' : to.kind === 'role' ? to.role : nameOf(roster, to.id),
+    ),
     ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
     ...(projected.supersededBy === undefined ? {} : { supersededBy: projected.supersededBy }),
     createdAt: entry.createdAt,

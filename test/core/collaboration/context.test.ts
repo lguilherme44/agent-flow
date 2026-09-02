@@ -300,7 +300,7 @@ describe('buildCollaborationBootstrap (M5, I-40)', () => {
     // buy a message that arrived once; this is what availability alone should cost.
     const bytes = new TextEncoder().encode(buildCollaborationBootstrap()).length;
 
-    // **1 040, and every raise has been bought.** M5's 772 became 900 for the handoff's
+    // **1 080, and every raise has been bought.** M5's 772 became 900 for the handoff's
     // form, and 900 becomes this for the `affects` enum — because the live M6 run showed
     // what the placeholder cost: a QA agent wrote two well-formed blackboard entries and
     // the only invalid thing in the file was that one field, so the whole outbox was
@@ -308,8 +308,13 @@ describe('buildCollaborationBootstrap (M5, I-40)', () => {
     // mechanical cause and it was an enum an agent could not guess.
     //
     // ~120 bytes against a 32–50 KB implementation prompt is 0.3%, and it is the
-    // difference between a protocol that can be obeyed and one that cannot. Still below
-    // M4's 1 373, which this is measured against.
-    expect(bytes).toBeLessThan(1_040);
+    // difference between a protocol that can be obeyed and one that cannot.
+    //
+    // M7 adds 40 more for the audience union: `affects` now takes what `to` takes, so an
+    // entry can name a teammate, and an agent shown a team is no longer told a shape it
+    // cannot use. Three raises, three purchases — 772 → 900 the handoff's form, 900 →
+    // 1 040 the role enum, 1 040 → 1 080 the audience. Still below M4's 1 373, which this
+    // is measured against.
+    expect(bytes).toBeLessThan(1_080);
   });
 });

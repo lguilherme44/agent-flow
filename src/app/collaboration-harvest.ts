@@ -2,6 +2,8 @@ import nodePath from 'node:path';
 import type { z } from 'zod';
 import {
   AgentOutboxSchema,
+  CollaborationAudienceSchema,
+  type CollaborationAudience,
   AgentMessageSchema,
   BlackboardEntrySchema,
   type AgentId,
@@ -370,6 +372,30 @@ function resolveRecipient(
 
 /* ─── Blackboard ───────────────────────────────────────────────────────────── */
 
+/**
+ * The audience values this product understands, and a count of the ones it did not.
+ *
+ * A count rather than the values themselves: a rejection is not a channel, and the same
+ * rule that keeps a malformed message body out of the log keeps a malformed audience out
+ * of it.
+ */
+function admitAudience(values: readonly unknown[]): {
+  readonly kept: CollaborationAudience[];
+  readonly dropped: number;
+} {
+  const kept: CollaborationAudience[] = [];
+  let dropped = 0;
+
+  for (const value of values) {
+    const parsed = CollaborationAudienceSchema.safeParse(value);
+    if (parsed.success) kept.push(parsed.data);
+    else dropped += 1;
+  }
+
+  return { kept, dropped };
+}
+
+
 function admitEntries(
   request: HarvestRequest,
   proposed: readonly ProposedEntry[],
@@ -405,6 +431,36 @@ function admitEntries(
       continue;
     }
 
+    // **The audience, narrowed here rather than by the outbox schema** (M7 §3).
+    //
+    // A strict union in `ProposedEntrySchema` would fail the whole file over one
+    // unrecognised value, which is exactly what the live M6 run did — twice in one task,
+    // discarding two well-formed entries and everything beside them. So the schema keeps
+    // the values `unknown` and this narrows them, keeping what it understands.
+    const audience = admitAudience(candidate.affects);
+    if (audience.dropped > 0) {
+      rejections.push({
+        reason: 'schema_invalid',
+        subject: candidate.subject,
+        detail:
+          `${String(audience.dropped)} audience value(s) were not a role, a member or ` +
+          '"everyone", and were dropped',
+      });
+    }
+
+    // **An audience that was named and not understood is refused, never widened.** An
+    // empty `affects` means "everyone" and is an honest default for a discovery nobody
+    // knew the audience of; arriving at empty by discarding every value the author wrote
+    // would deliver to everyone precisely the entry that tried to be specific.
+    if (candidate.affects.length > 0 && audience.kept.length === 0) {
+      rejections.push({
+        reason: 'schema_invalid',
+        subject: candidate.subject,
+        detail: 'no audience value could be understood, and an entry is not widened to everyone',
+      });
+      continue;
+    }
+
     const redaction = {
       workspaceRoot: request.workspaceDir,
       ...(request.homeDir === undefined ? {} : { home: request.homeDir }),
@@ -426,7 +482,7 @@ function admitEntries(
       author: request.agentId,
       statement: statement.text,
       ...(rationale === undefined ? {} : { rationale: rationale.text }),
-      affects: candidate.affects,
+      affects: audience.kept,
       references: candidate.references,
       ...(candidate.supersedes === undefined ? {} : { supersedes: candidate.supersedes }),
       truncated: statement.truncated || (rationale?.truncated ?? false),
