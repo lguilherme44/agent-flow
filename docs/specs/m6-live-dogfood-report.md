@@ -130,6 +130,94 @@ and is reported as such rather than manufactured.
 
 ---
 
+## Scenario 2 — `AF-2026-001`, a slug module
+
+Sized to *close* the loop rather than to stress it: one pure module, work an implementer
+finishes in one attempt.
+
+| | |
+|---|---|
+| Repository | `~/wk/m6-dogfood2` — a single ES module, 2 tests at baseline |
+| Feature | `uniqueSlug(title, taken)` with a numeric suffix, test-first |
+| Run id | `AF-2026-001` |
+| Wall clock | 19:55:32Z → 20:28:08Z (**32m 36s**) plus two `review --fix` and one `revise` |
+| Providers | 2 — `claude-code-cli` and `agy-cli` |
+| Logical agents | 3 — `dev` (agy); `reviewer`, `qa` (claude) |
+| Context cost | **582 KB** across 16 stage prompts |
+| Tasks | 3, all completed |
+
+### QA picked up QA work, through the same policy
+
+| Task | Agent | Score | Why |
+|---|---|---|---|
+| TASK-001 *(write failing tests)* | **qa** | **0.91** | testing, test-gap, missing-test, coverage |
+| TASK-002 *(implement)* | dev | 0.86 | javascript, strings, correctness |
+| TASK-003 *(verify no collateral)* | dev | 0.00 | a role it also serves |
+
+0.91 is the highest assignment score in either scenario. §33–§35 asked for QA to be a team
+member with QA skills rather than a tenth `WorkflowRole`, and a test-writing task routed to
+it through the M5 policy with no QA-specific code anywhere. **M6-ACC-15, answered live.**
+
+### Reviews
+
+| Review | Task | Author | Independence | Verdict | Findings |
+|---|---|---|---|---|---|
+| REV-0001 | TASK-001 | qa | **1** | changes_requested | 1 medium, 1 low |
+| REV-0002 | TASK-002 | dev | **3** | approve | 1 low, 1 info |
+
+Independence 1 on the first, because `qa` and `reviewer` are both on `claude` — same
+provider, different member. Recorded rather than hidden, which is what §12 asks for. The
+second is 3, because `dev` is on `agy`.
+
+`REV-0002` is an **approval**, and the first this product has produced from a live reviewer.
+Two findings, both non-blocking, and the change proceeds — §44's severity policy doing the
+thing it exists to do rather than blocking everything.
+
+The reviewer found the same *class* of defect it found in the other repository, unprompted:
+
+> `assert.equal(result.endsWith('-1'), false)` can never fail. Line 27 already pins
+> `result` to the exact string.
+
+Two repositories, two assertions that cannot fail, found by a reviewer nobody told to look
+for them.
+
+`FIND-0004` (info) is worth quoting for a different reason:
+
+> The checked-out working tree does not contain this change. `src/slug.js` on master has
+> only slugify, `git status` is clean.
+
+The reviewer noticed it was reading an integration branch rather than the working tree, and
+filed it as `info` rather than as a defect. I-41 — a review is a statement about one tree —
+landing in the reviewer's own understanding.
+
+### Quality gates — the first green ones
+
+| Task | Gate | Required | Status |
+|---|---|---|---|
+| TASK-001 | test | yes | failed (exit 1) — correct: the task expects a red suite |
+| TASK-001 | lint | yes | **not_run** |
+| TASK-002 | test | yes | **passed** (exit 0) |
+| TASK-002 | lint | yes | **passed** (exit 0) |
+
+Both required gates green on TASK-002, from the project's own commands. **M6-ACC-17,
+answered live.** `lint` is `not_run` on TASK-001 for the reason described under limitations.
+
+### The Definition of Done, held open by exactly one thing
+
+```
+✓ SDD approved
+✓ all tasks completed
+✓ lint, tests and build passing
+✓ final review PASS
+✗ no blocking review finding is open — still open: FIND-0001
+```
+
+Every condition M4 knew about passed. Without the fifth — added in this milestone because
+§43 asks for it — **this run would have been declared DONE with a blocking finding open**.
+That is the defect and the fix, on one screen, from a real run.
+
+---
+
 ## Defects this dogfood found
 
 Every one of them survived 3893 green tests, and every fix carries a positive control.
@@ -174,7 +262,40 @@ Fixed in `e81d0ea`. The refusal now names the fields in the schema's own vocabul
 from `AgentOutboxSchema`, codes from the validator, segments sanitised, capped at four. No
 agent-authored text passes through: a rejection is still not a channel.
 
-### 4. Corrective tasks were ordered only against each other — MEDIUM
+### 4. A fix was born expecting a green suite the cycle requires to be red — HIGH
+
+**Both** live corrective rounds, in two different repositories, were rejected by the plan
+review with the same reasoning:
+
+> TASK-001 deliberately leaves the suite RED (its own expectation is `fail`). So FIX-001
+> becomes eligible the moment TASK-001 finishes, and in that window `npm run test` cannot
+> pass. The task only works by accident, if the runner happens to serialize in array order.
+> A parallel scheduler produces a false failure and burns retry attempts on a task whose
+> content is correct.
+
+Two of two is not a scenario artifact. A corrective task took the schema default of `pass`
+whatever it was correcting, so every fix to a test-first task's tests was born expecting
+green from a red suite.
+
+Fixed by inheriting the expectation of the task whose finding it corrects: a correction
+occupies that task's position in the cycle, because that is what it corrects.
+
+### 5. `review --fix` twice generated two tasks for one finding — HIGH
+
+A finding is `fixed` only once its corrective task *completes*. Between generating that
+task and running it the finding is still `open`, so the selector — which reads status —
+selected it again. The live run produced FIX-001 and FIX-003 with byte-identical
+descriptions and the same `FIND-0001`, and the plan review caught it:
+
+> Three tasks for one assertion. Whichever runs first satisfies the criterion, so the other
+> two are no-ops. FIX-003 makes it worse: it depends on FIX-001 and FIX-002 yet declares
+> `validationExpectation: "fail"`, so the last task in the plan is scheduled to demand a
+> failing gate on a change that is already green.
+
+Fixed: the selector reads the plan for findings that already carry a corrective task,
+whether or not it has run. One task per finding, ever.
+
+### 6. Corrective tasks were ordered only against each other — MEDIUM
 
 `applyFixes` derived file-overlap ordering among the new tasks only, reasoning that an
 existing task has already run. `review --fix` on a run that *halted* falsifies the premise:
@@ -184,6 +305,18 @@ entire plan for contention. The corrective round produced nothing.
 Fixed by deriving against the whole plan. Safe because the helper only adds edges from
 later entries to earlier ones and the fixes are appended last, so every edge points from a
 fix into the plan and never the reverse.
+
+### 7. Four event types stored a status the design says must be derived — MEDIUM
+
+Found by auditing the vocabulary after defect 1, not by the run itself. Five review event
+types were declared and emitted by nothing. Four of them — `finding_acknowledged`,
+`finding_disputed`, `finding_fixed`, `finding_verified` — are *statuses*, and I-43 says a
+finding's status is derived and never stored. An event carrying one would have been a
+second answer to a question the projection already answers, and the two would disagree the
+first time a run resumed.
+
+Removed. The suite now requires an emitter for every type in `REVIEW_EVENT_TYPES` — the
+reachability rule of defect 1, applied to data instead of to code.
 
 ---
 
