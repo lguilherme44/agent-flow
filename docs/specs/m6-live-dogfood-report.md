@@ -186,9 +186,9 @@ for them.
 > The checked-out working tree does not contain this change. `src/slug.js` on master has
 > only slugify, `git status` is clean.
 
-The reviewer noticed it was reading an integration branch rather than the working tree, and
-filed it as `info` rather than as a defect. I-41 — a review is a statement about one tree —
-landing in the reviewer's own understanding.
+I read this at the time as the reviewer being careful. **It was the reviewer reporting a
+product defect** — it was reading the working tree and not the integration branch, because
+nothing gave it the integration checkout. See defect -1.
 
 ### Quality gates — the first green ones
 
@@ -222,7 +222,47 @@ That is the defect and the fix, on one screen, from a real run.
 
 Every one of them survived 3893 green tests, and every fix carries a positive control.
 
-### 0. A team member's declared runner is fiction at execution time — BLOCKER, not fixed
+### -1. The reviewer read the wrong tree — BLOCKER, fixed
+
+**The worst defect in the milestone, and it invalidates the *content* of every live review
+before the fix.** Not the mechanism — a review was requested, assigned, run and recorded
+correctly every time — but what the model actually looked at.
+
+The reviewer ran in the project directory. In worktree mode that is the operator's own
+checkout, which does not have the change in it. So every per-task review judged a tree
+without the work.
+
+`reviewedTree` was recorded correctly the whole time. That is what made this dangerous
+rather than obvious: the audit trail named the right commit while the model had read a
+different one. §4 asks for `reviewedTree == tree intended for review`; the record satisfied
+it and the reading did not, and no test could tell, because every test checked the field.
+
+**The product said so twice and I read it as cleverness.** Scenario 2's reviewer filed this
+as `info`:
+
+> The checked-out working tree does not contain this change. `src/slug.js` on master has
+> only slugify, `git status` is clean.
+
+I recorded that above as "I-41 landing in the reviewer's own understanding". It was the
+reviewer reporting a product defect. Scenario 3 then produced `[critical] truncateSlug does
+not exist, src/slug.js ends at line 11` about a function sitting on the integration branch,
+and the QA agent sent back to fix it refused, with `git log -S truncateSlug` naming the two
+commits that had added it — **a corrective task correctly declining to correct a false
+positive.**
+
+Fixed: the review runs in the checkout `openForReview` prepares, the same one the run-level
+review and the Definition of Done already use. A preparation that cannot be opened skips
+the review rather than running it against the wrong tree. Three architecture rules hold it,
+including one requiring that exactly one place in the product opens an integration
+checkout.
+
+**What this costs the earlier evidence.** The findings quoted from scenarios 1–3 were formed
+against the pre-change tree, so a finding about *what the diff added* may be wrong.
+`FIND-0001` in scenario 1 survives on its own terms — it is an argument about an acceptance
+criterion's text, which the reviewer could read either way — and the same is true of the
+"assertion that cannot fail" findings. Anything asserting a file's *contents* does not.
+
+### 0. A team member's declared runner was fiction at execution time — BLOCKER, fixed
 
 **The independence figures in this report are unreliable, including the ones above.** They
 are corrected in the table below.
@@ -257,16 +297,16 @@ Three of five are wrong, and one of them is wrong in the direction that matters:
 REV-0002 recorded *maximum* independence for a review where the same provider wrote the
 code and judged it — the exact situation I-42 exists to prevent, reported as its opposite.
 
-**Not fixed here, deliberately.** This is an M5 execution-path defect, and §2 of the M6
-charter says M5 stabilisation is its own work and must not be smuggled into M6. The change
-also moves which provider every team task runs on, which is a real behavioural change for
-anyone with a team configured — not something to land at the end of a milestone on the
-strength of one log line, however clear.
+**Fixed.** It was left standing at the end of the first pass, on the reasoning that an M5
+execution-path change should not be smuggled into M6. The completion charter's §8 settles
+it the other way — "o sistema deve persistir o nível *efetivo*" — and an effective level is
+only persistable if the effective runner runs.
 
-The fix is small and the shape is already there: thread the assigned member's runner and
-model into `StageRunOptions`, and pass them to `resolveRole` as the override it already
-takes. It is the first thing the next cycle should do, and every independence number in the
-product is suspect until it is done.
+`StageRunOptions` now carries the assigned member, and `stageRunner.run` passes it to
+`resolveRole` as the override that function has accepted since M5. A run with no team is
+byte-for-byte unchanged: the override is absent and the role resolves as it always did.
+Two architecture rules hold the thread, one at each end, because a rule checking one end is
+how it broke.
 
 ### 1. A code-review finding could never become work — BLOCKER
 
@@ -422,6 +462,100 @@ change and the criteria, not the repository.
 
 ---
 
+## Scenario 3 — `AF-2026-002`, the completion pass
+
+Run on the completion charter's build, and it produced the milestone's two clearest pieces
+of evidence.
+
+| | |
+|---|---|
+| Repository | `~/wk/m6-dogfood2` |
+| Feature | `truncateSlug(title, maxLength)`, test-first |
+| Providers · agents | 2 · 3 (`dev` on agy; `reviewer`, `qa` on claude) |
+| Context cost | **402 KB** across 13 stage prompts |
+| Reviews | 3 · independence 1, 3, 1 |
+| Findings | 6 — 1 critical, 1 high, 2 low, 2 info |
+
+### The review caught a green gate that was lying
+
+`TASK-002` reported completion. Its two required gates both passed, exit 0. The reviewer
+read the tree and returned `blocked`:
+
+> **[critical] FIND-0004** — `truncateSlug` does not exist. `src/slug.js` ends at line 11
+> with the original slugify function.
+>
+> **[info] FIND-0006** — The reported green gate cannot distinguish 'implemented correctly'
+> from 'not implemented'.
+
+The second finding is the diagnosis of the first: the tests never imported the function, so
+`npm test` passed by not exercising anything. A deterministic gate said yes about work that
+did not exist, and a semantic review is what noticed — which is §9–§12's whole argument,
+arrived at from the other direction.
+
+Then the Definition of Done:
+
+```
+✓ SDD approved
+✓ all tasks completed
+✓ lint, tests and build passing
+✓ final review PASS
+✗ no blocking review finding is open — still open: FIND-0004, FIND-0005
+```
+
+**Every condition M4 knew about passed on a tree where the feature does not exist.** Without
+the fifth — added in this milestone because §43 asks for it — this run ships as DONE with
+nothing implemented. That is the milestone justified in five lines of its own output.
+
+### The runner fix, before and after in one log
+
+`qa` declares `runner: claude`. `executor.normal` points at `agy`.
+
+```
+TASK-001  runner=agy       ← old build: the role won
+TASK-002  runner=agy
+TASK-003  runner=agy
+FIX-001   runner=claude    ← after the fix: the member wins
+```
+
+Same run, same config, same member. **M6-ACC-03, answered live.**
+
+### Why four milestones of silence — answered
+
+The refusal diagnostic added earlier in this milestone finally said what a malformed outbox
+got wrong:
+
+```
+entries.0.affects.0: invalid_value
+entries.0.affects.2: invalid_value
+entries.1.affects.1: invalid_value
+```
+
+The QA agent wrote two well-formed blackboard entries and the *only* invalid thing in the
+file was one field. `affects` takes the nine workflow roles; the bootstrap sketched it as
+`"affects":["<role>"]` and never said what a role is, while everything else in the same
+block names members by id — which is what a team makes natural to write there.
+
+So the channel was not unused. It was unusable, over an enum nobody was shown. The
+bootstrap now lists the nine values, at ~120 bytes on a 32–50 KB prompt. `affects` still
+rejects a member id, which is the follow-up: widening it is an M4 contract change and the
+audience filter has to learn about members.
+
+### Two more defects, both found by running it
+
+**The corrective task took the whole validation registry.** The plan review named the
+consequence exactly: `install` resolves to `npm install`, this repository has no
+dependencies, npm writes a `package-lock.json` that `.gitignore` does not cover, and
+TASK-003's change-surface criterion then fails. Every human-planned task omitted `install`;
+every generated fix put it back. A correction now validates with what the corrected task
+validated with — the third thing it inherits, after its origin and its expectation.
+
+**A revision plus a block crashed the run.** `agent-flow revise` gave the already-completed
+TASK-003 a dependency on FIX-001; FIX-001 blocked; the cascade returned TASK-003; the
+scheduler wrote `completed → blocked`; the state machine refused, correctly, and the
+unhandled `TaskStateError` killed the run *after* the corrective task had done its work.
+The cascade's own comment said "none of them ran, so this is dependency-derived by
+construction" — and a revision is exactly the case where that stops being true.
+
 ## Acceptance criteria, one by one
 
 Twenty-eight, and every tag is greppable in `test/` so this table can be checked rather
@@ -431,7 +565,7 @@ than believed.
 |---|---|---|---|
 | 01 | implementation receives independent reviewer | ✅ | `review-acceptance`, live in both runs |
 | 02 | reviewer cannot equal implementation invocation | ✅ | `assignment.ts` `is_author`, architecture test |
-| 03 | provider independence preferred, degradation recorded | ❌ | **recorded, and wrong 3 times in 5 — defect 0** |
+| 03 | provider independence preferred, degradation recorded | ✅ | wrong 3 times in 5 until defect 0 was fixed |
 | 04 | structured finding is persisted | ✅ | 11 findings across 4 live reviews |
 | 05 | invalid finding paths refused/dropped safely | ✅ | `normalise.ts`, adversarial suite |
 | 06 | blocking finding prevents review approval | ✅ | live: the DoD held two runs open |
@@ -570,9 +704,9 @@ in the last hour of the dogfood.
 
 | | |
 |---|---|
-| M6-ACC-03 | ❌ independence is recorded and wrong three times in five (defect 0) |
-| M6-ACC-24 | ❌ no live handoff or reassignment, in either scenario |
-| M6-ACC-25 | ❌ no collaboration payload changed any agent's behaviour |
+| M6-ACC-03 | ✅ fixed in the completion pass — see defect 0 |
+| M6-ACC-24 | ⊘ released by the completion charter's §53: not required when no honest scenario produces one |
+| M6-ACC-25 | ⊘ released by §54, for the same reason |
 
 Everything else holds, and most of it holds on live evidence rather than on a fixture.
 
