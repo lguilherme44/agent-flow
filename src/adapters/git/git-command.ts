@@ -71,6 +71,13 @@ export const GIT_SUBCOMMANDS = [
   // refusing itself over its own state files.
   'submodule',
   'check-ignore',
+  // Added for M7. The first two verbs in this list that touch a network, and the reason
+  // the allowlist exists: `push` is the one Git command that can destroy work on a machine
+  // this process does not own. `RemoteGitPublisher` is the only caller, it passes an exact
+  // object id and an exact destination ref as separate arguments, and no `--force` in any
+  // spelling reaches here — `assertPushArgs` refuses them by name.
+  'push',
+  'ls-remote',
 ] as const;
 
 export type GitSubcommand = (typeof GIT_SUBCOMMANDS)[number];
@@ -278,6 +285,49 @@ const IDENTITY_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
  * attack of §45 through the door it was written to close. No operation in
  * {@link GIT_SUBCOMMANDS} takes a legitimate argument starting with `-c`.
  */
+/**
+ * The options a push may never carry (M7 §12).
+ *
+ * Refused by name rather than by policy elsewhere, because this is the layer that builds
+ * the argv — a guard in the caller protects the caller that remembered it.
+ */
+const FORBIDDEN_PUSH_OPTIONS: readonly string[] = [
+  '--force',
+  '-f',
+  '--force-with-lease',
+  '--force-if-includes',
+  '--delete',
+  '-d',
+  '--mirror',
+  '--prune',
+  '--all',
+  '--tags',
+  '--follow-tags',
+  '--receive-pack',
+  '--exec',
+];
+
+/**
+ * Whether a `push` invocation is one this product is willing to make.
+ *
+ * A non-fast-forward update is a person's decision. Agent Flow publishes an exact commit
+ * to a branch it owns, and a remote that has moved underneath it is a refusal — not a
+ * flag, and specifically not `--force-with-lease`, which reads as careful and still
+ * discards whatever the lease did not know about.
+ */
+export function assertPushArgs(args: readonly string[]): GitFailure | null {
+  for (const arg of args) {
+    const name = arg.split('=', 1)[0] ?? arg;
+    if (FORBIDDEN_PUSH_OPTIONS.includes(name)) {
+      return {
+        code: 'git_unsafe_argument',
+        message: `"${arg}" would let a push overwrite or remove a remote ref, which this tool never does`,
+      };
+    }
+  }
+  return null;
+}
+
 export function assertOperationArgs(args: readonly string[]): GitFailure | null {
   for (const arg of args) {
     if (NUL_BYTE.test(arg)) {
@@ -355,6 +405,11 @@ export class GitCommand {
 
     const unsafe = assertOperationArgs(args);
     if (unsafe !== null) return gitFailure(unsafe);
+
+    if (invocation.subcommand === 'push') {
+      const unsafePush = assertPushArgs(args);
+      if (unsafePush !== null) return gitFailure(unsafePush);
+    }
 
     if (invocation.identity !== undefined) {
       const badIdentity = assertIdentity(invocation.identity);

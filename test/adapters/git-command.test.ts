@@ -8,6 +8,7 @@ import {
   GitCommand,
   assertOperationArgs,
   createGitCommand,
+  assertPushArgs,
 } from '../../src/adapters/git/git-command.js';
 
 /**
@@ -177,7 +178,11 @@ describe('safety configuration is not overridable (§45, S-12)', () => {
     const result = await commandWith(runner).run({
       // The whole point of the list is that this cannot be reached by accident,
       // so reaching it on purpose needs a cast.
-      subcommand: 'push' as (typeof GIT_SUBCOMMANDS)[number],
+      //
+      // **Was `push` until M7 admitted it.** `reset` is the better example anyway: it is
+      // the command that lost uncommitted work in an earlier cycle, and the one nothing in
+      // this product has ever had a reason to run.
+      subcommand: 'reset' as (typeof GIT_SUBCOMMANDS)[number],
       cwd: '/repo',
     });
 
@@ -425,5 +430,44 @@ describe('failures are typed, and a non-zero exit is not one of them', () => {
     if (!result.ok) return;
     // The wrapper reports it; `GitWorkspaces` refuses to parse it (§37).
     expect(result.value.truncated).toBe(true);
+  });
+});
+
+/**
+ * M7 admitted the first two Git verbs that touch a network, and `push` is the one command
+ * in this product that can destroy work on a machine the process does not own.
+ *
+ * The guard is here rather than in `RemoteGitPublisher` because a guard in the caller
+ * protects the caller that remembered it. This layer builds the argv.
+ */
+describe('a push may never overwrite or remove a remote ref (M7 §12)', () => {
+  it.each([
+    '--force',
+    '-f',
+    '--force-with-lease',
+    '--force-with-lease=refs/heads/x',
+    '--force-if-includes',
+    '--delete',
+    '-d',
+    '--mirror',
+    '--prune',
+    '--all',
+    '--tags',
+  ])('refuses %s', (option) => {
+    const refusal = assertPushArgs(['origin', 'abc:refs/heads/agent-flow/AF-2026-001', option]);
+
+    expect(refusal?.code).toBe('git_unsafe_argument');
+  });
+
+  it('refuses --receive-pack, which chooses what runs on the far end', () => {
+    expect(assertPushArgs(['--receive-pack=/tmp/evil', 'origin', 'a:b'])?.code).toBe(
+      'git_unsafe_argument',
+    );
+  });
+
+  it('allows the shape the publisher actually builds', () => {
+    expect(
+      assertPushArgs(['--porcelain', 'origin', `${'a'.repeat(40)}:refs/heads/agent-flow/AF-2026-001`]),
+    ).toBeNull();
   });
 });
