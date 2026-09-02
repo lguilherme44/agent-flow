@@ -161,6 +161,32 @@ export const FAILURE_AUTHORITIES = ['mechanical', 'llm_advisory', 'human'] as co
 export const FailureAuthoritySchema = z.enum(FAILURE_AUTHORITIES);
 export type FailureAuthority = z.infer<typeof FailureAuthoritySchema>;
 
+/**
+ * The artifacts a stage can produce — a closed vocabulary, not a path.
+ *
+ * Declared here rather than in `app/paths.ts`, which is where it used to live and where
+ * it still resolves to a filename. The list itself is *vocabulary*: it is what a plan, a
+ * message or a review may name when it points at something the run produced, and every
+ * other closed vocabulary in this product is declared in the contracts layer for the same
+ * reason — a caller that needs to validate a name must not have to import the layer that
+ * knows where the file is.
+ *
+ * `app/paths.ts` re-exports the type and owns the name → path mapping, so no existing
+ * import changed and there is still exactly one place that composes a path.
+ */
+export const ARTIFACT_NAMES = [
+  'request',
+  'architectureImpact',
+  'sdd',
+  'plan',
+  'planReview',
+  'verification',
+  'finalReview',
+] as const;
+
+export const ArtifactNameSchema = z.enum(ARTIFACT_NAMES);
+export type ArtifactName = z.infer<typeof ArtifactNameSchema>;
+
 /** Requirement ids carried by the SDD (§40) and referenced by tasks (§41). */
 export const RequirementIdSchema = z
   .string()

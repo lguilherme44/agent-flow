@@ -7,6 +7,7 @@ import {
   type WorkflowRole,
 } from './common.schema.js';
 import { UtilityModelConfigSchema } from './utility-model-config.schema.js';
+import { CollaborationConfigSchema } from './collaboration-config.schema.js';
 
 /** Default per-role timeout. A hung CLI must not stall a run forever (R-11). */
 export const DEFAULT_TIMEOUT_SECONDS = 900;
@@ -211,6 +212,19 @@ export const GlobalConfigSchema = z.object({
    * boundary; the resolved value is never persisted, serialized or logged.
    */
   utilityModel: UtilityModelConfigSchema.prefault({}),
+  /**
+   * What agents may say to each other, and how much of it (M4).
+   *
+   * Global only, and deliberately absent from `OVERRIDABLE_KEYS` for the same reason as
+   * `ui` and `utilityModel`: whether agents talk, and how far their autonomy runs before
+   * a budget stops it, is a property of the operator's setup. Letting one discovered
+   * repository raise its own message budget would let a repository decide how much of
+   * itself reaches the next prompt.
+   *
+   * Disabled by default. When disabled, the workflow behaves exactly as it did before M4:
+   * no outbox is read, no collaboration directory is created, and no prompt gains a byte.
+   */
+  collaboration: CollaborationConfigSchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

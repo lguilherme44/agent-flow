@@ -10,6 +10,8 @@
  * pointer to the active run, and a cache whose whole purpose is being shared.
  */
 
+import type { ArtifactName } from '../contracts/common.schema.js';
+
 export interface AgentFlowPaths {
   readonly root: string;
   readonly config: string;
@@ -32,15 +34,17 @@ export function agentFlowPaths(projectDir: string): AgentFlowPaths {
   };
 }
 
-/** Artifacts a stage can produce. Keys, not paths, so callers never build strings. */
-export type ArtifactName =
-  | 'request'
-  | 'architectureImpact'
-  | 'sdd'
-  | 'plan'
-  | 'planReview'
-  | 'verification'
-  | 'finalReview';
+/**
+ * Artifacts a stage can produce. Keys, not paths, so callers never build strings.
+ *
+ * The *list* moved to `contracts/common.schema.ts` and is re-exported here unchanged, so
+ * every existing `import type { ArtifactName } from './paths.js'` still resolves. The
+ * reason for the move is that the names are a closed vocabulary a message or a plan may
+ * reference, and a validator in the contracts layer must not import the layer that knows
+ * where files live. What stays here is the only thing that was ever specific to this
+ * module: the mapping from a name to a path.
+ */
+export type { ArtifactName };
 
 export interface RunPaths {
   readonly dir: string;

@@ -3369,3 +3369,105 @@ describe('a core module built for a milestone is actually wired to one', () => {
     expect(unreachable, 'a core module no surface imports').toEqual([]);
   });
 });
+
+describe('collaboration carries no workflow authority (M4, I-27, I-29)', () => {
+  // The single property that makes an agent-to-agent channel safe to have at all.
+  // A message is model output arriving through a different door than a plan, and the
+  // defence is the same one: the modules that read it are structurally incapable of
+  // acting on it. Prose saying "messages are advisory" is a promise; an import ban is
+  // a mechanism.
+  const COLLABORATION = [
+    ...sourceFiles('src/core/collaboration'),
+    ...sourceFiles('src').filter((file) => /src\/app\/collaboration-[^/]+\.ts$/.test(file)),
+    join(ROOT, 'src/contracts/collaboration.schema.ts'),
+    join(ROOT, 'src/contracts/collaboration-config.schema.ts'),
+  ].filter((file) => existsSync(file));
+
+  it('exists at all', () => {
+    // Guards the rules below against passing over an empty set — the failure mode
+    // where a whole feature is renamed and every rule about it silently stops looking.
+    expect(COLLABORATION.length).toBeGreaterThan(0);
+  });
+
+  it('reaches no module that can move a run', () => {
+    const FORBIDDEN = [
+      'scheduler',
+      'integrator',
+      'task-executor',
+      'state-store',
+      'attempt-receipt',
+      'worktree-recovery',
+      'run-actions',
+      'approval',
+      'corrective-round',
+    ];
+
+    const offenders = COLLABORATION.map(read).flatMap(({ path, text }) =>
+      importSpecifiers(text)
+        .filter((specifier) => FORBIDDEN.some((module) => specifier.includes(module)))
+        .map((specifier) => `${path} → ${specifier}`),
+    );
+
+    expect(offenders, 'a collaboration module importing something that decides').toEqual([]);
+  });
+
+  it('reaches no shell, no process and no Git', () => {
+    // I-29. A message body is text that a model wrote; a module that can both read one
+    // and spawn a process is one refactor away from interpolating the first into the
+    // second.
+    const FORBIDDEN = ['node:child_process', 'child_process', 'git-command', 'git-client', 'git-workspaces', 'process-runner'];
+
+    const offenders = COLLABORATION.map(read).flatMap(({ path, text }) =>
+      importSpecifiers(text)
+        .filter((specifier) => FORBIDDEN.some((module) => specifier.includes(module)))
+        .map((specifier) => `${path} → ${specifier}`),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the pure half free of Node built-ins, like the rest of core', () => {
+    const offenders = sourceFiles('src/core/collaboration')
+      .map(read)
+      .filter(({ text }) => importSpecifiers(text).some((s) => s.startsWith('node:')))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('names no runner, model or provider', () => {
+    // Same rule as `src/core`, restated for this feature because a roster is exactly
+    // where a provider name is tempting: an agent has a runner, and the runner's *id*
+    // comes from configuration rather than from a table here.
+    const FORBIDDEN = ['claude', 'codex', 'anthropic', 'openai', 'gpt-', 'opus', 'sonnet', 'gemini'];
+
+    const offenders = COLLABORATION.map(read).flatMap(({ path, text }) => {
+      const code = codeOnly(text).toLowerCase();
+      return FORBIDDEN.filter((name) => code.includes(name)).map((name) => `${path}: ${name}`);
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('validates a referenced path with the ContextPacket rule and no second one', () => {
+    // A second implementation of the traversal rules is a second chance to miss one of
+    // them. The reference schema must reach `validateAndNormalizeRepositoryPath` rather
+    // than test for `..` itself.
+    const schema = read(join(ROOT, 'src/contracts/collaboration.schema.ts'));
+
+    expect(schema.text).toContain('validateAndNormalizeRepositoryPath');
+    // No hand-rolled traversal check beside it.
+    expect(codeOnly(schema.text)).not.toMatch(/\.\.\//);
+  });
+
+  it('gives an agent no field in which to name its own sender (I-28)', () => {
+    // The defence is the *absence* of the field: Zod strips unknown keys, so a forged
+    // `from` is discarded by the parse rather than by a check somebody has to remember
+    // to write. A `from` appearing in the proposed shape would silently re-open it.
+    const schema = read(join(ROOT, 'src/contracts/collaboration.schema.ts')).text;
+    const proposed = schema.slice(schema.indexOf('export const ProposedMessageSchema'));
+    const body = proposed.slice(0, proposed.indexOf('});'));
+
+    expect(codeOnly(body)).not.toMatch(/\bfrom:/);
+  });
+});

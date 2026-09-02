@@ -190,6 +190,47 @@ utilityModel:
   targetInputTokens: 40000
   maxOutputTokens: 4000
   timeoutSeconds: 120
+
+# What agents may say to each other (M4). Off by default: with it off, nothing
+# reads an outbox, no collaboration directory is created, and not one byte of any
+# prompt differs from before the milestone.
+#
+# Turned on, an implementation agent may leave a \`.agent-flow-outbox.json\` in its
+# workspace. Agent Flow reads it after the process exits and before it captures the
+# validated tree, so nothing an agent writes there can reach a commit; then it
+# validates every message against a schema, redacts it, bounds it, and assigns the
+# sender from the dispatch rather than from the file. The agent proposes; Agent Flow
+# decides — the same ordering that makes a validation receipt trustworthy.
+#
+# Every budget below ends its channel when exhausted and says which one ran out.
+collaboration:
+  enabled: false
+
+  # Per task, across all of its attempts.
+  maxMessagesPerTask: 12
+  maxHandoffsPerTask: 2
+
+  # An automatic exchange that has run eight deep is not converging.
+  maxThreadDepth: 8
+
+  # Bytes. A body that does not fit is truncated and *marked*, never cut quietly.
+  maxMessageBytes: 4096
+  # Checked before the file is parsed, so a huge outbox is a refusal and not a heap.
+  maxOutboxBytes: 65536
+
+  # Per run.
+  maxBlackboardEntriesPerRun: 200
+
+  # How much of this may reach one prompt. Smaller than the recovery packet on
+  # purpose: recovery context describes the failure this attempt exists to fix, and
+  # collaboration context is background.
+  maxContextBytes: 4096
+
+  # Whether an accepted handoff changes who *executes* a task, rather than only
+  # being recorded. Off, because re-routing execution from model output is an
+  # ownership transfer, and ownership is not a model's to decide. With it on, the
+  # target still has to satisfy the implementation prompt's requirements.
+  handoffsReassignExecution: false
 `;
 
 export const DEFAULT_PROJECT_CONFIG_YAML = `# agent-flow project configuration
