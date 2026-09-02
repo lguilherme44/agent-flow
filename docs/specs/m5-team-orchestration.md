@@ -126,6 +126,12 @@ Continuing the series (I-32 is M4's last).
 - **I-39 — Capacity is derived, never stored.** Busy/idle comes from the run's own
   task states. A persisted `busy: true` survives a crash that ended the work.
 
+- **I-40 — Availability is cheap; context is earned.** Every agent that may write an
+  outbox is told the channel exists, unconditionally and in a bounded, stable block.
+  The *content* of what other agents said reaches only an agent for whom a mechanical
+  rule says it is relevant. Two architecture tests: an empty log still produces a
+  bootstrap, and a task with no relevant activity produces no context payload.
+
 ---
 
 ## 4. Domain
@@ -251,6 +257,71 @@ refused — it is ranked lower, and if nobody owns them, the best skill match wi
 Matching uses the segment-aware comparison `core/file-overlap.ts` already implements.
 A second glob matcher would be a second answer to "does `src/auth` contain
 `src/authz.ts`".
+
+### 4.6 Latent collaboration — what the dogfood forced into this specification
+
+**This section is an amendment.** It was not in the specification as written, and the
+live run of `AF-2026-002` is why it is here now.
+
+Two measurements, both from the run's own `stage_context_measured` events:
+
+| | |
+|---|---|
+| collaboration bytes on every implementation prompt | **1 373 (3% of 42 015)** |
+| agents that received it | 5 |
+| agents that used it | **1** |
+
+The one that used it was blocked, and what it wrote was correct and about another
+agent's work. So the channel earns its place — and paying 1 373 bytes on every prompt
+of every task to buy a message that arrives once, only when something has already gone
+wrong, is the wrong trade.
+
+The fix is not to make the block smaller. It is to stop conflating two things that were
+one function:
+
+```text
+CollaborationBootstrap          CollaborationContext
+────────────────────────        ─────────────────────────────
+"the channel exists,            "here is what other agents
+ here is how to use it"          said that concerns you"
+
+unconditional                   earned by a mechanical rule
+tiny and stable                 as large as the budget allows
+every eligible agent            the agents it is about
+```
+
+**Bootstrap** goes to every agent that may write an outbox, always, including on a
+fresh run whose log is empty — that condition is exactly the deadlock M4 shipped, and
+I-40 exists so it can never return. It carries the outbox path, the shape, and the
+standing rule that anything written there is a proposal. It does **not** carry the
+roster: an agent with nobody to address does not need a list of who exists.
+
+**Context** is added on top when, and only when, a deterministic rule says this agent
+has something to read. The triggers, all set arithmetic over data the run already has:
+
+| Trigger | Source |
+|---|---|
+| an unresolved thread addressed to this agent, its role, or everyone | `threadsFor` |
+| an unresolved thread this agent opened | `threadsFor` |
+| any thread naming this task | `threadsFor` |
+| a live blackboard entry naming this agent's role | `entriesFor` |
+| a live entry referencing this task or one of its `files.likely` | `entriesFor` |
+| a **contested** entry naming this role | `entriesFor` |
+| a handoff involving this agent or this task | `projectHandoffs` |
+| an upstream dependency with collaboration activity | the DAG + the message log |
+
+**No model call decides whether context exists.** The rules above are exact and free.
+A UtilityModel may later *rank* content that is already eligible — that is a different
+question and it is not M5's.
+
+The roster moves from bootstrap to context, because it is only actionable once there is
+something to reply to. A bootstrap that lists nine agents to an agent with nothing to
+say is 500 bytes of noise on every prompt of every run.
+
+**Both are measured.** `PromptSource` gains `collaborationBootstrap` beside
+`collaboration`, so `stage_context_measured` answers "what did availability cost" and
+"what did relevance cost" separately, and a dogfood can compare the two against M4's
+undifferentiated 1 373.
 
 ---
 
@@ -481,6 +552,7 @@ old agent, the new one and which of the five applied.
 | security | One per row of §10. |
 | architecture | I-33 … I-39's import bans; one scheduler; one router; the UI computes no assignment. |
 | acceptance | M5-ACC-01 … 16 from the charter, verbatim. |
+| collaboration cost | 10 tasks, 8 with no relevant activity and 2 with some: all 10 receive the bootstrap, exactly 2 receive a payload, and the bytes of each are asserted rather than described. |
 | dogfood | M5-08. |
 
 ---
@@ -510,3 +582,10 @@ The charter's M5-ACC-01 … 16, unchanged, plus two this specification adds:
   *identical* to `routeTask`'s answer, compared task by task rather than asserted.
 - **M5-ACC-18** — the ranking is invariant under input permutation: shuffling the
   member list produces byte-identical assignments and candidate order.
+- **M5-ACC-19** — an empty collaboration history still advertises the bootstrap. This
+  is the M4 deadlock as a permanent test; it must never pass by returning nothing.
+- **M5-ACC-20** — a task with no relevant collaboration receives the bootstrap and
+  **no** context payload, asserted by byte count rather than by absence of a substring.
+- **M5-ACC-21** — a task with relevant collaboration receives both, and the payload
+  contains the item that made it relevant.
+- **M5-ACC-22** — both costs are attributed separately in `stage_context_measured`.
