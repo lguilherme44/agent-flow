@@ -3,6 +3,9 @@ import type {
   AgentIdentity,
   BlackboardEntry,
   CollaborationConfig,
+  GlobalConfig,
+  Task,
+  TaskAssignment,
   WorkflowRole,
 } from '../contracts/index.js';
 import type { AgentRoster } from '../core/collaboration/roster.js';
@@ -12,7 +15,8 @@ import {
 } from '../core/collaboration/context.js';
 import { projectThreads } from '../core/collaboration/threads.js';
 import { projectBlackboard } from '../core/collaboration/blackboard.js';
-import { projectHandoffs, resolveTaskAgent, type TaskAssignment } from '../core/collaboration/handoffs.js';
+import { projectHandoffs } from '../core/collaboration/handoffs.js';
+import { resolveTaskAgent } from '../core/team/policy.js';
 import type { Clock, FileSystem, Host } from '../ports/index.js';
 import type { CollaborationStore } from './collaboration-store.js';
 import { harvestOutbox, type HarvestOutcome } from './collaboration-harvest.js';
@@ -60,6 +64,14 @@ export interface CollaborationServiceOptions {
   readonly collaboration: CollaborationStore;
   readonly roster: AgentRoster;
   readonly config: CollaborationConfig;
+  /**
+   * The whole configuration, for the assignment policy (M5).
+   *
+   * The policy reasons about `teams:` and about `collaboration.handoffsReassignExecution`
+   * together, so handing it the collaboration slice alone would make one of the two
+   * flags unreachable from the module that has to weigh both.
+   */
+  readonly globalConfig: GlobalConfig;
   /** For its home directory — redaction's second root (AD-35). */
   readonly host?: Host;
 }
@@ -179,23 +191,32 @@ export class CollaborationService {
    */
   async assignmentFor(request: {
     readonly runId: string;
-    readonly taskId: string;
+    readonly task: Task;
     readonly routedRole: WorkflowRole;
     readonly canImplement: (agent: AgentIdentity) => boolean;
+    /** How many tasks each member currently holds, derived from run state (I-39). */
+    readonly inFlight?: ReadonlyMap<AgentId, number>;
   }): Promise<TaskAssignment> {
-    const routed: TaskAssignment = { agentId: request.routedRole, reason: 'routed' };
-    if (!this.enabled) return routed;
-
-    const messages = await this.options.collaboration.readMessages(request.runId);
-    if (messages.length === 0) return routed;
+    // **Asked on every task, whether or not a team is configured.** With none, the policy
+    // answers `routed` — the router's role, byte-identical to M4 — which is the whole of
+    // the legacy guarantee and what M5-ACC-01 compares against task by task.
+    //
+    // Not gated on `collaboration.enabled`: assignment is a *team* concern, and a project
+    // that configures a team without turning on the channel still expects its members to
+    // receive work. The channel decides who may talk; this decides who works.
+    const messages = this.enabled
+      ? await this.options.collaboration.readMessages(request.runId)
+      : [];
 
     return resolveTaskAgent({
-      taskId: request.taskId,
+      task: request.task,
       routedRole: request.routedRole,
+      config: this.options.globalConfig,
+      roster: this.options.roster,
       handoffs: projectHandoffs(messages),
-      config: this.options.config,
-      agentOf: (id) => this.options.roster.byId(id),
+      inFlight: request.inFlight ?? new Map(),
       canImplement: request.canImplement,
+      now: this.options.clock.now(),
     });
   }
 

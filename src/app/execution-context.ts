@@ -263,6 +263,7 @@ export async function buildExecutionContext(
     store,
     collaboration: new CollaborationStore({ fs, projectDir: options.projectDir }),
     roster,
+    globalConfig: config.global,
     config: config.global.collaboration,
     host: options.host,
   });

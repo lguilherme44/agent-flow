@@ -160,6 +160,7 @@ async function harness() {
       store,
       collaboration: collaborationStore,
       roster: deriveAgentRoster(config),
+      globalConfig: config,
       config: config.collaboration,
     }),
     capabilities: { claude: CAPS },
@@ -229,7 +230,6 @@ describe('what the channel costs across ten tasks (M5-ACC-19 … 22)', () => {
     const m5Total = measured.reduce((sum, task) => sum + task.bootstrap + task.context, 0);
     const m4Total = M4_PER_TASK * measured.length;
 
-    // eslint-disable-next-line no-console
     console.log(
       `collaboration cost over ${String(measured.length)} tasks — ` +
         `M4: ${String(m4Total)} B · M5: ${String(m5Total)} B · ` +

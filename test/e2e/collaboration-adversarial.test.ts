@@ -140,6 +140,7 @@ async function harness(collaboration: Partial<CollaborationConfig> = {}) {
       store,
       collaboration: collaborationStore,
       roster: deriveAgentRoster(config),
+      globalConfig: config,
       config: config.collaboration,
     }),
     capabilities: { claude: CAPS },

@@ -37,8 +37,7 @@ afterEach(() => {
 
 const RUN = 'AF-2026-001';
 
-const roster = deriveAgentRoster(
-  GlobalConfigSchema.parse({
+const GLOBAL = GlobalConfigSchema.parse({
     runners: { claude: { type: 'claude-code-cli' } },
     roles: {
       architect: { runner: 'claude', effort: 'high' },
@@ -53,8 +52,9 @@ const roster = deriveAgentRoster(
       verification: { runner: 'claude', effort: 'medium' },
       finalReviewer: { runner: 'claude', effort: 'high' },
     },
-  }),
-);
+});
+
+const roster = deriveAgentRoster(GLOBAL);
 
 /**
  * What `agent-flow init` writes, so the repository under test looks like a real one.
@@ -79,6 +79,7 @@ function serviceOn(current: TempRepo): CollaborationService {
     store: new StateStore({ fs, clock, projectDir: current.dir }),
     collaboration: new CollaborationStore({ fs, projectDir: current.dir }),
     roster,
+    globalConfig: GLOBAL,
     config: CollaborationConfigSchema.parse({ enabled: true }),
   });
 }

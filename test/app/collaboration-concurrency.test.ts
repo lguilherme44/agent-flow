@@ -25,8 +25,7 @@ const PROJECT = '/wk/project';
 const RUN = 'AF-2026-001';
 const TASKS = Array.from({ length: 8 }, (_, index) => `TASK-00${String(index + 1)}`);
 
-const roster = deriveAgentRoster(
-  GlobalConfigSchema.parse({
+const GLOBAL = GlobalConfigSchema.parse({
     runners: { claude: { type: 'claude-code-cli' } },
     roles: {
       architect: { runner: 'claude', effort: 'high' },
@@ -41,8 +40,9 @@ const roster = deriveAgentRoster(
       verification: { runner: 'claude', effort: 'medium' },
       finalReviewer: { runner: 'claude', effort: 'high' },
     },
-  }),
-);
+});
+
+const roster = deriveAgentRoster(GLOBAL);
 
 function workspaceOf(taskId: string): string {
   return `/wk/worktrees/${RUN}/${taskId}`;
@@ -64,6 +64,7 @@ async function wave(order: readonly string[]): Promise<{
     store: state,
     collaboration: store,
     roster,
+    globalConfig: GLOBAL,
     config: CollaborationConfigSchema.parse({ enabled: true }),
   });
 

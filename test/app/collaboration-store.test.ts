@@ -21,8 +21,7 @@ const RUN = 'AF-2026-001';
 const WORKSPACE = '/wk/worktrees/AF-2026-001/TASK-003';
 const NOW = '2026-08-09T20:00:00.000Z';
 
-const roster = deriveAgentRoster(
-  GlobalConfigSchema.parse({
+const GLOBAL = GlobalConfigSchema.parse({
     runners: { claude: { type: 'claude-code-cli' } },
     roles: {
       architect: { runner: 'claude', effort: 'high' },
@@ -37,8 +36,9 @@ const roster = deriveAgentRoster(
       verification: { runner: 'claude', effort: 'medium' },
       finalReviewer: { runner: 'claude', effort: 'high' },
     },
-  }),
-);
+});
+
+const roster = deriveAgentRoster(GLOBAL);
 
 function message(overrides: Partial<AgentMessage> = {}): AgentMessage {
   return AgentMessageSchema.parse({
@@ -172,6 +172,7 @@ async function harness(config: Partial<CollaborationConfig> = {}): Promise<Servi
     store: state,
     collaboration,
     roster,
+    globalConfig: GLOBAL,
     config: CollaborationConfigSchema.parse({ enabled: true, ...config }),
   });
 

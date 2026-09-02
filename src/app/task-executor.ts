@@ -78,7 +78,7 @@ import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
 import { resolveRole, type RunnerCapabilitiesMap } from '../core/role.js';
-import type { TaskAssignment } from '../core/collaboration/handoffs.js';
+import type { TaskAssignment } from '../contracts/index.js';
 import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
@@ -94,6 +94,18 @@ import {
   type AttemptChange,
   type AttemptDraft,
 } from './attempt-receipt.js';
+
+/**
+ * The router's answer, shaped as an assignment.
+ *
+ * Used wherever the policy cannot be asked — no collaboration service wired, or the ask
+ * itself went wrong. **The fallback is the whole safety property**: an assignment is
+ * model-influenced input, so a bug in reading it must never leave a task unassigned or
+ * assigned to nobody. The worst case is the answer M4 gave.
+ */
+function fallbackAssignment(taskId: string, role: WorkflowRole, now: string): TaskAssignment {
+  return { taskId, agentId: role, role, reason: 'routed', candidates: [], assignedAt: now };
+}
 
 /** Marker the implementation prompt asks the agent to end with. */
 const RESULT_BLOCK = /##\s*RESULT\s*([\s\S]*)$/i;
@@ -557,28 +569,87 @@ export class TaskExecutor {
     role: WorkflowRole,
   ): Promise<TaskAssignment> {
     const collaboration = this.options.collaboration;
-    if (collaboration === undefined) return { agentId: role, reason: 'routed' };
+    if (collaboration === undefined) return fallbackAssignment(task.id, role, this.options.clock.now());
 
     try {
       const assignment = await collaboration.assignmentFor({
         runId,
-        taskId: task.id,
+        task,
         routedRole: role,
         canImplement: (agent) => this.canImplement(agent),
+        inFlight: await this.inFlightByAgent(runId),
       });
 
-      if (assignment.refusal !== undefined) {
-        await this.options.store.appendEvent(runId, 'collaboration_handoff_refused', {
+      // Recorded whenever the answer is not the router's, which is the only case a
+      // reader needs an explanation for. I-34: the candidate ranking rides on the event
+      // so "why did Backend not get this" is answerable from the audit trail alone.
+      if (assignment.reason !== 'routed') {
+        await this.options.store.appendEvent(runId, 'task_assigned', {
           task: task.id,
+          agent: assignment.agentId,
+          role: assignment.role,
           reason: assignment.reason,
-          detail: assignment.refusal,
+          ...(assignment.detail === undefined ? {} : { detail: assignment.detail }),
+          candidates: assignment.candidates.map((candidate) => ({
+            agent: candidate.agentId,
+            score: Number(candidate.score.toFixed(3)),
+            ...(candidate.excludedBy === undefined ? {} : { excludedBy: candidate.excludedBy }),
+          })),
         });
       }
 
       return assignment;
     } catch {
-      return { agentId: role, reason: 'routed' };
+      return fallbackAssignment(task.id, role, this.options.clock.now());
     }
+  }
+
+  /**
+   * How many tasks each agent currently holds (I-39).
+   *
+   * **Derived from the run's own task states, never stored.** A persisted `busy: true`
+   * outlives the crash that ended the work, and the agent it named would then be locked
+   * out of every subsequent wave with nothing to explain it.
+   *
+   * A task counts as held when it is `running`. `queued` is not held — nobody is doing it
+   * — and a task that failed is not either.
+   */
+  private async inFlightByAgent(runId: string): Promise<ReadonlyMap<string, number>> {
+    const counts = new Map<string, number>();
+
+    // **The strict read, not the tolerant one.** `readEventsBestEffort` exists for read
+    // models: a malformed legacy line should cost a dashboard a row rather than a whole
+    // projection. This is not a read model — it decides who gets work — and skipping an
+    // unparseable line here would silently change an assignment. An architecture rule
+    // caught the first version of this using the tolerant read.
+    //
+    // A throw is handled by the caller's fallback to the router's answer, which is the
+    // fail-closed direction: an unreadable log means the team policy is not consulted,
+    // never that a member is assumed idle.
+    const events = await this.options.store.readEvents(runId);
+    const state = await this.options.store.loadRun(runId);
+    const running = new Set(
+      state.tasks.filter((task) => task.state === 'running').map((task) => task.id),
+    );
+
+    // The last assignment recorded for each running task. Read from the audit trail
+    // rather than from a second store: an assignment is a fact the run already recorded,
+    // and keeping a parallel copy is the drift §19 forbids.
+    const assignedTo = new Map<string, string>();
+    for (const event of events) {
+      if (event.type !== 'task_assigned') continue;
+      const task = event.detail['task'];
+      const agent = event.detail['agent'];
+      if (typeof task === 'string' && typeof agent === 'string') assignedTo.set(task, agent);
+    }
+
+    for (const taskId of running) {
+      const agent = assignedTo.get(taskId);
+      if (agent === undefined) continue;
+      counts.set(agent, (counts.get(agent) ?? 0) + 1);
+    }
+
+    return counts;
   }
 
   /**

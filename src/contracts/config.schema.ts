@@ -8,6 +8,7 @@ import {
 } from './common.schema.js';
 import { UtilityModelConfigSchema } from './utility-model-config.schema.js';
 import { CollaborationConfigSchema } from './collaboration-config.schema.js';
+import { TeamsConfigSchema } from './team.schema.js';
 
 /** Default per-role timeout. A hung CLI must not stall a run forever (R-11). */
 export const DEFAULT_TIMEOUT_SECONDS = 900;
@@ -268,6 +269,20 @@ export const GlobalConfigSchema = z.object({
    * no outbox is read, no collaboration directory is created, and no prompt gains a byte.
    */
   collaboration: CollaborationConfigSchema.prefault({}),
+  /**
+   * Who forms a team, and who is expected to touch what (M5).
+   *
+   * **Optional, and absent means legacy.** A configuration with only `roles:` derives the
+   * same nine agents M4 derived and assigns exactly what `core/router.ts` would have
+   * assigned — asserted task by task rather than promised, because "unchanged" is a claim
+   * a comparison can make and a comment cannot.
+   *
+   * Global only, and deliberately absent from `OVERRIDABLE_KEYS` for the reason `ui`,
+   * `utilityModel` and `collaboration` are: which agents exist, what they may take and
+   * how much at once is a property of the operator's setup. Letting one discovered
+   * repository add a member would let a repository decide who runs code on this machine.
+   */
+  teams: TeamsConfigSchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

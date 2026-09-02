@@ -3,6 +3,7 @@ export * from './config.schema.js';
 export * from './utility-model-config.schema.js';
 export * from './collaboration-config.schema.js';
 export * from './collaboration.schema.js';
+export * from './team.schema.js';
 export * from './task.schema.js';
 export * from './plan.schema.js';
 export * from './state.schema.js';

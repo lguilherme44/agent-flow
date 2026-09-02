@@ -2,10 +2,12 @@ import {
   ALL_WORKFLOW_ROLES,
   HUMAN_AGENT_ID,
   ORCHESTRATOR_AGENT_ID,
+  normaliseSkills,
   roleConfigOf,
   type AgentId,
   type AgentIdentity,
   type GlobalConfig,
+  type TeamMemberConfig,
   type WorkflowRole,
 } from '../../contracts/index.js';
 
@@ -98,7 +100,60 @@ const RESERVED: readonly AgentIdentity[] = [
   },
 ];
 
+/**
+ * Whether this configuration describes a team, or only the nine roles (M5).
+ *
+ * The one discriminator, asked in one place, so "is this a legacy run" has a single
+ * answer. An empty `teams:` block is legacy: a record with no members describes nobody.
+ */
+export function hasTeam(config: GlobalConfig): boolean {
+  return Object.values(config.teams ?? {}).some(
+    (team) => Object.keys(team.members).length > 0,
+  );
+}
+
+/**
+ * Every configured member, flattened across teams, with the team each came from.
+ *
+ * Flattened because assignment is per *task* and a task belongs to a run rather than to
+ * a team; the team id is carried so a projection can group by it. Two teams declaring the
+ * same member id is a configuration mistake, and the first wins rather than the last —
+ * so the answer does not depend on object key order.
+ */
+export function teamMembers(
+  config: GlobalConfig,
+): { readonly teamId: string; readonly agentId: AgentId; readonly member: TeamMemberConfig }[] {
+  const seen = new Set<AgentId>();
+  const members: { teamId: string; agentId: AgentId; member: TeamMemberConfig }[] = [];
+
+  for (const [teamId, team] of Object.entries(config.teams ?? {})) {
+    for (const [agentId, member] of Object.entries(team.members)) {
+      if (seen.has(agentId)) continue;
+      seen.add(agentId);
+      members.push({ teamId, agentId, member });
+    }
+  }
+
+  return members;
+}
+
 export function deriveAgentRoster(config: GlobalConfig): AgentRoster {
+  // **One roster, two sources** (M5). Every M4 consumer — the harvest, the context
+  // builder, the read model, the CLI — is untouched by this branch, because none of them
+  // ever asked where the roster came from. A second roster type for teams would have
+  // meant a second `byId`, and the two would answer differently the first time a member
+  // was renamed.
+  if (hasTeam(config)) return teamRoster(config);
+  return legacyRoster(config);
+}
+
+/**
+ * The nine roles, exactly as M4 derived them.
+ *
+ * Unchanged and kept callable on its own, because M5-ACC-01 compares a team run's
+ * assignment against this path's answer rather than against a remembered expectation.
+ */
+function legacyRoster(config: GlobalConfig): AgentRoster {
   const derived: AgentIdentity[] = ALL_WORKFLOW_ROLES.map((role) => {
     const roleConfig = roleConfigOf(config.roles, role);
     return {
@@ -124,6 +179,42 @@ export function deriveAgentRoster(config: GlobalConfig): AgentRoster {
     // Only the derived agents: a `byRole` that returned the human because it is nominally
     // a plan reviewer would let a role-addressed message reach a participant that cannot
     // be dispatched. The reserved two are addressable by id and by nothing else.
+    byRole: (role) => derived.filter((agent) => agent.role === role),
+    has: (id) => index.has(id),
+  };
+}
+
+/**
+ * One agent per configured team member (M5).
+ *
+ * **Produces `AgentIdentity`, and nothing else.** A `TeamMember` is the configuration an
+ * identity is derived *from*; making it a second identity type would give every consumer
+ * two shapes to handle and one of them would eventually be handled wrong.
+ *
+ * Skills are normalised here, at the single boundary where a string a person typed
+ * becomes a `SkillId`. `TypeScript`, `typescript` and ` Type Script ` are one skill, and
+ * a matcher that thought otherwise would silently score zero.
+ *
+ * The reserved participants are appended exactly as in the legacy path: `human` and
+ * `orchestrator` are addressable on every run, whether or not a team is configured.
+ */
+function teamRoster(config: GlobalConfig): AgentRoster {
+  const derived: AgentIdentity[] = teamMembers(config).map(({ agentId, member }) => ({
+    id: agentId,
+    displayName: member.displayName ?? agentId,
+    role: member.role,
+    runner: member.runner,
+    ...(member.model === undefined ? {} : { model: member.model }),
+    skills: normaliseSkills(member.skills),
+    specializations: normaliseSkills(member.specializations),
+  }));
+
+  const all = [...derived, ...RESERVED];
+  const index = new Map(all.map((agent) => [agent.id, agent]));
+
+  return {
+    agents: derived,
+    byId: (id) => index.get(id),
     byRole: (role) => derived.filter((agent) => agent.role === role),
     has: (id) => index.has(id),
   };

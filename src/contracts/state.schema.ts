@@ -415,3 +415,30 @@ export const LIFECYCLE_EVENT_TYPES = [
 ] as const;
 
 export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];
+
+/**
+ * The event names team orchestration is allowed to emit (M5).
+ *
+ * Declared here for the reason the three lists above are: so the next reader of the event
+ * log finds one spelling rather than three. Every one records something *Agent Flow*
+ * decided — an assignment is a decision the policy took, never a request an agent made
+ * (I-33).
+ */
+export const TEAM_EVENT_TYPES = [
+  /**
+   * `detail: { task, agent, role, reason, detail?, candidates }`.
+   *
+   * Emitted only when the answer is not the router's, because a `reason: 'routed'` on
+   * every task would be a row nobody reads. The candidate ranking rides on it so that
+   * "why did Backend not get this" is answerable from the audit trail alone (I-34).
+   */
+  'task_assigned',
+  /** `detail: { task, from, to, reason }`. A task that changed hands, and why. */
+  'task_reassigned',
+  /** `detail: { task, agent, held, limit }`. A ready task deferred because its agent is full. */
+  'wave_deferred_for_capacity',
+  /** `detail: { task, waitsFor, patterns }`. Deferred because an exclusive area is taken. */
+  'wave_deferred_for_ownership',
+] as const;
+
+export type TeamEventType = (typeof TEAM_EVENT_TYPES)[number];

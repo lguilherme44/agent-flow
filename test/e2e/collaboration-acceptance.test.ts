@@ -125,6 +125,7 @@ async function harness(collaboration: Partial<CollaborationConfig> = {}) {
     store,
     collaboration: collaborationStore,
     roster: deriveAgentRoster(config),
+    globalConfig: config,
     config: config.collaboration,
   });
 
@@ -420,6 +421,11 @@ describe('an accepted handoff', () => {
     },
   ];
 
+  // **The semantics moved and the compatibility did not** (M5 §28). `handoffsReassignExecution`
+  // used to mean "assign the target"; it now means "let the assignment policy consider the
+  // target", and the policy can still refuse. For a configuration with no `teams:` — which is
+  // every configuration written before M5 — the two are observationally the same, which is
+  // what these two tests pin.
   it('changes no execution while re-routing is off', async () => {
     const h = await harness({ enabled: true, handoffsReassignExecution: false });
     await h.collaborationStore.appendMessages(h.run.runId, handoffLog(h.run.runId));
@@ -444,10 +450,11 @@ describe('an accepted handoff', () => {
       (event) => event.type === 'task_started',
     );
     // The router's role stays on the event — it is what the plan says — and the agent
-    // that actually spoke is recorded beside it.
+    // that actually spoke is recorded beside it. `handoff_admitted` rather than M4's
+    // `handoff`: the word names the decision the policy made, not the message it read.
     expect(started?.detail['role']).toBe('executor.normal');
     expect(started?.detail['agent']).toBe('executor.complex');
-    expect(started?.detail['assignment']).toBe('handoff');
+    expect(started?.detail['assignment']).toBe('handoff_admitted');
   });
 });
 

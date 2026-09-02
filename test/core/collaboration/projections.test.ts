@@ -1,15 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { projectThreads, threadsFor } from '../../../src/core/collaboration/threads.js';
-import { projectHandoffs, resolveTaskAgent } from '../../../src/core/collaboration/handoffs.js';
+import { projectHandoffs } from '../../../src/core/collaboration/handoffs.js';
 import { entriesFor, projectBlackboard } from '../../../src/core/collaboration/blackboard.js';
 import {
   AgentMessageSchema,
   BlackboardEntrySchema,
-  CollaborationConfigSchema,
-  type AgentIdentity,
   type AgentMessage,
   type BlackboardEntry,
-  type CollaborationConfig,
 } from '../../../src/contracts/index.js';
 
 const RUN = 'AF-2026-001';
@@ -47,22 +44,6 @@ function entry(overrides: Partial<BlackboardEntry> = {}): BlackboardEntry {
     createdAt: at(),
     ...overrides,
   });
-}
-
-function config(overrides: Partial<CollaborationConfig> = {}): CollaborationConfig {
-  return CollaborationConfigSchema.parse({ enabled: true, ...overrides });
-}
-
-function agent(overrides: Partial<AgentIdentity> = {}): AgentIdentity {
-  return {
-    id: 'architect',
-    displayName: 'Architect',
-    role: 'architect',
-    runner: 'runner-a',
-    skills: [],
-    specializations: [],
-    ...overrides,
-  };
 }
 
 /* ─── Threads ──────────────────────────────────────────────────────────────── */
@@ -307,131 +288,12 @@ describe('projectHandoffs (M4-04)', () => {
   });
 });
 
-describe('resolveTaskAgent — who executes (M4-04)', () => {
-  const accepted = [
-    message({
-      id: 'MSG-0001',
-      type: 'handoff_request',
-      from: 'executor.normal',
-      to: { kind: 'agent', id: 'architect' },
-      taskId: 'TASK-003',
-    }),
-    message({
-      id: 'MSG-0002',
-      type: 'handoff_accepted',
-      from: 'architect',
-      to: { kind: 'agent', id: 'executor.normal' },
-      taskId: 'TASK-003',
-    }),
-  ];
-
-  const base = {
-    taskId: 'TASK-003',
-    routedRole: 'executor.normal' as const,
-    agentOf: () => agent(),
-    canImplement: () => true,
-  };
-
-  it('answers the router with no handoff at all', () => {
-    const assignment = resolveTaskAgent({ ...base, handoffs: [], config: config() });
-
-    expect(assignment.agentId).toBe('executor.normal');
-    expect(assignment.reason).toBe('routed');
-  });
-
-  it('records the handoff but keeps the router’s answer while re-routing is off', () => {
-    // The default, and the reason for it: re-routing execution from model output is an
-    // ownership transfer, and ownership is not a model's to decide.
-    const assignment = resolveTaskAgent({
-      ...base,
-      handoffs: projectHandoffs(accepted),
-      config: config({ handoffsReassignExecution: false }),
-    });
-
-    expect(assignment.agentId).toBe('executor.normal');
-    expect(assignment.reason).toBe('handoff_not_enabled');
-    expect(assignment.handoff?.to).toBe('architect');
-  });
-
-  it('honours an accepted handoff when the operator turned it on', () => {
-    const assignment = resolveTaskAgent({
-      ...base,
-      handoffs: projectHandoffs(accepted),
-      config: config({ handoffsReassignExecution: true }),
-    });
-
-    expect(assignment.agentId).toBe('architect');
-    expect(assignment.reason).toBe('handoff');
-  });
-
-  it('refuses a target that cannot implement, and says why', () => {
-    // A handoff to an agent whose runner has no working directory produces an attempt
-    // that cannot begin. Refused before it is spent, not discovered afterwards.
-    const assignment = resolveTaskAgent({
-      ...base,
-      handoffs: projectHandoffs(accepted),
-      config: config({ handoffsReassignExecution: true }),
-      canImplement: () => false,
-    });
-
-    expect(assignment.agentId).toBe('executor.normal');
-    expect(assignment.reason).toBe('handoff_refused_capability');
-    expect(assignment.refusal).toContain('architect');
-  });
-
-  it('refuses a target nobody configured', () => {
-    const assignment = resolveTaskAgent({
-      ...base,
-      handoffs: projectHandoffs(accepted),
-      config: config({ handoffsReassignExecution: true }),
-      agentOf: () => undefined,
-    });
-
-    expect(assignment.reason).toBe('handoff_refused_capability');
-  });
-
-  it('stops a task that is being passed around', () => {
-    const twice = [
-      ...accepted,
-      message({
-        id: 'MSG-0003',
-        threadId: 'THR-0002',
-        type: 'handoff_request',
-        from: 'architect',
-        to: { kind: 'agent', id: 'planner' },
-        taskId: 'TASK-003',
-      }),
-      message({
-        id: 'MSG-0004',
-        threadId: 'THR-0002',
-        type: 'handoff_accepted',
-        from: 'planner',
-        to: { kind: 'agent', id: 'architect' },
-        taskId: 'TASK-003',
-      }),
-    ];
-
-    const assignment = resolveTaskAgent({
-      ...base,
-      handoffs: projectHandoffs(twice),
-      config: config({ handoffsReassignExecution: true, maxHandoffsPerTask: 1 }),
-    });
-
-    expect(assignment.agentId).toBe('executor.normal');
-    expect(assignment.reason).toBe('handoff_budget_exhausted');
-  });
-
-  it('ignores a handoff belonging to another task', () => {
-    const assignment = resolveTaskAgent({
-      ...base,
-      taskId: 'TASK-009',
-      handoffs: projectHandoffs(accepted),
-      config: config({ handoffsReassignExecution: true }),
-    });
-
-    expect(assignment.reason).toBe('routed');
-  });
-});
+/**
+ * `resolveTaskAgent` moved to `core/team/policy.ts` in M5 and is covered by
+ * `test/core/team/assignment.test.ts`. It kept its position in the call graph and lost
+ * its home here, which is the point: one answer to "who executes this task", and the
+ * handoff projection is an input to it rather than the place it is decided.
+ */
 
 /* ─── Blackboard ───────────────────────────────────────────────────────────── */
 
