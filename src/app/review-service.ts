@@ -8,6 +8,7 @@ import {
   type EffectiveConfig,
   type ReviewRecord,
   type Task,
+  type TaskResult,
 } from '../contracts/index.js';
 import type { AgentRoster } from '../core/collaboration/roster.js';
 import { selectReviewer, hasReviewer } from '../core/review/reviewer.js';
@@ -73,7 +74,8 @@ export interface ReviewRequest {
   readonly author: AgentId;
   /** The commit this change integrated as. Absent in sequential mode. */
   readonly integratedTree?: string;
-  readonly diff: string;
+  /** `git diff --stat` between the wave base and the merge. A map, not the territory. */
+  readonly diffStat: string;
   readonly changedFiles: readonly string[];
   /** What the project's commands already said, so the reviewer does not repeat them. */
   readonly commandResults: readonly CommandResult[];
@@ -226,7 +228,7 @@ export class ReviewService {
           taskTitle: request.task.title,
           taskDescription: request.task.description,
           acceptanceCriteria: request.task.acceptanceCriteria.map((line) => `- ${line}`).join('\n'),
-          diff: request.diff,
+          diffStat: request.diffStat,
           changedFiles: request.changedFiles.map((file) => `- ${file}`).join('\n'),
           qualityEvidence: evidenceOf(request.commandResults),
           agentsMd: request.agentsMd,
@@ -303,4 +305,96 @@ export function codeReviewStage(taskId: string, round: number): StageDefinition 
     outputSchema: CodeReviewResponseSchema,
     logName: `code-review-${taskId}-${String(round)}`,
   };
+}
+
+/**
+ * What the scheduler holds: a reviewer it can call after a merge (M6-03).
+ *
+ * **The gathering lives here rather than in the scheduler**, because a scheduler that
+ * assembled review context would be a scheduler that knows what a review is. Everything
+ * this collects is already recorded somewhere — the tree on the result's integration
+ * block, the files on the result, the commands on its validation, the author on the
+ * audit trail — so nothing is measured twice and nothing is asked of a model.
+ *
+ * Never throws. A review that could not be prepared is a review that did not happen, and
+ * the quality decision refuses without one — which is the fail-closed direction and a
+ * better answer than a halted run.
+ */
+export class ChangeReviewAdapter {
+  constructor(
+    private readonly options: {
+      readonly service: ReviewService;
+      readonly store: StateStore;
+      readonly fs: { readFile(path: string): Promise<string>; exists(path: string): Promise<boolean> };
+      readonly projectDir: string;
+      /** Produces the change's shape. Absent in sequential mode, where there is no range. */
+      readonly diffStat?: (base: string, head: string) => Promise<string>;
+      readonly inFlight: (runId: string) => Promise<ReadonlyMap<AgentId, number>>;
+    },
+  ) {}
+
+  async review(runId: string, task: Task, result: TaskResult): Promise<void> {
+    if (!this.options.service.enabled) return;
+
+    try {
+      const integration = result.integration;
+
+      await this.options.service.review({
+        runId,
+        task,
+        author: await this.authorOf(runId, task.id, result),
+        ...(integration === undefined ? {} : { integratedTree: integration.mergeCommit }),
+        diffStat: await this.shapeOf(result),
+        changedFiles: result.filesChanged,
+        commandResults: result.validation.commands,
+        agentsMd: await this.agentsMd(),
+        inFlight: await this.options.inFlight(runId),
+      });
+    } catch {
+      // A review is not a gate. Failing to prepare one must not fail the run — the
+      // decision that weighs reviews already refuses when there is none.
+    }
+  }
+
+  /**
+   * Who wrote this change.
+   *
+   * From the audit trail rather than from the result, because `runner` is a provider and
+   * an author is an agent — and on a team those are different things (I-42). Falls back
+   * to the runner only when no assignment was recorded, which is every legacy run.
+   *
+   * The strict read: getting the author wrong is getting `is_author` wrong, and a
+   * reviewer allowed to review its own work is the one thing this milestone must refuse.
+   * A throw reaches the adapter's catch, and no review is better than a wrong one.
+   */
+  private async authorOf(runId: string, taskId: string, result: TaskResult): Promise<AgentId> {
+    const events = await this.options.store.readEvents(runId);
+    const assigned = [...events]
+      .reverse()
+      .find((event) => event.type === 'task_assigned' && event.detail['task'] === taskId);
+
+    const agent = assigned?.detail['agent'];
+    return typeof agent === 'string' ? agent : result.runner;
+  }
+
+  /** The change's shape, or an honest sentence when there is no range to compare. */
+  private async shapeOf(result: TaskResult): Promise<string> {
+    const integration = result.integration;
+    const diffStat = this.options.diffStat;
+    if (integration === undefined || diffStat === undefined) {
+      return `${String(result.filesChanged.length)} file(s) changed; no commit range to compare.`;
+    }
+
+    try {
+      return await diffStat(integration.base, integration.mergeCommit);
+    } catch {
+      return `${String(result.filesChanged.length)} file(s) changed; the range could not be read.`;
+    }
+  }
+
+  private async agentsMd(): Promise<string> {
+    const path = `${this.options.projectDir}/AGENTS.md`;
+    if (!(await this.options.fs.exists(path))) return 'No AGENTS.md in this repository.';
+    return this.options.fs.readFile(path);
+  }
 }

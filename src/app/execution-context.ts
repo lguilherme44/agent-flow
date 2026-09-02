@@ -11,6 +11,8 @@ import { StateStore } from './state-store.js';
 import { StageRunner } from './stage-runner.js';
 import { PromptLoader } from './prompt-loader.js';
 import { TaskExecutor, canImplementWith } from './task-executor.js';
+import { ReviewService, ChangeReviewAdapter } from './review-service.js';
+import { ReviewStore } from './review-store.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
 import { RepositoryContextAdvisor } from './repository-context-advisor.js';
@@ -349,6 +351,37 @@ export async function buildExecutionContext(
     integrator,
   });
 
+  // **M6-03: reviews happen after a merge, and only when somebody reviews.**
+  //
+  // Wired unconditionally and answering with silence when no team member declares review
+  // skills — the same shape the collaboration service has, so the mode is decided by
+  // configuration rather than by the wiring. A run with no reviewer behaves exactly as
+  // M5 did, byte for byte, and pays nothing.
+  const reviewService = new ReviewService({
+    clock,
+    store,
+    reviews: new ReviewStore({ fs, projectDir: options.projectDir }),
+    stageRunner,
+    roster,
+    config,
+    canImplement: canImplementWith(config.global, registry.capabilities()),
+  });
+
+  const changeReviewer = new ChangeReviewAdapter({
+    service: reviewService,
+    store,
+    fs,
+    projectDir: options.projectDir,
+    // **No diff stat, deliberately.** Producing one here would make this a second place
+    // that composes the review workflow with Git, which `run-actions.ts` already owns —
+    // and the reviewer has a working directory and the list of files that changed. A
+    // summary is a map; the prompt tells it to read the territory.
+    //
+    // The same derivation the executor uses, so a reviewer's capacity is counted the way
+    // an implementer's is. No task is exempt from itself here: a review is new work.
+    inFlight: async (runId) => inFlightFromRun(store, runId),
+  });
+
   const scheduler = new Scheduler({
     store,
     executor,
@@ -365,6 +398,7 @@ export async function buildExecutionContext(
     // retried however much budget is left. `enabled: false` restores the previous
     // behaviour exactly, which is why the switch exists at all.
     recoveryConfig: config.global.recovery,
+    ...(reviewService.enabled ? { reviewer: changeReviewer } : {}),
     // M5-07: the two constraints a configured team adds to the wave this scheduler was
     // already forming. Wired unconditionally and asked per candidate — with no `teams:`
     // block it admits everything, so the mode is decided by configuration rather than by
@@ -488,4 +522,46 @@ export async function loadPlan(store: StateStore, runId: string): Promise<Plan |
 /** Task states as last persisted, for resuming. */
 export function statesOf(state: RunState): Record<string, string> {
   return Object.fromEntries(state.tasks.map((task) => [task.id, task.state]));
+}
+
+/**
+ * How many tasks each agent currently holds, for a reviewer's capacity.
+ *
+ * The executor's own derivation reads the same two facts — the run's running tasks and
+ * the assignments the audit trail recorded — and this is the read-only half of it, here
+ * because a reviewer is assigned outside the executor. Tolerant rather than strict: a
+ * malformed line should cost a reviewer's capacity count some precision, not stop a
+ * review from being assigned at all.
+ */
+async function inFlightFromRun(
+  store: StateStore,
+  runId: string,
+): Promise<ReadonlyMap<string, number>> {
+  const counts = new Map<string, number>();
+
+  try {
+    const state = await store.loadRun(runId);
+    const running = new Set(
+      state.tasks.filter((task) => task.state === 'running').map((task) => task.id),
+    );
+
+    const assignedTo = new Map<string, string>();
+    for (const event of await store.readEvents(runId)) {
+      if (event.type !== 'task_assigned') continue;
+      const task = event.detail['task'];
+      const agent = event.detail['agent'];
+      if (typeof task === 'string' && typeof agent === 'string') assignedTo.set(task, agent);
+    }
+
+    for (const taskId of running) {
+      const agent = assignedTo.get(taskId);
+      if (agent !== undefined) counts.set(agent, (counts.get(agent) ?? 0) + 1);
+    }
+  } catch {
+    // An unreadable run means an unknown load, which the policy reads as idle. A review
+    // assigned to a busy member is a worse outcome than no review at all only if the
+    // member is genuinely saturated — and capacity is a coordination signal, not a lock.
+  }
+
+  return counts;
 }

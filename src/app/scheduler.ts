@@ -27,6 +27,17 @@ import type {
 import type { RunRecovery, RunRecoveryOutcome } from './worktree-recovery.js';
 import { overlappingPaths } from '../core/file-overlap.js';
 import type { WaveAdmission, WaveDeferral } from '../core/team/waves.js';
+
+/**
+ * The narrow view the scheduler holds of the reviewer.
+ *
+ * Declared here and consumed as a type, exactly as `WaveIntegrator` is and for the same
+ * reason: the wave loop can be driven in a test without a reviewer, and the scheduler
+ * imports nothing that knows what a review is.
+ */
+export interface ChangeReviewer {
+  review(runId: string, task: Task, result: TaskResult): Promise<void>;
+}
 import {
   decideTaskRecovery,
   escalationEvidence,
@@ -142,6 +153,19 @@ export interface SchedulerOptions {
    * would disagree on the first resumed run.
    */
   readonly waveAdmission?: WaveAdmission;
+  /**
+   * Reviews each change after it integrates (M6-03).
+   *
+   * **Narrow on purpose, and optional for the reason `integrator` is.** The scheduler
+   * gains no new authority here: it already knows a task integrated, and this tells
+   * somebody. What a review needs — the diff, the author, the tree, the roster — is
+   * gathered by the adapter, because a scheduler that assembled review context would be
+   * a scheduler that knows what a review is.
+   *
+   * Absent, and nothing is reviewed: every configuration written before M6, and every
+   * team with no member who reviews.
+   */
+  readonly reviewer?: ChangeReviewer;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
@@ -606,6 +630,21 @@ export class Scheduler {
           // a task in, and the literal lives in the module that owns the write.
           states[outcome.task] = outcome.state;
           if (outcome.kind === 'integrated') results.push(outcome.result);
+        }
+
+        // **After the merge, because that is the only moment the tree exists** (I-41).
+        // A review before integration reads a worktree nobody will ship; a review after
+        // the next wave reads a tree with somebody else's work in it. Between the two is
+        // the one commit this change actually is.
+        //
+        // Sequentially rather than in parallel: reviews are read-only and cheap to
+        // order, and a wave of concurrent reviewers would make the roster's capacity a
+        // second thing to reason about for no gain.
+        for (const outcome of integrated.outcomes) {
+          if (outcome.kind !== 'integrated') continue;
+          const task = byId.get(outcome.task);
+          if (task === undefined) continue;
+          await this.options.reviewer?.review(runId, task, outcome.result);
         }
 
         if (integrated.haltedBy !== undefined && haltedBy === undefined) {

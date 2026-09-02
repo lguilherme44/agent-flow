@@ -1,7 +1,8 @@
 ---
 permissions: read-only
 outputFormat: json
-requiredVars: [taskId, taskTitle, taskDescription, acceptanceCriteria, diff, changedFiles, qualityEvidence, agentsMd]
+workingDirectory: true
+requiredVars: [taskId, taskTitle, taskDescription, acceptanceCriteria, diffStat, changedFiles, qualityEvidence, agentsMd]
 ---
 ROLE: CODE_REVIEW_AGENT
 
@@ -23,11 +24,14 @@ pipeline that produced it.
 
 ## The change
 
-{{diff}}
+{{diffStat}}
 
 ### Files changed
 
 {{changedFiles}}
+
+You have the repository. Read these files — the summary above is a map, not the
+territory, and a review of a diff stat is a review of nothing.
 
 ## What the project's own commands already said
 

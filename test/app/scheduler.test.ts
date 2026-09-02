@@ -1367,6 +1367,81 @@ describe('a validated attempt is not a completed task (M2-06 §14.4, I-3)', () =
     expect((await store.loadRun(run.runId)).tasks[0]?.state).toBe('completed');
   });
 
+  /** A reviewer that records what it was asked to review. */
+  function recordingReviewer() {
+    const reviewed: { task: string; tree: string | undefined }[] = [];
+    return {
+      reviewed,
+      service: {
+        review: async (_runId: string, task: Task, result: TaskResult) => {
+          reviewed.push({ task: task.id, tree: result.integration?.mergeCommit });
+        },
+      },
+    };
+  }
+
+  it('reviews each change after it integrates, and not before (M6-03)', async () => {
+    // **The wiring, asserted rather than assumed.** The service's own tests cover what a
+    // review does; this covers that one happens — and the first version of this code
+    // passed every one of those while the scheduler called nothing.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const integration = integrator();
+    const workspaces = isolatedWorkspaces();
+    const reviewer = recordingReviewer();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001'), task('TASK-002')] });
+    await new Scheduler({
+      store,
+      executor,
+      maxConcurrency: 2,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+      reviewer: reviewer.service,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(reviewer.reviewed.map((entry) => entry.task).sort()).toEqual(['TASK-001', 'TASK-002']);
+  });
+
+  it('does not review a task the merge refused', async () => {
+    // A change that is not on the branch is not a change anybody can review — I-41 says
+    // a review names the tree it read, and a refused merge produced none.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const integration = integrator({ 'TASK-001': 'refused' });
+    const workspaces = isolatedWorkspaces();
+    const reviewer = recordingReviewer();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+      reviewer: reviewer.service,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(reviewer.reviewed).toEqual([]);
+  });
+
+  it('runs exactly as before when no reviewer is wired', async () => {
+    // Every configuration written before M6, and every team with nobody who reviews.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const integration = integrator();
+    const workspaces = isolatedWorkspaces();
+
+    const plan = PlanSchema.parse({ feature: 'f', tasks: [task('TASK-001')] });
+    const outcome = await new Scheduler({
+      store,
+      executor,
+      workspaces: workspaces.service as never,
+      integrator: integration.service as never,
+    }).run(plan, run.runId, 'SDD');
+
+    expect(outcome.states['TASK-001']).toBe('completed');
+  });
+
   it('leaves an unintegrated task out of completed, and halts', async () => {
     const { store, run } = await harness();
     const { executor } = fakeExecutor();
