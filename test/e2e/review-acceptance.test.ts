@@ -479,7 +479,7 @@ describe('M6-ACC-12 — a re-review observes the corrected tree', () => {
 
 /* ─── M6-ACC-13 … 14 ────────────────────────────────────────────────────────── */
 
-describe('M6-ACC-13, 14 — a review goes stale, and a stale one satisfies no gate', () => {
+describe('M6-ACC-13 / M6-ACC-14 — a review goes stale, and a stale one satisfies no gate', () => {
   it('is stale once the tree moves', async () => {
     const h = await harness();
     await h.adapter.review(h.run.runId, task(), result(TREE_B));
@@ -516,7 +516,7 @@ describe('M6-ACC-13, 14 — a review goes stale, and a stale one satisfies no ga
 
 /* ─── M6-ACC-15 … 16 ────────────────────────────────────────────────────────── */
 
-describe('M6-ACC-15, 16 — QA is work, and QA saying so is not a gate', () => {
+describe('M6-ACC-15 / M6-ACC-16 — QA is work, and QA saying so is not a gate', () => {
   it('is a team member with QA skills rather than a tenth role', async () => {
     // §33. M5 already lets a member declare skills; a role for semantic flavour would be
     // a concept the assignment policy already has.
@@ -667,7 +667,7 @@ describe('M6-ACC-21 — one projection for every surface', () => {
   });
 });
 
-describe('M6-ACC-22, 23 — M4 and M5 invariants survive', () => {
+describe('M6-ACC-22 / M6-ACC-23 — M4 and M5 invariants survive', () => {
   it('leaves a run with no reviewer behaving exactly as M5', async () => {
     const h = await harness({ members: { backend: {} } });
     await h.adapter.review(h.run.runId, task(), result());
