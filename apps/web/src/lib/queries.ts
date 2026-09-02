@@ -4,6 +4,7 @@ import type {
   AnalyticsView,
   ArtifactContentView,
   CollaborationView,
+  TeamView,
   ConfigView,
   ArtifactView,
   ProjectView,
@@ -65,6 +66,8 @@ export const keys = {
     ['telemetry', { runId, projectId }] as const,
   collaboration: (projectId: string | undefined, runId: string) =>
     ['collaboration', { runId, projectId }] as const,
+  team: (projectId: string | undefined, runId: string) =>
+    ['team', { runId, projectId }] as const,
   runnerHealth: (projectId?: string) => ['runner-health', { projectId }] as const,
   runners: (projectId?: string) => ['runners', { projectId }] as const,
   agents: (projectId?: string) => ['agents', { projectId }] as const,
@@ -288,6 +291,30 @@ export function useCollaboration(
   return useQuery({
     queryKey: keys.collaboration(projectId, runId ?? ''),
     queryFn: () => api.collaboration(runId as string, projectId),
+    enabled: runId !== undefined,
+  });
+}
+
+/**
+ * The run's team (M5-08, M5-ACC-15).
+ *
+ * **The component renders this and computes none of it.** Members, assignments, the
+ * ranking behind each one and the totals all arrive from `core/team/view.ts`, which is
+ * the same fold `af status` prints. A browser that ranked its own candidates would be a
+ * second assignment authority, and its first disagreement with the run would put a
+ * decision nobody made on screen (I-33).
+ *
+ * One query for all of it, matching the one endpoint: a member's derived status and the
+ * assignment that produced it are folds over one log at one instant, and two caches
+ * expiring apart would show somebody idle beside the task they are running.
+ */
+export function useTeam(
+  projectId: string | undefined,
+  runId: string | undefined,
+): UseQueryResult<TeamView> {
+  return useQuery({
+    queryKey: keys.team(projectId, runId ?? ''),
+    queryFn: () => api.team(runId as string, projectId),
     enabled: runId !== undefined,
   });
 }

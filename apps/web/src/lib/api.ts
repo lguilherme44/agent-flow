@@ -5,6 +5,7 @@ import type {
   ApprovalGateView,
   ArtifactContentView,
   CollaborationView,
+  TeamView,
   ConfigView,
   ArtifactView,
   HealthResponse,
@@ -188,6 +189,12 @@ export const api = {
   // calls would let a repaint show a thread as open beside the entry that closed it.
   collaboration: (runId: string, projectId?: string) =>
     get<CollaborationView>(`/runs/${runId}/collaboration`, { projectId }),
+  // Members, assignments, deferrals and the totals in one call, for the same reason: a
+  // member's derived status and the assignment that produced it are folds over one log
+  // at one instant, and two caches expiring apart would show somebody idle beside the
+  // task they are running.
+  team: (runId: string, projectId?: string) =>
+    get<TeamView>(`/runs/${runId}/team`, { projectId }),
 
   runners: (projectId?: string) => get<RunnerView[]>('/runners', { projectId }),
   runnerHealth: (projectId?: string) =>

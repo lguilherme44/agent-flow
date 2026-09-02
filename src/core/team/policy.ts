@@ -270,7 +270,13 @@ function explain(best: CandidateScore, required: readonly SkillId[]): string {
   );
 }
 
-/** Why nobody was eligible, naming each filter that fired. */
+/**
+ * Why nobody was eligible, naming each filter that fired.
+ *
+ * The reasons are spelled out rather than pasted in. `excludedBy` is an enum, and an enum
+ * in the middle of an English sentence — `1 role_mismatch` — is an implementation detail
+ * leaking onto a screen an operator reads. The screenshot is where that showed.
+ */
 function summarise(ranked: readonly CandidateScore[]): string {
   const counts = new Map<string, number>();
   for (const candidate of ranked) {
@@ -280,6 +286,6 @@ function summarise(ranked: readonly CandidateScore[]): string {
 
   return [...counts]
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([reason, count]) => `${String(count)} ${reason}`)
+    .map(([reason, count]) => `${String(count)} ${reason.replace(/_/g, ' ')}`)
     .join(', ');
 }

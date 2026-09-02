@@ -8,6 +8,7 @@ import {
   useArtifact,
   useArtifacts,
   useCollaboration,
+  useTeam,
   useRun,
   useRunDag,
   useStages,
@@ -25,12 +26,13 @@ import {
   ModelUsageCard,
 } from '../features/bottom-cards';
 import { CollaborationPanel } from '../features/collaboration';
+import { TeamPanel } from '../features/team';
 import { Empty, Notice, cx } from '../components/ui';
 import { StructuredPlanView } from '../components/StructuredPlanView';
 import { ArtifactReader } from '../components/ArtifactReader';
 import { ApiError } from '../lib/api';
 import { INSPECTOR_PANE, useMediaQuery } from '../hooks/use-media-query';
-import type { TaskDetailView } from '@contracts/index.js';
+import type { TaskDetailView, TeamView } from '@contracts/index.js';
 
 /**
  * The graph arrives when somebody asks for it.
@@ -121,6 +123,22 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   const collaboration = useCollaboration(projectId, runId);
   const hasCollaboration =
     (collaboration.data?.threads.length ?? 0) > 0 || (collaboration.data?.entries.length ?? 0) > 0;
+  // M5-08. Same shape and same reason: one query for the whole view, because a member's
+  // derived status and the assignment that produced it are folds over one log at one
+  // instant. Shown only for a run whose project configured a team — a permanently empty
+  // Team card on every dashboard would be a box for a feature that ships off.
+  const team = useTeam(projectId, runId);
+  const hasTeam = team.data?.configured === true;
+  // Built here rather than in the graph, because the graph is lazy-loaded and this is a
+  // three-line fold: the last assignment per task wins, since a reassignment appends to
+  // the log rather than rewriting it.
+  const assignedTo = useMemo(() => {
+    const byTask = new Map<string, string>();
+    for (const assignment of team.data?.assignments ?? []) {
+      byTask.set(assignment.taskId, assignment.agentName);
+    }
+    return byTask;
+  }, [team.data]);
 
   // Selecting a task a later plan no longer contains would leave the inspector
   // showing a task the run does not have.
@@ -228,6 +246,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                       visible={new Set(visible.map((t) => t.id))}
                       selectedId={selectedTask}
                       onSelect={setSelectedTask}
+                      assignedTo={assignedTo}
                       isLoading={dag.isLoading}
                       isDagFullscreen={isDagFullscreen}
                       onToggleFullscreen={() => {
@@ -244,6 +263,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
       {asPane && (!asGraph || selectedTask !== undefined) ? (
         <div className="section-agents surface-1 overflow-hidden flex flex-col">
           <TaskInspector
+              team={team.data}
             task={task.data}
             projectId={projectId}
             runId={runId}
@@ -264,6 +284,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
           task={task.data}
           projectId={projectId}
           runId={runId}
+          team={team.data}
           onClose={() => {
             setSelectedTask(undefined);
           }}
@@ -293,8 +314,23 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                 enough for a message; and a permanently empty fifth card on every
                 dashboard would be a box for a feature that ships off. So a project that
                 has not opted in sees exactly the row it saw before M4. */}
-            {hasCollaboration ? (
-              <CollaborationPanel collaboration={collaboration.data}  />
+            {hasCollaboration || hasTeam ? (
+              // Side by side above 1280 and stacked below, for the same measured reason
+              // the row above splits at that width: two cards at 1024 leave each 500px,
+              // which is enough for a member row and not for one beside a thread.
+              //
+              // Team first. It answers "who is doing this", which is the context that
+              // makes an open thread legible — "executor.normal is blocked" reads
+              // differently once the screen has said which member that is.
+              <div
+                className={cx(
+                  'grid gap-3',
+                  hasCollaboration && hasTeam ? 'xl:grid-cols-2' : 'grid-cols-1',
+                )}
+              >
+                {hasTeam ? <TeamPanel team={team.data} /> : null}
+                {hasCollaboration ? <CollaborationPanel collaboration={collaboration.data} /> : null}
+              </div>
             ) : null}
           </div>
         </div>
@@ -340,6 +376,8 @@ function InspectorDrawer(props: {
   projectId: string | undefined;
   runId: string | undefined;
   onClose: () => void;
+  /** Threaded through rather than fetched again: one query per run, not per layout. */
+  team: TeamView | undefined;
 }): JSX.Element {
   const opener = useRef<HTMLElement | null>(null);
 
@@ -378,6 +416,7 @@ function InspectorDrawer(props: {
             task={props.task}
             projectId={props.projectId}
             runId={props.runId}
+            team={props.team}
             onClose={props.onClose}
           />
         </DialogPrimitive.Content>

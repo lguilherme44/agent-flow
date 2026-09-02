@@ -28,6 +28,16 @@ export interface DagViewProps {
   readonly isLoading?: boolean;
   readonly isDagFullscreen?: boolean;
   readonly onToggleFullscreen?: () => void;
+  /**
+   * Who holds each task, as `taskId → member name` (§39).
+   *
+   * **Discreet, and absent by default.** A run with no team passes nothing and every node
+   * draws exactly as it did before M5 — turning five hundred boxes into departure boards
+   * for a field most projects do not have would cost every reader to serve a few. Where
+   * there *is* an assignment it is one short name on a line that already exists, and the
+   * ranking that produced it lives in the inspector, one click away.
+   */
+  readonly assignedTo?: ReadonlyMap<string, string>;
 }
 
 interface TaskNodeData extends Record<string, unknown> {
@@ -37,6 +47,8 @@ interface TaskNodeData extends Record<string, unknown> {
   /** How this node relates to the selected one. Drives emphasis, not colour. */
   readonly relation: 'selected' | 'ancestor' | 'descendant' | 'unrelated' | 'none';
   readonly filteredOut: boolean;
+  /** The member holding this task, when a team assigned it. */
+  readonly agentName: string | undefined;
 }
 
 type TaskNode = Node<TaskNodeData, 'task'>;
@@ -84,9 +96,10 @@ export function DagView(props: DagViewProps): JSX.Element {
         // React Flow puts this on the focusable wrapper, which is what a screen
         // reader lands on when tabbing through the graph. Status is in the words,
         // not only in the colour (§97).
-        ariaLabel: describeNode(node.taskId, task, relation),
+        ariaLabel: describeNode(node.taskId, task, relation, props.assignedTo?.get(node.taskId)),
         ariaRole: 'button',
         data: {
+          agentName: props.assignedTo?.get(node.taskId),
           task,
           taskId: node.taskId,
           selected: node.taskId === selectedId,
@@ -336,7 +349,7 @@ function GraphProblems(props: { dag: RunDagView }): JSX.Element | null {
  * and says so rather than showing a zero.
  */
 const TaskNodeBody = memo(function TaskNodeBody(props: NodeProps<TaskNode>): JSX.Element {
-  const { task, taskId, selected, relation, filteredOut } = props.data;
+  const { task, taskId, selected, relation, filteredOut, agentName } = props.data;
   const state = task?.state ?? 'queued';
   const tone = taskTone(state);
 
@@ -386,9 +399,17 @@ const TaskNodeBody = memo(function TaskNodeBody(props: NodeProps<TaskNode>): JSX
       </span>
 
       <span className="flex items-center gap-1.5 truncate text-[10px] leading-tight text-faint">
+        {/* **The member replaces the model, rather than joining it.** Three facts is what
+            this line fits; the first version put the agent in front of all three and the
+            screenshot showed the model ellipsised away to make room. A member implies the
+            runner it is configured with, and both it and the model are one click away in
+            the inspector — so where there is an assignment the more specific fact wins the
+            slot, and where there is none the node is exactly what it was before M5. */}
         <span className="capitalize">{task?.complexity ?? 'unknown'}</span>
         <span aria-hidden>·</span>
-        <span className="truncate">{task?.model ?? task?.runner ?? 'no model yet'}</span>
+        <span className="truncate">
+          {agentName ?? task?.model ?? task?.runner ?? 'no model yet'}
+        </span>
         {task?.durationMs === undefined ? null : (
           <>
             <span aria-hidden>·</span>
@@ -409,12 +430,17 @@ function describeNode(
   taskId: string,
   task: TaskSummaryView | undefined,
   relation: TaskNodeData['relation'],
+  agentName: string | undefined,
 ): string {
   const parts = [
     taskId,
     task?.title ?? 'unknown task',
     taskLabel(task?.state ?? 'queued').toLowerCase(),
   ];
+
+  // In the words as well as on the box (§97). A name a sighted reader can see and a
+  // screen reader cannot is a fact the screen only half carries.
+  if (agentName !== undefined) parts.push(`assigned to ${agentName}`);
 
   if (task?.complexity !== undefined) parts.push(task.complexity);
   if (task?.model !== undefined) parts.push(task.model);

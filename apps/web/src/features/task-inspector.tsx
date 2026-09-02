@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
 import { ArrowDownToLine, Copy, Pause, RotateCcw, X } from 'lucide-react';
-import type { AttemptHistoryView, TaskDetailView } from '@contracts/index.js';
+import type { AttemptHistoryView, TaskDetailView, TeamView } from '@contracts/index.js';
 import {
   ActionRefusal,
   Badge,
@@ -17,6 +17,7 @@ import {
 import { useRetry } from '../lib/mutations';
 import { formatDuration, formatTime } from '../lib/format';
 import { taskLabel, taskTone } from '../lib/status';
+import { TaskAssignmentNote } from './team';
 
 /**
  * The execution panel (§73–§77).
@@ -38,6 +39,14 @@ export function TaskInspector(props: {
   task: TaskDetailView | undefined;
   projectId: string | undefined;
   runId: string | undefined;
+  /**
+   * The run's team, when one is configured (§38).
+   *
+   * Optional, and its absence renders nothing rather than an empty section: a project
+   * with no `teams:` block made no assignment decision, and a "why?" disclosure over the
+   * router's answer would promise an explanation there is none of.
+   */
+  team?: TeamView | undefined;
   onClose?: () => void;
 }): JSX.Element {
   const [tab, setTab] = useState('logs');
@@ -121,6 +130,11 @@ export function TaskInspector(props: {
               {task.correctiveFor.stage.replace(/-/g, ' ')}.
             </p>
           )}
+
+          {/* Between the provenance notices and the outcome, because it is the same
+              kind of fact: who ran this, and why it was them rather than somebody else.
+              One line closed; the ranking is behind the disclosure. */}
+          <TaskAssignmentNote team={props.team} taskId={task.id} />
 
           <TaskIntegration task={task} />
 

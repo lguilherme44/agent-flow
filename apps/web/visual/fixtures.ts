@@ -1112,6 +1112,153 @@ export const COLLABORATION: CollaborationView = {
   ],
 };
 
+/**
+ * A run with no team, which is the reference run and most runs (§37).
+ *
+ * **Deliberately unconfigured in the shared fixture.** Putting a team here would add a
+ * second card to the bottom row of every screenshot in this suite, and every baseline
+ * would move at once — which is exactly the change §49 says not to make blindly. The
+ * team's own compositions are photographed in `team.spec.ts`, which overrides this.
+ *
+ * A clean `configured: false` rather than no route at all: a 404 is a console error, and
+ * `dashboard.spec.ts` asserts the page logs none.
+ */
+export const TEAM_NONE = {
+  configured: false,
+  members: [],
+  assignments: [],
+  deferrals: [],
+  totals: {
+    assignments: 0,
+    reassignments: 0,
+    capacityDeferrals: 0,
+    ownershipDeferrals: 0,
+    candidatesConsidered: 0,
+  },
+};
+
+/**
+ * A team mid-run, composed to put every branch in one frame (§37, §38).
+ *
+ * One member full, one working, one idle; a task no member could take; a wave held for a
+ * contended area. The branch whose styling is easiest to get wrong is the one nobody
+ * photographs, so all of them are here.
+ */
+export const TEAM = {
+  configured: true,
+  members: [
+    {
+      id: 'backend',
+      displayName: 'Backend',
+      role: 'executor.normal',
+      runner: 'claude',
+      model: 'claude-opus-4-6',
+      skills: ['typescript', 'node'],
+      specializations: ['fastify'],
+      maxConcurrentTasks: 1,
+      ownership: { preferred: ['src/server/**'], exclusive: ['src/db/**'], shared: [] },
+      assigned: ['TASK-003'],
+      assignedTotal: 3,
+      status: 'full',
+    },
+    {
+      id: 'frontend',
+      displayName: 'Frontend',
+      role: 'executor.normal',
+      runner: 'codex',
+      model: 'gpt-5-codex',
+      skills: ['vue', 'css'],
+      specializations: [],
+      maxConcurrentTasks: 2,
+      ownership: { preferred: ['apps/web/**'], exclusive: [], shared: [] },
+      assigned: ['TASK-005'],
+      assignedTotal: 2,
+      status: 'working',
+    },
+    {
+      id: 'reviewer',
+      displayName: 'Reviewer',
+      role: 'finalReviewer',
+      runner: 'claude',
+      skills: ['review'],
+      specializations: [],
+      maxConcurrentTasks: 1,
+      ownership: { preferred: [], exclusive: [], shared: ['**'] },
+      assigned: [],
+      assignedTotal: 0,
+      status: 'idle',
+    },
+  ],
+  assignments: [
+    {
+      taskId: 'TASK-003',
+      agentId: 'backend',
+      agentName: 'Backend',
+      role: 'executor.normal',
+      reason: 'team_match',
+      detail:
+        'backend scored 0.90 — skills typescript of typescript, node; ownership 1.00; role is the one the router would have chosen',
+      assignedAt: '2026-08-10T19:34:00.000Z',
+      candidates: [
+        { agentId: 'backend', agentName: 'Backend', score: 0.9, skillMatch: 1, ownership: 1, riskFit: 1, matchedSkills: ['typescript'] },
+        { agentId: 'frontend', agentName: 'Frontend', score: 0.2, skillMatch: 0, ownership: 0, riskFit: 1, matchedSkills: [] },
+        { agentId: 'reviewer', agentName: 'Reviewer', score: 0.0, skillMatch: 0, ownership: 0, riskFit: 0, matchedSkills: [], excludedBy: 'role_mismatch' },
+      ],
+    },
+    {
+      taskId: 'TASK-005',
+      agentId: 'frontend',
+      agentName: 'Frontend',
+      role: 'executor.normal',
+      reason: 'team_match',
+      detail: 'frontend scored 0.80 — skills vue of vue; ownership 1.00',
+      assignedAt: '2026-08-10T19:52:00.000Z',
+      candidates: [
+        { agentId: 'frontend', agentName: 'Frontend', score: 0.8, skillMatch: 1, ownership: 1, riskFit: 1, matchedSkills: ['vue'] },
+        { agentId: 'backend', agentName: 'Backend', score: 0.2, skillMatch: 0, ownership: 0, riskFit: 1, matchedSkills: [], excludedBy: 'capacity' },
+      ],
+    },
+    {
+      taskId: 'TASK-007',
+      agentId: 'executor.normal',
+      agentName: 'executor.normal',
+      role: 'executor.normal',
+      reason: 'no_eligible_member',
+      detail: 'No configured member can take TASK-007: 2 capacity, 1 role mismatch. It stays with the role the router chose.',
+      assignedAt: '2026-08-10T20:01:00.000Z',
+      candidates: [
+        { agentId: 'backend', agentName: 'Backend', score: 0.5, skillMatch: 0, ownership: 1, riskFit: 1, matchedSkills: [], excludedBy: 'capacity' },
+        { agentId: 'frontend', agentName: 'Frontend', score: 0.2, skillMatch: 0, ownership: 0, riskFit: 1, matchedSkills: [], excludedBy: 'capacity' },
+        { agentId: 'reviewer', agentName: 'Reviewer', score: 0.0, skillMatch: 0, ownership: 0, riskFit: 0, matchedSkills: [], excludedBy: 'role_mismatch' },
+      ],
+    },
+  ],
+  deferrals: [
+    {
+      taskId: 'TASK-006',
+      reason: 'ownership',
+      detail: 'TASK-006 and TASK-003 both write into src/db/**, which is declared exclusive.',
+      waitsFor: 'TASK-003',
+      patterns: ['src/db/**'],
+      agents: [],
+    },
+    {
+      taskId: 'TASK-008',
+      reason: 'capacity',
+      detail: 'Every member who could take TASK-008 is at its capacity in this wave (backend, frontend).',
+      patterns: [],
+      agents: ['backend', 'frontend'],
+    },
+  ],
+  totals: {
+    assignments: 3,
+    reassignments: 0,
+    capacityDeferrals: 1,
+    ownershipDeferrals: 1,
+    candidatesConsidered: 8,
+  },
+};
+
 export const ROUTES: Record<string, unknown> = {
   '/api/v1/health': { status: 'ok', version: '0.1.0', projects: 4, host: '127.0.0.1', port: 4782 },
   '/api/v1/projects': PROJECTS,
@@ -1125,6 +1272,7 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}/artifacts`]: ARTIFACTS,
   [`/api/v1/runs/${RUN_ID}/telemetry`]: TELEMETRY,
   [`/api/v1/runs/${RUN_ID}/collaboration`]: COLLABORATION,
+  [`/api/v1/runs/${RUN_ID}/team`]: TEAM_NONE,
   '/api/v1/runners': RUNNERS,
   '/api/v1/agents': AGENTS,
   '/api/v1/prompts': PROMPTS,
