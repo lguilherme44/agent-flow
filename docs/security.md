@@ -207,6 +207,109 @@ and text is what an agent can write; nothing trusts them.
 
 ---
 
+---
+
+## What an agent says to another agent is untrusted input
+
+M4 gave a run a channel between its agents. Everything in it is model output arriving
+through a different door than a plan, and the defences are the ones a plan already has.
+
+### The agent proposes; Agent Flow decides
+
+An implementation agent runs as a child process inside a sandboxed worktree, and Agent
+Flow cannot intercept what it does. So the same ordering that makes a validation receipt
+trustworthy makes a message trustworthy:
+
+```text
+the agent's process exits                    ← nothing below can start earlier
+        ↓
+`.agent-flow-outbox.json` is read
+        ↓
+it is removed from the workspace             ← before any tree is captured
+        ↓
+schema · redaction · budgets · re-keying
+        ↓
+appended to the run's collaboration log
+        ↓
+validation commands run                      (unchanged)
+        ↓
+git add -A · git write-tree                  the tree never contained the outbox
+```
+
+That last property is proved against real Git rather than asserted: an attempt that
+speaks captures a tree byte-identical to one that stays silent, the outbox never appears
+in `filesChanged`, and it never reaches the operator's own `git status` in sequential
+mode.
+
+### Five things an agent cannot do, closed by construction
+
+- **Forge a sender.** The shape an agent writes has no `from` field at all, so a forged
+  one is discarded by the parse rather than by a check somebody has to remember. The
+  harvest *notices* the attempt and records it, because a defence that leaves no trace is
+  a defence nobody can audit.
+- **File against another task.** `taskId` is assigned from the dispatch.
+- **Choose its own id.** Ids are allocated from the log, by maximum rather than by count,
+  so a skipped malformed line never causes a reuse.
+- **Reach outside the workspace.** The outbox path is resolved and checked for
+  containment through the same rule the project registry uses, so an outbox that is a
+  symlink to `~/.ssh/id_rsa` is refused rather than read — and the refusal quotes nothing
+  of what it found.
+- **Exhaust the machine.** The file's size is checked against the filesystem *before* it
+  is parsed: a schema cannot defend against a file it has already been handed.
+
+### A message never reaches a shell, a path or a ref
+
+A body is text. A reference is a closed union whose `file` variant is validated by the
+same repository-path rule the ContextPacket trust boundary uses — absolute paths, `..`,
+percent-encoded traversal, URL schemes, drive letters, UNC shares, control characters,
+`.git` and `.agent-flow` are all rejected. Architecture tests forbid every collaboration
+module from importing a shell, a process runner or a Git module, and from importing
+anything that can move a run.
+
+### Nothing is silently overwritten
+
+The blackboard is append-only and there is no update, no delete and no edit anywhere in
+the product. A change is a new entry naming the one it replaces, and what the pair *means*
+is decided by a projection rather than by whoever wrote last:
+
+- superseded by its **own author** — a correction; the old entry drops out of context;
+- superseded by **somebody else** — a disagreement. **Both stay live, both reach the next
+  agent**, both are marked contested, and an event says so.
+
+The alternative was a permission lattice deciding who may overrule whom, which is an ACL
+nobody maintains. This needs none: an executor that finds the architect's contract wrong
+can say so, and what it cannot do is make the architect's entry disappear.
+
+### Everything is bounded
+
+Messages per task, bytes per message, bytes of the outbox file, thread depth, handoffs per
+task, entries per run, and bytes of the block that reaches a prompt. An exhausted budget
+stops the channel, records which budget, and names the one action that clears it.
+
+### What is deliberately withheld
+
+**An accepted handoff does not re-route execution unless an operator says so.**
+`collaboration.handoffsReassignExecution` ships `false`. With it off a handoff is a
+complete, auditable record that changes no execution; with it on, the target must still
+satisfy what an implementation task needs, checked through the same role resolver
+everything else uses. Re-routing execution from model output is an ownership transfer, and
+ownership is not a model's to decide.
+
+**The whole channel ships off.** With `collaboration.enabled: false` no outbox is read, no
+directory is created, and not one byte of any prompt differs from before the milestone —
+which is asserted by comparing two runs rather than by inspection.
+
+### The limit
+
+**The block an agent receives is prompt-injection surface, and framing is the only
+mitigation.** It is presented exactly as MVP 3's advisory context is: written by another
+agent, not validated, carrying no authority, with the task and the specification named as
+the contract. Agent Flow branches on nothing in it — no message completes a task, opens a
+gate, moves a stage or signs a verdict — so the worst a hostile peer can do is waste an
+attempt. It cannot make one succeed.
+
+---
+
 ## The limits, stated plainly
 
 **The receipt is not unforgeable against an agent that escapes its worktree.** This is a

@@ -183,6 +183,34 @@ Packaging and gsd-browser are local. See above for why.
 
 ---
 
+## Collaboration — the layers M4 needed that no other feature did
+
+Two claims in M4 cannot be made by a unit test, and each has its own suite.
+
+**"The outbox never enters a validated tree"** is a claim about what `git add -A` and
+`git write-tree` do to a file that is present at that moment, so it runs against real Git
+in a temporary repository: an attempt that speaks captures a tree byte-identical to one
+that stays silent, `filesChanged` never names the outbox, and it never reaches the
+operator's own `git status`. A fake would only ever confirm what the fake was told.
+
+**"The harvest happens between the agent exiting and the tree being captured"** is a claim
+about *line order* inside one method, which no type can enforce. An architecture rule
+asserts it directly, alongside the rules that forbid any collaboration module from
+importing a shell, a Git module or anything that can move a run.
+
+Three more layers exist because the failure they catch is specific:
+
+| Layer | What it caught |
+|---|---|
+| concurrency | eight tasks in one wave, harvested in both orders, producing an identical projection — the property MVP 2 spent a milestone on for integration, restated for speech |
+| acceptance (`test/e2e/collaboration-acceptance.test.ts`) | that with `collaboration.enabled: false` the prompt a runner receives is **byte-identical** to the pre-M4 one, proved by comparing two runs rather than by reading the code |
+| visual | three defects every green component test had missed — a panel clipping its own content, a contested notice repeating what the list below it already said, and an empty state rendered over a list of handoffs |
+
+That last row is the one worth repeating. The component tests asserted that elements
+existed, and they did; the screenshot showed the second thread and the whole blackboard
+section cut off below the fold of a 288-pixel box. **"The element exists" is not "the
+layout is right"**, and only a picture tells the difference.
+
 ## Dogfood — the real CLIs, never in CI
 
 The layers above are free, fast and deterministic because no coding CLI is ever

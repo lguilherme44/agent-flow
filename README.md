@@ -133,6 +133,11 @@ Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
 | Git-aware `clean` (worktrees, refs, branch retention) | Available |
 | Isolation and concurrency facts in the dashboard | Available |
 | More than one task at a time | Available — worktree mode, up to 8 |
+| Persistent agent identity, derived from the roles you configured | Available |
+| Messages, threads and handoffs between agents, on an append-only log | Available — opt-in, `collaboration.enabled` |
+| A shared blackboard whose entries are never silently overwritten | Available — opt-in |
+| Team context in an implementation prompt, byte-bounded and attributed | Available — opt-in |
+| A handoff that changes who *executes* a task | Available — opt-in twice, `collaboration.handoffsReassignExecution` |
 | `pause` / `resume` / `cancel` | Designed, not built |
 | Configuration writes from the dashboard | Designed, not built |
 | Remote or distributed execution | Out of scope for MVP 2 |
@@ -598,6 +603,72 @@ gap, and the commit all three describe is recorded on the run as `integrationHea
 
 ---
 
+## Agents that can talk to each other
+
+Off by default. With `collaboration.enabled: true`, the agents on a run get an identity, a
+durable channel, and a shared place to write down what they decided.
+
+**Who the agents are is derived, not configured.** Your existing `roles:` block yields one
+agent per role on the first run after an upgrade — no new block, no migration, nothing to
+edit. `id` and `role` are separate fields from the start, so a future `teams:` block can
+introduce a member called `frontend` serving `executor.normal` without invalidating
+anything already written.
+
+**How an agent speaks.** It writes `.agent-flow-outbox.json` in its working directory
+before it finishes. Agent Flow reads it **after the process exits and before the validated
+tree is captured**, removes it in that window, validates every item against a schema,
+redacts it, bounds it, and assigns the sender from the dispatch rather than from the file.
+The agent proposes; Agent Flow decides — the same ordering that makes a validation receipt
+trustworthy.
+
+```json
+{
+  "messages": [
+    {
+      "to": { "kind": "agent", "id": "architect" },
+      "type": "question",
+      "subject": "where is the idempotency key minted?",
+      "body": "The SDD names one but does not say which side generates it."
+    }
+  ],
+  "entries": [
+    {
+      "kind": "decision",
+      "subject": "checkout-idempotency",
+      "statement": "The API mints the key; the client echoes it on retry.",
+      "affects": ["executor.normal"]
+    }
+  ]
+}
+```
+
+You do not have to teach an agent this shape. When the feature is on, the contract is part
+of the team-context block the implementation prompt receives — which is also why turning it
+off leaves every prompt byte-for-byte as it was.
+
+**Nothing is silently overwritten.** The blackboard is append-only. A change is a new entry
+naming the one it replaces; by the same author that is a correction, and by a *different*
+author both entries stay live, both are marked contested, and both reach the next agent.
+An executor that finds the architect's contract wrong can say so — what it cannot do is
+make the architect's entry disappear.
+
+**Nothing an agent says has any authority.** No message completes a task, opens a gate,
+moves a stage or signs a verdict. Architecture tests make that structural rather than
+promised: no collaboration module may import the scheduler, the integrator, the task
+executor, a shell, a process runner or a Git module.
+
+**A handoff is recorded; whether it moves the work is a second decision.**
+`collaboration.handoffsReassignExecution` also ships `false`, because re-routing execution
+from model output is an ownership transfer. With it on, the target still has to satisfy
+what an implementation task needs.
+
+**Everything is bounded** — messages per task, bytes per message, outbox size, thread
+depth, handoffs per task, entries per run, and bytes of context reaching a prompt. Those
+bytes are attributed as their own source, so "why is this prompt 12 kB" has an answer that
+names the switch.
+
+---
+
 ## Artifacts and auditability
 
 ```text
@@ -780,6 +851,20 @@ MVP 2 — Safe Parallel Execution
 [x] M2-12  E2E, dogfood and documentation
 
 MVP 2 complete.
+
+M4 — Collaboration Foundation
+
+[x] M4-00  specification, and three false documentation claims corrected
+[x] M4-01  persistent agent identity, derived from the roles you already have
+[x] M4-02  the mailbox, and the outbox an agent leaves behind
+[x] M4-03  threads
+[x] M4-04  handoffs, and the one answer to "who executes this task"
+[x] M4-05  the shared blackboard
+[x] M4-06  team context in the prompt, bounded and attributed
+[x] M4-07  the read model, the CLI section and the dashboard panel
+[x] M4-08  acceptance suite and documentation
+
+Ships off. A live dogfood against real runners is the owner's to spend.
 ```
 
 Full roadmap, including what MVP 1 established and what is deliberately out of scope:

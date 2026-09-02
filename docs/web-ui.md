@@ -62,7 +62,7 @@ reached twice is one project rather than two histories.
 |---|---|
 | `/dashboard` | The run most likely to want you: executing, then waiting at a gate, then most recent. Renders the same component `/runs/:runId` does. |
 | `/runs` | History. Filters are local — narrowing the list costs no round trip. |
-| `/runs/:runId` | One run: pipeline, tasks, inspector, artifacts, approval, execution summary, model usage. |
+| `/runs/:runId` | One run: pipeline, tasks, inspector, artifacts, approval, execution summary, model usage — and, when the agents spoke, what they said. |
 | `/projects` | The registry, with each project's current run and — once one is selected — its runner health. |
 | `/agents` | What each of the nine logical roles would run, and which cannot be resolved. Read-only. |
 | `/prompts` | The prompts this installation ships. They belong to the installation, not to a repository. |
@@ -210,6 +210,7 @@ GET /api/v1/runs/:runId/tasks/:taskId
 GET /api/v1/runs/:runId/artifacts
 GET /api/v1/runs/:runId/artifacts/:artifact
 GET /api/v1/runs/:runId/telemetry
+GET /api/v1/runs/:runId/collaboration
 GET /api/v1/runs/:runId/approval
 GET /api/v1/runs/:runId/job
 GET /api/v1/jobs/:jobId
@@ -241,6 +242,42 @@ A refusal is structured: a machine-readable `error` code, a message in the words
 person needs, and the next step. `404` for something that does not exist, `400` for a
 malformed request, `409` for a request that was well formed and a workflow that said
 no. Never a stack trace.
+
+---
+
+## What the agents said
+
+`GET /runs/:runId/collaboration` returns threads, handoffs, blackboard entries and the
+run's roster in **one** response. One rather than four, because a thread's status and an
+entry's status are folds over the same two logs and have to be read at one instant: four
+calls would let a repaint show a thread as open beside the entry that closed it.
+
+Every answer comes out of the same projections the *prompt* was built from. Nothing in the
+browser folds a log or decides a status — a component that re-derived one would be the one
+that drifts, because the real answer is not on screen.
+
+The panel is a second row under the four bottom cards, and it is **not rendered at all**
+when there is nothing in it. A project that has not enabled collaboration sees exactly the
+row it saw before M4; an always-empty fifth card for a feature that ships off would be a
+box on every dashboard forever.
+
+Bounded like `Artifacts` already was — the top few of each section, with the footer
+carrying the totals — and ordered by what nothing mechanical settles:
+
+1. **contested entries**, with both claims side by side. Two agents disagree and no code
+   decides it; this is the one thing on the panel that is waiting for a person.
+2. **unanswered handoffs** — a task waiting on somebody's attention.
+3. **unresolved threads**, each with its latest message.
+4. **live blackboard entries**.
+
+A resolved conversation and a superseded entry are history, and history belongs in the log
+rather than in the row somebody reads before deciding whether the run can move on.
+
+Message bodies render as **text, never as markup**. A body is written by a model, and
+rendering it as anything else would make a peer's output part of this page's DOM.
+
+`enabled` and "anything was said" are reported separately, and the empty state depends on
+which: *off* invites the operator to turn it on, and *on, and quiet* does not.
 
 ---
 

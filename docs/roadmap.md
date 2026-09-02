@@ -12,9 +12,9 @@ MVP 1  ────────────────────────�
 MVP 2  ─────────────────────────────────►  safe parallel execution, complete
 MVP 3  ─────────────────────────────────►  context intelligence & advisory local model, complete
 AR     ─────────────────────────────────►  autonomous execution & recovery, in progress
-M4     ─────────────────────────────────►  collaboration foundation, in progress
+M4     ─────────────────────────────────►  collaboration foundation, complete — and off
                                         ▲
-                                        you are here: M4-00 specified
+                                        you are here: M4 built, awaiting a live dogfood
 ```
 
 ---
@@ -234,7 +234,7 @@ and confines the per-model table to `src/adapters/runners/`.
 
 ---
 
-## M4 — Collaboration Foundation · in progress
+## M4 — Collaboration Foundation · complete, and shipped off
 
 Specified in [`specs/m4-collaboration-foundation.md`](specs/m4-collaboration-foundation.md).
 
@@ -265,14 +265,53 @@ what earns the flip.
 | | Milestone | Status |
 |---|---|---|
 | M4-00 | Specification, and the three false documentation claims it found | **done** |
-| M4-01 | Agent identity | in progress |
-| M4-02 | Mailbox, outbox harvest and budgets | not started |
-| M4-03 | Threads | not started |
-| M4-04 | Handoffs | not started |
-| M4-05 | Shared blackboard | not started |
-| M4-06 | Context integration | not started |
-| M4-07 | Read model, CLI and dashboard | not started |
-| M4-08 | Dogfood and audit | not started |
+| M4-01 | Agent identity | **done** |
+| M4-02 | Mailbox, outbox harvest and budgets | **done** |
+| M4-03 | Threads | **done** |
+| M4-04 | Handoffs | **done** |
+| M4-05 | Shared blackboard | **done** |
+| M4-06 | Context integration | **done** |
+| M4-07 | Read model, CLI and dashboard | **done** |
+| M4-08 | Acceptance suite and documentation | **done** — the live dogfood is the owner's |
+
+### What M4-08 could prove, and what it could not
+
+The acceptance suite drives the **real** `TaskExecutor` against scripted runners, because
+the two claims that matter most are claims about where the calls sit rather than about
+what a function returns: the harvest happens between the agent exiting and the tree being
+captured, and the block reaches the prompt the runner actually receives. Fourteen tests,
+one per row of §14.
+
+The criterion worth naming is the twelfth. **With `collaboration.enabled: false`, the
+prompt a runner receives is byte-identical to the pre-M4 one** — proved by running the same
+task twice, once with the feature off and a full outbox sitting in the workspace, once with
+the block absent from configuration entirely, and comparing the two strings. Not by reading
+the code.
+
+What it cannot produce is a live run. A dogfood against real runners costs real model calls
+and is the owner's to spend — the same line AR-10 drew, for the same reason — and it is
+what would earn the flip to `enabled: true`.
+
+### What the milestone found on its way through
+
+Six defects, all in M4's own code, and every one of them caught by a gate rather than by
+review:
+
+- **The architecture rules caught three.** `CollaborationService` imported `StateStore`,
+  which can write task states — the prose said it never would and the import said it could.
+  `nextMessageId` was exported, tested and called by nothing. `admitHandoff` was written a
+  milestone before it had a caller.
+- **The screenshots caught three more, all with green component tests.** The panel rendered
+  every message of every thread into a 288-pixel box and cut the second thread and the
+  whole blackboard off below the fold. The contested notice listed ids the reader could not
+  act on while the list below repeated both entries with their text. And the empty state
+  rendered "nothing said" over a list of handoffs.
+
+There is also a red gate the M4-00 audit missed and this milestone is reporting rather than
+absorbing: **`npm run test:visual` fails on `master`**, proved in a clean worktree at
+`741941c` — four failures, the same DOM assertions that fail with M4 applied
+(`nothing clips a value it has room for` at 1024, and `the inspector is a pane above 1200`
+at three widths). Not M4's to fix, and not M4's to hide.
 
 ### What M4-00 corrected on its way past
 

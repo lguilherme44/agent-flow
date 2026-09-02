@@ -133,6 +133,11 @@ Quadro completo: [`docs/roadmap.md`](docs/roadmap.md). Fonte normativa:
 | `clean` ciente de Git (worktrees, refs, retenção de branch) | Disponível |
 | Fatos de isolamento e concorrência no dashboard | Disponível |
 | Mais de uma task ao mesmo tempo | Disponível — modo worktree, até 8 |
+| Identidade persistente de agente, derivada dos papéis que você já configurou | Disponível |
+| Mensagens, threads e handoffs entre agentes, em log append-only | Disponível — opt-in, `collaboration.enabled` |
+| Blackboard compartilhado cujas entradas nunca são sobrescritas em silêncio | Disponível — opt-in |
+| Contexto de time no prompt de implementação, limitado em bytes e atribuído | Disponível — opt-in |
+| Handoff que muda quem *executa* uma task | Disponível — opt-in duas vezes, `collaboration.handoffsReassignExecution` |
 | `pause` / `resume` / `cancel` | Desenhado, não construído |
 | Escrita de configuração pelo dashboard | Desenhado, não construído |
 | Execução remota ou distribuída | Fora do escopo do MVP 2 |
@@ -605,6 +610,71 @@ a árvore B", e o commit que os três descrevem fica registrado no run como
 
 ---
 
+## Agentes que conversam entre si
+
+Desligado por padrão. Com `collaboration.enabled: true`, os agentes de um run ganham
+identidade, um canal durável e um lugar compartilhado para registrar o que decidiram.
+
+**Quem são os agentes é derivado, não configurado.** O seu bloco `roles:` já existente
+produz um agente por papel no primeiro run depois do upgrade — sem bloco novo, sem
+migração, sem nada para editar. `id` e `role` são campos separados desde o início, então um
+futuro bloco `teams:` pode introduzir um membro chamado `frontend` servindo
+`executor.normal` sem invalidar nada que já foi escrito.
+
+**Como um agente fala.** Ele escreve `.agent-flow-outbox.json` no diretório de trabalho
+antes de terminar. O Agent Flow lê **depois que o processo sai e antes de capturar a
+árvore validada**, remove o arquivo nessa janela, valida cada item contra um schema, redige,
+limita, e atribui o remetente pelo despacho e não pelo arquivo. O agente propõe; o Agent
+Flow decide — a mesma ordenação que torna um receipt de validação confiável.
+
+```json
+{
+  "messages": [
+    {
+      "to": { "kind": "agent", "id": "architect" },
+      "type": "question",
+      "subject": "onde a chave de idempotência é gerada?",
+      "body": "O SDD cita uma, mas não diz qual lado a gera."
+    }
+  ],
+  "entries": [
+    {
+      "kind": "decision",
+      "subject": "checkout-idempotency",
+      "statement": "A API gera a chave; o cliente devolve na retentativa.",
+      "affects": ["executor.normal"]
+    }
+  ]
+}
+```
+
+Você não precisa ensinar esse formato ao agente. Com a feature ligada, o contrato faz parte
+do bloco de contexto de time que o prompt de implementação recebe — que é também o motivo
+de desligá-la deixar todo prompt byte a byte como era.
+
+**Nada é sobrescrito em silêncio.** O blackboard é append-only. Uma mudança é uma entrada
+nova nomeando a que substitui; pelo mesmo autor isso é uma correção, e por um autor
+**diferente** as duas entradas ficam vivas, as duas são marcadas como contestadas, e as
+duas chegam ao próximo agente. Um executor que descobre que o contrato do arquiteto está
+errado pode dizer isso — o que ele não pode é fazer a entrada do arquiteto desaparecer.
+
+**Nada que um agente diz tem autoridade.** Nenhuma mensagem conclui uma task, abre um
+portão, move um estágio ou assina um veredito. Testes de arquitetura tornam isso estrutural
+em vez de prometido: nenhum módulo de colaboração pode importar o scheduler, o integrator,
+o task executor, um shell, um process runner ou um módulo de Git.
+
+**Um handoff é registrado; se ele move o trabalho é uma segunda decisão.**
+`collaboration.handoffsReassignExecution` também sai `false`, porque redirecionar execução a
+partir de saída de modelo é uma transferência de ownership. Ligado, o alvo ainda precisa
+satisfazer o que uma task de implementação exige.
+
+**Tudo é limitado** — mensagens por task, bytes por mensagem, tamanho da outbox,
+profundidade de thread, handoffs por task, entradas por run, e bytes de contexto que chegam
+ao prompt. Esses bytes são atribuídos como fonte própria, então "por que esse prompt tem
+12 kB" tem uma resposta que nomeia o interruptor.
+
+---
+
 ## Artefatos e auditabilidade
 
 ```text
@@ -792,6 +862,20 @@ MVP 2 — Safe Parallel Execution
 [x] M2-12  E2E, dogfood e documentação
 
 MVP 2 completo.
+
+M4 — Collaboration Foundation
+
+[x] M4-00  especificação, e três afirmações falsas de documentação corrigidas
+[x] M4-01  identidade persistente de agente, derivada dos papéis que você já tem
+[x] M4-02  o mailbox, e a outbox que o agente deixa para trás
+[x] M4-03  threads
+[x] M4-04  handoffs, e a única resposta para "quem executa esta task"
+[x] M4-05  o blackboard compartilhado
+[x] M4-06  contexto de time no prompt, limitado e atribuído
+[x] M4-07  o read model, a seção do CLI e o painel do dashboard
+[x] M4-08  suíte de aceite e documentação
+
+Sai desligado. Um dogfood ao vivo contra runners reais é do dono gastar.
 ```
 
 Roadmap completo, incluindo o que o MVP 1 estabeleceu e o que está deliberadamente fora
