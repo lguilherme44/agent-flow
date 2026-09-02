@@ -559,3 +559,55 @@ slugify". A model asserted verified fact about a tree it had misread, and a *dif
 model caught it. Nothing downstream trusted the first one. That is the review layer
 working, and it is also the clearest argument in either scenario for why §9–§12 insist
 semantic review, QA and deterministic validation are not equivalent.
+
+---
+
+## Verdict
+
+**M6 is incomplete.** Not because the suite is red — every gate is green — but because two
+of twenty-eight acceptance criteria are unmet and a third is undermined by a defect found
+in the last hour of the dogfood.
+
+| | |
+|---|---|
+| M6-ACC-03 | ❌ independence is recorded and wrong three times in five (defect 0) |
+| M6-ACC-24 | ❌ no live handoff or reassignment, in either scenario |
+| M6-ACC-25 | ❌ no collaboration payload changed any agent's behaviour |
+
+Everything else holds, and most of it holds on live evidence rather than on a fixture.
+
+### What the next cycle should do, in order
+
+1. **Thread the member's runner into the dispatch.** `resolveRole` already takes the
+   override; `stageRunner.run` never passes it. Until then every independence figure in
+   the product describes a configuration rather than a run. M5 work, not M6 work.
+2. **Run one scenario-1-shaped team on the current build** and read the outbox refusal
+   diagnostics. Four agents tried to use the collaboration channel and the product could
+   not tell anyone why it refused them; now it can. That is the shortest path to M6-ACC-25.
+3. **Force the handoff.** One task whose declared files straddle two members' exclusive
+   patterns, dispatched with `agent-flow task` so no planner can decompose the conflict
+   away. That is the experiment M6-ACC-24 needs and the one nobody has run.
+4. **Insert a corrective task into the chain**, not merely beside it — a fix to a test that
+   a later task's criteria depend on should precede that task. Needs task states in the
+   generator.
+5. **Make a required quality gate run.** A task's validation should be the union of what
+   the planner declared and the required gates that apply, so `lint` cannot sit at
+   `not_run` forever with no command able to resolve it.
+
+### What M6 actually delivered
+
+Seven defects found and fixed, every one of them past a green suite of 3900+ tests, every
+fix carrying a positive control that fails when the fix is reverted. Three of the seven
+were reachability defects — code, an event, and a key — where the mechanism existed, the
+tests passed, and no real agent could ever traverse the path. Two architecture rules now
+ask that question mechanically, one for exported functions and one for declared events.
+
+The reviewer found real defects in two unrelated repositories, including the same class of
+defect twice unprompted, and one finding predicted the exact reason a run would fail before
+the implementation ran. A finding became a task, the task routed itself to QA by the
+finding's own category, and the corrected tree was reviewed again. Per-task review costs
+13% of an implementation prompt.
+
+And the Definition of Done, which knew four conditions and now knows five, held a run open
+that would otherwise have been declared done with a blocking finding open. That one line of
+live output is the milestone in miniature: the gate was the thing missing, not the model.
