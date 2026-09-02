@@ -175,3 +175,69 @@ describe('the browser sends ids and sentences, never locations (§93)', () => {
     expect(posts).not.toMatch(/\bcommand\b\s*[,:]/);
   });
 });
+
+/**
+ * The team is the server's answer, drawn and never recomputed (M5, §43, I-33).
+ *
+ * A browser that ranked its own candidates would be a second assignment authority. Its
+ * first disagreement with the run puts a decision nobody made on an operator's screen —
+ * and the operator has no way to tell, because the screen is where they would have
+ * looked to find out.
+ */
+describe('the browser draws the assignment and does not compute one (M5)', () => {
+  const TEAM_FILES = ['features/team.tsx', 'features/dag-view.tsx', 'features/task-inspector.tsx'];
+
+  it('scores nothing, weights nothing and ranks nothing', () => {
+    // Reading `score` to draw it is the point of the table; multiplying it is the policy
+    // reimplemented here. A `*` adjacent to one of the term names is the tell.
+    //
+    // **Both directions, and the first version only caught one.** It matched
+    // `skillMatch *`, and a weighted sum is written `0.55 * skillMatch` — so the rule
+    // passed over exactly the shape it exists to forbid. Found by injecting that line
+    // and watching this test stay green, which is the only way to learn that a rule
+    // reporting nothing is reporting on anything at all.
+    const WEIGHTED =
+      /\*\s*[\w.[\]!?]*\b(?:skillMatch|ownership|riskFit|score)\b|\b(?:skillMatch|ownership|riskFit|score)\s*\*|\bSCORE_WEIGHTS\b/;
+
+    const offenders = sources()
+      .filter(({ path }) => TEAM_FILES.includes(path))
+      .filter(({ text }) => WEIGHTED.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('re-sorts no candidate list', () => {
+    // The order *is* the ranking, and it is total and stable by construction on the
+    // server (I-35). A `.sort()` here would be a second tie-break, and the two would
+    // disagree the first time two members scored the same.
+    const offenders = sources()
+      .filter(({ path }) => TEAM_FILES.includes(path))
+      .filter(({ text }) => /\bcandidates[^;]{0,60}\.sort\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('decides no member’s status', () => {
+    // I-39. `status` is derived on the server from the run's own task states; a
+    // component comparing `assigned.length` against a capacity would be deriving it a
+    // second time, and after a crash the two would disagree about who is working.
+    const offenders = sources()
+      .filter(({ path }) => path === 'features/team.tsx')
+      .filter(({ text }) => /maxConcurrentTasks\s*(?:<=|>=|<|>|===)/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('reads the team from the one query that fetches it', () => {
+    // One endpoint, one cache key. A second fetch would be a second instant, and a
+    // repaint could show a member idle beside the task they are running.
+    const fetchers = sources()
+      .filter(({ text }) => /['"`]\/runs\/\$\{[^}]+\}\/team['"`]/.test(text))
+      .map(({ path }) => path);
+
+    expect(fetchers).toEqual(['lib/api.ts']);
+  });
+});

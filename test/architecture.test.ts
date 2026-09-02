@@ -3596,3 +3596,168 @@ describe('collaboration carries no workflow authority (M4, I-27, I-29)', () => {
     expect(codeOnly(body)).not.toMatch(/\bfrom:/);
   });
 });
+
+/**
+ * The assignment authority is one module, and everything else reads its answer (M5, §43).
+ *
+ * **The rule these enforce is I-33**: an agent-authored message may say "Frontend should
+ * take this" and only `core/team/policy.ts` assigns. Every rule below is one way that
+ * could quietly stop being true — a second scorer in the browser, a handoff projection
+ * that reroutes, an ownership matcher that grew a filesystem call — and each of them
+ * would be discovered by a run that dispatched a task nobody could do.
+ */
+describe('one module decides who executes a task (M5, I-33 … I-39)', () => {
+  const TEAM = sourceFiles('src/core/team').map(read);
+
+  it('has a team core that imports no provider, adapter, port or Node built-in', () => {
+    // The scoring function must be answerable on paper. A module that could reach a
+    // provider could score a candidate by asking one, and the answer would stop being
+    // reproducible from the log — which is the whole of I-34.
+    const offenders = TEAM.filter(({ text }) =>
+      importSpecifiers(text).some(
+        (specifier) =>
+          specifier.startsWith('node:') ||
+          specifier.includes('/adapters/') ||
+          specifier.includes('/ports/') ||
+          specifier.includes('/app/') ||
+          specifier.includes('/server/') ||
+          specifier.includes('/cli/'),
+      ),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('answers the capability question through a predicate, never a capability map', () => {
+    // `resolveRole` owns "can this runner do this work". A second implementation inside
+    // the policy would be a second answer, and the one that disagrees shows up as a wave
+    // that dispatched a task nobody could run.
+    const offenders = TEAM.filter(({ text }) =>
+      importSpecifiers(text).some((specifier) => specifier.includes('core/role')),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the ownership matcher away from Git, the filesystem and any process', () => {
+    // I-37: ownership is coordination, never containment. A matcher that could stat a
+    // path would be a sandbox implemented in a policy file, and it would be the weakest
+    // one in the product — the execution boundary is the worktree and the process group.
+    const ownership = read(join(ROOT, 'src/core/team/ownership.ts'));
+
+    expect(codeOnly(ownership.text)).not.toMatch(/\b(?:exec|spawn|readFile|stat|realpath)\b/i);
+    expect(importSpecifiers(ownership.text)).toEqual([
+      '../../contracts/index.js',
+    ]);
+  });
+
+  it('normalises every path through the one function that already rejects traversal', () => {
+    // A second path rule is a second chance to miss one of `..`, a drive letter or a
+    // percent-encoded separator. The matcher delegates and holds no list of its own.
+    const ownership = read(join(ROOT, 'src/core/team/ownership.ts'));
+
+    expect(ownership.text).toContain('validateAndNormalizeRepositoryPath');
+    expect(codeOnly(ownership.text)).not.toMatch(/\.\.\//);
+  });
+
+  it('has exactly one `resolveTaskAgent`, and it is the policy', () => {
+    // The seam M4 built so that M5 would have somewhere to put a decision rather than a
+    // second router beside the first. Two definitions is two answers to "who executes
+    // this task", and the second one is reached by whichever caller imported it.
+    const definitions = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export function resolveTaskAgent\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(definitions).toEqual(['src/core/team/policy.ts']);
+  });
+
+  it('lets the handoff projection project, and nothing else', () => {
+    // A handoff is a conversation folded out of the message log. Deciding what one
+    // *means* belongs to the policy, and keeping the two apart is what stops an accepted
+    // message from being an instruction (I-33).
+    const handoffs = read(join(ROOT, 'src/core/collaboration/handoffs.ts'));
+    const code = codeOnly(handoffs.text);
+
+    expect(code).not.toMatch(/resolveTaskAgent|rankCandidates|bestCandidate/);
+    expect(handoffs.text).toMatch(/export function projectHandoffs\b/);
+    // One export: a projection module that grew a second function is a module that is
+    // becoming something else.
+    expect([...code.matchAll(/export (?:function|const) (\w+)/g)].map((m) => m[1])).toEqual([
+      'projectHandoffs',
+    ]);
+  });
+
+  it('is called from three places, each of which is the same question', () => {
+    // The policy defines it; the collaboration service asks it for the task about to
+    // run; the wave constraint asks it a wave early, to find out whether the team has
+    // room. Three call sites and one answer — every one of them runs the same function
+    // over the same inputs, which is why a wave's provisional answer and the executor's
+    // authoritative one agree.
+    //
+    // A fourth would need justifying here. The failure it guards against is a second
+    // *implementation*, not a second caller: a module that scored candidates itself
+    // would not appear in this list at all, which is what the `resolveTaskAgent` and
+    // `Scheduler` uniqueness rules above are for.
+    const callers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /\bresolveTaskAgent\s*\(/.test(codeOnly(text)))
+      .map(({ path }) => path)
+      .sort();
+
+    expect(callers).toEqual([
+      'src/app/collaboration-service.ts',
+      'src/core/team/policy.ts',
+      'src/core/team/waves.ts',
+    ]);
+  });
+
+  it('writes `task_assigned` from the executor alone', () => {
+    // The audit row *is* the assignment record (M5-ACC-14). A second writer would be a
+    // second account of one decision, and a crash between the two writes would leave
+    // them disagreeing about who holds a task.
+    const writers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /appendEvent\([^)]*['"]task_assigned['"]/.test(withoutComments(text)))
+      .map(({ path }) => path);
+
+    expect(writers).toEqual(['src/app/task-executor.ts']);
+  });
+
+  it('has one scheduler, and the team constraint is not a second one', () => {
+    // §9 absolute. The constraint answers a question the scheduler asks it; it owns no
+    // loop, dispatches nothing and decides no ordering.
+    const schedulers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export class Scheduler\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(schedulers).toEqual(['src/app/scheduler.ts']);
+
+    const waves = codeOnly(read(join(ROOT, 'src/core/team/waves.ts')).text);
+    expect(waves).not.toMatch(/\b(?:while|for)\s*\(.*\battempt/);
+    expect(waves).not.toMatch(/\bexecute\s*\(|\bdispatch\b/);
+  });
+
+  it('derives busy from run state and stores it nowhere (I-39)', () => {
+    // A persisted `busy` outlives the crash that ended the work, and the member it named
+    // is then locked out of every later wave with nothing to explain it.
+    const offenders = [...sourceFiles('src/core/team'), ...sourceFiles('src/contracts')]
+      .map(read)
+      .filter(({ text }) => /\b(?:busy|isBusy|currentlyRunning)\s*:/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('gives an agent no field in which to claim ownership or capacity (I-38)', () => {
+    // Ownership and capacity are configuration a person wrote. The defence is the
+    // absence of the field: Zod strips unknown keys, so a proposed `ownership` is
+    // discarded by the parse rather than by a check somebody has to remember to write.
+    const schema = read(join(ROOT, 'src/contracts/collaboration.schema.ts')).text;
+    const proposed = schema.slice(schema.indexOf('export const ProposedMessageSchema'));
+    const body = codeOnly(proposed.slice(0, proposed.indexOf('});')));
+
+    expect(body).not.toMatch(/\b(?:ownership|capacity|assignTo|agentId|skills)\s*:/);
+  });
+});
