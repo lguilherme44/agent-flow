@@ -55,7 +55,15 @@ export function refuseDestination(branch: string, runId: RunId): string | undefi
   // Git's own ref rules, the subset that matters here. `git check-ref-format` is the
   // authority and this is not trying to replace it — it is refusing the shapes that would
   // let a ref mean something other than a branch.
-  if (/^-|\.\.|@\{|[~^:?*[\\\x00-\x20\x7f]|\/\/|\/$|\.lock$|^\/|\.$/.test(trimmed)) {
+  //
+  // Control characters are checked by code point rather than by a regex range: a literal
+  // one inside a pattern is invisible in a diff, which is the wrong property for a rule
+  // about what a name may contain.
+  const hasControl = [...trimmed].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code <= 0x20 || code === 0x7f;
+  });
+  if (hasControl || /^-|\.\.|@\{|[~^:?*[\\]|\/\/|\/$|\.lock$|^\/|\.$/.test(trimmed)) {
     return `"${trimmed}" is not a shape this tool will use as a branch name`;
   }
 

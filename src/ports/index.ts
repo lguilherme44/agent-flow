@@ -35,3 +35,4 @@ export type {
 } from './repository-content-source.js';
 export { REPOSITORY_CONTENT_ERROR_CODES } from './repository-content-source.js';
 export type { ContextTokenEstimator } from './context-token-estimator.js';
+export * from './forge.js';

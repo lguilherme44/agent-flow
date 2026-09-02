@@ -229,8 +229,15 @@ export const ForgeConfigSchema = z.object({
       maxMutationAttempts: z.number().int().min(1).max(5).default(3),
       maxSyncAttempts: z.number().int().min(1).max(20).default(5),
       maxCommentsPerRun: z.number().int().min(0).max(50).default(5),
-      /** How many remote objects a recovery search may read before refusing as ambiguous. */
-      maxRecoveryScan: z.number().int().min(10).max(500).default(100),
+      /**
+       * How many remote objects a recovery scan may read before refusing as ambiguous.
+       *
+       * **Three pages, not one.** GitHub's page size is 100, so a bound of 100 means the
+       * scan can never reach page two — and any repository with a hundred issues would
+       * answer `forge_ambiguous_recovery` forever. Caught by a test whose arithmetic
+       * disagreed with the default's.
+       */
+      maxRecoveryScan: z.number().int().min(100).max(1_000).default(300),
     })
     .prefault({}),
 });
