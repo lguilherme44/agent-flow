@@ -343,6 +343,28 @@ And the runner, in both directions in one run: `TASK-001` on `claude` because `q
 it, `TASK-002` on `agy` because `dev` does, with the `roles:` table pointing at `agy` for
 both. Defect 0, closed and visible.
 
+### The whole path, green
+
+```
+✓ SDD approved
+✓ all tasks completed
+✓ lint, tests and build passing
+✓ final review PASS
+✓ no blocking review finding is open
+
+FEATURE COMPLETE
+```
+
+The first time the fifth condition has been a **✓**. In scenarios 2 and 3 it was the only
+thing holding a run open, which showed it works; here it lets a run through, which shows it
+is a gate rather than a wall.
+
+`AF-2026-003` is the milestone's answer to §61: real implementation on two providers with
+each member on the runner it declares, real validation with both required gates passing,
+real assignment through the M5 policy, and a real reviewer invocation against the tree the
+run actually produced. Nine stage prompts, 275 KB, and the two code reviews cost 7.2 KB
+each — 19% of an implementation prompt in this scenario, 13% across all four.
+
 ---
 
 ## Defects this dogfood found
