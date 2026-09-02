@@ -287,6 +287,10 @@ export async function buildExecutionContext(
     // decided by configuration rather than by the wiring, exactly as the Integrator
     // answers `sequential` for a run that is not isolated.
     collaboration,
+    // For the handoff capability gate: whether the agent that accepted a task can
+    // actually implement it is `resolveRole`'s question, and it needs the same map every
+    // other resolution reads.
+    capabilities: registry.capabilities(),
   });
 
   // The configured number is an intention; the scheduler needs an instruction.

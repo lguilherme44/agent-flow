@@ -5,9 +5,11 @@ import {
   FailureContextPacketSchema,
   TaskResultSchema,
   type EffectiveConfig,
+  type AgentIdentity,
   type Task,
   type TaskResult,
   type ValidationJudgement,
+  type WorkflowRole,
 } from '../contracts/index.js';
 import { consumesAttempt } from '../core/failure-classification.js';
 import { redactAndTruncate } from '../core/evidence-redaction.js';
@@ -74,6 +76,8 @@ function divergenceNote(
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
+import { resolveRole, type RunnerCapabilitiesMap } from '../core/role.js';
+import type { TaskAssignment } from '../core/collaboration/handoffs.js';
 import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
@@ -125,6 +129,14 @@ export interface TaskExecutorOptions {
    * `git add -A` would have staged it into the tree a marker is bound to.
    */
   readonly collaboration?: CollaborationService;
+  /**
+   * What each runner can do, for the handoff capability gate (M4-04).
+   *
+   * Optional together with {@link collaboration}: without it a handoff is refused rather
+   * than granted, which is the conservative direction — granting execution to an agent
+   * whose capabilities nobody checked is the one outcome the gate exists to prevent.
+   */
+  readonly capabilities?: RunnerCapabilitiesMap;
 }
 
 /**
@@ -180,9 +192,23 @@ export class TaskExecutor {
     const workingDirectory = workspace?.path ?? projectDir;
 
     const role = routeTask(task, this.options.routingPolicy);
+
+    // **Who executes this task** (M4-04). Asked unconditionally and answering `role` for
+    // almost every task: a seam that only existed while a flag was on would be a function
+    // nobody calls. `assignment.agentId` is the *speaker* for everything below — the
+    // context it is shown, and the `from` on anything it says.
+    const assignment = await this.assignAgent(runId, task, role);
     const startedAt = clock.now();
 
-    await store.appendEvent(runId, 'task_started', { task: task.id, role });
+    await store.appendEvent(runId, 'task_started', {
+      task: task.id,
+      role,
+      // Additive on an open record (§8), and only when it says something the role does
+      // not: a `reason: 'routed'` on every task would be a field nobody reads.
+      ...(assignment.reason === 'routed' ? {} : { agent: assignment.agentId, assignment: assignment.reason }),
+    });
+
+    const collaborationContext = await this.collaborationContextFor(runId, task, assignment.agentId);
 
     let text: string;
     // What actually ran. Taken from the stage result rather than from the
@@ -222,6 +248,10 @@ export class TaskExecutor {
           // AR-09: what this attempt's context cost, attributable to this attempt.
           task: task.id,
           ...(workspace?.attempt === undefined ? {} : { attempt: workspace.attempt }),
+          // M4-06. Absent when the feature is off, when nobody has said anything, or when
+          // nothing that was said concerns this agent — in every one of those cases the
+          // prompt is byte-for-byte what it was before the milestone.
+          ...(collaborationContext === undefined ? {} : { collaborationContext }),
         },
       );
       text = result.text;
@@ -240,7 +270,7 @@ export class TaskExecutor {
       // a file nobody wrote into their `git status`. No tree is captured on this path — a
       // failed attempt produces no receipt and no marker — so the ordering constraint is
       // slack here, but the cleanup is not optional.
-      const failedNotes = await this.harvestCollaboration(runId, task, role, workingDirectory);
+      const failedNotes = await this.harvestCollaboration(runId, task, assignment.agentId, workingDirectory);
 
       // Still no `attempt-<n>.json`, and still deliberately: the agent produced no report,
       // so there is nothing to record as an attempt's *work*. §17.3 windows 1 and 2 read
@@ -298,7 +328,7 @@ export class TaskExecutor {
     // Nothing it returns changes what happens next. `collaborationNotes` are prose on the
     // result; no branch below reads them, and no message can complete, block or fail a
     // task (I-27).
-    const collaborationNotes = await this.harvestCollaboration(runId, task, role, workingDirectory);
+    const collaborationNotes = await this.harvestCollaboration(runId, task, assignment.agentId, workingDirectory);
 
     // **What Git says this attempt did** (AD-38, AD-39). Captured once, as soon as the
     // agent has exited, and handed to every path below — the judgement, the assertions,
@@ -467,6 +497,98 @@ export class TaskExecutor {
    * Every field is absent in sequential mode. That is not a degraded answer, it is the
    * true one: no workspace was cut, so there is no base to compare against.
    */
+  /**
+   * Who executes this task (M4-04).
+   *
+   * Falls back to the router's answer on absence, on a disabled feature and on anything
+   * going wrong — and the fallback is the *whole* safety property, not defensive tidiness.
+   * A handoff is model output, so a bug in reading it must never be able to leave a task
+   * unassigned or assigned to nobody; the worst case is that the router's answer stands,
+   * which is what would have happened before M4 anyway.
+   *
+   * The capability question is answered by `resolveRole`, which owns it. Passing a
+   * predicate rather than a capability map is what keeps `core/collaboration/handoffs.ts`
+   * pure and provider-free.
+   */
+  private async assignAgent(
+    runId: string,
+    task: Task,
+    role: WorkflowRole,
+  ): Promise<TaskAssignment> {
+    const collaboration = this.options.collaboration;
+    if (collaboration === undefined) return { agentId: role, reason: 'routed' };
+
+    try {
+      const assignment = await collaboration.assignmentFor({
+        runId,
+        taskId: task.id,
+        routedRole: role,
+        canImplement: (agent) => this.canImplement(agent),
+      });
+
+      if (assignment.refusal !== undefined) {
+        await this.options.store.appendEvent(runId, 'collaboration_handoff_refused', {
+          task: task.id,
+          reason: assignment.reason,
+          detail: assignment.refusal,
+        });
+      }
+
+      return assignment;
+    } catch {
+      return { agentId: role, reason: 'routed' };
+    }
+  }
+
+  /**
+   * Whether this agent's (runner, model) pair can do implementation work.
+   *
+   * Asked through `resolveRole` — the one module that answers a capability question — with
+   * the requirements `prompts/implementation.md` declares: it writes, and it reads the
+   * repository. An agent whose runner is an inference endpoint fails both, which is
+   * exactly why a handoff to one has to be refused rather than attempted.
+   */
+  private canImplement(agent: AgentIdentity): boolean {
+    const capabilities = this.options.capabilities;
+    if (capabilities === undefined) return false;
+
+    try {
+      resolveRole(agent.role, this.options.config.global, capabilities, {
+        workingDirectory: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The team-context block this agent should be shown (M4-06).
+   *
+   * `undefined` on every unhappy path, and never an exception: a prompt is not the place
+   * to discover that a log line was malformed, and a task whose peers said nothing useful
+   * must produce byte-for-byte the prompt it produced before the milestone.
+   */
+  private async collaborationContextFor(
+    runId: string,
+    task: Task,
+    agentId: string,
+  ): Promise<string | undefined> {
+    const collaboration = this.options.collaboration;
+    if (collaboration === undefined || !collaboration.enabled) return undefined;
+
+    try {
+      return await collaboration.contextFor({
+        runId,
+        taskId: task.id,
+        agentId,
+        files: task.files.likely,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * Reads the agent's outbox, if this run lets agents speak (M4-02).
    *

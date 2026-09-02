@@ -22,6 +22,7 @@ const parts = (overrides: Partial<Record<string, string>> = {}) => ({
   agentsMd: '# Rules\n',
   advisory: '',
   failureContext: '',
+  collaboration: '',
   ...overrides,
 });
 
@@ -139,5 +140,28 @@ describe('what a recovery cost, against the attempt it replaced (AR-09)', () => 
 
     expect(cost?.addedBytes).toBe(-200);
     expect(cost?.addedShare).toBe(-20);
+  });
+});
+
+describe('the collaboration source (M4-06)', () => {
+  it('is attributed like every other source when it is present', () => {
+    // The reason it is a source at all. An operator asking "why is this prompt 12 kB"
+    // must be able to see that the team context is a third of it, and turn it off.
+    const measured = measurePromptComposition(
+      parts({ stagePrompt: 'x'.repeat(50), agentsMd: 'y'.repeat(25), collaboration: 'z'.repeat(25) }),
+    );
+
+    const collaboration = measured.parts.find((part) => part.source === 'collaboration');
+    expect(collaboration?.bytes).toBe(25);
+    expect(collaboration?.share).toBe(25);
+  });
+
+  it('is absent from the report when the feature is off', () => {
+    // Acceptance criterion 12. A run with `collaboration.enabled: false` must produce
+    // byte-for-byte the report it produced before the milestone — a row of zeroes would
+    // be a new fact where there was none.
+    const measured = measurePromptComposition(parts({ collaboration: '' }));
+
+    expect(measured.parts.map((part) => part.source)).not.toContain('collaboration');
   });
 });

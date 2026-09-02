@@ -1,5 +1,15 @@
-import type { AgentId, BlackboardEntry, CollaborationConfig } from '../contracts/index.js';
+import type {
+  AgentId,
+  AgentIdentity,
+  BlackboardEntry,
+  CollaborationConfig,
+  WorkflowRole,
+} from '../contracts/index.js';
 import type { AgentRoster } from '../core/collaboration/roster.js';
+import { buildCollaborationContext } from '../core/collaboration/context.js';
+import { projectThreads } from '../core/collaboration/threads.js';
+import { projectBlackboard } from '../core/collaboration/blackboard.js';
+import { projectHandoffs, resolveTaskAgent, type TaskAssignment } from '../core/collaboration/handoffs.js';
 import type { Clock, FileSystem, Host } from '../ports/index.js';
 import type { CollaborationStore } from './collaboration-store.js';
 import { harvestOutbox, type HarvestOutcome } from './collaboration-harvest.js';
@@ -91,6 +101,75 @@ export class CollaborationService {
   /** Whether this run reads outboxes at all. */
   get enabled(): boolean {
     return this.options.config.enabled;
+  }
+
+  /**
+   * What this agent should be told about what the others have been saying (M4-06).
+   *
+   * **Read before the agent is dispatched, and derived rather than stored.** Every answer
+   * in the block — a thread's status, an entry's supersession — is a fold over the two
+   * logs, computed here so that the CLI, the dashboard and the prompt cannot disagree
+   * about what the state of a conversation is.
+   *
+   * Returns `undefined` when there is nothing worth spending prompt bytes on, which is the
+   * common case and stays the common case: a heading with nothing under it costs real
+   * bytes and teaches the agent that the section is noise.
+   */
+  async contextFor(request: {
+    readonly runId: string;
+    readonly taskId: string;
+    readonly agentId: AgentId;
+    readonly files: readonly string[];
+  }): Promise<string | undefined> {
+    if (!this.enabled) return undefined;
+
+    const agent = this.options.roster.byId(request.agentId);
+    if (agent === undefined) return undefined;
+
+    const messages = await this.options.collaboration.readMessages(request.runId);
+    const entries = await this.options.collaboration.readEntries(request.runId);
+    if (messages.length === 0 && entries.length === 0) return undefined;
+
+    const rendered = buildCollaborationContext({
+      agent,
+      taskId: request.taskId,
+      files: request.files,
+      threads: projectThreads(messages),
+      entries: projectBlackboard(entries),
+      roster: this.options.roster.agents,
+      config: this.options.config,
+    });
+
+    return rendered?.text;
+  }
+
+  /**
+   * Who executes this task (M4-04).
+   *
+   * Asked unconditionally, and it answers with the router's role for almost every task.
+   * The seam is always live so that a function guarded by a flag never becomes a module
+   * nobody calls; the *policy* is what `handoffsReassignExecution` moves.
+   */
+  async assignmentFor(request: {
+    readonly runId: string;
+    readonly taskId: string;
+    readonly routedRole: WorkflowRole;
+    readonly canImplement: (agent: AgentIdentity) => boolean;
+  }): Promise<TaskAssignment> {
+    const routed: TaskAssignment = { agentId: request.routedRole, reason: 'routed' };
+    if (!this.enabled) return routed;
+
+    const messages = await this.options.collaboration.readMessages(request.runId);
+    if (messages.length === 0) return routed;
+
+    return resolveTaskAgent({
+      taskId: request.taskId,
+      routedRole: request.routedRole,
+      handoffs: projectHandoffs(messages),
+      config: this.options.config,
+      agentOf: (id) => this.options.roster.byId(id),
+      canImplement: request.canImplement,
+    });
   }
 
   /**

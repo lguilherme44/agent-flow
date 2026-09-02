@@ -208,6 +208,22 @@ export interface StageRunOptions {
    */
   readonly task?: string;
   readonly attempt?: number;
+  /**
+   * A block appended to the rendered prompt, from outside the stage (M4-06).
+   *
+   * The same shape as the advisory block and appended in the same place, for the same
+   * reason: it is *context*, never control. What makes it a parameter rather than a
+   * second `StageAdvisor` is that its content depends on the task and the agent, and the
+   * advisory request carries neither — a hook that had to be told which task it was for
+   * would stop being the stage-generic seam MVP 3 designed.
+   *
+   * **Appended rather than interpolated into `prompts/implementation.md`, deliberately.**
+   * A `{{collaboration}}` placeholder would put a blank line into every prompt whether or
+   * not the feature is on, and M4's acceptance requires that a run with
+   * `collaboration.enabled: false` produce byte-for-byte the prompt it produced before the
+   * milestone.
+   */
+  readonly collaborationContext?: string;
 }
 
 /**
@@ -345,6 +361,12 @@ export class StageRunner {
         // Best effort: advisory context never changes stage control (§14.3).
       }
     }
+    // M4-06. After the advisory block, so the two are in a fixed order and a prompt is a
+    // deterministic function of its inputs; and inside the *base*, so a repair rebuilds
+    // from the same material the failed attempt saw.
+    const collaborationBlock = options.collaborationContext ?? '';
+    if (collaborationBlock.length > 0) basePrompt = `${basePrompt}\n\n${collaborationBlock}`;
+
     let promptText = basePrompt;
 
     const runner = getRunner(resolved);
@@ -378,6 +400,7 @@ export class StageRunner {
         agentsMd: vars.agentsMd ?? '',
         advisory: advisoryBlock,
         failureContext: vars.failureContext ?? '',
+        collaboration: collaborationBlock,
       },
       ...(options.complexity === undefined ? [] : [{ complexity: options.complexity }]),
     );

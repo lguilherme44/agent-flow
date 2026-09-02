@@ -72,14 +72,29 @@ export function admitMessage(input: MessageAdmission): BudgetRefusal | undefined
   return undefined;
 }
 
-/**
- * A handoff budget belongs here and is **not** written yet.
- *
- * M4-04 owns handoffs, and a budget function with no caller is the shape the architecture
- * rule against dead core modules exists to catch — it caught this one, written a milestone
- * early. `collaboration.maxHandoffsPerTask` is already in the schema because the whole
- * budget block ships together; the function that reads it lands with the feature it bounds.
- */
+export interface HandoffAdmission {
+  readonly config: CollaborationConfig;
+  /**
+   * Handoffs already *accepted* for this task.
+   *
+   * Accepted, not requested: a target that said no cost the task nothing, and counting a
+   * refusal against the budget would punish the task for the target's decision.
+   */
+  readonly alreadyForTask: number;
+}
+
+export function admitHandoff(input: HandoffAdmission): BudgetRefusal | undefined {
+  if (input.alreadyForTask < input.config.maxHandoffsPerTask) return undefined;
+
+  return {
+    rejection: 'budget_exhausted',
+    budget: 'collaboration.maxHandoffsPerTask',
+    limit: input.config.maxHandoffsPerTask,
+    action:
+      `This task has already been handed off ${String(input.config.maxHandoffsPerTask)} times. ` +
+      'Assign it deliberately, or split it — a task nobody will take is usually two tasks.',
+  };
+}
 
 export interface EntryAdmission {
   readonly config: CollaborationConfig;

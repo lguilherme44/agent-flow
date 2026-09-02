@@ -11,6 +11,7 @@
  */
 
 import type { ArtifactName } from '../contracts/common.schema.js';
+import { AGENT_OUTBOX_FILENAME } from '../contracts/collaboration.schema.js';
 
 export interface AgentFlowPaths {
   readonly root: string;
@@ -184,7 +185,7 @@ export function artifactPath(
  * Leading dot so it sorts and reads as machinery. Composed here rather than at the call
  * site so there is one spelling of it; an architecture test pins that.
  */
-export const AGENT_OUTBOX_FILENAME = '.agent-flow-outbox.json';
+export { AGENT_OUTBOX_FILENAME };
 
 export function agentOutboxPath(workspaceDir: string): string {
   return `${workspaceDir}/${AGENT_OUTBOX_FILENAME}`;

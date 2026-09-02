@@ -18,8 +18,19 @@ import type { Task } from '../contracts/index.js';
  * change to MVP 3's advisory context, and no prompt rewriting.
  */
 
-/** Where a byte of prompt came from. Four sources, four different owners. */
-export type PromptSource = 'stagePrompt' | 'advisory' | 'agentsMd' | 'failureContext';
+/**
+ * Where a byte of prompt came from. Five sources, five different owners.
+ *
+ * `collaboration` joined in M4 and is the one an operator can turn off outright, which is
+ * exactly why it has to be attributable: "the prompt got big" is not actionable, and
+ * "the team context is 40% of it" names both the cause and the switch.
+ */
+export type PromptSource =
+  | 'stagePrompt'
+  | 'advisory'
+  | 'agentsMd'
+  | 'failureContext'
+  | 'collaboration';
 
 export interface PromptPart {
   readonly source: PromptSource;
@@ -59,6 +70,14 @@ export interface PromptParts {
   readonly advisory: string;
   /** AD-40's packet, when this is a retry. */
   readonly failureContext: string;
+  /**
+   * M4's team-context block, when the run lets agents speak.
+   *
+   * Empty when `collaboration.enabled` is false, and an empty source is *omitted* from
+   * the composition rather than reported at zero — so a run with the feature off produces
+   * byte-for-byte the report it produced before the milestone.
+   */
+  readonly collaboration: string;
 }
 
 export function measurePromptComposition(
@@ -66,7 +85,7 @@ export function measurePromptComposition(
   task?: Pick<Task, 'complexity'>,
 ): PromptComposition {
   const measured: { source: PromptSource; bytes: number }[] = (
-    ['stagePrompt', 'agentsMd', 'advisory', 'failureContext'] as const
+    ['stagePrompt', 'agentsMd', 'advisory', 'failureContext', 'collaboration'] as const
   )
     .map((source) => ({ source, bytes: bytesOf(parts[source]) }))
     // A source that contributed nothing is omitted rather than reported at zero: "no

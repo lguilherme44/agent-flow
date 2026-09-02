@@ -398,7 +398,21 @@ export const ProposedEntrySchema = z.object({
 export type ProposedEntry = z.infer<typeof ProposedEntrySchema>;
 
 /**
- * The file an agent leaves behind: `.agent-flow-outbox.json` in its workspace.
+ * The name of the file an agent leaves behind.
+ *
+ * **In the contracts layer because it is a contract**, and specifically the one contract
+ * in this product that a *model* has to hold up its end of: the prompt tells the agent
+ * this name, and the harvest looks for it. Two spellings of it would be an agent writing
+ * to a file nobody reads — a failure with no error, because an outbox that is never found
+ * is indistinguishable from an agent that had nothing to say.
+ *
+ * `app/paths.ts` re-exports it and composes the path; `core/collaboration/context.ts`
+ * interpolates it into the instruction. Neither writes the string.
+ */
+export const AGENT_OUTBOX_FILENAME = '.agent-flow-outbox.json';
+
+/**
+ * The file an agent leaves behind: {@link AGENT_OUTBOX_FILENAME} in its workspace.
  *
  * Read after the process exits and removed before the tree is captured (I-32), so no
  * outbox can enter a validated tree, a marker, a diff or `filesChanged`. Everything in it
@@ -432,3 +446,78 @@ export const COLLABORATION_REJECTIONS = [
 
 export const CollaborationRejectionSchema = z.enum(COLLABORATION_REJECTIONS);
 export type CollaborationRejection = z.infer<typeof CollaborationRejectionSchema>;
+
+/* ─── Projections ──────────────────────────────────────────────────────────── */
+
+/**
+ * Where a conversation stands (M4-03).
+ *
+ * Declared in the contracts layer even though nothing persists it, because both surfaces
+ * render it and the HTTP API publishes it — and a vocabulary two adapters share belongs
+ * where the other shared vocabularies are. The same reasoning put `RUNTIME_STATUSES` here
+ * for a projection that is equally never written to disk.
+ */
+export const THREAD_STATUSES = ['open', 'answered', 'resolved', 'abandoned'] as const;
+
+export const ThreadStatusSchema = z.enum(THREAD_STATUSES);
+export type ThreadStatus = z.infer<typeof ThreadStatusSchema>;
+
+export interface MessageThread {
+  readonly id: ThreadId;
+  readonly status: ThreadStatus;
+  /** Who opened it. The only participant entitled to resolve it. */
+  readonly opener: AgentId;
+  /** The opening message's subject — what the thread is *about*. */
+  readonly subject: string;
+  readonly taskId?: string;
+  readonly messages: readonly AgentMessage[];
+  /** Distinct senders, in the order they first spoke. */
+  readonly participants: readonly AgentId[];
+  readonly openedAt: string;
+  readonly lastMessageAt: string;
+}
+
+/**
+ * Where a transfer of work stands (M4-04).
+ *
+ * `expired` rather than `abandoned`, and the difference from a thread's vocabulary is
+ * deliberate: a conversation nobody finished is a conversation, and a transfer nobody
+ * accepted is a transfer that did not happen.
+ */
+export const HANDOFF_STATUSES = ['requested', 'accepted', 'rejected', 'expired'] as const;
+
+export const HandoffStatusSchema = z.enum(HANDOFF_STATUSES);
+export type HandoffStatus = z.infer<typeof HandoffStatusSchema>;
+
+export interface Handoff {
+  readonly threadId: ThreadId;
+  readonly taskId: string;
+  readonly from: AgentId;
+  readonly to: AgentId;
+  /** The request's body, verbatim — why the work is being passed on. */
+  readonly reason: string;
+  readonly status: HandoffStatus;
+  readonly requestedAt: string;
+  /** When it was accepted or rejected. Absent while it is still open. */
+  readonly settledAt?: string;
+}
+
+/**
+ * What a blackboard entry is *now*, once every later entry has had its say (M4-05).
+ *
+ * `contested` is the value that makes I-30 mean something. An entry superseded by a
+ * different author does not lose: both stay live, both reach the next agent, and the
+ * disagreement is the thing a person is shown rather than a winner somebody has to
+ * reverse-engineer.
+ */
+export const ENTRY_STATUSES = ['active', 'superseded', 'contested'] as const;
+
+export const EntryStatusSchema = z.enum(ENTRY_STATUSES);
+export type EntryStatus = z.infer<typeof EntryStatusSchema>;
+
+export interface ProjectedEntry {
+  readonly entry: BlackboardEntry;
+  readonly status: EntryStatus;
+  /** The entry that superseded this one, when one did. */
+  readonly supersededBy?: EntryId;
+}

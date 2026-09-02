@@ -3355,6 +3355,10 @@ describe('a core module built for a milestone is actually wired to one', () => {
     'src/core/collaboration/roster.ts',
     'src/core/collaboration/ids.ts',
     'src/core/collaboration/budgets.ts',
+    'src/core/collaboration/threads.ts',
+    'src/core/collaboration/handoffs.ts',
+    'src/core/collaboration/blackboard.ts',
+    'src/core/collaboration/context.ts',
     'src/core/path-containment.ts',
   ];
 
@@ -3502,10 +3506,18 @@ describe('collaboration carries no workflow authority (M4, I-27, I-29)', () => {
     // The filename is the contract between an agent and the harvest, and it is also the
     // thing that must never be spelled twice: a second spelling in the executor would be
     // a file the harvest does not remove, which is I-32 broken silently.
-    // `defaults.ts` names it too, in the YAML template's own comment — which is
-    // documentation an operator reads, not a path this product composes. Allow-listed
-    // rather than removed, because a config template that describes a mechanism without
-    // naming its file is a template that cannot be acted on.
+    // **The one contract in this product that a model has to hold up its end of.** The
+    // prompt tells the agent the name and the harvest looks for it; two spellings would be
+    // an agent writing to a file nobody reads — a failure with no error, because an outbox
+    // that is never found is indistinguishable from an agent that had nothing to say.
+    //
+    // Caught here first: `core/collaboration/context.ts` hardcoded it into the instruction
+    // rather than interpolating the constant. It now imports it, like everything else.
+    //
+    // `defaults.ts` names it in the YAML template's own comment, which is documentation an
+    // operator reads rather than a path this product composes. Allow-listed rather than
+    // removed: a config template describing a mechanism without naming its file cannot be
+    // acted on.
     const DOCUMENTATION = ['src/config/defaults.ts'];
 
     const owners = sourceFiles('src')
@@ -3514,7 +3526,7 @@ describe('collaboration carries no workflow authority (M4, I-27, I-29)', () => {
       .map(({ path }) => path)
       .filter((path) => !DOCUMENTATION.includes(path));
 
-    expect(owners).toEqual(['src/app/paths.ts']);
+    expect(owners).toEqual(['src/contracts/collaboration.schema.ts']);
   });
 
   it('harvests before the tree is captured, in the executor (I-32)', () => {
@@ -3523,7 +3535,7 @@ describe('collaboration carries no workflow authority (M4, I-27, I-29)', () => {
     // appears before the call that runs `git add -A`.
     const executor = codeOnly(read(join(ROOT, 'src/app/task-executor.ts')).text);
 
-    const harvest = executor.indexOf('harvestCollaboration(runId, task, role, workingDirectory)');
+    const harvest = executor.indexOf('this.harvestCollaboration(');
     const capture = executor.indexOf('this.observeChange(workspace)');
 
     expect(harvest, 'the harvest call').toBeGreaterThan(-1);
