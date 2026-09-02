@@ -23,6 +23,7 @@ pedido de feature
   → implementação            ← opcionalmente, um worktree Git travado por attempt
   → validação determinística ← executada pelo orquestrador, nunca por um agente
   → integração determinística
+  → code review             ← por mudança, por um membro que não a escreveu
   → final review
   → Definition of Done
 ```

@@ -23,6 +23,7 @@ feature request
   → implementation          ← optionally, one locked Git worktree per attempt
   → deterministic validation ← run by the orchestrator, never by an agent
   → deterministic integration
+  → code review             ← per change, by a member that did not write it
   → final review
   → Definition of Done
 ```

@@ -1955,6 +1955,7 @@ async function judgeRun(
           changes.map((change) => change.path),
           fromCodeReview?.originFor,
           fromCodeReview?.expectationFor,
+          fromCodeReview?.validationFor,
         );
 
   return done({
@@ -2075,6 +2076,7 @@ async function codeReviewFindings(
       review: ReviewResult;
       originFor: ReadonlyMap<string, CorrectiveOriginStage>;
       expectationFor: ReadonlyMap<string, 'pass' | 'fail' | 'none'>;
+      validationFor: ReadonlyMap<string, readonly string[]>;
     }
   | undefined
 > {
@@ -2110,6 +2112,7 @@ async function codeReviewFindings(
   const expectationOf = new Map(
     plan.tasks.map((task) => [task.id, task.validationExpectation] as const),
   );
+  const validationOf = new Map(plan.tasks.map((task) => [task.id, task.validation] as const));
 
   return {
     review: selection.review,
@@ -2118,6 +2121,12 @@ async function codeReviewFindings(
       selection.findings.map(
         (held) => [held.finding.id, expectationOf.get(held.taskId) ?? 'pass'] as const,
       ),
+    ),
+    validationFor: new Map(
+      selection.findings.flatMap((held) => {
+        const ids = validationOf.get(held.taskId);
+        return ids === undefined ? [] : [[held.finding.id, ids] as const];
+      }),
     ),
   };
 }
@@ -2135,6 +2144,8 @@ async function correctPlan(
   originFor?: ReadonlyMap<string, CorrectiveOriginStage>,
   /** What the corrected task expected, so a fix to a red suite is not judged as green. */
   expectationFor?: ReadonlyMap<string, 'pass' | 'fail' | 'none'>,
+  /** What the corrected task validated with, so a fix runs no command that task avoided. */
+  validationFor?: ReadonlyMap<string, readonly string[]>,
 ): Promise<CorrectiveRound | undefined> {
   const architectureImpact =
     (await context.store.readArtifact(runId, 'architectureImpact')) ??
@@ -2150,6 +2161,7 @@ async function correctPlan(
     origin: 'final-review',
     ...(originFor === undefined ? {} : { originFor }),
     ...(expectationFor === undefined ? {} : { expectationFor }),
+    ...(validationFor === undefined ? {} : { validationFor }),
     sdd,
     architectureImpact,
     // The ids a corrective task may cite come from the project's own

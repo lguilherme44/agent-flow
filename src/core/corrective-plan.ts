@@ -58,6 +58,19 @@ export interface FixOptions {
    * Unmapped findings keep `pass`, which is every run-level finding and every pre-M6 caller.
    */
   readonly expectationFor?: ReadonlyMap<string, 'pass' | 'fail' | 'none'>;
+  /**
+   * The validation ids the corrected task ran, by finding id.
+   *
+   * **A correction runs what the work it corrects ran.** Without this a fix takes the
+   * whole registry, so it executes commands the plan deliberately omitted — and the live
+   * M6 plan review caught the consequence: every human-planned task left `install` out
+   * because in that repository `npm install` writes a `package-lock.json` the change-surface
+   * criterion then fails on, and the generated fixes put it back.
+   *
+   * Unmapped findings fall through to {@link FixOptions.validation}, which is every id the
+   * project defines — the behaviour every caller had before this existed.
+   */
+  readonly validationFor?: ReadonlyMap<string, readonly string[]>;
   readonly minSeverity?: FindingSeverity;
 }
 
@@ -136,7 +149,7 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
     // The generator this replaces emitted an empty list, so a fix for a review
     // finding ran no validation at all — the one outcome this workflow exists
     // to prevent.
-    validation: [...options.validation],
+    validation: validationOf(finding, options),
     validationExpectation: expectationOf(finding, options),
   }));
 
@@ -177,6 +190,24 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
   }));
 
   return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...ordered] });
+}
+
+/**
+ * What the corrected task validated with, falling back to everything the project defines.
+ *
+ * Empty is never returned: a fix that runs no validation is the outcome this whole
+ * workflow exists to prevent, and a corrected task with `validation: []` would produce
+ * exactly that.
+ */
+function validationOf(
+  finding: ReviewResult['findings'][number],
+  options: FixOptions,
+): string[] {
+  const id = 'id' in finding && typeof finding.id === 'string' ? finding.id : undefined;
+  const inherited = id === undefined ? undefined : options.validationFor?.get(id);
+  return inherited === undefined || inherited.length === 0
+    ? [...options.validation]
+    : [...inherited];
 }
 
 /** What the corrected task expected, so the fix runs where that task ran. */

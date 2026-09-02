@@ -465,3 +465,70 @@ describe('a fix inherits the cycle position of the task it corrects', () => {
     expect(next.tasks.at(-1)?.validationExpectation).toBe('pass');
   });
 });
+
+/**
+ * The live M6 plan review, on the third scenario:
+ *
+ * > FIX-001 and FIX-002 both declare `validation: ["install", "lint", "test"]`. The
+ * > `install` step resolves to `npm install`, which the SDD explicitly forbids: the
+ * > repository has no dependencies, so `npm install` writes a `package-lock.json` that
+ * > .gitignore does not cover. Running FIX-001 guarantees the failure of TASK-003's
+ * > criterion. TASK-001/002/003 correctly omit `install`; the FIX tasks reintroduce it.
+ *
+ * A correction runs what the work it corrects ran.
+ */
+describe('a fix validates with what the corrected task validated with', () => {
+  const withId = (id: string): ReviewResult => {
+    const findings: ReviewFinding[] = [
+      {
+        id: id as ReviewFinding['id'],
+        severity: 'high',
+        type: 'correctness',
+        description: 'The function does not exist.',
+        suggestedAction: 'Implement it.',
+        file: 'src/slug.js',
+        evidence: [],
+      },
+    ];
+
+    return {
+      verdict: 'FAIL',
+      independence: 'cross-provider',
+      reviewer: { runner: 'reviewer', reasoning: 'high' },
+      findings,
+      adjudications: [],
+      residualRisks: [],
+    };
+  };
+
+  it('omits the command the corrected task omitted', () => {
+    const next = applyFixes(plan(['TASK-001']), withId('FIND-0001'), {
+      validation: ['install', 'lint', 'test'],
+      origin: 'code-review',
+      validationFor: new Map([['FIND-0001', ['lint', 'test']]]),
+    });
+
+    expect(next.tasks.at(-1)?.validation).toEqual(['lint', 'test']);
+  });
+
+  it('falls back to every id the project defines when nothing is mapped', () => {
+    const next = applyFixes(plan(['TASK-001']), withId('FIND-0002'), {
+      validation: ['install', 'lint', 'test'],
+      origin: 'code-review',
+      validationFor: new Map([['FIND-0001', ['lint']]]),
+    });
+
+    expect(next.tasks.at(-1)?.validation).toEqual(['install', 'lint', 'test']);
+  });
+
+  /** A fix that runs nothing is the outcome this whole workflow exists to prevent. */
+  it('never inherits an empty list', () => {
+    const next = applyFixes(plan(['TASK-001']), withId('FIND-0003'), {
+      validation: ['lint', 'test'],
+      origin: 'code-review',
+      validationFor: new Map([['FIND-0003', []]]),
+    });
+
+    expect(next.tasks.at(-1)?.validation).toEqual(['lint', 'test']);
+  });
+});

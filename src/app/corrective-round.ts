@@ -37,6 +37,8 @@ export interface CorrectiveRoundOptions {
   readonly originFor?: ReadonlyMap<string, CorrectiveOriginStage>;
   /** What the corrected task expected of its validation, so the fix runs where it ran. */
   readonly expectationFor?: ReadonlyMap<string, 'pass' | 'fail' | 'none'>;
+  /** What the corrected task validated with, so a fix runs no command that task avoided. */
+  readonly validationFor?: ReadonlyMap<string, readonly string[]>;
   readonly sdd: string;
   readonly architectureImpact: string;
   readonly validation: ValidationRegistry;
@@ -99,6 +101,7 @@ export async function runCorrectiveRound(
     origin: options.origin,
     ...(options.originFor === undefined ? {} : { originFor: options.originFor }),
     ...(options.expectationFor === undefined ? {} : { expectationFor: options.expectationFor }),
+    ...(options.validationFor === undefined ? {} : { validationFor: options.validationFor }),
   });
 
   const added = next.tasks.slice(plan.tasks.length);
