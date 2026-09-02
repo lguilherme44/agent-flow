@@ -714,20 +714,39 @@ describe('M6-ACC-22 / M6-ACC-23 — M4 and M5 invariants survive', () => {
 
 describe('M6-ACC-24 … 28 — what only a live run can answer', () => {
   it.skip('M6-ACC-24 — live handoff/reassignment demonstrated', () => {
-    // Carried from M5 per the charter's §55. A handoff needs a real agent to write one,
-    // and four independent plans showed the planner resolves the area conflict upstream.
+    // NOT MET. Carried from M5 per the charter's §55, and still open after two live M6
+    // scenarios. A handoff needs a real agent to write one, and the outbox is refused as
+    // malformed every time it is used — four attempts in the M6 run, zero accepted. The
+    // recovery ladder stopped both failed tasks at `recovery_exhausted` and asked a human
+    // rather than rerouting, which is its documented behaviour and not a reassignment.
+    // See docs/specs/m6-live-dogfood-report.md.
   });
 
   it.skip('M6-ACC-25 — live collaboration payload changes downstream behaviour', () => {
-    // Twenty-one agent invocations across three milestones have produced one message.
+    // NOT MET, and the reason changed. Through M5 the answer was "nobody uses the
+    // channel"; after Phase A gave the bootstrap a handoff form and stated ownership,
+    // agents used it in four of six implementation prompts and the product rejected all
+    // four. Unusable as specified rather than unused. The refusal diagnostic added in M6
+    // is what will produce the evidence to fix it.
   });
 
   it.skip('M6-ACC-26 — a live reviewer finds a real issue', () => {
-    // A scripted reviewer finds what the script says. This is the dogfood's to answer.
+    // MET. `FIND-0001` (high, correctness) on run AF-2026-006: an acceptance criterion
+    // asserting `out.includes('onmouseover=') === false` over output that, escaped as the
+    // SDD requires, contains that substring by design. No conforming implementation can
+    // pass. Three independent reviewers found it — the per-task code reviewer first, then
+    // the run-level final review, then the plan reviewer — and the run failed for exactly
+    // that reason. The review predicted the failure before the implementation ran.
   });
 
   it.skip('M6-ACC-27 — the live corrective loop fixes and verifies it', () => {
-    // Same: the mechanism is proved above, and that it *fires on real output* is not.
+    // PARTIAL. `review --fix` on AF-2026-006 generated FIX-002 from FIND-0001 and FIX-003
+    // from FIND-0004, both carrying `correctiveFor.finding` and `origin: 'code-review'`,
+    // both ordered against the plan, with `corrective_task_created` emitted for each.
+    // Execution and re-review are scenario 2's to answer; the report says which.
+    //
+    // Getting here took two blocker fixes: nothing called `correctiveSelection`, and
+    // nothing emitted the event the projection reads.
   });
 
   it('M6-ACC-28 — every mandatory gate is green, and this suite is one of them', () => {
