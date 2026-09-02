@@ -35,7 +35,10 @@ import { describeRoleRoutes } from '../app/role-routes.js';
 import { RunExecutionLock, type LockRefusal } from '../app/run-execution-lock.js';
 import {
   approve,
+  cancel,
   describeApprovalGate,
+  pause,
+  resume,
   reject,
   retryTask,
   revise,
@@ -60,6 +63,12 @@ import { ActionJobs, type ActionJob, type JobResult } from './action-jobs.js';
 import { createEventBus, RunWatcher, type EventBus } from './event-bridge.js';
 import type { ProjectRegistry, RegisteredProject } from './project-registry.js';
 import { ContextTelemetryReader } from './context-telemetry-reader.js';
+import {
+  CLIENT_HEADER,
+  checkHost,
+  checkWrite,
+  isWriteMethod,
+} from './request-guard.js';
 
 /**
  * The local control plane (§59, §86).
@@ -115,6 +124,14 @@ export interface ServerOptions {
   /** Where the built dashboard lives. Omitted when only the API is wanted. */
   readonly webDir?: string;
   readonly pollIntervalMs?: number;
+  /**
+   * Host names this server answers to beyond address literals and `localhost` (§93).
+   *
+   * Passed in rather than read here, for the reason every other setting is: the CLI
+   * already loads the configuration, and a server that loaded it again would be a
+   * second answer to the same question.
+   */
+  readonly allowedHosts?: readonly string[];
 }
 
 export interface RunningServer {
@@ -126,6 +143,40 @@ export interface RunningServer {
 
 export async function buildServer(options: ServerOptions): Promise<RunningServer> {
   const app = Fastify({ logger: false });
+
+  /**
+   * Who may talk to this server, decided before any handler runs (PRI-05).
+   *
+   * `onRequest` is the earliest hook Fastify offers — ahead of body parsing, ahead of
+   * routing — which is what makes this a boundary rather than a check. A refusal here
+   * cannot have had a side effect, because nothing below it has run.
+   *
+   * The rules and the attack they answer live in `request-guard.ts`. What belongs here
+   * is only the wiring: the host guard on everything, the origin guard on writes, and
+   * the request's own validated `Host` as the identity a write's `Origin` must match.
+   */
+  app.addHook('onRequest', (request, reply, done) => {
+    const host = request.headers.host;
+
+    const hostOutcome = checkHost(host, {
+      ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
+    });
+    if (!hostOutcome.ok) return refuseGuard(reply, hostOutcome.refusal, done);
+
+    if (!isWriteMethod(request.method)) return done();
+
+    const clientHeader = request.headers[CLIENT_HEADER];
+    const writeOutcome = checkWrite(
+      {
+        ...(typeof request.headers.origin === 'string' ? { origin: request.headers.origin } : {}),
+        ...(typeof clientHeader === 'string' ? { client: clientHeader } : {}),
+      },
+      { host },
+    );
+    if (!writeOutcome.ok) return refuseGuard(reply, writeOutcome.refusal, done);
+
+    return done();
+  });
   const bus = createEventBus();
   const reader = new RunReader({
     fs: options.fs,
@@ -689,6 +740,69 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return jobView(outcome.started);
   };
 
+  /**
+   * Lifecycle, from the browser (PRI-14, PRI-15).
+   *
+   * Ordinary handlers rather than jobs, and the difference from `start` is the point:
+   * these three do not spawn anything. `pause` and `cancel` write an intent and return —
+   * whatever is executing the run, in this server or in somebody's terminal, observes it.
+   * `resume` does start work, so it goes through the job machinery like `start` does.
+   *
+   * None of them takes the execution lease. That is what makes them the commands they
+   * are: a pause that had to wait for the run to finish would be a no-op with extra steps.
+   */
+  app.post('/api/v1/runs/:runId/pause', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const outcome = await pause(depsFor(scope.project), scope.runId);
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+
+    return actionResult(scope.runId, outcome.warnings, {
+      pauseRequestedAt: outcome.value.pauseRequestedAt,
+      alreadyPaused: outcome.value.alreadyPaused,
+      executing: outcome.value.executing,
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/cancel', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const outcome = await cancel(depsFor(scope.project), scope.runId);
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+
+    return actionResult(scope.runId, outcome.warnings, {
+      cancelledAt: outcome.value.cancelledAt,
+      alreadyCancelled: outcome.value.alreadyCancelled,
+      interrupted: [...outcome.value.interrupted],
+      executing: outcome.value.executing,
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/resume', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const deps = depsFor(scope.project);
+    const runId = scope.runId;
+
+    // A job, because resuming executes the plan — minutes of work and spawned runners.
+    // The refusals `resume` owns (not paused, cancelled, still executing) come back
+    // through the job, exactly as `start`'s gates do.
+    return await startJob(reply, scope.project, 'start', runId, async () => {
+      const outcome = await resume(deps, runId);
+      if (!outcome.ok) return { error: outcome.error };
+
+      const scheduled = outcome.value.outcome;
+      return {
+        summary: scheduled.planComplete
+          ? 'Every task completed.'
+          : `Stopped: ${scheduled.haltedBy ?? 'not all tasks completed'}.`,
+      };
+    });
+  });
+
   app.post('/api/v1/runs/:runId/start', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;
@@ -952,6 +1066,31 @@ function actionResult(
     warnings: [...warnings],
     ...(detail === undefined ? {} : { detail }),
   };
+}
+
+/**
+ * Answers a guard refusal and stops the request there.
+ *
+ * The body is the same `{ error, message, action }` shape every other refusal uses, so
+ * the dashboard's existing error rendering shows it without a special case — and a
+ * person who hits it by pointing `curl` at the API reads what to do rather than a bare
+ * 403.
+ *
+ * `done()` is called with no argument after `send`, which is how an `onRequest` hook
+ * short-circuits in Fastify: passing the error instead would route it through the error
+ * handler and replace this body with a generic one.
+ */
+function refuseGuard(
+  reply: FastifyReply,
+  refusal: { status: number; error: string; message: string; action: string },
+  done: () => void,
+): void {
+  void reply.code(refusal.status).send({
+    error: refusal.error,
+    message: refusal.message,
+    action: refusal.action,
+  });
+  done();
 }
 
 function badRequest(

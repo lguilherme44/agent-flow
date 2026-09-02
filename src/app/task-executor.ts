@@ -1,3 +1,4 @@
+import { isAbsolute, relative } from 'node:path';
 import { renderFailureContext } from '../core/failure-context.js';
 import { stringify as toYaml } from 'yaml';
 import {
@@ -96,6 +97,28 @@ import {
 /** Marker the implementation prompt asks the agent to end with. */
 const RESULT_BLOCK = /##\s*RESULT\s*([\s\S]*)$/i;
 
+/**
+ * How much of a repository's `AGENTS.md` reaches a prompt.
+ *
+ * Generous — a real one is a page or two, and 64 KiB is many pages. The number is not
+ * about typical files; it is about there being a number at all, so that the size of every
+ * implementation prompt is a decision this repository made rather than one the repository
+ * under test makes.
+ */
+const MAX_AGENTS_MD_BYTES = 64 * 1024;
+
+/**
+ * Whether a resolved path sits under a resolved root.
+ *
+ * Both sides must already be real paths: this is the lexical half of a check whose other
+ * half is `realPath`, and running it on unresolved paths would answer confidently about
+ * the wrong two files.
+ */
+function isWithin(root: string, candidate: string): boolean {
+  const inside = relative(root, candidate);
+  return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside);
+}
+
 export interface TaskExecutorOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
@@ -186,6 +209,13 @@ export class TaskExecutor {
     runId: string,
     sdd: string,
     workspace?: TaskWorkspace,
+    /**
+     * Ends this attempt, and the agent's process tree, before its timeout (PRI-14).
+     *
+     * Per execution rather than on the executor, because it belongs to the *run* that is
+     * being cancelled and one executor serves many attempts.
+     */
+    signal?: AbortSignal,
   ): Promise<TaskResult> {
     const { store, clock, stageRunner, config } = this.options;
     const projectDir = this.options.projectDir;
@@ -252,6 +282,10 @@ export class TaskExecutor {
           // nothing that was said concerns this agent — in every one of those cases the
           // prompt is byte-for-byte what it was before the milestone.
           ...(collaborationContext === undefined ? {} : { collaborationContext }),
+          // Reaches the agent's process group (PRI-14). An aborted invocation comes back
+          // as an ordinary failure, so the `catch` below records the attempt exactly as it
+          // records any other — cancel keeps evidence, it does not erase it.
+          ...(signal === undefined ? {} : { signal }),
         },
       );
       text = result.text;
@@ -937,11 +971,57 @@ export class TaskExecutor {
     }
   }
 
+  /**
+   * The repository's own instructions, read **on the agent's behalf** (T6, PRI-20).
+   *
+   * That phrase is the whole reason this is not a two-line read. Everywhere else, hostile
+   * repository content reaches a model because the model went and read it — inside
+   * whatever sandbox the vendor applies. Here the *orchestrator* opens the file, with the
+   * orchestrator's privileges and no sandbox at all, and interpolates the result into the
+   * prompt. Two things follow, and neither held:
+   *
+   *   **It must be inside the workspace.** A repository shipping `AGENTS.md` as a symlink
+   *   to `~/.ssh/id_rsa` had that file read by this process and pasted into a prompt. The
+   *   agent could not have reached it; this could. Refused by comparing the *resolved*
+   *   path against the resolved workspace, because a lexical check answers a different
+   *   question than the one a symlink asks.
+   *
+   *   **It must be bounded.** `measurePromptComposition` measures and does not enforce,
+   *   and it runs after this — so a repository decided how large every implementation
+   *   prompt was. Truncation is explicit and says how much is missing, in the same shape
+   *   the process boundary already uses: silence would be a prompt that quietly stopped
+   *   containing the instructions it claims to carry.
+   *
+   * A refusal is not an error. The file is a convenience, and a task that cannot run
+   * because a repository shipped a strange one would be a worse outcome than a task that
+   * runs without it — so both cases produce a sentence the agent can read, and the run
+   * continues.
+   */
   private async readAgentsMd(workingDirectory: string): Promise<string> {
     const path = `${workingDirectory}/AGENTS.md`;
-    return (await this.options.fs.exists(path))
-      ? this.options.fs.readFile(path)
-      : 'No AGENTS.md in this repository.';
+    if (!(await this.options.fs.exists(path))) return 'No AGENTS.md in this repository.';
+
+    const [resolvedFile, resolvedRoot] = await Promise.all([
+      this.options.fs.realPath(path),
+      this.options.fs.realPath(workingDirectory),
+    ]);
+
+    if (resolvedFile !== null && resolvedRoot !== null && !isWithin(resolvedRoot, resolvedFile)) {
+      return (
+        'This repository ships AGENTS.md as a link to a file outside it, so it was not ' +
+        'read. Agent Flow reads that file on your behalf, outside any sandbox, and will ' +
+        'not follow it out of the workspace.'
+      );
+    }
+
+    const content = await this.options.fs.readFile(path);
+    if (content.length <= MAX_AGENTS_MD_BYTES) return content;
+
+    return (
+      `${content.slice(0, MAX_AGENTS_MD_BYTES)}\n\n` +
+      `… [truncated: AGENTS.md is ${String(content.length)} bytes and this prompt ` +
+      `carries the first ${String(MAX_AGENTS_MD_BYTES)}]`
+    );
   }
 }
 

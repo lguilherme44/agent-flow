@@ -24,6 +24,11 @@ import {
   type UiOptions,
 } from './ui.js';
 import { readVersion } from './version.js';
+import {
+  runCancelCommand,
+  runPauseCommand,
+  runResumeCommand,
+} from './lifecycle.js';
 
 export interface GlobalOptions {
   readonly cwd: string;
@@ -208,6 +213,28 @@ export async function main(argv: string[]): Promise<number> {
     .option('--force', 'retry a BLOCKED task, or exceed the attempt limit')
     .action(async (taskId: string, options: { force?: boolean }, command: Command) => {
       exitCode = await runRetryCommand(taskId, options, globalOptions(command));
+    });
+
+  program
+    .command('pause')
+    .description('Stop starting work; the task in flight finishes')
+    .action(async (_options: unknown, command: Command) => {
+      exitCode = await runPauseCommand(globalOptions(command));
+    });
+
+  program
+    .command('resume')
+    .description('Clear a pause and continue the approved plan')
+    .action(async (_options: unknown, command: Command) => {
+      exitCode = await runResumeCommand(globalOptions(command));
+    });
+
+  program
+    .command('cancel')
+    .description('End the run and terminate its agents; keeps every artifact')
+    .option('--yes', 'confirm: cancelling is not reversible')
+    .action(async (options: { yes?: boolean }, command: Command) => {
+      exitCode = await runCancelCommand(options, globalOptions(command));
     });
 
   program

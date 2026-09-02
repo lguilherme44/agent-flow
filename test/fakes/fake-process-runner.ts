@@ -28,6 +28,23 @@ export class FakeProcessRunner implements ProcessRunner {
 
   async run(options: ProcessSpawnOptions): Promise<ProcessResult> {
     this.calls.push(options);
+
+    // The real runner refuses to spawn on an already-aborted signal, so a cancellation
+    // test that used this fake would otherwise see a success the product cannot produce.
+    if (options.signal?.aborted === true) {
+      return {
+        exitCode: null,
+        signal: null,
+        stdout: '',
+        stderr: '',
+        durationMs: 0,
+        timedOut: false,
+        cancelled: true,
+        spawnFailed: false,
+        truncated: false,
+      };
+    }
+
     const script = this.scripts.shift() ?? this.fallback;
     return {
       exitCode: 0,
@@ -36,6 +53,7 @@ export class FakeProcessRunner implements ProcessRunner {
       stderr: '',
       durationMs: 1,
       timedOut: false,
+      cancelled: false,
       spawnFailed: false,
       truncated: false,
       ...script(options),

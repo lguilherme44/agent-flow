@@ -75,6 +75,7 @@ class RecordingProcessRunner implements ProcessRunner {
       stderr: '',
       durationMs: 1,
       timedOut: false,
+      cancelled: false,
       spawnFailed: false,
       truncated: false,
     };

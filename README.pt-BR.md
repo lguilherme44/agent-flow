@@ -138,7 +138,7 @@ Quadro completo: [`docs/roadmap.md`](docs/roadmap.md). Fonte normativa:
 | Blackboard compartilhado cujas entradas nunca são sobrescritas em silêncio | Disponível — opt-in |
 | Contexto de time no prompt de implementação, limitado em bytes e atribuído | Disponível — opt-in |
 | Handoff que muda quem *executa* uma task | Disponível — opt-in duas vezes, `collaboration.handoffsReassignExecution` |
-| `pause` / `resume` / `cancel` | Desenhado, não construído |
+| `pause` / `resume` / `cancel` | Disponível |
 | Escrita de configuração pelo dashboard | Desenhado, não construído |
 | Execução remota ou distribuída | Fora do escopo do MVP 2 |
 

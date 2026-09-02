@@ -39,6 +39,17 @@ import type { TelemetrySummary } from '../../../../src/core/telemetry.js';
 export const API_BASE = '/api/v1';
 
 /**
+ * The header every write carries (PRI-05).
+ *
+ * Duplicated from `src/server/request-guard.ts` rather than imported: this bundle is
+ * built by a separate compiler with its own module resolution, and reaching across the
+ * workspace boundary for a five-character constant is a worse trade than a name that
+ * appears twice. `test/server/request-guard.test.ts` pins the value on the server side;
+ * the e2e suite drives this file against the real server, so a drift fails there.
+ */
+export const CLIENT_HEADER = 'x-agent-flow-client';
+
+/**
  * A refused request, with everything the server said about it.
  *
  * The write API answers a refusal with a code, a message and the suggested next
@@ -129,7 +140,14 @@ async function post<T>(
   const suffix = query.toString();
   const response = await fetch(`${API_BASE}${path}${suffix === '' ? '' : `?${suffix}`}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      // Says "a client that could read this server's own code sent me" — which a page on
+      // another origin cannot say. Setting a custom header makes a request non-simple, so
+      // a cross-origin attempt earns a preflight, and the server answers none. Same-origin
+      // requests like this one never see a preflight at all, so it costs nothing here.
+      [CLIENT_HEADER]: 'dashboard',
+    },
     body: JSON.stringify(body),
   });
 

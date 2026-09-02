@@ -119,9 +119,13 @@ test.describe('failure states', () => {
 
     // The API says no, in words, with a next step and without a trace.
     const runId = await world.runIdOf('booking-api');
+    // `page.request` is not the page: it sends no `Origin`, so it reaches the API the
+    // way `curl` does and carries the header the request guard admits a non-browser
+    // client on. Without it the answer would be 403 before any gate was consulted —
+    // which would make this test pass for a reason that has nothing to do with §95.
     const response = await page.request.post(
       `${world.url}/api/v1/runs/${runId}/approve?project=booking-api`,
-      { data: {} },
+      { data: {}, headers: { 'x-agent-flow-client': 'e2e' } },
     );
     expect(response.status()).toBe(409);
     const body = (await response.json()) as {

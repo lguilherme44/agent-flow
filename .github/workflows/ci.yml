@@ -16,6 +16,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Every action below is pinned to an immutable commit SHA with its version in a trailing
+# comment. A tag is a pointer somebody else can move: `@v4` today and `@v4` tomorrow can be
+# different code, running in a job that has this repository checked out and a token in its
+# environment. The version comment is what keeps the pin readable, and Dependabot rewrites
+# both halves together — see `.github/dependabot.yml`.
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -30,9 +35,9 @@ jobs:
         node: ['20', '22']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -73,9 +78,9 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -88,7 +93,7 @@ jobs:
         env:
           AF_E2E_CHANNEL: chromium
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: e2e-report
@@ -113,9 +118,9 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -130,7 +135,7 @@ jobs:
 
       # The expected, the actual and the diff for every mismatch. "Screenshot
       # comparison failed" without the images is a failure nobody can act on.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: visual-diff
@@ -139,15 +144,42 @@ jobs:
             apps/web/visual/.results/
           retention-days: 7
 
+  # Does the *published package* work outside this checkout? (UI-33)
+  #
+  # `npm run test` proves the source is correct and proves nothing about the tarball. A
+  # `files` entry naming a path that does not exist, a runtime resolution that only works
+  # because `src/` happens to be next door, a prompt that was never packaged — all of them
+  # pass here and fail on the first person to run `npm i -g agent-flow`. The script packs,
+  # installs into a temporary root with the checkout hidden, and drives the CLI.
+  #
+  # It existed before this job and ran nowhere, which is the same as not existing.
+  packaging:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+      - run: npm run build:web
+
+      - run: npm run test:packaging
+
   # Separated from `check` because coverage is a report, not a gate: a drop is
   # worth seeing without failing a pull request over a number.
   coverage:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm

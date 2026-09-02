@@ -3092,9 +3092,16 @@ describe('I-21 — redaction is applied once, at the boundary that persists (AD-
 });
 
 describe('I-26 — runtime status is projected, never persisted (AD-48)', () => {
-  it('adds nothing to the persisted run statuses', () => {
-    // `RUN_STATUSES` is unchanged, and that is the decision rather than an omission:
-    // mixing lifecycle with presentation means a crash mid-write persists an opinion.
+  it('persists lifecycle outcomes and nothing a projection computes', () => {
+    // Frozen so growth is deliberate. Mixing lifecycle with presentation means a crash
+    // mid-write persists an *opinion*, and the projection then has two sources of truth.
+    //
+    // `cancelled` was added by PR-03 and is the one member this list has ever gained. It
+    // belongs here because it is a terminal outcome that is neither `completed` nor
+    // `failed`: a run an operator stopped, reported as failed, would describe a person's
+    // decision as a defect on every surface that reads this — the dashboard, the
+    // Definition of Done and `status --json`. It is not a projection of anything; nothing
+    // computes it, `cancel` writes it.
     const { text } = read(join(ROOT, 'src/contracts/state.schema.ts'));
     const declaration = /RUN_STATUSES = \[([\s\S]*?)\]/.exec(withoutComments(text))?.[1] ?? '';
 
@@ -3106,7 +3113,42 @@ describe('I-26 — runtime status is projected, never persisted (AD-48)', () => 
       'approved',
       'completed',
       'failed',
+      'cancelled',
     ]);
+  });
+
+  it('persists no status that is derived from something else', () => {
+    // The structural half, and the first draft of it was wrong in a way worth recording:
+    // it asserted the two enums share no name, and `failed` has always been in both. That
+    // sharing is correct — a failed run projects to `failed` — so the rule is not "no
+    // overlap".
+    //
+    // The rule is that a status **computed from other evidence** must never be written
+    // down. Each name below is derived: from the event log, from the task states, from a
+    // freshness comparison. Persisting one means a crash between the evidence and the
+    // opinion leaves a run asserting something its own tasks contradict, and then two
+    // sources of truth disagree with no way to tell which is stale.
+    const derived = [
+      'planning',
+      'implementing',
+      'recovering',
+      'verifying',
+      'reviewing',
+      'correcting',
+      'blocked_on_human',
+      'auto_recovery_exhausted',
+      'plan_rejected_revisable',
+    ];
+
+    const stateText = withoutComments(read(join(ROOT, 'src/contracts/state.schema.ts')).text);
+    const declaration = /RUN_STATUSES = \[([\s\S]*?)\]/.exec(stateText)?.[1] ?? '';
+    const persisted = [...declaration.matchAll(/'([a-z_]+)'/g)].map((match) => match[1] ?? '');
+
+    expect(persisted.length, 'the persisted statuses could not be read').toBeGreaterThan(0);
+    expect(
+      derived.filter((name) => persisted.includes(name)),
+      'a computed status reached the persisted enum',
+    ).toEqual([]);
   });
 
   it('declares the runtime statuses outside the persisted contract', () => {

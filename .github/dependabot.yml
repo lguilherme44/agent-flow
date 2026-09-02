@@ -1,0 +1,56 @@
+# Dependency and Action updates, proposed as pull requests CI can actually judge.
+#
+# The Actions ecosystem is listed first and deliberately: every workflow in this
+# repository pins its actions to an immutable commit SHA, which closes the "a tag moved
+# under us" vector and opens a slower one — a pinned action never gets its own security
+# fixes. Dependabot is the half that makes pinning safe rather than merely strict; it
+# rewrites the SHA and leaves the human-readable version in the trailing comment.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: 'ci'
+    labels: [dependencies, github-actions]
+
+  # The root workspace: the CLI's runtime dependencies and the whole toolchain.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore'
+      prefix-development: 'chore'
+    labels: [dependencies]
+    groups:
+      # One pull request for the test toolchain rather than six. These move together,
+      # they are judged by the same suite, and splitting them produces PRs that each fail
+      # because the others have not landed.
+      test-toolchain:
+        patterns: ['vitest', '@vitest/*', 'vite', 'esbuild', 'jsdom']
+      types:
+        patterns: ['@types/*']
+      eslint:
+        patterns: ['eslint', '@eslint/*', 'typescript-eslint']
+
+  # The dashboard workspace. Separate because npm workspaces do not share a manifest and
+  # a single entry would silently watch only the root one.
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(web)'
+    labels: [dependencies, web]
+    groups:
+      react:
+        patterns: ['react', 'react-dom', '@types/react', '@types/react-dom']
+      radix:
+        patterns: ['@radix-ui/*']
+      test-toolchain:
+        patterns: ['vitest', 'vite', '@vitejs/*', 'jsdom', '@testing-library/*']

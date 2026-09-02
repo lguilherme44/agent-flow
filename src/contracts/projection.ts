@@ -34,6 +34,14 @@ export const RUNTIME_STATUSES = [
   'auto_recovery_exhausted',
   'complete',
   'failed',
+  /**
+   * An operator stopped it (PRI-14).
+   *
+   * Beside `complete` and `failed` rather than folded into either. A cancelled run that
+   * reported `failed` would show a person's decision as a defect on every surface that
+   * reads this; one that reported `complete` would be worse.
+   */
+  'cancelled',
 ] as const;
 
 export type RuntimeStatus = (typeof RUNTIME_STATUSES)[number];

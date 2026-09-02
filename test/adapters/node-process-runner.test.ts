@@ -63,14 +63,172 @@ describe('environment', () => {
     expect(result.stdout).toBe('present');
   });
 
-  it('keeps the parent environment so CLI auth still resolves', async () => {
-    // The runners rely on each CLI's own local login (§54). Wiping the
-    // environment would break exactly the thing the design depends on.
-    const result = await runNode('process.stdout.write(process.env.PATH ? "yes" : "no")', {
-      env: { AF_TEST: 'present' },
-    });
+  it('keeps what a CLI needs to find itself and log in', async () => {
+    // The runners rely on each CLI's own local login (§54). The allowlist is a list of
+    // what they need, so this is the case that decides whether it is right.
+    const result = await runNode(
+      'process.stdout.write([process.env.PATH, process.env.HOME].every(Boolean) ? "yes" : "no")',
+      { env: { AF_TEST: 'present' } },
+    );
     expect(result.stdout).toBe('yes');
   });
+
+  it('does not hand a coding agent a credential it was never given (PRI-17)', async () => {
+    // The default. A child used to receive `{ ...process.env }` — every credential the
+    // operator's shell exports, most of which have nothing to do with the task.
+    const previous = process.env['AWS_SECRET_ACCESS_KEY'];
+    process.env['AWS_SECRET_ACCESS_KEY'] = 'must-not-reach-the-child';
+
+    try {
+      const result = await runNode(
+        'process.stdout.write(process.env.AWS_SECRET_ACCESS_KEY ?? "absent")',
+      );
+      expect(result.stdout).toBe('absent');
+    } finally {
+      if (previous === undefined) delete process.env['AWS_SECRET_ACCESS_KEY'];
+      else process.env['AWS_SECRET_ACCESS_KEY'] = previous;
+    }
+  });
+
+  it('hands it over when the caller asks to inherit, and says why at its call site', async () => {
+    // `git-command.ts` and `verification-commands.ts` are the two, and both write the
+    // reason down. This asserts the escape hatch works rather than that it is used.
+    const previous = process.env['AF_INHERIT_PROBE'];
+    process.env['AF_INHERIT_PROBE'] = 'inherited';
+
+    try {
+      const result = await runNode('process.stdout.write(process.env.AF_INHERIT_PROBE ?? "absent")', {
+        envMode: 'inherit',
+      });
+      expect(result.stdout).toBe('inherited');
+    } finally {
+      if (previous === undefined) delete process.env['AF_INHERIT_PROBE'];
+      else process.env['AF_INHERIT_PROBE'] = previous;
+    }
+  });
+
+  it('honours a removal even for a name the allowlist would have passed', async () => {
+    // A removal is a stronger statement than the allowlist's silence. The Git boundary
+    // relies on it, and a name that survived because it was also allowed would be the
+    // quietest possible way for `GIT_DIR` to come back.
+    const result = await runNode('process.stdout.write(process.env.HOME ? "yes" : "no")', {
+      unsetEnv: ['HOME'],
+    });
+    expect(result.stdout).toBe('no');
+  });
+
+  it('passes what the operator declared', async () => {
+    const previous = process.env['ACME_REGION'];
+    process.env['ACME_REGION'] = 'sa-east-1';
+
+    try {
+      const result = await runNode('process.stdout.write(process.env.ACME_REGION ?? "absent")', {
+        envPass: ['ACME_'],
+      });
+      expect(result.stdout).toBe('sa-east-1');
+    } finally {
+      if (previous === undefined) delete process.env['ACME_REGION'];
+      else process.env['ACME_REGION'] = previous;
+    }
+  });
+});
+
+describe('cancellation (PRI-09, PRI-14)', () => {
+  // A timeout is the child running out of *its* patience. This is somebody else running
+  // out of theirs, and until it existed there was no such thing: the only way to stop an
+  // agent mid-flight was to kill the orchestrator, which leaves the agent's own process
+  // group alive because nothing signals children when a parent dies.
+
+  it('stops a running child and says the reason was cancellation', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+
+    const startedAt = Date.now();
+    const result = await runNode('setTimeout(() => {}, 30_000)', {
+      signal: controller.signal,
+      timeoutSeconds: 30,
+      killGraceMs: 150,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    expect(result.cancelled).toBe(true);
+    // Not a timeout. The two mean opposite things to whoever reads the result: one is a
+    // failure worth classifying, the other is an operator decision.
+    expect(result.timedOut).toBe(false);
+    expect(elapsed).toBeLessThan(5_000);
+  }, 40_000);
+
+  it('spawns nothing at all when the signal has already aborted', async () => {
+    // On a cancelled run, a process started and immediately killed is still an agent
+    // invocation somebody is billed for.
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runNode('process.stdout.write("this must never run")', {
+      signal: controller.signal,
+    });
+
+    expect(result.cancelled).toBe(true);
+    expect(result.stdout).toBe('');
+    expect(result.durationMs).toBe(0);
+  });
+
+  it('reaches the whole process group, leaving no grandchild behind', async () => {
+    // The same failure the timeout path already documents, on the other path. A cancel
+    // that signalled only the direct child would leave exactly the orphans `detached`
+    // exists to prevent.
+    const { existsSync, rmSync } = await import('node:fs');
+    const marker = `/tmp/agent-flow-cancel-test-${String(process.pid)}`;
+    rmSync(marker, { force: true });
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 200);
+
+    await runner.run({
+      command: '/bin/sh',
+      args: ['-c', `( sleep 1; echo x > ${marker} ) & sleep 8`],
+      cwd: '/tmp',
+      timeoutSeconds: 30,
+      killGraceMs: 150,
+      signal: controller.signal,
+    });
+
+    // The grandchild would write its marker one second in. Wait past that.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    const survived = existsSync(marker);
+    rmSync(marker, { force: true });
+    expect(survived).toBe(false);
+  }, 40_000);
+
+  it('leaves an ordinary run untouched when the signal never fires', async () => {
+    const controller = new AbortController();
+
+    const result = await runNode('process.stdout.write("done")', { signal: controller.signal });
+
+    expect(result.cancelled).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('done');
+  });
+
+  it('reports cancellation rather than timeout when both could be true', async () => {
+    // The operator's decision is the reason it stopped. Recording it as a timeout would
+    // classify the work as having failed.
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 120);
+
+    const result = await runner.run({
+      command: '/bin/sh',
+      args: ['-c', 'sleep 8'],
+      cwd: '/tmp',
+      timeoutSeconds: 0.3,
+      killGraceMs: 100,
+      signal: controller.signal,
+    });
+
+    expect(result.cancelled).toBe(true);
+    expect(result.timedOut).toBe(false);
+  }, 20_000);
 });
 
 describe('stdin', () => {

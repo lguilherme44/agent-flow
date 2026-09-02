@@ -41,6 +41,18 @@ type RunnerFactory = (
   id: string,
   config: RunnerConfig,
   deps: RegistryDependencies,
+  /**
+   * `execution.passEnv` — extra names a spawned agent may inherit (PRI-17).
+   *
+   * Read from the configuration here rather than asked of every caller. There are four
+   * `buildRegistry` call sites and a fifth would be added without this line being
+   * anywhere in view; the failure of forgetting it is silent, and its shape is an
+   * operator whose declared variable simply never arrives.
+   *
+   * Handed to the CLI adapters and to none of the others: `openai-compatible` spawns
+   * nothing, so an environment policy would be a field it could only ignore.
+   */
+  envPass: readonly string[],
 ) => AgentRunner;
 
 /**
@@ -51,26 +63,29 @@ type RunnerFactory = (
  * and one adapter file — no workflow code, no stage, no prompt changes.
  */
 const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
-  'claude-code-cli': (id, config, deps) =>
+  'claude-code-cli': (id, config, deps, envPass) =>
     new ClaudeCodeRunner({
       id,
       processRunner: deps.processRunner,
+      envPass,
       ...(config.command === undefined ? {} : { command: config.command }),
     }),
 
-  'codex-cli': (id, config, deps) =>
+  'codex-cli': (id, config, deps, envPass) =>
     new CodexRunner({
       id,
       processRunner: deps.processRunner,
+      envPass,
       // Needed because `--output-schema` takes a file path rather than a string.
       fs: deps.fs,
       ...(config.command === undefined ? {} : { command: config.command }),
     }),
 
-  'agy-cli': (id, config, deps) =>
+  'agy-cli': (id, config, deps, envPass) =>
     new AgyRunner({
       id,
       processRunner: deps.processRunner,
+      envPass,
       ...(config.command === undefined ? {} : { command: config.command }),
     }),
 
@@ -157,7 +172,7 @@ export function buildRegistry(
       );
     }
 
-    runners.set(id, factory(id, runnerConfig, deps));
+    runners.set(id, factory(id, runnerConfig, deps, config.execution.passEnv));
   }
 
   const get = (id: string): AgentRunner => {

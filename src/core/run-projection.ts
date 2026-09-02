@@ -84,6 +84,10 @@ export function projectRun(input: ProjectionInput): RunProjection {
 
   if (state.status === 'completed') return { ...base, status: 'complete' };
   if (state.status === 'failed') return { ...base, status: 'failed' };
+  // Before every stage inference below. `cancelled` is terminal, and a chain of `if`s that
+  // did not name it would fall through to `implementing` — a stopped run reported as
+  // running, with a Resume button on it.
+  if (state.status === 'cancelled') return { ...base, status: 'cancelled' };
 
   if (state.status === 'waiting_for_approval') {
     return {
@@ -176,7 +180,15 @@ export function projectRun(input: ProjectionInput): RunProjection {
 export function isResumable(input: ProjectionInput): boolean {
   const { state } = input;
   if (state.status === 'completed' || state.status === 'failed') return false;
+  // Terminal by an operator's decision (PRI-14). Its tasks are deliberately left where
+  // they were — `interrupted` for what was running, `queued` for what never started — so
+  // both the crash branch below and the DAG would otherwise report this as resumable.
+  if (state.status === 'cancelled') return false;
   if (state.status === 'waiting_for_approval') return false;
+  // A pause is an operator asking for no new work (PRI-15). The run is resumable in the
+  // ordinary sense and must not be *auto*-started, so this reports what a person may do,
+  // and `start` refuses until `resume` clears the request.
+  if (state.pauseRequestedAt !== undefined) return false;
   // A rejected plan is not executable work, however ready its tasks look. Measured on the
   // evidence run: the corrective round it rejected left FIX-001..003 in `plan.json` with no
   // dependencies and **no entry in `state.tasks`**, so the DAG defaults them to `queued`,

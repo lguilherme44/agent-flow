@@ -54,6 +54,9 @@ const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
   'completed',
   'failed',
   'plan_rejected',
+  // An operator's decision is as terminal as a failure. Omitted, a cancelled run would
+  // read as the project's live one forever.
+  'cancelled',
 ]);
 
 const ARTIFACT_LABELS: Record<ArtifactName, string> = {

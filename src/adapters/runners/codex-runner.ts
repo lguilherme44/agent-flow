@@ -37,6 +37,8 @@ export interface CodexRunnerOptions {
   readonly id: string;
   readonly processRunner: ProcessRunner;
   readonly command?: string;
+  /** `execution.passEnv`, forwarded to `BaseRunnerOptions` (PRI-17). */
+  readonly envPass?: readonly string[];
   /**
    * Required, unlike the Claude adapter: `--output-schema` takes a *file path*,
    * so producing structured output means writing the schema to disk first.
@@ -71,6 +73,10 @@ export class CodexRunner extends BaseRunner {
     super({
       id: options.id,
       processRunner: options.processRunner,
+      // Forwarded explicitly. This is the one adapter with a constructor of its own, so
+      // it is the one that can drop a base option by omission — and `envPass` is optional
+      // on the base, so nothing would have complained.
+      ...(options.envPass === undefined ? {} : { envPass: options.envPass }),
       ...(options.command === undefined ? {} : { command: options.command }),
     });
     this.fs = options.fs;

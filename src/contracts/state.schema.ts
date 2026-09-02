@@ -67,6 +67,20 @@ export const RUN_STATUSES = [
   'approved',
   'completed',
   'failed',
+  /**
+   * An operator stopped this run (PRI-14).
+   *
+   * The one terminal outcome that is neither `completed` nor `failed`, and it earns a
+   * member of this enum for exactly that reason: reporting a cancelled run as failed would
+   * make the dashboard, the Definition of Done and `status --json` all describe a person's
+   * decision as a defect.
+   *
+   * **Only cancel writes it, and nothing writes over it.** A run reaching here has had its
+   * process groups terminated and its evidence retained; the tasks that were running are
+   * `interrupted`, the queued ones are still queued, and the integration branch and the
+   * failed worktrees are still on disk. What is gone is the intent to continue.
+   */
+  'cancelled',
 ] as const;
 
 export const RunStatusSchema = z.enum(RUN_STATUSES);
@@ -210,6 +224,33 @@ export const RunStateSchema = z.object({
    */
   approvedPlanHash: z.string().optional(),
 
+  /**
+   * When an operator asked this run to stop at its next safe boundary (PRI-15).
+   *
+   * **A request, not a status.** A run's `status` says where it is in the workflow;
+   * "paused" says what a person asked for. Those are different axes, and folding pause
+   * into `RUN_STATUSES` would make `waiting_for_approval` and `paused` mutually exclusive
+   * when they are plainly not.
+   *
+   * Honoured at the top of the dispatch loop, between tasks — never mid-task. The task in
+   * flight runs to its natural end, because killing it throws away work already paid for
+   * and there is no partial result to keep. So the observable behaviour is "pausing…" and
+   * then "paused", and anything claiming to be immediate would be lying.
+   *
+   * Read by the `start` use case as well as by the scheduler, so a `agent-flow run` typed
+   * after a pause refuses rather than quietly overriding it — the same rule the execution
+   * lock follows, for the same reason.
+   */
+  pauseRequestedAt: IsoTimestampSchema.optional(),
+  /**
+   * When an operator cancelled this run, and who asked.
+   *
+   * Kept beside the terminal `cancelled` status rather than folded into it, because the
+   * status answers "what happened" and this answers "when, and on whose say-so" — and an
+   * audit trail that cannot distinguish a cancellation from a crash is not one.
+   */
+  cancelledAt: IsoTimestampSchema.optional(),
+
   degradations: z.array(DegradationSchema).default([]),
   tasks: z.array(TaskProgressSchema).default([]),
 
@@ -348,3 +389,29 @@ export const COLLABORATION_EVENT_TYPES = [
 ] as const;
 
 export type CollaborationEventType = (typeof COLLABORATION_EVENT_TYPES)[number];
+
+/**
+ * What an operator did to a run's lifecycle (PRI-14, PRI-15).
+ *
+ * Declared here for the reason the list above is: so the next reader of the event log
+ * finds one spelling rather than three. These are the only events that record a *person's*
+ * decision about whether a run continues, which is exactly the thing an audit of an
+ * autonomous system is for — a run that stopped is otherwise indistinguishable from one
+ * that crashed.
+ */
+export const LIFECYCLE_EVENT_TYPES = [
+  /** `detail: { at }`. Written once; pausing twice does not move the timestamp. */
+  'run_paused',
+  /** `detail: { at }`. The pause request was cleared and execution asked to continue. */
+  'run_resumed',
+  /**
+   * `detail: { at, interrupted, pid?, hostname? }`.
+   *
+   * `interrupted` names the tasks that were running when it happened, because "which work
+   * was severed mid-flight" is the first question anybody reading a cancelled run asks.
+   * The holder is recorded when one was executing, and absent when nothing was.
+   */
+  'run_cancelled',
+] as const;
+
+export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];

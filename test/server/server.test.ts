@@ -84,6 +84,16 @@ const PLAN = {
   ],
 };
 
+/**
+ * What a same-origin client sends on a write (PRI-05).
+ *
+ * `inject` is not a browser: it sends no `Origin`, which is exactly the shape the guard
+ * treats as "not a page" and admits only on the strength of this header. Every test
+ * below is about a *use case*, so it authenticates the way the CLI does and leaves the
+ * boundary itself to `request-guard.test.ts`.
+ */
+const WRITE_HEADERS = { 'x-agent-flow-client': 'test' } as const;
+
 let running: RunningServer | undefined;
 
 afterEach(async () => {
@@ -1273,7 +1283,14 @@ describe('UI-26 — the effective configuration', () => {
     // override into the global file — changing every other project on the machine.
     const { server } = await serve();
 
-    const response = await server.app.inject({ method: 'PATCH', url: '/api/v1/config' });
+    // Authenticated as the dashboard is, so this asserts what it says it asserts:
+    // the route does not exist. An unauthenticated PATCH is refused a step earlier by
+    // the request guard, which would make this pass for the wrong reason.
+    const response = await server.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/config',
+      headers: WRITE_HEADERS,
+    });
 
     expect(response.statusCode).toBe(404);
   });
@@ -1357,6 +1374,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
         payload: {},
       });
@@ -1375,6 +1393,7 @@ describe('UI-27 — the write API', () => {
 
       await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
         payload: { force: false, planHash: 'deadbeefdeadbeef' },
       });
@@ -1389,6 +1408,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
         payload: {},
       });
@@ -1408,6 +1428,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
         payload: { force: true },
       });
@@ -1428,6 +1449,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
         payload: {},
       });
@@ -1443,6 +1465,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
         payload: { reason: 'the approach is wrong' },
       });
@@ -1458,11 +1481,13 @@ describe('UI-27 — the write API', () => {
 
       await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
         payload: {},
       });
       const second = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
         payload: {},
       });
@@ -1478,6 +1503,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
         payload: {},
       });
@@ -1501,6 +1527,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
         payload: {},
       });
@@ -1518,6 +1545,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
         payload: {},
       });
@@ -1536,6 +1564,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/tasks/TASK-999/retry`,
         payload: {},
       });
@@ -1549,6 +1578,7 @@ describe('UI-27 — the write API', () => {
       for (const attempt of ['../../etc', 'TASK-1', 'rm -rf /']) {
         const response = await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/tasks/${encodeURIComponent(attempt)}/retry`,
           payload: {},
         });
@@ -1563,6 +1593,7 @@ describe('UI-27 — the write API', () => {
 
       const response = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/start`,
         payload: {},
       });
@@ -1579,6 +1610,7 @@ describe('UI-27 — the write API', () => {
       const started = (
         await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/start`,
           payload: {},
         })
@@ -1599,6 +1631,7 @@ describe('UI-27 — the write API', () => {
 
       await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
         payload: {},
       });
@@ -1607,11 +1640,13 @@ describe('UI-27 — the write API', () => {
       // spawn the same agent twice. A double-clicked button produces exactly that.
       const first = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/start`,
         payload: {},
       });
       const second = await server.app.inject({
         method: 'POST',
+        headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/start`,
         payload: {},
       });
@@ -1633,6 +1668,7 @@ describe('UI-27 — the write API', () => {
       for (const payload of [{}, { instruction: '' }, { instruction: '   ' }]) {
         const response = await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/revise`,
           payload,
         });
@@ -1649,6 +1685,7 @@ describe('UI-27 — the write API', () => {
       const started = (
         await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/start`,
           payload: {},
         })
@@ -1667,6 +1704,7 @@ describe('UI-27 — the write API', () => {
       const started = (
         await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/start`,
           payload: {},
         })
@@ -1694,20 +1732,35 @@ describe('UI-27 — the write API', () => {
   });
 
   describe('what the write API refuses to have', () => {
-    it('has no pause, resume or cancel', async () => {
-      // §86 lists all three and the core has semantics for none: RUN_STATUSES has
-      // no paused or cancelled, and the scheduler cannot be interrupted between
-      // tasks. An endpoint that set a status field to satisfy the list would be a
-      // button that lies about what it did.
+    it('answers pause, resume and cancel through the same use cases the CLI calls', async () => {
+      // This test used to assert all three were **absent**, and it was right to: the core
+      // had semantics for none of them, and an endpoint that set a status field to satisfy
+      // §86's list would have been a button that lied about what it did.
+      //
+      // They exist now (PRI-14, PRI-15), so what it asserts is the property that made
+      // their absence correct — the browser reaches `app/run-actions.ts`, not a second
+      // state machine. A route answering anything but a use case's own refusal would be
+      // the parallel implementation §60 forbids.
       const { server, run } = await serve();
 
-      for (const action of ['pause', 'resume', 'cancel']) {
+      // `pause` on a run at the approval gate: legal, and returns the use case's answer.
+      const paused = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/pause`,
+        payload: {},
+      });
+      expect(paused.statusCode).toBe(200);
+
+      // `resume` and `cancel` reach their own gates rather than a generic 404.
+      for (const action of ['resume', 'cancel']) {
         const response = await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/${action}`,
           payload: {},
         });
-        expect(response.statusCode).toBe(404);
+        expect([200, 202, 409], action).toContain(response.statusCode);
       }
     });
 
@@ -1730,6 +1783,7 @@ describe('UI-27 — the write API', () => {
       for (const action of ['approve', 'reject', 'revise']) {
         const response = await server.app.inject({
           method: 'POST',
+          headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/${action}`,
           payload: hostile,
         });
@@ -1806,6 +1860,7 @@ describe('AF-L01 — a run another process is executing', () => {
 
     const response = await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/start`,
       payload: {},
     });
@@ -1835,11 +1890,13 @@ describe('AF-L01 — a run another process is executing', () => {
 
     const revise = await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/revise`,
       payload: { instruction: 'split TASK-001' },
     });
     const retry = await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
       payload: {},
     });
@@ -1870,7 +1927,11 @@ describe('AF-L01 — a run another process is executing', () => {
       { url: `/api/v1/runs/${run.runId}/revise`, payload: { instruction: 'change it' } },
       { url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`, payload: {} },
     ]) {
-      const response = await server.app.inject({ method: 'POST', ...request });
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        ...request,
+      });
       expect(response.statusCode).toBe(409);
       expect(response.body).not.toMatch(/at \w+ \(|node_modules/);
     }
@@ -1890,6 +1951,7 @@ describe('AF-L01 — a run another process is executing', () => {
 
     const response = await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/start`,
       payload: {},
     });
@@ -1912,6 +1974,7 @@ describe('AF-L01 — a run another process is executing', () => {
 
     const response = await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
       payload: {},
     });
@@ -1931,6 +1994,7 @@ describe('AF-L01 — a run another process is executing', () => {
 
     await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
       payload: {},
     });
@@ -1951,6 +2015,7 @@ describe('AF-L01 — a run another process is executing', () => {
     // a refusal. `withExecutionLock` releases in a `finally`.
     await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
       payload: {},
     });
@@ -1964,6 +2029,7 @@ describe('AF-L01 — a run another process is executing', () => {
 
     await server.app.inject({
       method: 'POST',
+      headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
       payload: {},
     });

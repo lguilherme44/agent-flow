@@ -1,0 +1,107 @@
+# The gates that answer "is this repository safe to install from", as opposed to
+# "does this code work" — which `ci.yml` already answers.
+#
+# Separate workflow rather than three more jobs in `ci.yml`, for one reason: these
+# have different triggers. A secret committed on a Tuesday is still a secret on
+# Sunday, and a dependency with no advisory today can have a critical one tomorrow
+# without a single line of this repository changing. A schedule is the only thing
+# that finds either.
+name: Security
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  schedule:
+    # Weekly, Monday 06:00 UTC. The advisory database moves without us.
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Secrets
+  # ---------------------------------------------------------------------------
+  #
+  # Over history, not over the working tree. A credential deleted in the next commit
+  # is still published — anybody who cloned the repository has it, and rotating is the
+  # only fix. Scanning `HEAD` alone would report that repository as clean.
+  secrets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Gitleaks walks commits, so a shallow clone would silently scan one of them.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Dependencies
+  # ---------------------------------------------------------------------------
+  #
+  # Two audits, and the split is the whole design.
+  #
+  # What ships is `dependencies` — the tarball carries `dist/`, `prompts/` and
+  # `apps/web/dist/`, and a vulnerability in a runtime dependency is a vulnerability in
+  # somebody's install. That is a gate.
+  #
+  # The toolchain is not a gate and is not ignored either. `vitest` and `vite` carry
+  # advisories about their own dev servers, which nobody runs from a published package;
+  # fixing them needs major upgrades that belong in their own reviewed pull request, not
+  # in whichever commit happened to be pushed when the advisory landed. So it reports and
+  # does not block — and it reports every time, so "we will get to it" stays visible.
+  dependencies:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Runtime dependencies (blocking)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Toolchain (reported, not blocking)
+        if: always()
+        run: npm audit --audit-level=high || true
+
+  # ---------------------------------------------------------------------------
+  # Static analysis
+  # ---------------------------------------------------------------------------
+  codeql:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3.37.9
+        with:
+          languages: javascript-typescript
+          # Beyond the default set: the extended queries are where the injection and
+          # path-traversal rules live, and this repository spawns processes and resolves
+          # filesystem paths on behalf of an agent. Those are the two questions worth
+          # asking it.
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3.37.9
+        with:
+          category: /language:javascript-typescript

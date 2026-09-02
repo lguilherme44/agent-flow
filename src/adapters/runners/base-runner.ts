@@ -44,6 +44,14 @@ export interface ErrorRule {
 export interface BaseRunnerOptions {
   readonly id: string;
   readonly processRunner: ProcessRunner;
+  /**
+   * Extra environment variables this runner may inherit, from `execution.passEnv`.
+   *
+   * Carried on the runner rather than read at the spawn, because the spawn boundary must
+   * not reach for configuration — and because an operator who needs a variable for their
+   * agent needs it for every invocation of it, not for one.
+   */
+  readonly envPass?: readonly string[];
   /** Overrides the executable looked up on PATH. */
   readonly command?: string;
 }
@@ -64,11 +72,14 @@ export abstract class BaseRunner implements AgentRunner {
   readonly id: string;
   protected readonly processRunner: ProcessRunner;
   protected readonly command: string;
+  /** `execution.passEnv`, carried so every spawn of this runner sees the same list. */
+  protected readonly envPass: readonly string[] | undefined;
 
   constructor(options: BaseRunnerOptions) {
     this.id = options.id;
     this.processRunner = options.processRunner;
     this.command = options.command ?? this.defaultCommand();
+    this.envPass = options.envPass;
   }
 
   /**
@@ -133,6 +144,14 @@ export abstract class BaseRunner implements AgentRunner {
         args: invocation.args,
         cwd: input.workingDirectory,
         timeoutSeconds: input.timeoutSeconds,
+        // Left at the default, `allowlist` (PRI-17). Stated by omission everywhere else in
+        // this codebase; stated here because this is the spawn the invariant is *about* —
+        // a coding CLI is a program with a model inside it reading a repository somebody
+        // else wrote, and it now receives what it needs rather than everything.
+        ...(this.envPass === undefined ? {} : { envPass: this.envPass }),
+        // Straight through to the kill that already reaches the whole process group on
+        // timeout. Cancel must not grow a second termination mechanism (PRI-09).
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(invocation.stdin === undefined ? {} : { stdin: invocation.stdin }),
       });
 
