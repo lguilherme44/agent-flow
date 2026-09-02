@@ -60,6 +60,19 @@ export interface RunPaths {
   readonly finalReview: string;
   readonly tasksDir: string;
   readonly logsDir: string;
+  /**
+   * Where the run's collaboration logs live (M4).
+   *
+   * Inside the run's artifacts, and therefore outside every worktree, for exactly the
+   * reason the attempt artifacts are: `.agent-flow/runs/` is in the project directory and
+   * is gitignored, so it is not part of any checkout an agent receives. An agent can write
+   * a message; it cannot rewrite the log of what it wrote.
+   */
+  readonly collaborationDir: string;
+  /** Append-only, one `AgentMessage` per line. */
+  readonly messages: string;
+  /** Append-only, one `BlackboardEntry` per line. */
+  readonly blackboard: string;
   taskResult(taskId: string): string;
   /**
    * `tasks/<taskId>/attempt-<n>.json` — one attempt's evidence (MVP 2 §10.1).
@@ -102,6 +115,7 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
   const reviewsDir = `${dir}/reviews`;
   const tasksDir = `${dir}/tasks`;
   const logsDir = `${dir}/logs`;
+  const collaborationDir = `${dir}/collaboration`;
 
   return {
     dir,
@@ -117,6 +131,9 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     finalReview: `${reviewsDir}/final-review.json`,
     tasksDir,
     logsDir,
+    collaborationDir,
+    messages: `${collaborationDir}/messages.jsonl`,
+    blackboard: `${collaborationDir}/blackboard.jsonl`,
     taskResult: (taskId) => `${tasksDir}/${taskId}/result.json`,
     taskAttempt: (taskId, attempt) => `${tasksDir}/${taskId}/attempt-${String(attempt)}.json`,
     failedAttempt: (taskId, attempt) =>
@@ -149,4 +166,26 @@ export function artifactPath(
   artifact: ArtifactName,
 ): string {
   return runPaths(projectDir, runId)[artifact];
+}
+
+/**
+ * The file an agent leaves in its workspace to say something (M4-02).
+ *
+ * A fixed name rather than a per-attempt one, and inside the workspace rather than beside
+ * it, because the agent runs in a sandbox whose only writable root *is* the workspace —
+ * there is nowhere else to put it that the agent could reach.
+ *
+ * What makes that safe is when it is read, not where it lives: the harvest runs after the
+ * agent's process exits and **before** the validated tree is captured, and it removes the
+ * file in that window (I-32). So an outbox never reaches `git add -A`, never enters a
+ * tree, never appears in a marker, a diff or `filesChanged` — and in sequential mode it
+ * never appears in the operator's own `git status` either.
+ *
+ * Leading dot so it sorts and reads as machinery. Composed here rather than at the call
+ * site so there is one spelling of it; an architecture test pins that.
+ */
+export const AGENT_OUTBOX_FILENAME = '.agent-flow-outbox.json';
+
+export function agentOutboxPath(workspaceDir: string): string {
+  return `${workspaceDir}/${AGENT_OUTBOX_FILENAME}`;
 }

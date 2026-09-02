@@ -26,6 +26,9 @@ import {
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
 import { TaskWorkspaces } from './task-workspaces.js';
+import { CollaborationStore } from './collaboration-store.js';
+import { CollaborationService } from './collaboration-service.js';
+import { deriveAgentRoster, type AgentRoster } from '../core/collaboration/roster.js';
 import { Integrator } from './integrator.js';
 import { WorktreeRecovery } from './worktree-recovery.js';
 import {
@@ -115,6 +118,17 @@ export interface ExecutionContext {
   readonly host: Host;
   /** The adapter type behind a runner id — what independence is judged on. */
   readonly providerOf: (runnerId: string) => string | undefined;
+  /**
+   * Who the agents on this run are (M4-01).
+   *
+   * Published rather than kept inside the executor because the read models need the same
+   * one: a dashboard rendering "who said this" and a CLI rendering the same line must
+   * resolve an id through the roster the run actually used, and two derivations of it
+   * would be two chances to disagree about a display name.
+   */
+  readonly roster: AgentRoster;
+  /** The mailbox and the blackboard (M4-02). Silent unless `collaboration.enabled`. */
+  readonly collaboration: CollaborationService;
   readonly projectDir: string;
 }
 
@@ -235,6 +249,24 @@ export async function buildExecutionContext(
     ...(advisor === undefined ? {} : { advisor }),
   });
 
+  // M4-01/M4-02: who the agents on this run are, and the channel between them.
+  //
+  // The roster is *derived* from `config.global.roles`, so a project that has never heard
+  // of collaboration still has one — which is what lets a message name a recipient on the
+  // first run after an upgrade. The service is constructed whether or not the feature is
+  // on: it reads its own `enabled` flag and answers with silence, so there is one wiring
+  // rather than a conditional graph whose two halves drift.
+  const roster = deriveAgentRoster(config.global);
+  const collaboration = new CollaborationService({
+    fs,
+    clock,
+    store,
+    collaboration: new CollaborationStore({ fs, projectDir: options.projectDir }),
+    roster,
+    config: config.global.collaboration,
+    host: options.host,
+  });
+
   const executor = new TaskExecutor({
     fs,
     clock,
@@ -249,6 +281,12 @@ export async function buildExecutionContext(
     // asks when the workspace it was handed carries an isolation block.
     workspaces,
     host: options.host,
+    // M4-02: reads what an agent left in its outbox, after the process exits and
+    // before the tree is captured. Wired unconditionally and asked per attempt —
+    // it answers with silence when `collaboration.enabled` is false, so the mode is
+    // decided by configuration rather than by the wiring, exactly as the Integrator
+    // answers `sequential` for a run that is not isolated.
+    collaboration,
   });
 
   // The configured number is an intention; the scheduler needs an instruction.
@@ -344,6 +382,8 @@ export async function buildExecutionContext(
     integrator,
     host: options.host,
     providerOf: (id) => registry.providerOf(id),
+    roster,
+    collaboration,
     projectDir: options.projectDir,
   };
 }

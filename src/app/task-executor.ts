@@ -79,6 +79,7 @@ import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
 import type { TaskWorkspace } from './task-workspaces.js';
+import type { CollaborationService } from './collaboration-service.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { judgeValidation } from '../core/validation-outcome.js';
 import {
@@ -111,6 +112,19 @@ export interface TaskExecutorOptions {
   readonly workspaces?: GitWorkspaces;
   /** For `randomHex`: the receipt nonce must come from a cryptographic source. */
   readonly host?: Host;
+  /**
+   * Reads what the agent left in its outbox, when the run allows agents to speak (M4-02).
+   *
+   * Optional in exactly the way {@link workspaces} and the Integrator are: absent, no
+   * outbox is read and every existing caller behaves as it did. Present but disabled by
+   * configuration, the same — the service answers with silence.
+   *
+   * **Where it is called is the whole guarantee** (I-32): after the agent's process has
+   * exited, and before {@link TaskExecutor.observeChange} stages the tree. One line earlier
+   * and the file would be read while the agent could still rewrite it; one line later and
+   * `git add -A` would have staged it into the tree a marker is bound to.
+   */
+  readonly collaboration?: CollaborationService;
 }
 
 /**
@@ -218,6 +232,16 @@ export class TaskExecutor {
       const failedExecution =
         failure?.execution ?? execution ?? stageRunner.plannedExecution(role);
 
+      // **Harvested on the failure path too, and for two reasons.**
+      //
+      // An agent that timed out may have asked a question before it stopped, and that
+      // question is often the most useful thing the attempt produced. And in sequential
+      // mode the outbox lives in the *user's own working tree*: leaving it there would put
+      // a file nobody wrote into their `git status`. No tree is captured on this path — a
+      // failed attempt produces no receipt and no marker — so the ordering constraint is
+      // slack here, but the cleanup is not optional.
+      const failedNotes = await this.harvestCollaboration(runId, task, role, workingDirectory);
+
       // Still no `attempt-<n>.json`, and still deliberately: the agent produced no report,
       // so there is nothing to record as an attempt's *work*. §17.3 windows 1 and 2 read
       // "no `attempt-<n>.json`" as *the attempt's work was never observed*, and inventing
@@ -248,7 +272,7 @@ export class TaskExecutor {
           startedAt,
           finishedAt,
           validation: { passed: false, commands: [] },
-          notes: [failure?.message ?? String(error)],
+          notes: [failure?.message ?? String(error), ...failedNotes],
           ...(failure === undefined ? {} : { errorCode: failure.errorCode }),
           // Named on the result too, so no surface has to open an artifact to find out
           // what kind of failure it is reporting.
@@ -263,6 +287,18 @@ export class TaskExecutor {
     }
 
     const report = parseResultBlock(text);
+
+    // **The agent has exited; the tree has not been captured. This is the window** (I-32).
+    //
+    // The outbox is read and removed here and nowhere else. Earlier, and the agent could
+    // still be writing it. Later — after `observeChange` below runs `git add -A` — and the
+    // file would already be inside the tree the receipt is bound to, which would put
+    // agent-authored content into a marker.
+    //
+    // Nothing it returns changes what happens next. `collaborationNotes` are prose on the
+    // result; no branch below reads them, and no message can complete, block or fail a
+    // task (I-27).
+    const collaborationNotes = await this.harvestCollaboration(runId, task, role, workingDirectory);
 
     // **What Git says this attempt did** (AD-38, AD-39). Captured once, as soon as the
     // agent has exited, and handed to every path below — the judgement, the assertions,
@@ -285,7 +321,7 @@ export class TaskExecutor {
           finishedAt: clock.now(),
           filesChanged,
           validation: { passed: false, commands: [] },
-          notes: report.notes,
+          notes: [...report.notes, ...collaborationNotes],
           errorCode: 'blocked',
         },
         workspace,
@@ -322,6 +358,7 @@ export class TaskExecutor {
           validation: { passed: false, commands: [] },
           notes: [
             ...report.notes,
+            ...collaborationNotes,
             `validation ${unresolved.map((entry) => `"${entry.id}"`).join(', ')} ` +
               `is not defined by the project configuration`,
           ],
@@ -384,6 +421,7 @@ export class TaskExecutor {
         },
         notes: [
           ...report.notes,
+          ...collaborationNotes,
           ...report.deviations.map((d) => `deviation: ${d}`),
           ...(judgement.note === undefined ? [] : [judgement.note]),
           ...(acceptance?.satisfied === false ? [acceptance.detail] : []),
@@ -429,6 +467,41 @@ export class TaskExecutor {
    * Every field is absent in sequential mode. That is not a degraded answer, it is the
    * true one: no workspace was cut, so there is no base to compare against.
    */
+  /**
+   * Reads the agent's outbox, if this run lets agents speak (M4-02).
+   *
+   * Returns notes for the result and nothing else. **It cannot fail an attempt**, and the
+   * `catch` is not defensive tidiness — it is I-27 written as code: a message is not the
+   * work, and a run whose task validated and integrated must not be failed because a JSON
+   * file beside it was unreadable. Everything the harvest actually refuses is already a
+   * recorded event with a reason; what this catches is the harvest itself going wrong.
+   *
+   * The agent id is the executor role the router chose, because in M4 those are the same
+   * thing. M4-04 replaces this expression with `resolveTaskAgent` and nothing else here
+   * changes — which is why `AgentIdentity.id` was a separate field from the first version.
+   */
+  private async harvestCollaboration(
+    runId: string,
+    task: Task,
+    role: string,
+    workingDirectory: string,
+  ): Promise<string[]> {
+    const collaboration = this.options.collaboration;
+    if (collaboration === undefined || !collaboration.enabled) return [];
+
+    try {
+      const summary = await collaboration.harvest({
+        runId,
+        taskId: task.id,
+        agentId: role,
+        workspaceDir: workingDirectory,
+      });
+      return [...summary.notes];
+    } catch {
+      return ['collaboration: the outbox could not be processed for this attempt'];
+    }
+  }
+
   private async observeChange(workspace: TaskWorkspace | undefined): Promise<ObservedChange> {
     const isolation = workspace?.isolation;
     const { workspaces } = this.options;

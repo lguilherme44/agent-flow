@@ -1,6 +1,7 @@
 import nodePath from 'node:path';
 import { agentFlowPaths } from '../app/paths.js';
 import type { FileSystem } from '../ports/index.js';
+import { isAtOrUnderRoot, type PathFlavour } from '../core/path-containment.js';
 
 /**
  * The set of projects this server will talk about, and the only way to name one.
@@ -153,47 +154,19 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
 }
 
 /**
- * The path primitives containment is decided with.
- *
- * A parameter because the rules differ by platform in ways that cannot be tested on
- * one: drive letters, UNC shares, two separators and case-insensitive roots are all
- * Windows facts, and a test that could only assert them by running on Windows would
- * never be run. Production passes `node:path`; the tests pass `path.posix` and
- * `path.win32` explicitly.
- */
-export interface PathFlavour {
-  relative(from: string, to: string): string;
-  isAbsolute(path: string): boolean;
-  readonly sep: string;
-}
-
-/**
  * Whether `path` is the root or sits under it (D-F02).
  *
- * This was `startsWith(`${root}/`)`, which is right on POSIX and wrong everywhere
- * else — `C:\wk` does not contain `C:\wk\api` by that rule, so a Windows workspace
- * discovered nothing at all, and `\\server\share` compared as an ordinary prefix.
+ * A thin default over `core/path-containment.ts`, which owns the rule. It moved there when
+ * the M4 outbox harvest needed the same question answered about a different root: `src/app`
+ * may not import `src/server`, and a second copy of a containment rule is a second chance
+ * to get `/wk` versus `/wknight` wrong.
  *
- * `relative` answers the question the platform's own way. What comes back is a path
- * *from* the root, so containment is a statement about that path rather than about
- * string prefixes:
- *
- *   - empty means the two are the same directory,
- *   - absolute means there is no route between them — a different drive letter, or
- *     a different UNC share, which is the one case a prefix test cannot express,
- *   - a leading `..` segment means it escapes upwards. `/wk` and `/wknight` produce
- *     `../wknight`, which is exactly why the original needed the separator.
- *
- * Case is not handled here and must not be: `path.win32.relative` already compares
- * Windows roots case-insensitively, and a `toLowerCase()` of our own would be a
- * second, worse answer that also broke case-sensitive Linux filesystems.
+ * What stays here is the default flavour. Production passes `node:path`; the tests pass
+ * `path.posix` and `path.win32` explicitly, because Windows rules a test could only assert
+ * by running on Windows are rules nobody checks.
  */
 function within(root: string, path: string, flavour: PathFlavour = nodePath): boolean {
-  const relative = flavour.relative(root, path);
-  if (relative === '') return true;
-  if (flavour.isAbsolute(relative)) return false;
-
-  return relative !== '..' && !relative.startsWith(`..${flavour.sep}`);
+  return isAtOrUnderRoot(root, path, flavour);
 }
 
 /** Exported for the cross-platform tests; production always uses `node:path`. */

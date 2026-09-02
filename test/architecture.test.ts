@@ -1904,15 +1904,46 @@ describe('a workspace has one registry (UI-29, §93)', () => {
     // `C:\wk` does not contain `C:\wk\api` by that rule, so a Windows workspace
     // discovered nothing — and a security boundary that silently matches nothing is
     // indistinguishable from one that silently matches everything until you read it.
+    //
+    // **The rule moved to `core/path-containment.ts` in M4** and the registry keeps only
+    // the default flavour, so this asserts against both files: the registry still supplies
+    // `node:path`, and the primitive still lives where the answer is computed.
     const { text } = read(join(ROOT, 'src/server/project-registry.ts'));
     const registry = codeOnly(text);
+    const rule = codeOnly(read(join(ROOT, 'src/core/path-containment.ts')).text);
 
     expect(importSpecifiers(text)).toContain('node:path');
-    expect(registry).toMatch(/\.relative\(/);
-    // No separator arithmetic left. The slug's own `[^a-z0-9]` class is not path
-    // logic and lives in `slug`, which `codeOnly` blanks as a literal.
-    expect(registry).not.toMatch(/lastIndexOf\(/);
-    expect(registry).not.toMatch(/startsWith\(\s*root/);
+    expect(rule).toMatch(/\.relative\(/);
+    // No separator arithmetic left, in either file. The slug's own `[^a-z0-9]` class is
+    // not path logic and lives in `slug`, which `codeOnly` blanks as a literal.
+    for (const source of [registry, rule]) {
+      expect(source).not.toMatch(/lastIndexOf\(/);
+      expect(source).not.toMatch(/startsWith\(\s*root/);
+    }
+  });
+
+  it('answers containment from two named modules and no third (M4)', () => {
+    // Two, not one, and the difference is the boundary case rather than an oversight:
+    //
+    //   `core/path-containment.ts`   — root counts as inside. A project may *be* the
+    //                                  workspace root the operator pointed the server at.
+    //   `adapters/git/git-workspaces` — root does not. A worktree must sit strictly under
+    //                                  the Agent Flow root and may never be the root.
+    //
+    // Collapsing them into one function with a flag would put a security answer behind a
+    // boolean parameter, which is worse than two functions whose names say which case
+    // they include. What must not happen is a *third*, written inline by whoever needed
+    // the question next — `/wk` versus `/wknight` decided differently in two places is
+    // the defect D-F02 already cost this product once.
+    const OWNERS = ['src/core/path-containment.ts', 'src/adapters/git/git-workspaces.ts'];
+
+    const offenders = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !OWNERS.includes(path))
+      .filter(({ text }) => /\.relative\(\s*(?:root|resolve\(root)/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders, 'a third containment rule').toEqual([]);
   });
 });
 
@@ -3318,6 +3349,13 @@ describe('a core module built for a milestone is actually wired to one', () => {
     'src/core/file-overlap.ts',
     'src/core/corrective-envelope.ts',
     'src/core/recovery-policy.ts',
+    // M4's, added as each one gained its caller rather than in advance. A module listed
+    // here before it is wired fails this rule, which is exactly the signal the rule is
+    // for — so the list grows with the milestone instead of describing its plan.
+    'src/core/collaboration/roster.ts',
+    'src/core/collaboration/ids.ts',
+    'src/core/collaboration/budgets.ts',
+    'src/core/path-containment.ts',
   ];
 
   const wholeSource = sourceFiles('src').map(read);
@@ -3458,6 +3496,39 @@ describe('collaboration carries no workflow authority (M4, I-27, I-29)', () => {
     expect(schema.text).toContain('validateAndNormalizeRepositoryPath');
     // No hand-rolled traversal check beside it.
     expect(codeOnly(schema.text)).not.toMatch(/\.\.\//);
+  });
+
+  it('composes the outbox path in one module, and reads it from one place', () => {
+    // The filename is the contract between an agent and the harvest, and it is also the
+    // thing that must never be spelled twice: a second spelling in the executor would be
+    // a file the harvest does not remove, which is I-32 broken silently.
+    // `defaults.ts` names it too, in the YAML template's own comment — which is
+    // documentation an operator reads, not a path this product composes. Allow-listed
+    // rather than removed, because a config template that describes a mechanism without
+    // naming its file is a template that cannot be acted on.
+    const DOCUMENTATION = ['src/config/defaults.ts'];
+
+    const owners = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => withoutComments(text).includes('.agent-flow-outbox.json'))
+      .map(({ path }) => path)
+      .filter((path) => !DOCUMENTATION.includes(path));
+
+    expect(owners).toEqual(['src/app/paths.ts']);
+  });
+
+  it('harvests before the tree is captured, in the executor (I-32)', () => {
+    // The ordering is the whole guarantee and it is expressed as *line order* in one
+    // method, which no type can enforce. So it is asserted directly: the harvest call
+    // appears before the call that runs `git add -A`.
+    const executor = codeOnly(read(join(ROOT, 'src/app/task-executor.ts')).text);
+
+    const harvest = executor.indexOf('harvestCollaboration(runId, task, role, workingDirectory)');
+    const capture = executor.indexOf('this.observeChange(workspace)');
+
+    expect(harvest, 'the harvest call').toBeGreaterThan(-1);
+    expect(capture, 'the tree capture').toBeGreaterThan(-1);
+    expect(harvest).toBeLessThan(capture);
   });
 
   it('gives an agent no field in which to name its own sender (I-28)', () => {

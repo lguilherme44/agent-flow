@@ -370,10 +370,10 @@ export type BlackboardEntry = z.infer<typeof BlackboardEntrySchema>;
  *     could choose its own id could overwrite another's message.
  *   - `truncated` — a fact about what Agent Flow did to the body, not a claim the author
  *     is entitled to make.
- *
- * `taskId` is accepted but is overwritten with the dispatched task at harvest, for the
- * same reason `from` is: an agent working on TASK-003 must not be able to file a message
- * against TASK-007.
+ *   - `taskId` — assigned from the dispatch, for the same reason `from` is: an agent
+ *     working on TASK-003 must not be able to file a message against TASK-007. Absent
+ *     rather than accepted-and-overwritten, because a field that is read and then ignored
+ *     is a field the next reader assumes is honoured.
  */
 export const ProposedMessageSchema = z.object({
   to: MessageRecipientSchema,

@@ -1,0 +1,240 @@
+import type { AgentId, BlackboardEntry, CollaborationConfig } from '../contracts/index.js';
+import type { AgentRoster } from '../core/collaboration/roster.js';
+import type { Clock, FileSystem, Host } from '../ports/index.js';
+import type { CollaborationStore } from './collaboration-store.js';
+import { harvestOutbox, type HarvestOutcome } from './collaboration-harvest.js';
+
+/**
+ * The one thing this service needs from the run's persistence: the ability to say
+ * something happened.
+ *
+ * **A narrowed interface rather than `StateStore`, and the architecture test is why.**
+ * The first version of this file imported the store, and the I-27 rule failed it
+ * immediately: `StateStore` can write task states, so a collaboration module holding one
+ * is a module that *could* complete a task. The prose said it never would; the import
+ * said it could, and an import is the half a future refactor reads.
+ *
+ * `StateStore` satisfies this structurally, so the wiring is unchanged and no adapter
+ * exists to keep in sync. What changed is that there is now no expressible way for
+ * anything in this file to move a run.
+ */
+export interface RunEventSink {
+  appendEvent(runId: string, type: string, detail?: Record<string, unknown>): Promise<void>;
+}
+
+/**
+ * What one attempt's collaboration costs the rest of the product: one call (M4-02).
+ *
+ * The executor's job is to run an agent and judge its work. Teaching it about mailboxes,
+ * rosters, budgets and blackboards would spread a feature across the module that must stay
+ * legible — `task-executor.ts` is where I-3 and AD-38 live, and a reader tracing "how does
+ * a task complete" should not have to step over message handling on the way.
+ *
+ * So the whole of M4's behaviour reaches the executor as `collaboration?.harvest(...)`,
+ * optional in exactly the way `workspaces` and `integrator` are: absent, nothing happens
+ * and every existing caller behaves as it did.
+ *
+ * **Nothing here can move a run** (I-27). It appends to two logs and to the audit trail.
+ * It returns notes, which the executor puts on the `TaskResult` — a note is prose for a
+ * person, and no reader branches on it.
+ */
+
+export interface CollaborationServiceOptions {
+  readonly fs: FileSystem;
+  readonly clock: Clock;
+  /** The audit trail, and nothing else — see {@link RunEventSink}. */
+  readonly store: RunEventSink;
+  readonly collaboration: CollaborationStore;
+  readonly roster: AgentRoster;
+  readonly config: CollaborationConfig;
+  /** For its home directory — redaction's second root (AD-35). */
+  readonly host?: Host;
+}
+
+export interface HarvestAttemptRequest {
+  readonly runId: string;
+  readonly taskId: string;
+  /**
+   * Who was speaking.
+   *
+   * In M4 this is the executor role the router chose, which is also the agent's id. M4-04
+   * replaces the caller's expression with `resolveTaskAgent`, and this signature does not
+   * change — which is the point of an agent id being its own field from the start.
+   */
+  readonly agentId: AgentId;
+  /** The worktree, or the project directory in sequential mode. */
+  readonly workspaceDir: string;
+}
+
+export interface HarvestSummary {
+  /** For the `TaskResult`. Empty when the agent said nothing, which is the ordinary case. */
+  readonly notes: readonly string[];
+  readonly outcome: HarvestOutcome;
+}
+
+const SILENT: HarvestSummary = {
+  notes: [],
+  outcome: {
+    messages: [],
+    entries: [],
+    rejections: [],
+    found: false,
+    refused: false,
+    senderClaimed: false,
+    removed: true,
+  },
+};
+
+export class CollaborationService {
+  constructor(private readonly options: CollaborationServiceOptions) {}
+
+  /** Whether this run reads outboxes at all. */
+  get enabled(): boolean {
+    return this.options.config.enabled;
+  }
+
+  /**
+   * Reads what the agent left, records what survives, and says what was refused.
+   *
+   * **Called after the agent's process exits and before the validated tree is captured**
+   * (I-32). The caller owns that ordering; this method assumes it and does not re-check
+   * it, because a second opinion about when it is safe to read a file is a second answer
+   * to a question the executor already answered by where it put the call.
+   */
+  async harvest(request: HarvestAttemptRequest): Promise<HarvestSummary> {
+    if (!this.enabled) return SILENT;
+
+    const { collaboration, clock } = this.options;
+
+    const existingMessages = await collaboration.readMessages(request.runId);
+    const existingEntries = await collaboration.readEntries(request.runId);
+
+    const outcome = await harvestOutbox(this.options.fs, {
+      runId: request.runId,
+      taskId: request.taskId,
+      agentId: request.agentId,
+      workspaceDir: request.workspaceDir,
+      roster: this.options.roster,
+      config: this.options.config,
+      existingMessages,
+      existingEntries,
+      now: clock.now(),
+      ...(this.options.host === undefined ? {} : { homeDir: this.options.host.homeDir }),
+    });
+
+    if (!outcome.found) return { notes: [], outcome };
+
+    // Appended before the events, so an event describing a message is never written for a
+    // message that is not on disk. The reverse order would let a crash between the two
+    // leave the audit trail claiming something the log cannot show.
+    await collaboration.appendMessages(request.runId, outcome.messages);
+    await collaboration.appendEntries(request.runId, outcome.entries);
+
+    await this.record(request, outcome, existingEntries);
+
+    return { notes: notesFor(outcome), outcome };
+  }
+
+  private async record(
+    request: HarvestAttemptRequest,
+    outcome: HarvestOutcome,
+    existingEntries: readonly BlackboardEntry[],
+  ): Promise<void> {
+    const { store } = this.options;
+    const base = { task: request.taskId, agent: request.agentId };
+
+    if (outcome.senderClaimed) {
+      await store.appendEvent(request.runId, 'collaboration_sender_claimed', base);
+    }
+
+    if (!outcome.removed) {
+      await store.appendEvent(request.runId, 'collaboration_outbox_not_removed', {
+        ...base,
+        impact: 'the outbox will be staged into this attempt’s validated tree',
+      });
+    }
+
+    for (const message of outcome.messages) {
+      await store.appendEvent(request.runId, 'collaboration_message_posted', {
+        ...base,
+        message: message.id,
+        thread: message.threadId,
+        type: message.type,
+        to: message.to.kind === 'agent' ? message.to.id : message.to.kind,
+        truncated: message.truncated,
+      });
+    }
+
+    const authorOf = new Map(existingEntries.map((entry) => [entry.id, entry.author]));
+    for (const entry of outcome.entries) {
+      await store.appendEvent(request.runId, 'blackboard_entry_recorded', {
+        ...base,
+        entry: entry.id,
+        kind: entry.kind,
+        subject: entry.subject,
+        ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
+      });
+
+      // **The §42 defence, made visible.** Superseding an entry somebody else wrote is
+      // not refused — an executor that discovers the architect's contract is wrong has to
+      // be able to say so — but it does not silently win either. Both entries stay live,
+      // both reach the next agent, and this event is how a person finds out there is a
+      // disagreement to settle.
+      const previousAuthor =
+        entry.supersedes === undefined ? undefined : authorOf.get(entry.supersedes);
+      if (previousAuthor !== undefined && previousAuthor !== entry.author) {
+        await store.appendEvent(request.runId, 'blackboard_entry_contested', {
+          ...base,
+          entry: entry.id,
+          supersedes: entry.supersedes,
+          originalAuthor: previousAuthor,
+        });
+      }
+    }
+
+    for (const rejection of outcome.rejections) {
+      const type =
+        rejection.reason === 'budget_exhausted' || rejection.reason === 'thread_depth_exceeded'
+          ? 'collaboration_budget_exhausted'
+          : outcome.refused
+            ? 'collaboration_outbox_refused'
+            : 'collaboration_message_rejected';
+
+      await store.appendEvent(request.runId, type, {
+        ...base,
+        reason: rejection.reason,
+        subject: rejection.subject,
+        detail: rejection.detail,
+      });
+    }
+  }
+}
+
+/**
+ * What the attempt's result should say about all this.
+ *
+ * Notes rather than a structured field, because nothing branches on them and a
+ * `TaskResult` field that nothing reads is a contract nobody can change later. A person
+ * reading a result wants to know that three messages were posted and one was refused;
+ * everything precise is in the log and the events.
+ */
+function notesFor(outcome: HarvestOutcome): string[] {
+  const notes: string[] = [];
+
+  if (outcome.messages.length > 0) {
+    notes.push(`collaboration: posted ${String(outcome.messages.length)} message(s)`);
+  }
+  if (outcome.entries.length > 0) {
+    notes.push(`collaboration: recorded ${String(outcome.entries.length)} blackboard entry(ies)`);
+  }
+  for (const rejection of outcome.rejections) {
+    notes.push(`collaboration_rejected: ${rejection.reason} — ${rejection.detail}`);
+  }
+  if (!outcome.removed) {
+    notes.push(
+      'collaboration: the outbox could not be removed and will appear in this attempt’s diff',
+    );
+  }
+
+  return notes;
+}

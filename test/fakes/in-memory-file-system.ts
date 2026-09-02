@@ -138,11 +138,22 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async remove(path: string): Promise<void> {
+    // **The link, never what it points at.** `fs.rm` on a symbolic link unlinks the
+    // link itself, and a fake that resolved first would delete the target — which is
+    // both wrong and dangerous to model, because a test asserting "the file is gone"
+    // would then be asserting that a harvest deleted somebody's private key.
+    //
+    // Missing until M4-02, and the gap was not academic: a link left in this map after
+    // its path was removed still answered `exists` through the target, so a caller that
+    // correctly removed a hostile symlink was reported as having failed to.
+    this.links.delete(path);
+
     this.files.delete(path);
     this.dirs.delete(path);
     const prefix = `${path}/`;
     for (const key of [...this.files.keys()]) if (key.startsWith(prefix)) this.files.delete(key);
     for (const key of [...this.dirs]) if (key.startsWith(prefix)) this.dirs.delete(key);
+    for (const key of [...this.links.keys()]) if (key.startsWith(prefix)) this.links.delete(key);
   }
 
   /**

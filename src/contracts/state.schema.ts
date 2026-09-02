@@ -280,3 +280,42 @@ export const RECOVERY_EVENT_TYPES = [
 ] as const;
 
 export type RecoveryEventType = (typeof RECOVERY_EVENT_TYPES)[number];
+
+/**
+ * The event names collaboration is allowed to emit (M4).
+ *
+ * Declared here, in full, ahead of the code that emits them, for the same reason
+ * {@link RECOVERY_EVENT_TYPES} is: `RunEventSchema.type` is an open string and stays open,
+ * so this is not a validator — it is the *spelling*, declared once in the layer that owns
+ * vocabulary. The alternative is each module coining a name at the call site, and two
+ * spellings of one event is a read model that silently reports half of what happened.
+ *
+ * Every one of them is a record of something Agent Flow *decided*, never of something an
+ * agent claimed. A message being posted is the orchestrator's act of accepting it.
+ */
+export const COLLABORATION_EVENT_TYPES = [
+  'collaboration_message_posted',
+  'collaboration_message_rejected',
+  /** The whole outbox was refused — unparseable, oversized, or pointing somewhere it should not. */
+  'collaboration_outbox_refused',
+  /**
+   * An outbox tried to name its own sender.
+   *
+   * The parse already discarded it, so nothing changed; this exists so that an agent
+   * attempting impersonation on every attempt of every run leaves a trace (I-28).
+   */
+  'collaboration_sender_claimed',
+  /**
+   * The outbox could not be removed from the workspace.
+   *
+   * Loud, because it means `git add -A` will stage agent-authored content into the
+   * validated tree, which is exactly what I-32 exists to prevent.
+   */
+  'collaboration_outbox_not_removed',
+  'collaboration_budget_exhausted',
+  'blackboard_entry_recorded',
+  /** An entry was superseded by an author other than its own. Both stay live (I-30). */
+  'blackboard_entry_contested',
+] as const;
+
+export type CollaborationEventType = (typeof COLLABORATION_EVENT_TYPES)[number];
