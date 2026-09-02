@@ -511,3 +511,38 @@ export const REVIEW_EVENT_TYPES = [
 ] as const;
 
 export type ReviewEventType = (typeof REVIEW_EVENT_TYPES)[number];
+
+/**
+ * What a remote delivery did, and — separately — what it intended (M7 §16, §17).
+ *
+ * **`requested` and the outcome are two events, not one.** A crash between a remote
+ * success and its local record is the case idempotency exists for, and it is only
+ * *visible* if the intent was written before the call. An event log that records only
+ * outcomes cannot distinguish "we never tried" from "we tried and lost the answer", and
+ * those need opposite recoveries.
+ *
+ * Nothing here carries a token, a header, or a response body.
+ */
+export const FORGE_EVENT_TYPES = [
+  /** `detail: { runId, commit, branch }`. About to push. */
+  'forge_publish_requested',
+  /** `detail: { branch, commit, verified }`. The remote holds the approved commit. */
+  'forge_branch_published',
+  /** `detail: { fingerprint }`. About to create or adopt an Issue. */
+  'forge_issue_create_requested',
+  /** `detail: { number, url, adopted }`. `adopted` when recovery found it already there. */
+  'forge_issue_created',
+  /** `detail: { fingerprint, head, base }`. */
+  'forge_pr_create_requested',
+  /** `detail: { number, url, headSha, adopted }`. */
+  'forge_pr_created',
+  /** `detail: { number, headSha }`. The body or title changed; the PR did not move. */
+  'forge_pr_updated',
+  /** `detail: { commit, total, byConclusion }`. Observation, never authority. */
+  'forge_checks_observed',
+  /** `detail: { on, number, adopted }`. */
+  'forge_comment_posted',
+  /** `detail: { operation, code, detail }`. Delivery failed; the run did not. */
+  'forge_operation_failed',
+] as const;
+export type ForgeEventType = (typeof FORGE_EVENT_TYPES)[number];
