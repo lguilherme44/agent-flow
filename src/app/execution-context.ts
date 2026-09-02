@@ -10,7 +10,7 @@ import { buildRegistry, type RunnerRegistry } from '../adapters/runners/registry
 import { StateStore } from './state-store.js';
 import { StageRunner } from './stage-runner.js';
 import { PromptLoader } from './prompt-loader.js';
-import { TaskExecutor } from './task-executor.js';
+import { TaskExecutor, canImplementWith } from './task-executor.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
 import { RepositoryContextAdvisor } from './repository-context-advisor.js';
@@ -28,6 +28,8 @@ import { recordFallback } from './fallback-audit.js';
 import { TaskWorkspaces } from './task-workspaces.js';
 import { CollaborationStore } from './collaboration-store.js';
 import { CollaborationService } from './collaboration-service.js';
+import { teamWaveAdmission } from '../core/team/waves.js';
+import { routeTask } from '../core/router.js';
 import { deriveAgentRoster, type AgentRoster } from '../core/collaboration/roster.js';
 import { Integrator } from './integrator.js';
 import { WorktreeRecovery } from './worktree-recovery.js';
@@ -363,6 +365,22 @@ export async function buildExecutionContext(
     // retried however much budget is left. `enabled: false` restores the previous
     // behaviour exactly, which is why the switch exists at all.
     recoveryConfig: config.global.recovery,
+    // M5-07: the two constraints a configured team adds to the wave this scheduler was
+    // already forming. Wired unconditionally and asked per candidate — with no `teams:`
+    // block it admits everything, so the mode is decided by configuration rather than by
+    // the wiring, exactly as the Integrator answers `sequential` for a run that is not
+    // isolated. It narrows waves; it never widens one, and it decides nothing about
+    // ordering.
+    waveAdmission: teamWaveAdmission({
+      config: config.global,
+      roster,
+      canImplement: canImplementWith(config.global, registry.capabilities()),
+      routedRole: (task) => routeTask(task),
+      // A timestamp the assignment carries and nothing here reads: admission asks who
+      // *would* take a task, and the answer that counts is minted by the executor when
+      // the task actually starts.
+      now: clock.now(),
+    }),
     fs,
     projectDir: options.projectDir,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),

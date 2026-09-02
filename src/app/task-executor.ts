@@ -78,7 +78,7 @@ import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
 import { resolveRole, type RunnerCapabilitiesMap } from '../core/role.js';
-import type { TaskAssignment } from '../contracts/index.js';
+import type { GlobalConfig, TaskAssignment } from '../contracts/index.js';
 import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
@@ -661,17 +661,7 @@ export class TaskExecutor {
    * exactly why a handoff to one has to be refused rather than attempted.
    */
   private canImplement(agent: AgentIdentity): boolean {
-    const capabilities = this.options.capabilities;
-    if (capabilities === undefined) return false;
-
-    try {
-      resolveRole(agent.role, this.options.config.global, capabilities, {
-        workingDirectory: true,
-      });
-      return true;
-    } catch {
-      return false;
-    }
+    return canImplementWith(this.options.config.global, this.options.capabilities)(agent);
   }
 
   /**
@@ -1163,5 +1153,37 @@ function provenanceOf(
     reasoning: execution.reasoning,
     reasoningClamped: execution.reasoningClamped,
     ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
+  };
+}
+
+/**
+ * Whether an agent's (runner, model) pair can do implementation work.
+ *
+ * Exported as a factory rather than duplicated, because two callers now ask it: the
+ * executor, when a handoff names a target, and the wave admission, when a team's capacity
+ * is being counted. Two implementations of a capability question is two answers, and the
+ * one that disagrees is discovered by a wave that dispatched a task nobody could run.
+ *
+ * `resolveRole` owns the question. This only asks it, with the requirements
+ * `prompts/implementation.md` declares: the agent writes, and it reads the repository. An
+ * agent whose runner is an inference endpoint fails both, which is exactly why a handoff
+ * to one has to be refused rather than attempted.
+ *
+ * No capability map means no agent qualifies — fail-closed, because an unknown capability
+ * assumed present is an attempt spent discovering it was not.
+ */
+export function canImplementWith(
+  config: GlobalConfig,
+  capabilities: RunnerCapabilitiesMap | undefined,
+): (agent: AgentIdentity) => boolean {
+  return (agent) => {
+    if (capabilities === undefined) return false;
+
+    try {
+      resolveRole(agent.role, config, capabilities, { workingDirectory: true });
+      return true;
+    } catch {
+      return false;
+    }
   };
 }

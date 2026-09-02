@@ -435,9 +435,15 @@ export const TEAM_EVENT_TYPES = [
   'task_assigned',
   /** `detail: { task, from, to, reason }`. A task that changed hands, and why. */
   'task_reassigned',
-  /** `detail: { task, agent, held, limit }`. A ready task deferred because its agent is full. */
+  /**
+   * `detail: { task, agents, detail }`. A ready task held one wave because every member
+   * that could take it is at `maxConcurrentTasks` in the wave being formed.
+   */
   'wave_deferred_for_capacity',
-  /** `detail: { task, waitsFor, patterns }`. Deferred because an exclusive area is taken. */
+  /**
+   * `detail: { task, waitsFor, patterns, detail }`. Held one wave because it and an
+   * already-admitted task both write into an area somebody declared exclusive.
+   */
   'wave_deferred_for_ownership',
 ] as const;
 

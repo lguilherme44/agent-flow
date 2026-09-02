@@ -1614,6 +1614,161 @@ describe('what a refused workspace writes to disk (§7.2, §21.3)', () => {
  * a plan that is *right* on paper but whose tasks became ready together anyway — a retry
  * reorders readiness, and two tasks the plan kept apart can arrive in one pass.
  */
+/**
+ * A team narrows the same wave further (M5-07, §29–§33).
+ *
+ * **The scheduler is unchanged in what it decides.** These tests exist to prove that the
+ * constraint reaches the loop and is recorded, not to re-test the constraint itself —
+ * `test/core/team/waves.test.ts` owns the rules. What is proved here is the wiring: a
+ * deferral costs one wave, both tasks still run, and the audit trail says why.
+ */
+describe('a wave a team narrowed (M5-07)', () => {
+  const withFiles = (id: string, files: string[]) => ({
+    ...task(id),
+    files: { likely: files },
+  });
+
+  /** Defers anything that would join a wave already holding something. */
+  const oneAtATime =
+    (reason: 'capacity' | 'ownership') =>
+    (candidate: Task, inWave: readonly Task[]) =>
+      inWave.length === 0
+        ? undefined
+        : {
+            reason,
+            detail: `${candidate.id} waits`,
+            ...(reason === 'ownership'
+              ? { waitsFor: inWave[0]?.id ?? '', patterns: ['src/db/**'] }
+              : { agents: ['solo'] }),
+          };
+
+  it('runs both tasks, one wave apart, when capacity holds one back', async () => {
+    // Narrowing delays; it never drops work. The same property AD-43 has for overlap.
+    const { store, run } = await harness();
+    const { executor, peak } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [withFiles('TASK-001', ['src/a.ts']), withFiles('TASK-002', ['src/b.ts'])],
+    });
+
+    await new Scheduler({
+      store,
+      executor,
+      maxConcurrency: 3,
+      waveAdmission: oneAtATime('capacity'),
+    }).run(plan, run.runId, 'SDD');
+
+    expect((await store.loadRun(run.runId)).tasks.map((entry) => entry.state)).toEqual([
+      'completed',
+      'completed',
+    ]);
+    expect(peak()).toBe(1);
+  });
+
+  it('records the members that were full', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [withFiles('TASK-001', ['src/a.ts']), withFiles('TASK-002', ['src/b.ts'])],
+    });
+
+    await new Scheduler({
+      store,
+      executor,
+      maxConcurrency: 3,
+      waveAdmission: oneAtATime('capacity'),
+    }).run(plan, run.runId, 'SDD');
+
+    const deferred = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'wave_deferred_for_capacity',
+    );
+
+    expect(deferred?.detail).toMatchObject({ task: 'TASK-002', agents: ['solo'] });
+  });
+
+  it('records the contended area and what the task waits behind', async () => {
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [withFiles('TASK-001', ['src/db/a.sql']), withFiles('TASK-002', ['src/db/b.sql'])],
+    });
+
+    await new Scheduler({
+      store,
+      executor,
+      maxConcurrency: 3,
+      waveAdmission: oneAtATime('ownership'),
+    }).run(plan, run.runId, 'SDD');
+
+    const deferred = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'wave_deferred_for_ownership',
+    );
+
+    expect(deferred?.detail).toMatchObject({
+      task: 'TASK-002',
+      waitsFor: 'TASK-001',
+      patterns: ['src/db/**'],
+    });
+  });
+
+  it('is never asked about a task file overlap already held back', async () => {
+    // Overlap is unconditional and comes first, so the reason recorded for an
+    // overlapping pair stays the one AD-43 gives. A team cannot relabel it.
+    const { store, run } = await harness();
+    const { executor } = fakeExecutor();
+    const asked: { candidate: string; inWave: string[] }[] = [];
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [withFiles('TASK-001', ['src/same.ts']), withFiles('TASK-002', ['src/same.ts'])],
+    });
+
+    await new Scheduler({
+      store,
+      executor,
+      maxConcurrency: 3,
+      waveAdmission: (candidate: Task, inWave: readonly Task[]) => {
+        asked.push({ candidate: candidate.id, inWave: inWave.map((held) => held.id) });
+        return undefined;
+      },
+    }).run(plan, run.runId, 'SDD');
+
+    const types = (await store.readEvents(run.runId)).map((event) => event.type);
+    expect(types).toContain('wave_serialised_for_overlap');
+    expect(types).not.toContain('wave_deferred_for_ownership');
+
+    // TASK-002 is asked in the *next* wave, alone — never alongside the task it
+    // overlaps, because overlap refused that pairing before the team was consulted.
+    expect(asked).toEqual([
+      { candidate: 'TASK-001', inWave: [] },
+      { candidate: 'TASK-002', inWave: [] },
+    ]);
+  });
+
+  it('changes nothing when none is wired', async () => {
+    // Every configuration written before M5, and the reason `waveAdmission` is optional.
+    const { store, run } = await harness();
+    const { executor, peak } = fakeExecutor();
+
+    const plan = PlanSchema.parse({
+      feature: 'f',
+      tasks: [
+        withFiles('TASK-001', ['src/a.ts']),
+        withFiles('TASK-002', ['src/b.ts']),
+        withFiles('TASK-003', ['src/c.ts']),
+      ],
+    });
+
+    await new Scheduler({ store, executor, maxConcurrency: 3 }).run(plan, run.runId, 'SDD');
+    expect(peak()).toBeGreaterThan(1);
+  });
+});
+
 describe('a wave never contends for a file (AD-43, C-17)', () => {
   const withFiles = (id: string, files: string[], dependencies: string[] = []) => ({
     ...task(id, dependencies),

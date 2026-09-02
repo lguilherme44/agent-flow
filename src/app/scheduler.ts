@@ -8,7 +8,7 @@ import type {
   TaskState,
 } from '../contracts/index.js';
 import type { TaskWorkspace, TaskWorkspaces } from './task-workspaces.js';
-import type { TaskBlockReason } from '../contracts/state.schema.js';
+import type { TaskBlockReason, TeamEventType } from '../contracts/state.schema.js';
 import {
   blockedByFailure,
   buildDag,
@@ -26,6 +26,7 @@ import type {
 } from './integrator.js';
 import type { RunRecovery, RunRecoveryOutcome } from './worktree-recovery.js';
 import { overlappingPaths } from '../core/file-overlap.js';
+import type { WaveAdmission, WaveDeferral } from '../core/team/waves.js';
 import {
   decideTaskRecovery,
   escalationEvidence,
@@ -128,6 +129,19 @@ export interface SchedulerOptions {
   readonly fs?: FileSystem;
   /** Needed with {@link fs} to place the packet beside the attempt it informs. */
   readonly projectDir?: string;
+  /**
+   * The constraints a configured team adds to wave admission (M5-07, §29–§33).
+   *
+   * Optional, and absent means waves exactly as M2 shaped them — which is every
+   * configuration written before M5 and every run without a `teams:` block.
+   *
+   * **The scheduler stays the authority.** This decides nothing about when a task runs,
+   * in what order, or how wide a wave may be; it answers one question the scheduler asks
+   * it, in the same shape it already asks the file-overlap question. A second scheduler
+   * that knew about capacity would be a second answer to "what runs next", and the two
+   * would disagree on the first resumed run.
+   */
+  readonly waveAdmission?: WaveAdmission;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: (result: TaskResult) => void;
 }
@@ -422,18 +436,17 @@ export class Scheduler {
       // The later task simply waits for the next wave. No dependency edge is injected: the
       // approved plan is a document a human read, and rewriting it here would change what
       // they approved.
-      const batch = admitWithoutOverlap(ready.slice(0, concurrency), byId);
-      const deferred = ready.slice(0, concurrency).filter((id) => !batch.includes(id));
+      // **A team narrows the same wave further** (M5-07). Ownership and capacity are two
+      // more reasons a ready task waits one wave, applied here rather than in a second
+      // loop so there is one admission step with one order and one set of events.
+      const { batch, deferrals } = admitWave(
+        ready.slice(0, concurrency),
+        byId,
+        this.options.waveAdmission,
+      );
 
-      for (const held of deferred) {
-        const against = batch.find(
-          (id) => filesOverlap(byId.get(id), byId.get(held)).length > 0,
-        );
-        await this.options.store.appendEvent(runId, 'wave_serialised_for_overlap', {
-          task: held,
-          waitsFor: against ?? null,
-          paths: filesOverlap(byId.get(against ?? ''), byId.get(held)),
-        });
+      for (const deferral of deferrals) {
+        await this.options.store.appendEvent(runId, deferral.event, deferral.detail);
       }
 
       for (const id of batch) states[id] = 'running';
@@ -1092,30 +1105,99 @@ export class Scheduler {
 }
 
 /**
- * The largest prefix of a ready batch whose tasks do not contend for a file (AD-43).
+ * The wave a ready batch reduces to, and why each held-back task was held (AD-43, M5-07).
  *
  * Greedy and order-preserving: the batch is already in the DAG's topological order, and a
  * task that loses its place simply waits for the next wave. Deterministic, so two runs of
  * one plan schedule identically.
  *
+ * Two layers, in this order. **File overlap** is unconditional and has been since AD-43:
+ * no two tasks in one wave may name a path in common. **The team's constraints** apply
+ * on top when one is wired, and they only ever remove tasks — a wave admitted here is a
+ * subset of the wave M2 would have admitted, never a superset.
+ *
  * A task with no declared files is admitted. An empty `files.likely` is "the plan did not
  * say", not "this task touches everything" — treating it as the latter would serialise
  * every plan that omits the field.
  */
-function admitWithoutOverlap(
+function admitWave(
   ready: readonly string[],
   byId: ReadonlyMap<string, Task>,
-): string[] {
-  const admitted: string[] = [];
+  extra?: WaveAdmission,
+): { batch: string[]; deferrals: AdmissionEvent[] } {
+  const batch: string[] = [];
+  const deferrals: AdmissionEvent[] = [];
 
   for (const id of ready) {
-    const contends = admitted.some(
+    const against = batch.find(
       (accepted) => filesOverlap(byId.get(accepted), byId.get(id)).length > 0,
     );
-    if (!contends) admitted.push(id);
+    if (against !== undefined) {
+      deferrals.push({
+        event: 'wave_serialised_for_overlap',
+        detail: {
+          task: id,
+          waitsFor: against,
+          paths: filesOverlap(byId.get(against), byId.get(id)),
+        },
+      });
+      continue;
+    }
+
+    // The team's two constraints, asked only of a task file overlap already admitted.
+    // Order matters for the recorded reason rather than for the outcome: a task held
+    // back by a contended area is not "at capacity", and the event has to say which.
+    const task = byId.get(id);
+    const held =
+      task === undefined || extra === undefined
+        ? undefined
+        : extra(
+            task,
+            batch.flatMap((admitted) => {
+              const inWave = byId.get(admitted);
+              return inWave === undefined ? [] : [inWave];
+            }),
+          );
+
+    if (held !== undefined) {
+      deferrals.push(admissionEvent(id, held));
+      continue;
+    }
+
+    batch.push(id);
   }
 
-  return admitted;
+  return { batch, deferrals };
+}
+
+/** One deferral, as the audit record it becomes. */
+interface AdmissionEvent {
+  readonly event: TeamEventType | 'wave_serialised_for_overlap';
+  readonly detail: Record<string, unknown>;
+}
+
+/**
+ * The deferral, as the row a person reads.
+ *
+ * Each reason carries the evidence for itself — the contended patterns, or the members
+ * that are full — because "deferred for capacity" without a name is a row that tells an
+ * operator a wave was narrower and nothing about what to change.
+ */
+function admissionEvent(taskId: string, deferral: WaveDeferral): AdmissionEvent {
+  return deferral.reason === 'capacity'
+    ? {
+        event: 'wave_deferred_for_capacity',
+        detail: { task: taskId, agents: deferral.agents ?? [], detail: deferral.detail },
+      }
+    : {
+        event: 'wave_deferred_for_ownership',
+        detail: {
+          task: taskId,
+          waitsFor: deferral.waitsFor ?? null,
+          patterns: deferral.patterns ?? [],
+          detail: deferral.detail,
+        },
+      };
 }
 
 /**
