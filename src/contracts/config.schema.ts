@@ -9,6 +9,7 @@ import {
 import { UtilityModelConfigSchema } from './utility-model-config.schema.js';
 import { CollaborationConfigSchema } from './collaboration-config.schema.js';
 import { TeamsConfigSchema } from './team.schema.js';
+import { QualityConfigSchema } from './review.schema.js';
 
 /** Default per-role timeout. A hung CLI must not stall a run forever (R-11). */
 export const DEFAULT_TIMEOUT_SECONDS = 900;
@@ -81,6 +82,21 @@ export const FallbackConfigSchema = z.object({
   roles: z.record(z.string(), RoleConfigSchema).default({}),
 });
 export type FallbackConfig = z.infer<typeof FallbackConfigSchema>;
+
+/**
+ * How many times a review may go round before a person is asked (M6, §30).
+ *
+ * Small numbers on purpose. "Reviewer: issue exists / Developer: disagree", repeated, has
+ * to end — and it has to end in a person with something to act on, not in a loop that
+ * quietly stops.
+ */
+export const ReviewPolicySchema = z.object({
+  maxRounds: z.number().int().min(1).max(10).default(3),
+  maxCorrectionRounds: z.number().int().min(1).max(10).default(2),
+  maxDisputeRounds: z.number().int().min(0).max(5).default(1),
+  maxFindingsPerReview: z.number().int().min(1).max(200).default(50),
+});
+export type ReviewPolicy = z.infer<typeof ReviewPolicySchema>;
 
 export const GlobalConfigSchema = z.object({
   version: z.literal(1).default(1),
@@ -283,8 +299,35 @@ export const GlobalConfigSchema = z.object({
    * repository add a member would let a repository decide who runs code on this machine.
    */
   teams: TeamsConfigSchema.prefault({}),
+  /**
+   * What a quality gate means, and how a review blocks (M6).
+   *
+   * **Metadata beside the validation registry, not a second registry** (§36). The command
+   * behind `test` is still whatever `commands.test` or `validationCommands.test` says,
+   * written by a person; this block says whether that gate is required, what category of
+   * evidence it produces, and which changes it applies to.
+   *
+   * Global only, and absent from `OVERRIDABLE_KEYS` for the reason `collaboration` and
+   * `teams` are: a discovered repository must not be able to declare its own gate
+   * optional. Whether the build has to pass is the operator's call, not the codebase's.
+   *
+   * Absent means M5: no per-gate policy, and the run-level Definition of Done unchanged.
+   */
+  quality: QualityConfigSchema.prefault({}),
+  /**
+   * The review protocol's own budgets (M6, §9 of its specification).
+   *
+   * Every loop here terminates, and exhaustion escalates rather than stopping quietly.
+   * `enabled` is absent on purpose: whether a task is reviewed follows from whether the
+   * team has a member with review skills, which is a fact the configuration already
+   * carries. A second switch would be a second way to say the same thing, and the two
+   * would eventually disagree.
+   */
+  review: ReviewPolicySchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
+
+
 
 /**
  * The recovery budgets, on their own.

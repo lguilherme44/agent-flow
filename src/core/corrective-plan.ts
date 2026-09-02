@@ -2,12 +2,20 @@ import {
   PlanSchema,
   type CorrectiveOriginStage,
   type Plan,
+  severityAtLeast,
+  type FindingSeverity,
   type ReviewResult,
 } from '../contracts/index.js';
 import { deriveOverlapDependencies } from './file-overlap.js';
 
-/** Severity at or above which a finding becomes work rather than a note. */
-const ORDER = ['low', 'medium', 'high', 'critical'] as const;
+/**
+ * Severity at or above which a finding becomes work rather than a note.
+ *
+ * The order comes from the contract rather than from a copy of it here. It was a copy
+ * until `info` was added at the bottom and this file kept comparing against a four-value
+ * list — two orderings of one concept, and the second one silently treated an `info`
+ * finding as unrecognised.
+ */
 
 export interface FixOptions {
   /**
@@ -26,7 +34,7 @@ export interface FixOptions {
    * caller record a provenance it never established.
    */
   readonly origin: CorrectiveOriginStage;
-  readonly minSeverity?: (typeof ORDER)[number];
+  readonly minSeverity?: FindingSeverity;
 }
 
 /**
@@ -46,9 +54,9 @@ export interface FixOptions {
  * on disk describe work that actually happened.
  */
 export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions): Plan {
-  const threshold = ORDER.indexOf(options.minSeverity ?? 'medium');
-  const actionable = review.findings.filter(
-    (finding) => ORDER.indexOf(finding.severity) >= threshold,
+  const threshold = options.minSeverity ?? 'medium';
+  const actionable = review.findings.filter((finding) =>
+    severityAtLeast(finding.severity, threshold),
   );
 
   if (actionable.length === 0) return plan;

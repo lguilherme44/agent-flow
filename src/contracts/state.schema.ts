@@ -448,3 +448,45 @@ export const TEAM_EVENT_TYPES = [
 ] as const;
 
 export type TeamEventType = (typeof TEAM_EVENT_TYPES)[number];
+
+/**
+ * What a review did, as the audit trail records it (M6).
+ *
+ * **The timeline is folded from these; there is no timeline store** (§63). Every state a
+ * review or a finding can be in is derivable from this vocabulary plus the collaboration
+ * log plus run state — which is what lets I-43 hold: a finding's status is a question
+ * about facts, not a field somebody writes.
+ */
+export const REVIEW_EVENT_TYPES = [
+  /** `detail: { task, round, reason }`. A review was asked for — explicitly (§17). */
+  'review_requested',
+  /** `detail: { task, review, reviewer, author, independence, degraded? }`. */
+  'reviewer_assigned',
+  /** `detail: { task, review, reviewer, tree? }`. */
+  'review_started',
+  /**
+   * `detail: { task, review, verdict, findings, blocking, tree? }`.
+   *
+   * `verdict` is what the reviewer proposed. Whether the workflow advanced is a separate
+   * decision, recorded separately, because a model's opinion is not a gate (I-44).
+   */
+  'review_completed',
+  /** `detail: { task, review, finding, severity, category, file? }`. */
+  'finding_raised',
+  /** `detail: { task, finding, by, message }`. The implementer answered. */
+  'finding_acknowledged',
+  /** `detail: { task, finding, by, message, reason }`. */
+  'finding_disputed',
+  /** `detail: { task, finding, correctiveTask, tree }`. Corrective work integrated. */
+  'finding_fixed',
+  /** `detail: { task, finding, by, evidence }`. A re-review or a gate, never a claim. */
+  'finding_verified',
+  /** `detail: { task, finding, correctiveTask }`. */
+  'corrective_task_created',
+  /** `detail: { gate, category, required, status, exitCode?, durationMs? }`. */
+  'quality_gate_evaluated',
+  /** `detail: { task, budget, limit, open, attempted, action }`. Escalation (§30). */
+  'review_budget_exhausted',
+] as const;
+
+export type ReviewEventType = (typeof REVIEW_EVENT_TYPES)[number];
