@@ -576,7 +576,38 @@ old agent, the new one and which of the five applied.
 
 ## 14. Acceptance
 
-The charter's M5-ACC-01 … 16, unchanged, plus two this specification adds:
+The charter's list, verbatim, because a specification that points at criteria it does not
+contain is a specification whose acceptance nobody can check:
+
+| | Criterion |
+|---|---|
+| M5-ACC-01 | legacy routing unchanged without team config |
+| M5-ACC-02 | team config creates stable agent identities |
+| M5-ACC-03 | best eligible skill match selected |
+| M5-ACC-04 | missing runner capability disqualifies candidate |
+| M5-ACC-05 | ownership affects assignment |
+| M5-ACC-06 | exclusive ownership prevents unsafe parallelism |
+| M5-ACC-07 | capacity limits per-agent concurrency |
+| M5-ACC-08 | tie break deterministic |
+| M5-ACC-09 | assignment survives crash/resume |
+| M5-ACC-10 | handoff alone cannot reroute |
+| M5-ACC-11 | AssignmentPolicy may admit valid handoff |
+| M5-ACC-12 | invalid handoff target refused |
+| M5-ACC-13 | agent cannot self-escalate ownership |
+| M5-ACC-14 | assignment explanation persisted |
+| M5-ACC-15 | CLI/API/dashboard use same assignment projection |
+| M5-ACC-16 | M4 collaboration semantics remain valid |
+| M5-ACC-17 | empty collaboration history still advertises bootstrap |
+| M5-ACC-18 | irrelevant task does not receive full collaboration context |
+| M5-ACC-19 | relevant task receives selected collaboration context |
+| M5-ACC-20 | collaboration prompt overhead is measured |
+
+**The charter's 17 … 20 are this document's 19 … 22.** The four were drafted here first,
+against the dogfood, and the charter numbered them from 17 after adopting them. The tests
+carry both numbers so neither list has to be renumbered; the wording below is this
+document's, which is the stricter of the two — it says *how* each is to be asserted.
+
+Plus two this specification adds:
 
 - **M5-ACC-17** — with no `teams:` block, the assignment for every task in a plan is
   *identical* to `routeTask`'s answer, compared task by task rather than asserted.
