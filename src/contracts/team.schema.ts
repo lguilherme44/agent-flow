@@ -249,6 +249,15 @@ export const CANDIDATE_EXCLUSIONS = [
   'runner_capability',
   'ownership',
   'capacity',
+  /**
+   * This candidate wrote the code (M6, I-42).
+   *
+   * First in the order that matters, and enforced rather than recorded: M5 already had
+   * `Independence` as a *field on the artifact*, which described the problem and refused
+   * nothing. A single-provider setup could review its own work and say so truthfully in a
+   * value nobody gated on.
+   */
+  'is_author',
 ] as const;
 
 export const CandidateExclusionSchema = z.enum(CANDIDATE_EXCLUSIONS);

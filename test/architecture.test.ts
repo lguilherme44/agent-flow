@@ -3688,12 +3688,16 @@ describe('one module decides who executes a task (M5, I-33 … I-39)', () => {
     ]);
   });
 
-  it('is called from three places, each of which is the same question', () => {
+  it('is called from four places, each of which is the same question', () => {
     // The policy defines it; the collaboration service asks it for the task about to
     // run; the wave constraint asks it a wave early, to find out whether the team has
-    // room. Three call sites and one answer — every one of them runs the same function
-    // over the same inputs, which is why a wave's provisional answer and the executor's
-    // authoritative one agree.
+    // room; and M6's reviewer selector asks it about a different piece of work — who
+    // reviews this change — with review skills required and the author excluded. Four
+    // call sites and one answer.
+    //
+    // The fourth is the charter's own instruction: "Reutilize M5. Não crie
+    // `ReviewRouter`." A reviewer is assigned work, and this product has one function
+    // that decides who does work.
     //
     // A fourth would need justifying here. The failure it guards against is a second
     // *implementation*, not a second caller: a module that scored candidates itself
@@ -3707,6 +3711,7 @@ describe('one module decides who executes a task (M5, I-33 … I-39)', () => {
 
     expect(callers).toEqual([
       'src/app/collaboration-service.ts',
+      'src/core/review/reviewer.ts',
       'src/core/team/policy.ts',
       'src/core/team/waves.ts',
     ]);

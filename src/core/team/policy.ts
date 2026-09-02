@@ -45,6 +45,21 @@ export interface AssignmentInput {
   readonly canImplement: (agent: AgentIdentity) => boolean;
   /** Files other in-flight tasks declared, for the exclusive-ownership check. */
   readonly concurrentFiles?: readonly string[];
+  /**
+   * Whether a candidate wrote the work under consideration (M6, I-42).
+   *
+   * Absent for ordinary assignment. Present when the work being assigned is a *review* of
+   * somebody's change, where authorship is the one disqualification no skill outweighs.
+   */
+  readonly isAuthor?: (agent: AgentIdentity) => boolean;
+  /**
+   * Skills this work needs beyond what the plan implies (M6).
+   *
+   * A review asks for review skills, and the plan says nothing about them — the task
+   * being reviewed is an implementation task, and deriving its requirements would ask for
+   * the skills of the work rather than the skills of reviewing it.
+   */
+  readonly requiredSkills?: readonly SkillId[];
   readonly now: string;
 }
 
@@ -89,11 +104,25 @@ export function resolveTaskAgent(input: AssignmentInput): TaskAssignment {
     members.map(({ agentId, member }) => [agentId, member.ownership]),
   );
 
-  const requirements = deriveTaskRequirements({
+  const derived = deriveTaskRequirements({
     task: input.task,
     role: input.routedRole,
     areaSkills: areaSkillsOf(members),
   });
+
+  // Skills the caller demands outright, ahead of anything inferred. A review needs a
+  // reviewer whatever the task under review happened to touch.
+  const requirements =
+    input.requiredSkills === undefined || input.requiredSkills.length === 0
+      ? derived
+      : {
+          ...derived,
+          skills: [...new Set([...input.requiredSkills, ...derived.skills])],
+          skillSources: {
+            ...Object.fromEntries(input.requiredSkills.map((skill) => [skill, 'scope' as const])),
+            ...derived.skillSources,
+          },
+        };
 
   const candidates: Candidate[] = members.flatMap(({ agentId, member }) => {
     const agent = input.roster.byId(agentId);
@@ -109,6 +138,7 @@ export function resolveTaskAgent(input: AssignmentInput): TaskAssignment {
     canImplement: input.canImplement,
     exclusivelyHeldByOthers: (agent) =>
       heldExclusivelyByAnother(agent.id, ownershipOf, requirements.files),
+    ...(input.isAuthor === undefined ? {} : { isAuthor: input.isAuthor }),
   });
 
   const handoff = admittedHandoff(input, (agentId) => {

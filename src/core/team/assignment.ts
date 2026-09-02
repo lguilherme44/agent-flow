@@ -78,6 +78,14 @@ export interface RankInput {
    * about the whole team and this function reasons about one task.
    */
   readonly exclusivelyHeldByOthers?: (agent: AgentIdentity) => boolean;
+  /**
+   * Whether this candidate wrote the work under consideration (M6, I-42).
+   *
+   * Absent for ordinary assignment, where there is nothing to be the author of. Present
+   * for a review, where being the author is the one disqualification no amount of skill
+   * can outweigh.
+   */
+  readonly isAuthor?: (agent: AgentIdentity) => boolean;
 }
 
 /**
@@ -133,6 +141,12 @@ function exclusionFor(candidate: Candidate, input: RankInput): CandidateScore['e
   // several. Comparing the primary alone is what made a real plan lose six of its seven
   // tasks to the router: the planner flagged four `crossModule`, the router escalated
   // them to `executor.complex`, and a team written for `executor.normal` had nobody.
+  // **Before every other filter, because it is the one that cannot be traded away.** A
+  // member with every skill and all the capacity in the world still may not approve its
+  // own work, and reporting "at capacity" for an author would name a reason a person
+  // could fix by raising a number.
+  if (input.isAuthor?.(candidate.agent) === true) return 'is_author';
+
   if (!serves(candidate.agent, input.requirements.role)) return 'role_mismatch';
 
   if (!input.canImplement(candidate.agent)) return 'runner_capability';
