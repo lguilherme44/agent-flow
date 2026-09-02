@@ -577,7 +577,7 @@ export class TaskExecutor {
         task,
         routedRole: role,
         canImplement: (agent) => this.canImplement(agent),
-        inFlight: await this.inFlightByAgent(runId),
+        inFlight: await this.inFlightByAgent(runId, task.id),
       });
 
       // Recorded whenever the answer is not the router's, which is the only case a
@@ -622,8 +622,19 @@ export class TaskExecutor {
    *
    * A task counts as held when it is `running`. `queued` is not held — nobody is doing it
    * — and a task that failed is not either.
+   *
+   * **The task being assigned does not count against itself**, which is `except`. The
+   * scheduler marks a task `running` before dispatching it, so on a retry the task is
+   * already running *and* already carries an assignment — and counting it made its own
+   * agent look full. The live dogfood is where that showed: `TASK-002` was assigned to
+   * `dba`, failed its review, and its retry reported `no_eligible_member — 1 capacity`
+   * and fell back to the router's role. The task ran, which is why nothing else caught
+   * it: a capacity-1 member could never retry its own work.
    */
-  private async inFlightByAgent(runId: string): Promise<ReadonlyMap<string, number>> {
+  private async inFlightByAgent(
+    runId: string,
+    except: string,
+  ): Promise<ReadonlyMap<string, number>> {
     const counts = new Map<string, number>();
 
     // **The strict read, not the tolerant one.** `readEventsBestEffort` exists for read
@@ -638,7 +649,9 @@ export class TaskExecutor {
     const events = await this.options.store.readEvents(runId);
     const state = await this.options.store.loadRun(runId);
     const running = new Set(
-      state.tasks.filter((task) => task.state === 'running').map((task) => task.id),
+      state.tasks
+        .filter((task) => task.state === 'running' && task.id !== except)
+        .map((task) => task.id),
     );
 
     // The last assignment recorded for each running task. Read from the audit trail

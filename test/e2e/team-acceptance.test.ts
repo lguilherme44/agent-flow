@@ -500,6 +500,45 @@ describe('M5-ACC-09 — assignment survives crash/resume', () => {
     expect(team.assignments.map((a) => `${a.taskId}:${a.agentId}`)).toEqual(['TASK-001:backend']);
   });
 
+  it('lets a member retry its own task, which the run still calls running', async () => {
+    // **The dogfood found this and every scripted test agreed it was fine.** The
+    // scheduler marks a task `running` before dispatching it, so on a retry the task is
+    // already running *and* already carries an assignment — counting it made its own
+    // agent look full. The live run reported `no_eligible_member — 1 capacity` for
+    // TASK-002's retry and fell back to the router; the task ran, which is why nothing
+    // else caught it. A capacity-1 member could never retry its own work.
+    const h = await harness(config({ members: { dba: { capacity: { maxConcurrentTasks: 1 } } } }));
+
+    await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
+    // The state the scheduler leaves before a retry: running, and already assigned.
+    await h.store.updateRun(h.run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
+
+    const retry = await assignmentOf(h, 'TASK-001');
+    expect(retry?.['agent']).toBe('dba');
+    expect(retry?.['reason']).toBe('team_match');
+  });
+
+  it('still counts a different task the member is running', async () => {
+    // The control. An exemption that exempted everything would pass the test above and
+    // silently remove the capacity filter.
+    const h = await harness(config({ members: { dba: { capacity: { maxConcurrentTasks: 1 } }, spare: {} } }));
+
+    await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
+    await h.store.updateRun(h.run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    await h.executor.execute(task('TASK-002'), h.run.runId, '# SDD');
+
+    expect((await assignmentOf(h, 'TASK-002'))?.['agent']).toBe('spare');
+  });
+
   it('does not count a finished task against its member on resume (I-39)', async () => {
     // A persisted `busy` would outlive the crash. Derived from run state, a completed
     // task returns its member to idle.

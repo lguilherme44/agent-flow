@@ -5,9 +5,7 @@ import type {
   OwnershipRule,
   SkillId,
   TaskRequirements,
-  WorkflowRole,
 } from '../../contracts/index.js';
-import { routeTask, type RoutingPolicy } from '../router.js';
 import { ownershipScore } from './ownership.js';
 import { serves } from '../collaboration/roster.js';
 
@@ -80,7 +78,6 @@ export interface RankInput {
    * about the whole team and this function reasons about one task.
    */
   readonly exclusivelyHeldByOthers?: (agent: AgentIdentity) => boolean;
-  readonly routingPolicy?: RoutingPolicy;
 }
 
 /**
@@ -107,7 +104,7 @@ function score(candidate: Candidate, input: RankInput): CandidateScore {
   const skillMatch =
     requirements.skills.length === 0 ? 1 : matched.length / requirements.skills.length;
   const ownership = ownershipScore({ rule: candidate.ownership, files: requirements.files });
-  const riskFit = riskFitOf(candidate.agent.role, requirements, input.routingPolicy);
+  const riskFit = candidate.agent.role === requirements.role ? 1 : 0;
 
   const base: CandidateScore = {
     agentId: candidate.agent.id,
@@ -164,42 +161,26 @@ function matchedSkills(
 }
 
 /**
- * Whether the router would have chosen this member's role for this work.
+ * **Where the router's answer enters the score, and why it is not recomputed here.**
  *
- * `1` when it would, `0` when it would not. Binary rather than graded because the router
- * answers a question with one right answer — a high-risk task belongs to the strong
- * executor — and a partial credit would let two weak signals outvote it.
+ * `requirements.role` *is* `routeTask`'s answer, carried from the one call the executor
+ * already made. An earlier version re-routed the task inside this function to compare
+ * against, which was a second source for one question — and the two disagreed the moment
+ * a caller passed a role the task's own complexity would not have produced.
+ *
+ * The comparison lives inline in `score` now, one line, against the primary role. What it
+ * measures is whether the routed role is this member's *main* one: a member listing
+ * `[executor.normal, executor.complex]` is saying it mainly does ordinary work, and
+ * preferring the member for whom this role is the main one is the preference the operator
+ * expressed by the order they wrote.
+ *
+ * As specified the term asked "would the router have chosen this member's role" — a
+ * question eligibility already answers, since a candidate that does not serve the routed
+ * role is excluded before it is scored. Among eligible candidates it was constant, and
+ * constant terms rank nothing. The live dogfood is what surfaced it: `backend` took an
+ * `executor.complex` task through its secondary role and the explanation read "role is
+ * not the one the router would have chosen", which was untrue.
  */
-function riskFitOf(
-  role: WorkflowRole,
-  requirements: TaskRequirements,
-  policy?: RoutingPolicy,
-): number {
-  const routed = routeTask(
-    {
-      id: requirements.taskId,
-      title: '',
-      description: '',
-      complexity: requirements.complexity,
-      risk: requirements.risk,
-      dependencies: [],
-      requirements: [],
-      files: { likely: [...requirements.files] },
-      flags: {
-        databaseChange: false,
-        crossModule: false,
-        architectureDecision: false,
-        externalIntegration: false,
-      },
-      acceptanceCriteria: [''],
-      validation: [],
-      validationExpectation: 'pass',
-    },
-    policy,
-  );
-
-  return routed === role ? 1 : 0;
-}
 
 /**
  * The order two candidates are ranked in.

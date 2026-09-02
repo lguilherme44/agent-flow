@@ -329,6 +329,24 @@ describe('resolveTaskAgent with a team (M5-ACC-02 … 06)', () => {
     expect(assignment.detail).toContain('backend');
     expect(assignment.detail).toContain('ownership');
   });
+
+  it('does not claim the router disagreed when it did not', () => {
+    // **The sentence used to lie.** It read "role is not the one the router would have
+    // chosen" for a member serving the routed role as a secondary — which the live
+    // dogfood printed for `backend` on a task the router sent to `executor.complex`,
+    // a role `backend` serves. What the term measures is whether this is the member's
+    // *main* role, and that is now what it says.
+    const versatile = { backend: { roles: ['executor.normal', 'executor.complex'] } };
+
+    const primary = resolveTaskAgent(input({ config: withTeam(versatile) }));
+    expect(primary.detail).toContain('its main role');
+
+    const secondary = resolveTaskAgent(
+      input({ config: withTeam(versatile), routedRole: 'executor.complex' }),
+    );
+    expect(secondary.detail).toContain('a role it also serves');
+    expect(secondary.detail).not.toContain('the router would have chosen');
+  });
 });
 
 describe('eligibility precedes ranking (M5-ACC-05, I-36)', () => {

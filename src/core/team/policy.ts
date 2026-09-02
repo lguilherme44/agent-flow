@@ -9,7 +9,6 @@ import type {
   TaskAssignment,
   WorkflowRole,
 } from '../../contracts/index.js';
-import type { RoutingPolicy } from '../router.js';
 import { teamMembers } from '../collaboration/roster.js';
 import type { AgentRoster } from '../collaboration/roster.js';
 import { deriveTaskRequirements } from './requirements.js';
@@ -46,7 +45,6 @@ export interface AssignmentInput {
   readonly canImplement: (agent: AgentIdentity) => boolean;
   /** Files other in-flight tasks declared, for the exclusive-ownership check. */
   readonly concurrentFiles?: readonly string[];
-  readonly routingPolicy?: RoutingPolicy;
   readonly now: string;
 }
 
@@ -111,7 +109,6 @@ export function resolveTaskAgent(input: AssignmentInput): TaskAssignment {
     canImplement: input.canImplement,
     exclusivelyHeldByOthers: (agent) =>
       heldExclusivelyByAnother(agent.id, ownershipOf, requirements.files),
-    ...(input.routingPolicy === undefined ? {} : { routingPolicy: input.routingPolicy }),
   });
 
   const handoff = admittedHandoff(input, (agentId) => {
@@ -279,7 +276,7 @@ function explain(best: CandidateScore, required: readonly SkillId[]): string {
   return (
     `${best.agentId} scored ${best.score.toFixed(2)} — ${skills}; ` +
     `ownership ${best.ownership.toFixed(2)}; ` +
-    `role ${best.riskFit === 1 ? 'is' : 'is not'} the one the router would have chosen`
+    `this is ${best.riskFit === 1 ? 'its main role' : 'a role it also serves'}`
   );
 }
 
