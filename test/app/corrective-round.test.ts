@@ -8,6 +8,7 @@ import { StateStore } from '../../src/app/state-store.js';
 import { StageRunner } from '../../src/app/stage-runner.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { runCorrectiveRound } from '../../src/app/corrective-round.js';
+import { projectFindings } from '../../src/core/review/findings.js';
 import { checkApproval, planHash, approveRun } from '../../src/app/approval.js';
 import { buildValidationRegistry } from '../../src/core/validation-registry.js';
 import {
@@ -16,6 +17,7 @@ import {
   ProjectConfigSchema,
   ReviewResultSchema,
   type Plan,
+  ReviewRecordSchema,
   type ReviewFinding,
   type ReviewResult,
 } from '../../src/contracts/index.js';
@@ -525,5 +527,77 @@ describe('a corrective task records which finding asked for it', () => {
     if (result.outcome !== 'applied') return;
     expect(result.added[0]?.correctiveFor?.stage).toBe('final-review');
     expect(result.added[0]?.correctiveFor?.finding).toBeUndefined();
+  });
+});
+
+/**
+ * The emitter and the reader, in one test, because separately they both passed while the
+ * link between them was broken.
+ *
+ * The event was first written with `task:` and the projection reads `correctiveTask:`, so
+ * `fixed` stayed underivable after the event started being emitted at all. Nothing caught
+ * it: every test of `projectFindings` hands it an event literal, which is §69's fixture
+ * question answered wrongly — that literal does not represent the production state it
+ * claims to, because in production the emitter writes it.
+ */
+describe('a finding becomes `fixed` from the event the round actually writes', () => {
+  it('pairs the emitted event with the corrective task completing', async () => {
+    const w = await world();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    const findings: ReviewFinding[] = [
+      {
+        id: 'FIND-0001' as ReviewFinding['id'],
+        severity: 'high',
+        type: 'correctness',
+        description: 'The assertion cannot fail.',
+        suggestedAction: 'Assert on the value.',
+        file: 'test/a.test.js',
+        evidence: [],
+      },
+    ];
+    const round = await w.round({
+      finalReview: {
+        verdict: 'FAIL',
+        independence: 'cross-provider',
+        reviewer: { runner: 'reviewer', reasoning: 'high' },
+        findings,
+        adjudications: [],
+        residualRisks: [],
+      },
+    });
+    expect(round.outcome).toBe('applied');
+    if (round.outcome !== 'applied') return;
+
+    const fix = round.added[0]?.id ?? '';
+    await w.store.appendEvent(w.run.runId, 'task_finished', {
+      task: fix,
+      status: 'completed',
+      runner: 'claude',
+      validationPassed: true,
+    });
+
+    const projected = projectFindings({
+      reviews: [
+        ReviewRecordSchema.parse({
+          id: 'REV-0001',
+          runId: w.run.runId,
+          taskId: 'TASK-001',
+          round: 1,
+          verdict: 'changes_requested',
+          reviewer: 'reviewer',
+          author: 'dev',
+          independence: 3,
+          reviewedTree: 'a'.repeat(40),
+          createdAt: '2026-09-01T12:00:00.000Z',
+          findings,
+        }),
+      ],
+      messages: [],
+      events: await w.store.readEvents(w.run.runId),
+    });
+
+    expect(projected[0]?.status).toBe('fixed');
+    expect(projected[0]?.correctiveTask).toBe(fix);
   });
 });

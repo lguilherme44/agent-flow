@@ -502,7 +502,7 @@ export const REVIEW_EVENT_TYPES = [
   'review_completed',
   /** `detail: { task, review, finding, severity, category, file? }`. */
   'finding_raised',
-  /** `detail: { task, finding, origin }`. The link the finding projection reads. */
+  /** `detail: { correctiveTask, finding, origin }`. The link the projection reads. */
   'corrective_task_created',
   /** `detail: { gate, category, required, status, exitCode?, durationMs? }`. */
   'quality_gate_evaluated',

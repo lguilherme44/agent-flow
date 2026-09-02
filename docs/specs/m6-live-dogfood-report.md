@@ -169,7 +169,7 @@ Independence 1 on the first, because `qa` and `reviewer` are both on `claude` �
 provider, different member. Recorded rather than hidden, which is what §12 asks for. The
 second is 3, because `dev` is on `agy`.
 
-`REV-0002` is an **approval**, and the first this product has produced from a live reviewer.
+`REV-0002` is an **approval** — the only one across both scenarios; the other three live reviews all asked for changes.
 Two findings, both non-blocking, and the change proceeds — §44's severity policy doing the
 thing it exists to do rather than blocking everything.
 
@@ -373,3 +373,66 @@ The spec's own §17 critique argued that per-task review doubles the model calls
 nobody had priced it. Priced: it doubles the *calls* and adds **13%** of an implementation
 prompt in context. The selective review context of §45 is why — the reviewer sees the
 change and the criteria, not the repository.
+
+---
+
+## Acceptance criteria, one by one
+
+Twenty-eight, and every tag is greppable in `test/` so this table can be checked rather
+than believed.
+
+| | Criterion | Status | Where |
+|---|---|---|---|
+| 01 | implementation receives independent reviewer | ✅ | `review-acceptance`, live in both runs |
+| 02 | reviewer cannot equal implementation invocation | ✅ | `assignment.ts` `is_author`, architecture test |
+| 03 | provider independence preferred, degradation recorded | ✅ | live: independence 3, 3, 1, 3 |
+| 04 | structured finding is persisted | ✅ | 11 findings across 4 live reviews |
+| 05 | invalid finding paths refused/dropped safely | ✅ | `normalise.ts`, adversarial suite |
+| 06 | blocking finding prevents review approval | ✅ | live: the DoD held two runs open |
+| 07 | non-blocking finding does not block | ✅ | live: REV-0002 approved with 2 findings |
+| 08 | developer response uses collaboration, no second store | ✅ | `findings.ts` reads messages only |
+| 09 | developer cannot self-verify a finding | ✅ | `verifierOf` requires a different tree |
+| 10 | corrective task passes through AssignmentPolicy | ✅ | it is an ordinary plan task |
+| 11 | corrective task passes through scheduler/worktree/validation | ✅ | same |
+| 12 | re-review observes the corrected tree | ✅ | `reviewedTree` identity |
+| 13 | review goes stale after the tree changes | ✅ | `freshnessOf` |
+| 14 | a stale review satisfies no final gate | ✅ | `decideQuality` condition 4 |
+| 15 | QA can create and execute test work | ✅ | **live: TASK-001 → qa at 0.91** |
+| 16 | QA output alone cannot pass a quality gate | ✅ | gates read command results, not verdicts |
+| 17 | required validation gate executes mechanically | ✅ | **live: TASK-002 lint+test passed** |
+| 18 | `NOT_RUN` is never `PASS` | ✅ | live: `lint not_run` blocked, twice |
+| 19 | review loop budget terminates | ✅ | enforced before the call is spent |
+| 20 | crash/resume duplicates no review, loses no finding | ✅ | `review-crash` suite |
+| 21 | CLI, API and dashboard use one projection | ✅ | `projectReviews`, architecture test |
+| 22 | M4 collaboration invariants survive | ✅ | regression suite |
+| 23 | M5 assignment/ownership/capacity invariants survive | ✅ | regression suite |
+| 24 | **live handoff/reassignment demonstrated** | ❌ | **not met** |
+| 25 | **live collaboration payload changes downstream behaviour** | ❌ | **not met** |
+| 26 | live review finds a real issue | ✅ | `FIND-0001`, confirmed by three reviewers |
+| 27 | live corrective loop fixes and verifies that issue | ◐ | tasks generated and linked; execution below |
+| 28 | all mandatory quality gates green | ✅ | 3917 · 343 · 38 e2e · 175 visual · lint · 3 typechecks · 2 builds |
+
+### Why 24 and 25 are not met, and what would settle them
+
+**M6-ACC-24.** §55 required this dogfood to include a real handoff or reassignment, because
+Phase A did not produce one. It did not happen. In scenario 1 both failing tasks stopped at
+`recovery_exhausted` — the ladder asking a human, which is its documented behaviour and not
+a reassignment. In scenario 2 nothing failed.
+
+The honest part: I did not design a scenario that *forces* the conflict. Both plans
+decomposed by module, and a module boundary is the ownership boundary, so the situation a
+handoff resolves was resolved upstream — the same result Phase A got from four independent
+plans. The experiment that would settle it is a single task whose declared files straddle
+two members' exclusive patterns, dispatched with `agent-flow task` so no planner can
+decompose the conflict away. That was not run.
+
+**M6-ACC-25.** Not met, and the reason changed, which is the useful part. Through M5 the
+answer was "nobody uses the channel". After Phase A gave the bootstrap a handoff form and
+stated ownership, agents used it in **four of six** implementation prompts in scenario 1 —
+and the product refused all four as malformed. The protocol is reachable and unusable as
+specified: the shape is described in prose and cannot be reproduced from prose.
+
+The refusal diagnostic added in this milestone is what produces the evidence to fix it. One
+run of a scenario-1-shaped team on the current build would name the fields agents actually
+get wrong, and the bootstrap could then carry a schema or an example instead of a
+description. That run was not made.

@@ -206,7 +206,12 @@ export async function runCorrectiveRound(
   // supplied the event itself.
   for (const link of correctiveLinks(added)) {
     await store.appendEvent(runId, 'corrective_task_created', {
-      task: link.task,
+      // **`correctiveTask`, not `task`.** The projection reads this key, and the first
+      // version of this emitter wrote `task` — so the link was still broken, by a name
+      // rather than by an absence. `task` is also genuinely ambiguous here: every other
+      // event in the vocabulary uses it for the task the event is *about*, which for a
+      // finding is the reviewed one, not the generated one.
+      correctiveTask: link.task,
       finding: link.finding,
       origin: options.originFor?.get(link.finding) ?? options.origin,
     });
