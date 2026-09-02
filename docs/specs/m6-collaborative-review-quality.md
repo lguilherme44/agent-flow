@@ -319,11 +319,28 @@ existing and passing, not by a second opinion.
 **A developer cannot verify its own finding** (M6-ACC-09): `verified` is derived from a
 re-review or a gate, and neither is the implementer's to write.
 
-### Disputes
+### Disputes — specified, deferred, and why
 
-A dispute is not a failure (§32). First dispute on a finding routes to an *independent*
-re-review; a second unresolved dispute escalates to a person. Bounded by
-`review.maxDisputeRounds`, default 1.
+A dispute is not a failure (§32). First dispute on a finding should route to an
+*independent* re-review; a second unresolved dispute should escalate to a person, bounded
+by `review.maxDisputeRounds`.
+
+**The routing is not implemented, deliberately.** A dispute reaches Agent Flow one way: the
+implementer writes it to the collaboration outbox, because §23 forbids a second messaging
+store and `answerOf` reads exactly that channel. Across M4, M5 and both M6 dogfood
+scenarios, **no agent has successfully written to that channel** — 27 invocations, one
+delivered message, and four refusals as `schema_invalid` in the M6 run alone.
+
+So the dispute trigger cannot fire in production today. Building routing on top of it
+would be the same defect this milestone found and fixed: a path that is written, tested,
+and unreachable by any real agent (§70). The projection already *derives* `disputed`
+correctly from a message that says so, and the architecture rule added in M6 will fail the
+suite the day a dispute router exists with nothing calling it.
+
+**Unblocking condition:** one run in which an agent's outbox is accepted. The refusal
+diagnostic added in M6 (`collaboration_outbox_refused` now names the fields) is what
+produces the evidence to get there. Until then `review.maxDisputeRounds` is read, asserted
+finite, and carried — configuration for a mechanism that will exist when it can run.
 
 ---
 

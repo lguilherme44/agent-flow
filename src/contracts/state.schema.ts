@@ -471,6 +471,21 @@ export type TeamEventType = (typeof TEAM_EVENT_TYPES)[number];
  * log plus run state — which is what lets I-43 hold: a finding's status is a question
  * about facts, not a field somebody writes.
  */
+/**
+ * What a review *did*, never what a finding *is*.
+ *
+ * **Four types were declared here and never emitted**, and removing them is the point
+ * rather than tidying: `finding_acknowledged`, `finding_disputed`, `finding_fixed` and
+ * `finding_verified` are all *statuses*, and I-43 says a finding's status is derived and
+ * never stored. An event carrying one would be a second answer to a question the
+ * projection already answers from the reviews, the messages and the corrective work — and
+ * the two would disagree the first time a run resumed.
+ *
+ * The audit that found them also found `corrective_task_created` declared, read by the
+ * projection, and written by nothing, which is a different bug in the same blind spot: a
+ * vocabulary nobody checks. The architecture suite now requires an emitter for every type
+ * listed here.
+ */
 export const REVIEW_EVENT_TYPES = [
   /** `detail: { task, round, reason }`. A review was asked for — explicitly (§17). */
   'review_requested',
@@ -487,19 +502,11 @@ export const REVIEW_EVENT_TYPES = [
   'review_completed',
   /** `detail: { task, review, finding, severity, category, file? }`. */
   'finding_raised',
-  /** `detail: { task, finding, by, message }`. The implementer answered. */
-  'finding_acknowledged',
-  /** `detail: { task, finding, by, message, reason }`. */
-  'finding_disputed',
-  /** `detail: { task, finding, correctiveTask, tree }`. Corrective work integrated. */
-  'finding_fixed',
-  /** `detail: { task, finding, by, evidence }`. A re-review or a gate, never a claim. */
-  'finding_verified',
-  /** `detail: { task, finding, correctiveTask }`. */
+  /** `detail: { task, finding, origin }`. The link the finding projection reads. */
   'corrective_task_created',
   /** `detail: { gate, category, required, status, exitCode?, durationMs? }`. */
   'quality_gate_evaluated',
-  /** `detail: { task, budget, limit, open, attempted, action }`. Escalation (§30). */
+  /** `detail: { task, rounds, budget, detail }`. The loop ended; nothing was approved. */
   'review_budget_exhausted',
 ] as const;
 

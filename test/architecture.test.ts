@@ -3983,3 +3983,36 @@ describe('every review capability is reachable from production code (§70)', () 
     expect(unreachable).toEqual([]);
   });
 });
+
+/**
+ * A declared event nobody writes is a second bug in the same blind spot as a function
+ * nobody calls.
+ *
+ * `corrective_task_created` was declared, read by the finding projection, and emitted by
+ * nothing — so `fixed` was underivable in every real run. Four more (`finding_acknowledged`,
+ * `finding_disputed`, `finding_fixed`, `finding_verified`) were declared for statuses I-43
+ * says must be derived rather than stored, which would have been a second answer to a
+ * question the projection already answers.
+ */
+describe('every review event type has something that emits it (§64, I-43)', () => {
+  it('leaves no declared type unwritten', () => {
+    const schema = read(join(ROOT, 'src/contracts/state.schema.ts')).text;
+    const block = /export const REVIEW_EVENT_TYPES = \[([\s\S]*?)\] as const;/.exec(schema);
+    expect(block).not.toBeNull();
+
+    const declared = [...(block?.[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
+    expect(declared.length).toBeGreaterThan(0);
+
+    // Everything the product runs. The contracts file declares them; it must not also be
+    // what "uses" them.
+    const emitters = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !path.startsWith('src/contracts/'))
+      .map(({ text }) => withoutComments(text))
+      .join('\n');
+
+    const unwritten = declared.filter((name) => !new RegExp(`'${name ?? ''}'`).test(emitters));
+
+    expect(unwritten).toEqual([]);
+  });
+});
