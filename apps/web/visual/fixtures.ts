@@ -1417,12 +1417,17 @@ export const REVIEW = {
   gates: [
     { gateId: 'lint', category: 'lint', required: true, status: 'passed', exitCode: 0, durationMs: 2100 },
     { gateId: 'security', category: 'security', required: true, status: 'not_run', detail: 'no command is configured for "security"' },
-    { gateId: 'test', category: 'unit', required: true, status: 'passed', exitCode: 0, durationMs: 18400 },
+    // **`failed` and `not_run` are different news and must not look alike** (I-45). One
+    // says the codebase answered no; the other says nothing asked. A person acts on them
+    // differently, so the panel has to render them differently — which is a claim only a
+    // screenshot can check.
+    { gateId: 'test', category: 'unit', required: true, status: 'failed', exitCode: 1, durationMs: 18400 },
     { gateId: 'typecheck', category: 'typecheck', required: true, status: 'passed', exitCode: 0, durationMs: 6200 },
     { gateId: 'visual', category: 'visual', required: false, status: 'not_applicable', detail: 'this change touches nothing under apps/web/**' },
   ],
   unsatisfiedGates: [
     { gateId: 'security', category: 'security', required: true, status: 'not_run', detail: 'no command is configured for "security"' },
+    { gateId: 'test', category: 'unit', required: true, status: 'failed', exitCode: 1, durationMs: 18400 },
   ],
   totals: {
     reviews: 4,

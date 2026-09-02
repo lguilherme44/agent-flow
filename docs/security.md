@@ -442,6 +442,59 @@ attempt. It cannot make one succeed.
 
 ---
 
+## A review is a claim, and the gate is the authority
+
+M6 gave a run a second kind of model output about its own work: a judgement. A judgement
+is more dangerous than a message, because a message is obviously an opinion and a verdict
+looks like a decision. The rule that makes it safe is the one the whole product runs on —
+**models propose, Agent Flow decides** — applied per field rather than per document.
+
+### The reviewer proposes a verdict and nothing else
+
+The shape a review agent may write is three fields: `verdict`, an optional `summary`, and
+`findings`. Everything that carries authority is absent from it by construction, which is
+the same defence that closed M4's sender forgery — a field an agent cannot write is a
+field nobody has to remember to check.
+
+| An agent cannot | Because |
+|---|---|
+| name itself as the reviewer | the reviewer comes from the assignment policy; the response schema has no reviewer field |
+| choose a finding's id | ids are allocated from the run's log, by maximum rather than by count |
+| set a finding's status | status is *derived* from reviews, messages and corrective work — nothing writes it |
+| declare a finding verified | `verified` needs a later review of a *different* tree; the event vocabulary has no `finding_verified` to emit |
+| declare a quality gate passed | a gate's status is the exit code of a command from human configuration |
+| name the command a gate runs | `QualityGateConfigSchema` has no command field; the id resolves through the existing validation registry |
+| say which tree it reviewed | `reviewedTree` is the integration merge commit, taken from the run |
+
+### Thirteen threats, and what stops each
+
+| Threat | Defence |
+|---|---|
+| **Self-review** | `is_author` is an *eligibility* exclusion checked before ranking, so an implementer scoring 1.0 is removed rather than out-ranked. An architecture test holds the ordering. |
+| **Reviewer identity forgery** | Not in the schema. The reviewer is whoever `selectReviewer` returned, recorded in `reviewer_assigned` before the call is made. |
+| **Finding identity forgery** | Not in the schema. `normaliseReview` assigns `FIND-nnnn` from the log. |
+| **Path traversal in a finding** | A finding's `file` goes through the same repository-path rule the ContextPacket boundary uses; a rejected path is *removed* from the finding rather than merely flagged. That removal was a bug once — the code spread the original object and added the key back only when valid, so a rejected path survived — and the regression test now proves the key is gone. |
+| **Review prompt injection** | A review is data on the way in and a proposal on the way out. Nothing in it selects a command, a path, a ref or an agent. `prompts/code-review.md` is `permissions: read-only`. |
+| **A developer message closing a finding** | Acknowledging closes nothing and disputing closes nothing (§25). `fixed` requires a corrective task that completed; `verified` requires a later review of a different tree. Both are folds over evidence, not writes. |
+| **Fake quality evidence** | Gate status joins the *executor's* recorded `CommandResult`s to registry-resolved commands. A model's account of what it ran reaches no gate. |
+| **Stale review reuse** | The quality decision's fourth condition compares the review's tree to the integrated one. Identity, never a timestamp: a review written after a change can still have read what came before it. |
+| **Reviewing the wrong tree** | `reviewedTree` is the integration merge commit, and the reviewer runs against that workspace. A sequential run has no tree and is `unverifiable` rather than `current`. |
+| **Review flood** | `review.maxRounds` is checked before a reviewer is named and before a call is spent. Running out approves nothing: the last review stands, and if it asked for changes the decision still refuses. |
+| **Finding flood** | A proposal's findings are truncated to a configured maximum during normalisation, and `ReviewRecordSchema` caps the array at 64 with every string bounded. |
+| **Infinite review/correction loop** | `review.maxRounds` bounds re-reviews, `recovery.maxCorrectiveRounds` bounds corrective rounds, and the counter is *written* as well as read — it was read and never written once, and every round compared zero. |
+| **Suppressing a required validation** | A gate's `required` flag is human configuration. `NOT_RUN` is never `PASS`, so a gate an agent avoided running blocks exactly as a failing one does. |
+
+### What this does not defend against
+
+A reviewer that is simply wrong. Every defence above is about *authority* — what a model's
+output is allowed to decide — and none of them make a judgement correct. That is why the
+deterministic gates are separate, why `NOT_RUN` blocks, and why a review's verdict is one
+of four conditions rather than the decision.
+
+Nor does it defend against a reviewer on the same provider as the author reaching the same
+wrong conclusion. Independence is *measured and recorded*, including when it degrades; it
+is not enforced, because a team may honestly have one provider.
+
 ## The limits, stated plainly
 
 **The receipt is not unforgeable against an agent that escapes its worktree.** This is a

@@ -35,7 +35,7 @@ test.describe('review', () => {
 
     // The line whose absence would be a silent product failure: a required gate that did
     // not run is not a gate that passed, and it must not read as a detail.
-    await expect(card.getByText('1 required gate(s) unsatisfied')).toBeVisible();
+    await expect(card.getByText('2 required gate(s) unsatisfied')).toBeVisible();
     await expect(card.getByText(/no command is configured/)).toBeVisible();
     // Status in words, not colour alone (§97).
     await expect(card.getByText('changes requested')).toBeVisible();
@@ -77,7 +77,33 @@ test.describe('review', () => {
 
     await expect(gates.getByText('not run')).toBeVisible();
     await expect(gates.getByText('not applicable')).toBeVisible();
+    // §30, and the reason the panel exists: `failed` and `not run` are different news.
+    // A picture is the only thing that can show they do not render alike.
+    await expect(gates.getByText('failed')).toBeVisible();
+    await expect(gates.getByText('passed').first()).toBeVisible();
 
     await expect(gates).toHaveScreenshot('review-quality-gates.png');
   });
 });
+
+/**
+ * The two states the panel must be able to show and had no picture of (§30).
+ *
+ * `approved` is in the shared fixture and was only ever seen collapsed, and a *green*
+ * review is the state a person sees most often once the product works — the one whose
+ * layout nobody checks because nothing is wrong in it.
+ */
+test.describe('review — the states that are not problems', () => {
+  test('an approved change, opened', async ({ page }) => {
+    const card = await panel(page);
+    const thread = card.locator('details').filter({ hasText: 'TASK-005' });
+    await thread.locator('summary').click();
+
+    await expect(thread.getByText('approved')).toBeVisible();
+    // No badge, no blocked line, no corrective task — absence is the design here, and it
+    // is exactly the kind of thing a DOM test cannot tell from a broken render.
+    await expect(thread.getByText('Blocked:')).toHaveCount(0);
+
+    await expect(thread).toHaveScreenshot('review-approved.png');
+  });
+})
