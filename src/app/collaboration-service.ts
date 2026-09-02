@@ -385,6 +385,9 @@ export class CollaborationService {
         reason: rejection.reason,
         subject: rejection.subject,
         detail: rejection.detail,
+        // Only when the refusal has one. A rejection with no structural diagnosis must not
+        // record an empty string that reads like "we looked and found nothing wrong".
+        ...(rejection.diagnosis === undefined ? {} : { diagnosis: rejection.diagnosis }),
       });
     }
   }

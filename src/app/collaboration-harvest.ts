@@ -1,4 +1,5 @@
 import nodePath from 'node:path';
+import type { z } from 'zod';
 import {
   AgentOutboxSchema,
   AgentMessageSchema,
@@ -63,6 +64,20 @@ export interface HarvestRejection {
   /** What was refused, for the event. Never the body — a rejection is not a channel. */
   readonly subject: string;
   readonly detail: string;
+  /**
+   * Which fields were wrong, in the schema's own vocabulary.
+   *
+   * **Absent from the first version, and the live evidence is why it exists.** Two agents
+   * on two providers wrote an outbox in one run; all of it was refused as malformed, and
+   * the event said only that. Nothing recorded *where* the shape went wrong, so the one
+   * signal that the protocol is not landing carried nothing to act on — and the file is
+   * deleted before the next process could look.
+   *
+   * Structure only: field paths come from our schema and codes from the validator, so
+   * this stays a closed vocabulary. The "a rejection is not a channel" rule above is
+   * about the *body*, and it still holds — no agent-authored text passes through here.
+   */
+  readonly diagnosis?: string;
 }
 
 export interface HarvestOutcome {
@@ -209,6 +224,7 @@ export async function harvestOutbox(
           reason: 'schema_invalid',
           subject: 'outbox',
           detail: 'the outbox did not match the expected shape and none of it was read',
+          diagnosis: shapeDiagnosis(parsed.error),
         },
       ],
     };
@@ -219,6 +235,37 @@ export async function harvestOutbox(
   const entries = admitEntries(request, parsed.data.entries, rejections);
 
   return { messages, entries, rejections, found: true, refused: false, senderClaimed, removed };
+}
+
+/**
+ * Where the shape went wrong, in a vocabulary the agent does not control.
+ *
+ * Field names come from `AgentOutboxSchema` and codes from the validator, so nothing an
+ * agent wrote can reach the log through here. A path segment is still sanitised: the
+ * schema strips unknown keys today, but a later `.strict()` would start putting input
+ * keys in the path, and this must not become the hole that opens.
+ *
+ * Capped at four issues. A file that is wrong in twenty places is wrong in one way, and
+ * the first few say which.
+ */
+function shapeDiagnosis(error: z.ZodError): string {
+  const seen = new Set<string>();
+  for (const issue of error.issues) {
+    if (seen.size >= 4) break;
+    seen.add(`${issuePath(issue.path)}: ${issue.code}`);
+  }
+  return [...seen].join('; ');
+}
+
+function issuePath(path: ReadonlyArray<PropertyKey>): string {
+  if (path.length === 0) return '(root)';
+  return path
+    .map((segment) => {
+      if (typeof segment === 'number') return String(segment);
+      const text = String(segment);
+      return /^[A-Za-z_][A-Za-z0-9_]{0,31}$/.test(text) ? text : '?';
+    })
+    .join('.');
 }
 
 /* ─── Messages ─────────────────────────────────────────────────────────────── */
