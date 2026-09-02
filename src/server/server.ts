@@ -376,6 +376,24 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return view === null ? notFound(reply, 'no such run') : view;
   });
 
+  /**
+   * The run's reviews: what was found, what is open, and whether it is still true.
+   *
+   * **The browser renders this and derives none of it** (§59, I-44). Review status,
+   * a finding's blocking status, a gate's verdict and a review's freshness are all
+   * answered by `core/review/view.ts` — the same fold `af status` prints. Freshness in
+   * particular used to be computed in the dashboard, from fields it happened to have;
+   * identity against the integrated tree is the only thing that answers it, and only the
+   * projection knows both halves.
+   */
+  app.get('/api/v1/runs/:runId/review', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const view = await collaboration.review(scope.project, scope.runId);
+    return view === null ? notFound(reply, 'no such run') : view;
+  });
+
   app.get('/api/v1/runs/:runId/artifacts', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;

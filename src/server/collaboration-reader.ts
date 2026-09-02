@@ -12,6 +12,7 @@ import {
   type RunEvent,
   type TeamView,
   RunEventSchema,
+  TaskResultSchema,
 } from '../contracts/index.js';
 import { CollaborationStore } from '../app/collaboration-store.js';
 import { runPaths } from '../app/paths.js';
@@ -21,6 +22,8 @@ import { projectHandoffs } from '../core/collaboration/handoffs.js';
 import { projectThreads } from '../core/collaboration/threads.js';
 import { deriveAgentRoster, type AgentRoster } from '../core/collaboration/roster.js';
 import { EMPTY_TEAM, projectTeam } from '../core/team/view.js';
+import { EMPTY_REVIEW, projectReviews, type ReviewView } from '../core/review/view.js';
+import { ReviewStore } from '../app/review-store.js';
 import type { FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
 
@@ -144,6 +147,72 @@ export class CollaborationReader {
       tasks: state.tasks.map((task) => ({ id: task.id, state: task.state })),
       events: await this.readEvents(project, runId),
     });
+  }
+
+  /**
+   * The run's reviews, or `null` when the run does not exist (M6-09, M6-ACC-21).
+   *
+   * **Beside the team and the collaboration, in the same class, for the same reason.**
+   * All three fold the same roster out of the same configuration; three readers deriving
+   * a roster is three rosters, and they disagree the first time a member is renamed.
+   *
+   * Freshness is answered here rather than in the browser, which is the point of the
+   * projection: identity against the integrated tree is the only thing that answers it,
+   * and only this side knows both halves.
+   */
+  async review(project: RegisteredProject, runId: string): Promise<ReviewView | null> {
+    const state = await this.readState(project, runId);
+    if (state === null) return null;
+
+    const config = await this.configOf(project);
+    if (config === undefined) return EMPTY_REVIEW;
+
+    const reviews = await new ReviewStore({
+      fs: this.options.fs,
+      projectDir: project.path,
+    }).readReviews(runId);
+    if (reviews.length === 0) return EMPTY_REVIEW;
+
+    const store = new CollaborationStore({ fs: this.options.fs, projectDir: project.path });
+
+    return projectReviews({
+      reviews,
+      messages: await store.readMessages(runId),
+      events: await this.readEvents(project, runId),
+      quality: config.quality,
+      roster: deriveAgentRoster(config),
+      integratedTrees: await this.integratedTrees(project, runId, state.tasks),
+    });
+  }
+
+  /**
+   * The commit each task is integrated as, read from the results the run already wrote.
+   *
+   * Tolerant: a result that will not parse costs one task its freshness answer, which
+   * renders as `unverifiable` — never as `stale`, because claiming a review is out of
+   * date on the strength of a file that would not open is a claim nobody made.
+   */
+  private async integratedTrees(
+    project: RegisteredProject,
+    runId: string,
+    tasks: readonly { readonly id: string }[],
+  ): Promise<ReadonlyMap<string, string>> {
+    const trees = new Map<string, string>();
+
+    for (const task of tasks) {
+      const path = `${runPaths(project.path, runId).tasksDir}/${task.id}/result.json`;
+      if (!(await this.options.fs.exists(path))) continue;
+
+      try {
+        const parsed = TaskResultSchema.safeParse(JSON.parse(await this.options.fs.readFile(path)));
+        const tree = parsed.success ? parsed.data.integration?.mergeCommit : undefined;
+        if (tree !== undefined) trees.set(task.id, tree);
+      } catch {
+        continue;
+      }
+    }
+
+    return trees;
   }
 
   /**

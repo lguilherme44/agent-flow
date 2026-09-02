@@ -15,6 +15,9 @@ import { integrationRef } from '../core/worktree-policy.js';
 import { CollaborationStore } from '../app/collaboration-store.js';
 import { renderCollaboration } from './render/collaboration.js';
 import { renderTeam } from './render/team.js';
+import { renderReview } from './render/review.js';
+import { projectReviews } from '../core/review/view.js';
+import { ReviewStore } from '../app/review-store.js';
 import { projectTeam } from '../core/team/view.js';
 import { deriveAgentRoster } from '../core/collaboration/roster.js';
 import { projectThreads } from '../core/collaboration/threads.js';
@@ -129,6 +132,10 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     // which is what the API returns and what the dashboard draws.
     const team = await readTeam(store, state, fs, globals);
 
+    // M6-ACC-21, and the same rule the two lines above follow: folded by
+    // `core/review/view.ts`, which is what the API returns and the dashboard draws.
+    const codeReview = await readCodeReview(store, state, fs, globals);
+
     process.stdout.write(
       `${render(
         state,
@@ -140,6 +147,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         conflicts,
         collaboration,
         team,
+        codeReview,
       )}\n`,
     );
 
@@ -273,6 +281,7 @@ export function render(
   conflicts: readonly { task: string; attempt: number; paths: readonly string[] }[],
   collaboration: string | undefined,
   team?: string | undefined,
+  codeReview?: string | undefined,
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -332,6 +341,10 @@ export function render(
   // context that makes an open thread legible — "executor.normal is blocked" reads
   // differently once the screen has said which member that is and what else it holds.
   if (team !== undefined) lines.push(team, '');
+
+  // After the team, because a review is a fact about work somebody did — and reading
+  // "TASK-003 changes requested" is easier once the screen has said who wrote it.
+  if (codeReview !== undefined) lines.push(codeReview, '');
 
   if (state.degradations.length > 0) {
     lines.push('Degraded:');
@@ -428,4 +441,69 @@ async function readTeam(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The run's reviews, folded exactly as the API and the dashboard fold them.
+ *
+ * `undefined` on every unhappy path and never an exception, for the reason
+ * `readCollaboration` and `readTeam` are: `status` is what a person runs when something
+ * is already wrong, and an unreadable review log must not be why they cannot see the gate.
+ */
+async function readCodeReview(
+  store: StateStore,
+  state: RunState,
+  fs: NodeFileSystem,
+  globals: GlobalOptions,
+): Promise<string | undefined> {
+  try {
+    const { global: config } = await loadConfig({
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: globals.cwd,
+    });
+
+    const reviews = await new ReviewStore({ fs, projectDir: globals.cwd }).readReviews(state.runId);
+    if (reviews.length === 0) return undefined;
+
+    const collaboration = new CollaborationStore({ fs, projectDir: globals.cwd });
+
+    return renderReview(
+      projectReviews({
+        reviews,
+        messages: await collaboration.readMessages(state.runId),
+        events: await store.readEventsBestEffort(state.runId),
+        quality: config.quality,
+        roster: deriveAgentRoster(config),
+        integratedTrees: await integratedTrees(store, state),
+      }),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The commit each task is integrated as, from the results the run already wrote.
+ *
+ * Freshness is identity against this, and nothing else knows both halves — which is why
+ * the browser cannot answer it and why this projection can.
+ */
+async function integratedTrees(
+  store: StateStore,
+  state: RunState,
+): Promise<ReadonlyMap<string, string>> {
+  const trees = new Map<string, string>();
+
+  for (const task of state.tasks) {
+    try {
+      const raw = await store.readTaskResult(state.runId, task.id);
+      const tree = raw?.integration?.mergeCommit;
+      if (typeof tree === 'string') trees.set(task.id, tree);
+    } catch {
+      continue;
+    }
+  }
+
+  return trees;
 }

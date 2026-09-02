@@ -735,6 +735,19 @@ export interface ApprovalGateView {
     readonly residualRisks?: readonly string[];
     /** The integration HEAD the reviewer read the code against (§19.2). Absent for legacy reviews. */
     readonly integrationHead?: string;
+    /**
+     * Whether this verdict still describes the code that is integrated (M6, I-41).
+     *
+     * **Answered here rather than in the browser.** The dashboard used to compute it from
+     * whichever fields it happened to hold, which is precisely what M6 §59 forbids: a
+     * surface deriving review freshness by its own rules is a second authority, and its
+     * first disagreement with the run puts a decision nobody made on screen.
+     *
+     * `unverifiable` when either side has no commit — a plan-only run has no code for a
+     * review to have gone stale against, and calling that stale would be a claim nobody
+     * measured.
+     */
+    readonly freshness: 'current' | 'stale' | 'unverifiable';
   };
   readonly degradations: Degradation[];
 }

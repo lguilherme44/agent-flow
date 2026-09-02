@@ -1,75 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { assessReviewFreshness } from './review-freshness';
+import { reviewFreshnessBadge } from './review-freshness';
 
-describe('assessReviewFreshness', () => {
-  it('returns Current when reviewed integration head matches current integration head', () => {
-    const res = assessReviewFreshness({
-      review: {
-        integrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
-      },
-      currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
-    });
-    expect(res.status).toBe('current');
-    expect(res.tone).toBe('success');
-    expect(res.label).toBe('Current');
+/**
+ * How a review's freshness reads, once the server has decided what it is.
+ *
+ * **This file used to test the decision, and the decision is not here any more.**
+ * `assessReviewFreshness` compared a review's `integrationHead` and `planHash` against the
+ * run's — in the browser, from whichever of those it happened to have been handed. M6 §59
+ * names review freshness among the things a surface must never derive, and the failure it
+ * names is exactly the one that shape allows: handed one field and not the other, a stale
+ * verdict rendered as current.
+ *
+ * What is left to test is presentation: a status the server computed, turned into words.
+ */
+
+describe('the badge says what the server decided', () => {
+  it('reads a current review as current, and says why that matters', () => {
+    const badge = reviewFreshnessBadge('current');
+
+    expect(badge?.tone).toBe('success');
+    expect(badge?.explanation).toContain('integrated now');
   });
 
-  it('returns Stale when integration head has changed', () => {
-    const res = assessReviewFreshness({
-      review: {
-        integrationHead: '1111111111111111111111111111111111111111',
-      },
-      currentIntegrationHead: '2222222222222222222222222222222222222222',
-    });
-    expect(res.status).toBe('stale');
-    expect(res.tone).toBe('warning');
-    expect(res.label).toBe('Stale (Code Changed)');
+  it('reads a stale review as a warning, and says the verdict satisfies no gate', () => {
+    const badge = reviewFreshnessBadge('stale');
+
+    expect(badge?.tone).toBe('warning');
+    expect(badge?.explanation).toContain('no longer what would ship');
   });
 
-  it('returns Unverifiable / Pending when current integration head exists but review lacks reviewed head', () => {
-    const res = assessReviewFreshness({
-      review: {
-      },
-      currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
-    });
-    expect(res.status).toBe('unverifiable');
-    expect(res.tone).toBe('warning');
-    expect(res.label).toBe('Unverifiable / Pending');
+  it('keeps unverifiable apart from stale, in tone and in words', () => {
+    // Absence of a measurement is not a negative measurement — the same distinction
+    // `not_run` draws for a quality gate, for the same reason.
+    const badge = reviewFreshnessBadge('unverifiable');
+
+    expect(badge?.tone).toBe('muted');
+    expect(badge?.explanation).toContain('not the same as stale');
   });
 
-  it('returns Stale when plan hash is the same but integration head changed', () => {
-    const res = assessReviewFreshness({
-      review: {
-        planHash: 'planhash123456',
-        integrationHead: '1111111111111111111111111111111111111111',
-      },
-      currentPlanHash: 'planhash123456',
-      currentIntegrationHead: '2222222222222222222222222222222222222222',
-    });
-    expect(res.status).toBe('stale');
-    expect(res.label).toBe('Stale (Code Changed)');
-  });
-
-  it('never marks Current from stage name alone when head evidence is absent', () => {
-    const res = assessReviewFreshness({
-      review: {
-      },
-      stage: 'final-review',
-      currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
-    });
-    expect(res.status).not.toBe('current');
-    expect(res.status).toBe('unverifiable');
-  });
-
-  it('marks intermediate review as Diagnostic', () => {
-    const res = assessReviewFreshness({
-      review: {
-        isIntermediate: true,
-      },
-      currentIntegrationHead: 'c06e3e7d73f7ca33986f539c01855aee039e37e4',
-    });
-    expect(res.status).toBe('intermediate_diagnostic');
-    expect(res.label).toBe('Diagnostic');
-    expect(res.tone).toBe('info');
+  it('shows nothing when the server decided nothing', () => {
+    expect(reviewFreshnessBadge(undefined)).toBeUndefined();
   });
 });

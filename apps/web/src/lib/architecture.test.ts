@@ -241,3 +241,73 @@ describe('the browser draws the assignment and does not compute one (M5)', () =>
     expect(fetchers).toEqual(['lib/api.ts']);
   });
 });
+
+/**
+ * The browser draws a review; it does not decide one (M6 §59, I-44).
+ *
+ * Four things the charter names by name — review status, a finding's blocking status, a
+ * gate's pass/fail and a review's freshness — and one of them used to be computed here.
+ */
+describe('the browser renders the review and derives none of it (M6)', () => {
+  it('compares no commit to decide freshness', () => {
+    // `assessReviewFreshness` lived in `lib/review-freshness.ts` and compared a review's
+    // `integrationHead` against the run's. Identity against the integrated tree is the
+    // only thing that answers freshness, and only the server knows both halves — so a
+    // comparison here is a second authority whose first disagreement puts a decision
+    // nobody made on screen.
+    // Narrow on purpose. `integrationHead === undefined` is a presence check and a
+    // legitimate one; what is forbidden is comparing it against *another value*, which is
+    // the freshness decision. A rule broad enough to catch the presence check would have
+    // needed an allowlist, and a rule with an allowlist stops meaning anything.
+    //
+    // The `[A-Za-z_$]` at the end is load-bearing: without it `\s*` matches zero, the
+    // lookahead lands on the space before `undefined`, and every presence check reads as
+    // a comparison. The first version of this rule did exactly that.
+    // `\?\.` as well as `.`: the first version matched only `a.integrationHead` and let
+    // `gate.review?.integrationHead` through — which is how the mutation that reinstates
+    // the derivation was written, and it passed.
+    const COMPARISON =
+      /integrationHead\s*===\s*(?!(?:undefined|null)\b)[A-Za-z_$]|===\s*[\w.?]*integrationHead\b/;
+
+    const offenders = sources()
+      .filter(({ text }) => COMPARISON.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('turns no exit code into a gate status', () => {
+    // Colouring one command's own recorded exit code is display of a fact. Producing a
+    // `GateStatus` from one is the decision `core/review/gates.ts` makes, and the
+    // difference is whether the value crosses into the vocabulary the workflow gates on.
+    const offenders = sources()
+      .filter(({ text }) =>
+        /exitCode[^;\n]{0,40}['"](?:passed|failed|not_run|not_applicable)['"]/.test(codeOnly(text)),
+      )
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('decides no gate is unsatisfied by weighing required against status', () => {
+    // `required && status !== 'passed'` is `unsatisfiedRequired`, and it is the sentence
+    // that turns evidence into a refusal. One place answers it.
+    const offenders = sources()
+      .filter(({ text }) => /required[^;\n]{0,60}status\s*!==/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('decides no finding blocking by comparing severities', () => {
+    // Which severities block is configuration a person wrote, weighed by
+    // `core/review/decision.ts`. A component ranking them would be a second policy.
+    const offenders = sources()
+      .filter(({ text }) =>
+        /severity\s*===\s*'(?:critical|high)'|indexOf\([\w.]*severity/.test(codeOnly(text)),
+      )
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+});

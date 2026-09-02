@@ -431,6 +431,15 @@ export interface ApprovalGate {
     readonly findings: ReviewResult['findings'];
     readonly adjudications?: ReviewResult['adjudications'];
     readonly residualRisks?: readonly string[];
+    readonly integrationHead?: string;
+    /**
+     * Whether the verdict still describes the integrated code (M6, I-41).
+     *
+     * Listed here as well as on the view because this type is *reconstructed* by the
+     * server rather than spread wholesale, and a type that enumerates what it keeps
+     * silently drops every field added after it.
+     */
+    readonly freshness: 'current' | 'stale' | 'unverifiable';
   };
   readonly degradations: RunState['degradations'];
 }
@@ -500,6 +509,10 @@ export async function describeApprovalGate(
             ...(review.integrationHead === undefined
               ? {}
               : { integrationHead: review.integrationHead }),
+            // I-41, decided here because only this side knows both halves. Identity, not
+            // a timestamp: a review written after a change can still have read what came
+            // before it.
+            freshness: reviewFreshness(review.integrationHead, state.integrationHead),
           },
         }),
     degradations: state.degradations,
@@ -2211,3 +2224,22 @@ function explainRefusal(
 
 /** Re-exported so an adapter can render a plan hash without recomputing one. */
 export { planHash };
+
+/**
+ * Whether a review still describes the code that is integrated (M6, I-41).
+ *
+ * One comparison, in one place. It lived in `apps/web/src/lib/review-freshness.ts` and
+ * was decided in the browser from whichever fields it happened to have — the shape §59
+ * names as forbidden, and the shape that let a stale verdict render as current whenever
+ * the dashboard was handed one field and not the other.
+ *
+ * `unverifiable` rather than `stale` when either side has no commit: a plan-only run has
+ * no code for a review to have gone stale against.
+ */
+export function reviewFreshness(
+  reviewed: string | undefined,
+  integrated: string | undefined,
+): 'current' | 'stale' | 'unverifiable' {
+  if (reviewed === undefined || integrated === undefined) return 'unverifiable';
+  return reviewed === integrated ? 'current' : 'stale';
+}

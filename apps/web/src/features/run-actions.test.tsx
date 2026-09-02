@@ -73,6 +73,7 @@ const PASSING_GATE: ApprovalGateView = {
     independence: 'cross-provider',
     planHash: 'a1b2c3d4e5f60718',
     coversThisPlan: true,
+    freshness: 'current' as const,
     findings: [],
   },
   degradations: [],
@@ -88,6 +89,7 @@ const FAILING_GATE: ApprovalGateView = {
     independence: 'same-provider-fresh-context',
     planHash: 'a1b2c3d4e5f60718',
     coversThisPlan: true,
+    freshness: 'current' as const,
     findings: [
       {
         severity: 'high',
@@ -367,7 +369,7 @@ describe('the approval gate', () => {
   });
 });
 
-describe('the review freshness of the gate (§19.2)', () => {
+describe('the review freshness of the gate (§19.2, M6 §59)', () => {
   const HEAD = 'c06e3e7d73f7ca33986f539c01855aee039e37e4';
 
   const ISOLATED_RUN: RunDetailView = {
@@ -389,50 +391,49 @@ describe('the review freshness of the gate (§19.2)', () => {
     };
   }
 
-  it('marks the review CURRENT when the reviewed head is the current head', async () => {
-    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith({ integrationHead: HEAD });
+  async function badgeText(review: Partial<NonNullable<ApprovalGateView['review']>>) {
+    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith(review);
     renderActions(ISOLATED_RUN);
     await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
+    return within(await screen.findByRole('dialog'));
+  }
 
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Current')).toBeInTheDocument();
+  // **These used to assert a derivation and now assert a rendering**, which is the whole
+  // of M6 §59. The browser compared the review's head against the run's, from whichever
+  // of those fields it happened to have been handed; the server compares them now, and
+  // the component draws the answer. A test that set two heads and expected a conclusion
+  // was testing an authority the dashboard is not allowed to have.
+
+  it('shows the review as current when the server says it is', async () => {
+    const dialog = await badgeText({ integrationHead: HEAD, freshness: 'current' });
+    expect(dialog.getByText('review current')).toBeInTheDocument();
   });
 
-  it('marks the review STALE when the code changed after the review', async () => {
-    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith({
+  it('shows it as stale when the server says the code moved', async () => {
+    const dialog = await badgeText({
       integrationHead: '9999999999999999999999999999999999999999',
+      freshness: 'stale',
     });
-    renderActions(ISOLATED_RUN);
-    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
-
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Stale (Code Changed)')).toBeInTheDocument();
+    expect(dialog.getByText('review stale')).toBeInTheDocument();
   });
 
-  it('marks a legacy review without a recorded head UNVERIFIABLE', async () => {
-    // A review written before `integrationHead` existed can never prove it read
-    // the code that is there now — and the gate says so instead of guessing.
-    const { integrationHead: _legacyHead, ...legacyReview } = PASSING_GATE.review!;
-    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith(legacyReview);
-    renderActions(ISOLATED_RUN);
-    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
-
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Unverifiable / Pending')).toBeInTheDocument();
+  it('keeps unverifiable apart from stale', async () => {
+    // A review written before `integrationHead` existed cannot prove it read the code
+    // that is there now — and "nobody measured" is not "it is out of date".
+    const { integrationHead: _legacyHead, ...legacy } = PASSING_GATE.review!;
+    const dialog = await badgeText({ ...legacy, freshness: 'unverifiable' });
+    expect(dialog.getByText('freshness unknown')).toBeInTheDocument();
   });
 
-  it('marks the review CURRENT from an identical head even when the plan hash matches', async () => {
-    routes[`/api/v1/runs/${RUN.runId}/approval`] = gateWith({
-      integrationHead: HEAD,
-      planHash: PASSING_GATE.planHash,
-    });
-    renderActions(ISOLATED_RUN);
-    await userEvent.click(screen.getByRole('button', { name: 'Review & approve' }));
-
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Current')).toBeInTheDocument();
+  it('renders the server’ word even when the two heads look equal', async () => {
+    // The point of not deriving: the component does not second-guess the comparison,
+    // so it cannot disagree with the run about it.
+    const dialog = await badgeText({ integrationHead: HEAD, freshness: 'stale' });
+    expect(dialog.getByText('review stale')).toBeInTheDocument();
+    expect(dialog.queryByText('review current')).not.toBeInTheDocument();
   });
 });
+
 
 describe('revision', () => {
   it('will not send an empty instruction', async () => {

@@ -844,6 +844,7 @@ export const APPROVAL_GATE: ApprovalGateView = {
     independence: 'same-provider-fresh-context',
     planHash: 'a1b2c3d4e5f60718',
     coversThisPlan: true,
+    freshness: 'current' as const,
     findings: [
       {
         severity: 'high',

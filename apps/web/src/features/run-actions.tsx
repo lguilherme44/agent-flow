@@ -28,7 +28,7 @@ import {
 import { useArtifact } from '../lib/queries';
 import { formatWhen, humanise } from '../lib/format';
 import { formatPlanReviewVerdict } from '../lib/status';
-import { assessReviewFreshness } from '../lib/review-freshness';
+import { reviewFreshnessBadge } from '../lib/review-freshness';
 import { StructuredPlanView } from '../components/StructuredPlanView';
 import { useI18n } from '../lib/i18n/i18n-context';
 
@@ -398,21 +398,12 @@ function GateBody(props: {
   // The badge exists only where an integration head does: a plan-only run has no
   // code for a review to have gone stale against, so its currency is carried by
   // `coversThisPlan` rather than by a freshness guess.
-  const currentIntegrationHead = run.isolation?.integrationHead;
-  const freshness =
-    currentIntegrationHead === undefined
-      ? undefined
-      : assessReviewFreshness({
-          review:
-            review === undefined
-              ? undefined
-              : {
-                  planHash: review.planHash,
-                  integrationHead: review.integrationHead,
-                },
-          currentPlanHash: gate.planHash,
-          currentIntegrationHead,
-        });
+  // **Rendered, not derived** (M6 §59). This compared the review's head against the
+  // run's, in the browser, from whichever of `planHash` and `integrationHead` it happened
+  // to hold — so a stale verdict rendered as current whenever it was handed one field and
+  // not the other. Identity against the integrated tree is the only thing that answers
+  // freshness, and only the server knows both halves.
+  const freshness = reviewFreshnessBadge(gate.review?.freshness);
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -442,25 +433,13 @@ function GateBody(props: {
             same provider
           </Badge>
         ) : null}
-        {freshness?.status === 'current' ? (
+        {freshness === undefined ? null : (
           <Tooltip content={<span>{freshness.explanation}</span>}>
-            <Badge tone="success" caps>
+            <Badge tone={freshness.tone} caps>
               {freshness.label}
             </Badge>
           </Tooltip>
-        ) : freshness?.status === 'stale' ? (
-          <Tooltip content={<span>{freshness.explanation}</span>}>
-            <Badge tone="warning" caps>
-              {freshness.label}
-            </Badge>
-          </Tooltip>
-        ) : freshness?.status === 'unverifiable' ? (
-          <Tooltip content={<span>{freshness.explanation}</span>}>
-            <Badge tone="muted" caps>
-              {freshness.label}
-            </Badge>
-          </Tooltip>
-        ) : null}
+        )}
       </div>
 
       {/* 3. Plan Identifiers */}
