@@ -131,8 +131,17 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
   // `test/cli/cli.test.ts` with nothing between them — same wave, same file, guaranteed
   // conflict, caught by a model call and then by a human writing a revision.
   //
-  // Derived only among the *new* tasks: an existing task has already run, and adding an
-  // edge to it would reorder work that is finished.
+  // **Derived against the whole plan, not only the new tasks.** It used to be new-only,
+  // reasoning that "an existing task has already run, so an edge to it would reorder work
+  // that is finished". The live M6 dogfood falsified the premise: `review --fix` on a run
+  // that *halted* sees three tasks that never ran, and four generated fixes landed beside
+  // them declaring the same files. `checkPlan` refused the plan and the whole corrective
+  // round produced nothing — the exact failure AD-42 exists to stop, one level up.
+  //
+  // Safe because `deriveOverlapDependencies` only ever adds an edge from a *later* entry
+  // to an earlier one, and the fixes are appended last. Every edge therefore points from a
+  // fix into the plan, never the reverse, and an edge onto a task that did complete is
+  // satisfied the moment it is read.
   //
   // Only the dependencies are taken from the result. The first version of this spread the
   // whole task through the overlap helper under a flattened `files` key and then stripped
@@ -141,12 +150,16 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
   // still parsed and the ordering it computed was correct; what broke was everything
   // downstream that asks a corrective task which files it will touch.
   const overlapOrder = deriveOverlapDependencies(
-    fixes.map((fix) => ({ id: fix.id, dependencies: fix.dependencies, files: fix.files.likely })),
+    [...plan.tasks, ...fixes].map((task) => ({
+      id: task.id,
+      dependencies: task.dependencies,
+      files: task.files.likely,
+    })),
   );
 
   const ordered = fixes.map((fix, index) => ({
     ...fix,
-    dependencies: overlapOrder[index]?.dependencies ?? fix.dependencies,
+    dependencies: overlapOrder[plan.tasks.length + index]?.dependencies ?? fix.dependencies,
   }));
 
   return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...ordered] });

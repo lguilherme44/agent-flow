@@ -319,3 +319,73 @@ describe('corrective tasks are ordered and sized from the work (AD-42, C-16)', (
     expect(fixes[0]?.dependencies).not.toContain('TASK-001');
   });
 });
+
+/**
+ * `review --fix` on a run that halted.
+ *
+ * The ordering used to be derived among the new tasks only, on the premise that an
+ * existing task has already run. The live M6 dogfood falsified it: two tasks exhausted
+ * their attempts, the run stopped with three tasks unfinished, and the four generated
+ * fixes declared the same files as tasks still waiting to execute. `checkPlan` refused the
+ * whole plan for file contention and the corrective round produced nothing — which is the
+ * failure AD-42 exists to prevent, one level up from where it was being prevented.
+ */
+describe('a fix is ordered against the plan it joins, not only against its siblings', () => {
+  const planWith = (entries: Array<{ id: string; files: string[] }>) =>
+    PlanSchema.parse({
+      feature: 'f',
+      tasks: entries.map(({ id, files }) => ({
+        id,
+        title: 'Do it',
+        description: 'Implements FR-001.',
+        complexity: 'normal',
+        risk: 'low',
+        dependencies: [],
+        requirements: ['FR-001'],
+        files: { likely: files },
+        acceptanceCriteria: ['It works.'],
+        validation: ['test'],
+      })),
+    });
+
+  it('depends on the existing task it would contend with', () => {
+    const next = applyFixes(
+      planWith([{ id: 'TASK-001', files: ['src/badge.js'] }]),
+      review([{ file: 'src/badge.js' }]),
+      { validation: ['test'], origin: 'final-review' },
+    );
+
+    expect(next.tasks.at(-1)?.dependencies).toContain('TASK-001');
+  });
+
+  it('leaves a fix that shares nothing free to run in the first wave', () => {
+    const next = applyFixes(
+      planWith([{ id: 'TASK-001', files: ['src/badge.js'] }]),
+      review([{ file: 'src/index.js' }]),
+      { validation: ['test'], origin: 'final-review' },
+    );
+
+    expect(next.tasks.at(-1)?.dependencies).toEqual([]);
+  });
+
+  /** Never the reverse: work already in the plan is not reordered behind a correction. */
+  it('adds no edge to the existing task', () => {
+    const next = applyFixes(
+      planWith([{ id: 'TASK-001', files: ['src/badge.js'] }]),
+      review([{ file: 'src/badge.js' }]),
+      { validation: ['test'], origin: 'final-review' },
+    );
+
+    expect(next.tasks[0]?.dependencies).toEqual([]);
+  });
+
+  it('still orders the fixes among themselves', () => {
+    const next = applyFixes(
+      planWith([{ id: 'TASK-001', files: ['src/other.js'] }]),
+      review([{ file: 'src/badge.js' }, { file: 'src/badge.js' }]),
+      { validation: ['test'], origin: 'final-review' },
+    );
+
+    expect(next.tasks.at(-1)?.dependencies).toContain('FIX-001');
+  });
+});
