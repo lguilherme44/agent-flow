@@ -13,9 +13,9 @@ MVP 2  ────────────────────────�
 MVP 3  ─────────────────────────────────►  context intelligence & advisory local model, complete
 AR     ─────────────────────────────────►  autonomous execution & recovery, in progress
 M4     ─────────────────────────────────►  collaboration foundation, dogfooded live — and still off
-M5     ─────────────────────────────────►  team orchestration, specified
+M5     ─────────────────────────────────►  team orchestration, dogfooded live
                                         ▲
-                                        you are here: M4 proved live; M5 specified, not built
+                                        you are here: M5 built and proved live; M6 next
 ```
 
 ---
@@ -232,6 +232,57 @@ and confines the per-model table to `src/adapters/runners/`.
 - **I-26 — Runtime status is projected, never persisted**: the CLI and the HTTP API derive status from one pure projection.
 
 ---
+
+---
+
+## M5 — Team Orchestration · complete, and dogfooded live
+
+Specified in [`specs/m5-team-orchestration.md`](specs/m5-team-orchestration.md); the live
+run is [`specs/m5-live-dogfood-report.md`](specs/m5-live-dogfood-report.md).
+
+The milestone that answers **"who should execute TASK-X, and why"** deterministically. A
+team has members; a member has roles, skills, a capacity and areas it owns; a task's
+requirements are derived from the plan the planner already wrote. Every candidate is
+ranked, every exclusion is named, and the whole ranking is in the audit log — because
+"the AI decided" is not an answer.
+
+**No second router and no second scheduler.** `resolveTaskAgent` kept its position in the
+call graph and got a new body; `core/router.ts` survives as the input its answer is scored
+against. The scheduler stays the only authority on when a task runs and how wide a wave
+may be, and M5 hands it two more reasons to hold a task back.
+
+**A model still decides nothing.** A handoff became a *request* the policy may admit and
+may refuse — an accepted one still passes every filter the ordinary path applies. An
+outbox has no field in which to claim an area, a capacity or an assignee, so the claim is
+discarded by the parse rather than by a check somebody has to remember.
+
+| | Item | |
+|---|---|---|
+| M5-00 | Specification, criticised against the M4 dogfood | **done** |
+| M5-01 | Team and member contracts; roster from both sources | **done** |
+| M5-02 | Skills: normalisation, matching, the score's term | **done** |
+| M5-03 | `TaskRequirements` derivation | **done** |
+| M5-04 | Filtering, scoring, tie-break; `resolveTaskAgent` re-bodied | **done** |
+| M5-05 | Ownership: config, matcher, score, exclusive constraint | **done** |
+| M5-06 | Capacity: the wave's fourth filter and its event | **done** |
+| M5-07 | Handoff admission through the policy | **done** |
+| M5-08 | Assignment log, read model, CLI, dashboard | **done** |
+| M5-09 | Acceptance, concurrency, crash and threat suites; dogfood | **done** — [report](specs/m5-live-dogfood-report.md) |
+
+### What the dogfood cost and bought
+
+Six defects, five of them invisible to a green suite and two invisible from outside the
+product entirely — the task ran, so nothing failed. One was **the M4 deadlock returning
+through a seam M5 added**: an implementation prompt going out with no mention of the
+coordination channel, on the one path that needs a team, a task nobody can take, and a
+fallback role a member staffs.
+
+The channel now costs **772 bytes a task** for availability against M4's 1 373
+unconditional, and nothing more unless something relevant exists. Across nine live tasks,
+nothing was relevant and no agent spoke — the same answer M4 got, at 44 % of the price.
+
+`collaboration.enabled` stays `false` by default. Two milestones have now asked nine and
+five agents whether they had anything to say, and one of fourteen did.
 
 ---
 
