@@ -53,7 +53,7 @@ const WITH_TEAM = `${LEGACY}teams:
   core:
     members:
       backend:
-        role: executor.normal
+        roles: executor.normal
         runner: claude
         displayName: Backend
         skills: [TypeScript]
@@ -61,7 +61,7 @@ const WITH_TEAM = `${LEGACY}teams:
         ownership:
           preferred: [src/server/**]
       frontend:
-        role: executor.normal
+        roles: executor.normal
         runner: claude
         skills: [vue]
 `;

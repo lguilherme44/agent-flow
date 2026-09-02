@@ -207,21 +207,30 @@ function legacyRoster(config: GlobalConfig): AgentRoster {
  * refused. Found by the acceptance criterion that says M4's semantics remain valid.
  */
 function teamRoster(config: GlobalConfig): AgentRoster {
-  const derived: AgentIdentity[] = teamMembers(config).map(({ agentId, member }) => ({
-    id: agentId,
-    displayName: member.displayName ?? agentId,
-    role: member.role,
-    runner: member.runner,
-    ...(member.model === undefined ? {} : { model: member.model }),
-    skills: normaliseSkills(member.skills),
-    specializations: normaliseSkills(member.specializations),
-  }));
+  const derived: AgentIdentity[] = teamMembers(config).map(({ agentId, member }) => {
+    // The first declared role is the primary — the slot the member is displayed under —
+    // and the rest widen its eligibility. Order is the operator's, so a member listed
+    // `[executor.complex, executor.normal]` reads as a complex executor that also takes
+    // ordinary work, which is what they wrote.
+    const [primary, ...rest] = member.roles;
+
+    return {
+      id: agentId,
+      displayName: member.displayName ?? agentId,
+      role: primary ?? 'executor.normal',
+      ...(rest.length === 0 ? {} : { alsoServes: rest }),
+      runner: member.runner,
+      ...(member.model === undefined ? {} : { model: member.model }),
+      skills: normaliseSkills(member.skills),
+      specializations: normaliseSkills(member.specializations),
+    };
+  });
 
   // The stages a team does not staff, under the ids they run as. Only the roles no member
   // serves: a legacy `executor.normal` beside two members who *are* the normal executors
   // would be a third participant nothing dispatches, addressable by a message that then
   // reaches nobody.
-  const staffed = new Set(derived.map((agent) => agent.role));
+  const staffed = new Set(derived.flatMap((agent) => [agent.role, ...(agent.alsoServes ?? [])]));
   const unstaffed = legacyRoster(config).agents.filter((agent) => !staffed.has(agent.role));
 
   const all = [...derived, ...unstaffed, ...RESERVED];
@@ -234,7 +243,20 @@ function teamRoster(config: GlobalConfig): AgentRoster {
     // listing only the members would describe a run half its size.
     agents: addressable,
     byId: (id) => index.get(id),
-    byRole: (role) => addressable.filter((agent) => agent.role === role),
+    // Primary or secondary: a member declared for two slots answers a message to either,
+    // because it is the agent that would run that stage.
+    byRole: (role) => addressable.filter((agent) => serves(agent, role)),
     has: (id) => index.has(id),
   };
+}
+
+/**
+ * Whether this agent can fill this slot.
+ *
+ * One predicate, because "does this agent serve this role" is asked by the roster when a
+ * message names a role and by the assignment policy when a task needs one — and two
+ * spellings of it would disagree the first time a member declared a second role.
+ */
+export function serves(agent: AgentIdentity, role: WorkflowRole): boolean {
+  return agent.role === role || (agent.alsoServes?.includes(role) ?? false);
 }

@@ -216,15 +216,28 @@ function admittedHandoff(
  * writer, so a candidate that is not the holder is not eligible for work inside it. The
  * holder itself is unaffected — owning an area exclusively is a reason to get the work,
  * not a reason to be refused it.
+ *
+ * **A claim the candidate also makes is not a claim against it.** Two members declaring
+ * `src/db/**` exclusive means "this area takes one writer, and we are who may be it" —
+ * which is how a team covers one area across two roles. Reading it as two rival claims
+ * excluded *both* of them and left the area with no eligible member at all; the dogfood
+ * hit that the moment a second database member was declared, and the fallback hid it
+ * behind a task that still ran.
+ *
+ * The wave constraint is what keeps it to one writer at a time; this only decides who may
+ * be that writer.
  */
 function heldExclusivelyByAnother(
   agentId: AgentId,
   ownershipOf: ReadonlyMap<AgentId, OwnershipRule>,
   files: readonly string[],
 ): boolean {
+  const own = ownershipOf.get(agentId)?.exclusive ?? [];
+
   for (const [owner, rule] of ownershipOf) {
     if (owner === agentId) continue;
     for (const pattern of rule.exclusive) {
+      if (own.includes(pattern)) continue;
       if (files.some((file) => patternCovers(pattern, file))) return true;
     }
   }

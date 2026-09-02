@@ -83,7 +83,7 @@ export function projectTeam(input: TeamProjectionInput): TeamView {
       const view: TeamMemberView = {
         id: agentId,
         displayName: identity?.displayName ?? member.displayName ?? agentId,
-        role: member.role,
+        role: member.roles[0] ?? 'executor.normal',
         runner: member.runner,
         ...(member.model === undefined ? {} : { model: member.model }),
         skills: normaliseSkills(member.skills),

@@ -157,13 +157,24 @@ export type OwnershipRule = z.infer<typeof OwnershipRuleSchema>;
 
 export const TeamMemberConfigSchema = z.object({
   /**
-   * The logical role this member serves.
+   * The logical roles this member serves — one, or several.
    *
    * Kept from M4's vocabulary rather than replaced: a role is what a *stage* asks for,
    * and a member is who answers. Two members may serve one role, which is the whole
-   * reason a team is not a roster.
+   * reason a team is not a roster; and one member may serve two, which is the reason
+   * this is a list.
+   *
+   * **A scalar is accepted and is the common case.** `roles: executor.normal` and
+   * `roles: [executor.normal, executor.complex]` are both valid, because refusing the
+   * first would make every single-role member a one-element array for a schema's
+   * convenience.
+   *
+   * The first is the primary: it is the role the member is displayed under and the one
+   * an unrouted message reaches it by. The rest widen its eligibility and nothing else.
    */
-  role: WorkflowRoleSchema,
+  roles: z
+    .union([WorkflowRoleSchema, z.array(WorkflowRoleSchema).min(1).max(9)])
+    .transform((value) => (Array.isArray(value) ? [...new Set(value)] : [value])),
   runner: z.string().min(1),
   model: z.string().min(1).optional(),
   displayName: z.string().min(1).max(120).optional(),

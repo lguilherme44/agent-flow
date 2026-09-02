@@ -91,6 +91,21 @@ export const AgentIdentitySchema = z.object({
   id: AgentIdSchema,
   displayName: z.string().min(1).max(120),
   role: WorkflowRoleSchema,
+  /**
+   * The other slots this agent can fill (M5).
+   *
+   * Empty on every M4 run and on every derived roster, which is why `role` stays the
+   * primary rather than becoming a list: one field that is usually a single value should
+   * read as one, and every consumer that only ever cared which slot an agent mainly fills
+   * is untouched.
+   *
+   * **The dogfood is why this exists.** A real seven-task plan routed one task to
+   * `executor.normal`, four to `executor.complex` and two to `executor.trivial` — so a
+   * team whose members each declared one role lost six of seven tasks to the router
+   * before a single agent ran. A person is not three people because a task was flagged
+   * `crossModule`, and a team that has to be written three times is a team nobody writes.
+   */
+  alsoServes: z.array(WorkflowRoleSchema).max(8).optional(),
   runner: z.string().min(1),
   model: z.string().min(1).optional(),
   /**

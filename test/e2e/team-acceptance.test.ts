@@ -118,7 +118,7 @@ function config(options: {
               members: Object.fromEntries(
                 Object.entries(options.members).map(([id, member]) => [
                   id,
-                  { role: 'executor.normal', runner: 'claude', ...member },
+                  { roles: 'executor.normal', runner: 'claude', ...member },
                 ]),
               ),
               policies: options.policies ?? {},
@@ -714,7 +714,7 @@ describe('M5-ACC-14 — assignment explanation persisted', () => {
   });
 
   it('explains a refusal by naming every filter that fired', async () => {
-    const h = await harness(config({ members: { reviewer: { role: 'finalReviewer' } } }));
+    const h = await harness(config({ members: { reviewer: { roles: 'finalReviewer' } } }));
 
     await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
 

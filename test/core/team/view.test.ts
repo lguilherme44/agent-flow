@@ -48,7 +48,7 @@ function config(members?: Record<string, Record<string, unknown>>): GlobalConfig
               members: Object.fromEntries(
                 Object.entries(members).map(([id, member]) => [
                   id,
-                  { role: 'executor.normal', runner: 'claude', ...member },
+                  { roles: 'executor.normal', runner: 'claude', ...member },
                 ]),
               ),
               policies: {},
@@ -328,7 +328,7 @@ describe('the totals a dashboard header and a CLI line both read (§41)', () => 
     // §41's aggregate: "capacity fired forty times" is a configuration to change, and
     // forty rows each saying `capacity` is a list to count.
     const view = project({
-      config: config({ backend: {}, frontend: {}, reviewer: { role: 'finalReviewer' } }),
+      config: config({ backend: {}, frontend: {}, reviewer: { roles: 'finalReviewer' } }),
       events: [
         event('task_assigned', {
           task: 'TASK-001',

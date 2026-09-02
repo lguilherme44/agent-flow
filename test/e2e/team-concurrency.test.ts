@@ -73,28 +73,28 @@ const TEAM: GlobalConfig = GlobalConfigSchema.parse({
     core: {
       members: {
         dba: {
-          role: 'executor.normal',
+          roles: 'executor.normal',
           runner: 'claude',
           skills: ['sql'],
           capacity: { maxConcurrentTasks: 1 },
           ownership: { exclusive: ['src/db/**'] },
         },
         backend: {
-          role: 'executor.normal',
+          roles: 'executor.normal',
           runner: 'claude',
           skills: ['typescript'],
           capacity: { maxConcurrentTasks: 2 },
           ownership: { preferred: ['src/server/**'] },
         },
         frontend: {
-          role: 'executor.normal',
+          roles: 'executor.normal',
           runner: 'claude',
           skills: ['vue'],
           capacity: { maxConcurrentTasks: 2 },
           ownership: { preferred: ['apps/web/**'] },
         },
         generalist: {
-          role: 'executor.normal',
+          roles: 'executor.normal',
           runner: 'claude',
           capacity: { maxConcurrentTasks: 1 },
         },

@@ -54,7 +54,7 @@ function withTeam(members: Record<string, Record<string, unknown>>): GlobalConfi
         members: Object.fromEntries(
           Object.entries(members).map(([id, member]) => [
             id,
-            { role: 'executor.normal', runner: 'claude', ...member },
+            { roles: 'executor.normal', runner: 'claude', ...member },
           ]),
         ),
         policies: {},
@@ -209,7 +209,7 @@ describe('a team that is full', () => {
     // A member excluded for its role stays excluded next wave too, so waiting achieves
     // nothing — the router's fallback runs it. Deferring here would be a deadlock spelled
     // as a policy.
-    const config = withTeam({ reviewer: { role: 'finalReviewer' } });
+    const config = withTeam({ reviewer: { roles: 'finalReviewer' } });
     const admit = admissionFor(config);
 
     expect(

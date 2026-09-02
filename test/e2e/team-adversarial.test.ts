@@ -63,7 +63,7 @@ function config(
               members: Object.fromEntries(
                 Object.entries(members).map(([id, member]) => [
                   id,
-                  { role: 'executor.normal', runner: 'claude', ...member },
+                  { roles: 'executor.normal', runner: 'claude', ...member },
                 ]),
               ),
               policies: { admitHandoffs: true },
@@ -197,8 +197,8 @@ describe('an agent that asks to be moved somewhere more capable', () => {
       teams: {
         core: {
           members: {
-            backend: { role: 'executor.normal', runner: 'claude' },
-            expensive: { role: 'executor.normal', runner: 'claude' },
+            backend: { roles: 'executor.normal', runner: 'claude' },
+            expensive: { roles: 'executor.normal', runner: 'claude' },
           },
           policies: { admitHandoffs: false },
         },
@@ -227,7 +227,7 @@ describe('an agent that asks to be moved somewhere more capable', () => {
     // A task routed to `executor.normal` cannot be handed to a member serving
     // `finalReviewer`, however willing both are. The plan is written in roles.
     const assignment = assign({
-      config: config({ backend: {}, expensive: { role: 'finalReviewer' } }),
+      config: config({ backend: {}, expensive: { roles: 'finalReviewer' } }),
       handoffs: escalation,
     });
 
@@ -449,7 +449,7 @@ describe('a wave that could starve the team', () => {
 
   it('does not defer a task no member could ever take', () => {
     // Waiting for a role nobody serves is waiting forever. The router's fallback runs it.
-    const global = config({ reviewer: { role: 'finalReviewer' } });
+    const global = config({ reviewer: { roles: 'finalReviewer' } });
 
     expect(admission(global)(task('TASK-002'), [task('TASK-001')])).toBeUndefined();
   });

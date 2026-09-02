@@ -540,6 +540,29 @@ old agent, the new one and which of the five applied.
 
 ---
 
+### 4.7 What the live dogfood forced into this specification
+
+Two things, both found before a single agent ran, and both by looking at a real plan
+rather than at a written one.
+
+**A member serves roles, not a role.** The dogfood's seven-task plan routed one task to
+`executor.normal`, four to `executor.complex` — the planner flagged them `crossModule`
+or `architectureDecision`, which the router escalates — and two to `executor.trivial`. A
+team whose members each declared one role had a candidate for one of the seven; the other
+six fell back to the router. A person is not three people because a task carries a flag,
+and a team that has to be written three times is a team nobody writes. `roles` accepts a
+bare string, because most members do serve one.
+
+**`exclusive` is a claim about the area, not against the other holders.** Covering one
+area across two roles means declaring it twice, and reading the second declaration as a
+rival claim excluded both members and left the area with nobody eligible. It means "this
+area takes one writer at a time, and these are who may be it"; keeping it to one at a time
+is the wave constraint's job. The failure was invisible from the outside, because the task
+fell back to the router and ran.
+
+Neither was visible from the scripted suites, and both would have been visible from a
+second plan. That is the whole argument for §45.
+
 ## 12. Test strategy
 
 | Layer | What it must prove |

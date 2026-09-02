@@ -99,7 +99,7 @@ function withTeam(
         members: Object.fromEntries(
           Object.entries(members).map(([id, member]) => [
             id,
-            { role: 'executor.normal', runner: 'claude', ...member },
+            { roles: 'executor.normal', runner: 'claude', ...member },
           ]),
         ),
         policies: { admitHandoffs: true, ...policies },
@@ -336,7 +336,7 @@ describe('eligibility precedes ranking (M5-ACC-05, I-36)', () => {
     const assignment = resolveTaskAgent(
       input({
         config: withTeam({
-          reviewer: { role: 'finalReviewer', ownership: { preferred: ['src/server/**'] } },
+          reviewer: { roles: 'finalReviewer', ownership: { preferred: ['src/server/**'] } },
           backend: {},
         }),
       }),
@@ -416,7 +416,7 @@ describe('eligibility precedes ranking (M5-ACC-05, I-36)', () => {
     // recorded reason has to be the one a person can act on.
     const assignment = resolveTaskAgent(
       input({
-        config: withTeam({ reviewer: { role: 'finalReviewer' }, backend: {} }),
+        config: withTeam({ reviewer: { roles: 'finalReviewer' }, backend: {} }),
         inFlight: new Map([['reviewer', 5]]),
         canImplement: (agent) => agent.id !== 'reviewer',
       }),
@@ -600,5 +600,134 @@ describe('what the assignment is not allowed to do', () => {
   it('is deterministic — the same question twice gives the same answer', () => {
     const ask = (): unknown => resolveTaskAgent(input({ config: withTeam({ a: {}, b: {} }) }));
     expect(ask()).toEqual(ask());
+  });
+});
+
+/* ─── What a real plan forced into the model ────────────────────────────────── */
+
+describe('a member that serves more than one role (the dogfood’s first finding)', () => {
+  /**
+   * **A real seven-task plan is what made this necessary.** The planner flagged four
+   * tasks `crossModule` or `architectureDecision`, which the router escalates to
+   * `executor.complex`; two were trivial and one was normal. A team whose members each
+   * declared one role therefore had a candidate for exactly one of the seven, and the
+   * other six fell back to the router before any agent ran.
+   *
+   * A person is not three people because a task carries a flag.
+   */
+  const versatile = {
+    backend: {
+      roles: ['executor.normal', 'executor.complex'],
+      ownership: { preferred: ['src/server/**'] },
+    },
+    frontend: { roles: 'executor.trivial' },
+  };
+
+  it('is eligible for its primary role', () => {
+    expect(resolveTaskAgent(input({ config: withTeam(versatile) })).agentId).toBe('backend');
+  });
+
+  it('is eligible for a role it also declared', () => {
+    const assignment = resolveTaskAgent(
+      input({ config: withTeam(versatile), routedRole: 'executor.complex' }),
+    );
+
+    expect(assignment.agentId).toBe('backend');
+    expect(assignment.reason).toBe('team_match');
+  });
+
+  it('is still excluded from a role it did not declare', () => {
+    // Widening eligibility is not removing the filter. A member that never said it
+    // reviews must not be handed a review.
+    const assignment = resolveTaskAgent(
+      input({ config: withTeam(versatile), routedRole: 'finalReviewer' }),
+    );
+
+    expect(assignment.reason).toBe('no_eligible_member');
+    expect(assignment.detail).toContain('role mismatch');
+  });
+
+  it('is displayed under the first role it declared', () => {
+    // The order is the operator's. `[executor.complex, executor.normal]` reads as a
+    // complex executor that also takes ordinary work, which is what they wrote.
+    const roster = deriveAgentRoster(withTeam(versatile));
+
+    expect(roster.byId('backend')?.role).toBe('executor.normal');
+    expect(roster.byId('backend')?.alsoServes).toEqual(['executor.complex']);
+  });
+
+  it('answers a message addressed to either role', () => {
+    const roster = deriveAgentRoster(withTeam(versatile));
+
+    expect(roster.byRole('executor.normal').map((a) => a.id)).toEqual(['backend']);
+    expect(roster.byRole('executor.complex').map((a) => a.id)).toEqual(['backend']);
+  });
+
+  it('accepts a bare string, because most members serve one role', () => {
+    // Refusing `roles: executor.trivial` would make every single-role member a
+    // one-element array for a schema's convenience.
+    expect(deriveAgentRoster(withTeam(versatile)).byId('frontend')?.role).toBe('executor.trivial');
+  });
+
+  it('stops the legacy role being staffed twice over', () => {
+    // A member covering `executor.complex` means the unstaffed-role fallback must not
+    // also add the legacy `executor.complex` — two participants for one slot, one of
+    // which nothing dispatches.
+    const ids = deriveAgentRoster(withTeam(versatile)).agents.map((agent) => agent.id);
+
+    expect(ids).toContain('backend');
+    expect(ids).not.toContain('executor.complex');
+    expect(ids).not.toContain('executor.normal');
+    // And a role nobody staffs is still there, because that stage still runs.
+    expect(ids).toContain('architect');
+  });
+});
+
+describe('two members holding one area exclusively (the dogfood’s second finding)', () => {
+  /**
+   * **Two rival claims excluded both of them.** Covering one area across two roles means
+   * declaring it twice, and reading the second declaration as a claim *against* the first
+   * left `src/db/**` with no eligible member at all — the task then fell back to the
+   * router and ran, which is what hid it.
+   *
+   * `exclusive` means "this area takes one writer at a time, and these are who may be
+   * it". Keeping it to one at a time is the wave constraint's job, not this one's.
+   */
+  const shared = {
+    dba: { roles: 'executor.normal', ownership: { exclusive: ['src/db/**'] } },
+    dbaSenior: { roles: 'executor.normal', ownership: { exclusive: ['src/db/**'] } },
+    backend: { roles: 'executor.normal' },
+  };
+
+  const migration = task({ files: { likely: ['src/db/001.sql'] } });
+
+  it('leaves both holders eligible', () => {
+    const assignment = resolveTaskAgent(input({ config: withTeam(shared), task: migration }));
+
+    expect(assignment.reason).toBe('team_match');
+    expect(['dba', 'dbaSenior']).toContain(assignment.agentId);
+  });
+
+  it('still excludes a member that made no such claim', () => {
+    const assignment = resolveTaskAgent(input({ config: withTeam(shared), task: migration }));
+    const outsider = assignment.candidates.find((c) => c.agentId === 'backend');
+
+    expect(outsider?.excludedBy).toBe('ownership');
+  });
+
+  it('excludes a holder from an area somebody else holds and it does not', () => {
+    // Sharing one area is not sharing every area. The rule is per pattern.
+    const assignment = resolveTaskAgent(
+      input({
+        config: withTeam({
+          ...shared,
+          web: { roles: 'executor.normal', ownership: { exclusive: ['apps/web/**'] } },
+        }),
+        task: task({ files: { likely: ['apps/web/a.vue'] } }),
+      }),
+    );
+
+    expect(assignment.agentId).toBe('web');
+    expect(assignment.candidates.find((c) => c.agentId === 'dba')?.excludedBy).toBe('ownership');
   });
 });

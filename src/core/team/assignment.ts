@@ -9,6 +9,7 @@ import type {
 } from '../../contracts/index.js';
 import { routeTask, type RoutingPolicy } from '../router.js';
 import { ownershipScore } from './ownership.js';
+import { serves } from '../collaboration/roster.js';
 
 /**
  * Who should execute a task, and why (M5).
@@ -130,7 +131,12 @@ function score(candidate: Candidate, input: RankInput): CandidateScore {
 function exclusionFor(candidate: Candidate, input: RankInput): CandidateScore['excludedBy'] {
   // The plan is written in roles, and a role is what a stage asks for. A member that
   // serves `verification` is not a candidate for an implementation task however capable.
-  if (candidate.agent.role !== input.requirements.role) return 'role_mismatch';
+  //
+  // Asked through `serves` rather than by comparing `role`, because a member may declare
+  // several. Comparing the primary alone is what made a real plan lose six of its seven
+  // tasks to the router: the planner flagged four `crossModule`, the router escalated
+  // them to `executor.complex`, and a team written for `executor.normal` had nobody.
+  if (!serves(candidate.agent, input.requirements.role)) return 'role_mismatch';
 
   if (!input.canImplement(candidate.agent)) return 'runner_capability';
 
