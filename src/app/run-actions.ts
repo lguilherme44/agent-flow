@@ -1897,7 +1897,7 @@ async function judgeRun(
   // **Read before the gate, because the gate now depends on it.** A blocking finding
   // raised by a per-task review is a statement about this tree, and a Definition of Done
   // that cannot see it will say done while a `critical` is open (§43, I-44).
-  const fromCodeReview = await codeReviewFindings(context, runId);
+  const fromCodeReview = await codeReviewFindings(context, runId, plan);
 
   // ---- Definition of Done, evaluated as code (§42), over the same tree.
   const doneCheck = checkDefinitionOfDone({
@@ -1954,6 +1954,7 @@ async function judgeRun(
           // already changed" — the first condition of the AD-46 envelope.
           changes.map((change) => change.path),
           fromCodeReview?.originFor,
+          fromCodeReview?.expectationFor,
         );
 
   return done({
@@ -2068,7 +2069,15 @@ function idOf(finding: ReviewResult['findings'][number]): string {
 async function codeReviewFindings(
   context: ExecutionContext,
   runId: string,
-): Promise<{ review: ReviewResult; originFor: ReadonlyMap<string, CorrectiveOriginStage> } | undefined> {
+  plan: Plan,
+): Promise<
+  | {
+      review: ReviewResult;
+      originFor: ReadonlyMap<string, CorrectiveOriginStage>;
+      expectationFor: ReadonlyMap<string, 'pass' | 'fail' | 'none'>;
+    }
+  | undefined
+> {
   const reviews = await new ReviewStore({
     fs: context.fs,
     projectDir: context.projectDir,
@@ -2093,9 +2102,20 @@ async function codeReviewFindings(
   });
   if (selection === undefined) return undefined;
 
+  // Which task each finding is about, so the fix inherits where that task stood in the
+  // cycle. A finding on a test-first task is corrected while the suite is still red.
+  const expectationOf = new Map(
+    plan.tasks.map((task) => [task.id, task.validationExpectation] as const),
+  );
+
   return {
     review: selection.review,
     originFor: new Map(selection.findings.map((held) => [held.finding.id, 'code-review'] as const)),
+    expectationFor: new Map(
+      selection.findings.map(
+        (held) => [held.finding.id, expectationOf.get(held.taskId) ?? 'pass'] as const,
+      ),
+    ),
   };
 }
 
@@ -2110,6 +2130,8 @@ async function correctPlan(
   touchedFiles: readonly string[],
   /** Which findings came from a code review rather than from the run-level verdict. */
   originFor?: ReadonlyMap<string, CorrectiveOriginStage>,
+  /** What the corrected task expected, so a fix to a red suite is not judged as green. */
+  expectationFor?: ReadonlyMap<string, 'pass' | 'fail' | 'none'>,
 ): Promise<CorrectiveRound | undefined> {
   const architectureImpact =
     (await context.store.readArtifact(runId, 'architectureImpact')) ??
@@ -2124,6 +2146,7 @@ async function correctPlan(
     finalReview,
     origin: 'final-review',
     ...(originFor === undefined ? {} : { originFor }),
+    ...(expectationFor === undefined ? {} : { expectationFor }),
     sdd,
     architectureImpact,
     // The ids a corrective task may cite come from the project's own

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { PlanSchema, ReviewResultSchema } from '../../src/contracts/index.js';
+import {
+  PlanSchema,
+  ReviewResultSchema,
+  type ReviewFinding,
+  type ReviewResult,
+} from '../../src/contracts/index.js';
 import { applyFixes } from '../../src/core/corrective-plan.js';
 
 const plan = (ids: string[]) =>
@@ -387,5 +392,76 @@ describe('a fix is ordered against the plan it joins, not only against its sibli
     );
 
     expect(next.tasks.at(-1)?.dependencies).toContain('FIX-001');
+  });
+});
+
+/**
+ * Both live M6 corrective rounds were rejected by the plan review over this, in two
+ * different repositories:
+ *
+ * > TASK-001 deliberately leaves the suite RED (its own expectation is `fail`). So FIX-001
+ * > becomes eligible the moment TASK-001 finishes and in that window `npm run test` cannot
+ * > pass. The task only works by accident. A parallel scheduler produces a false failure
+ * > and burns retry attempts on a task whose content is correct.
+ *
+ * A correction stands where the work it corrects stood.
+ */
+describe('a fix inherits the cycle position of the task it corrects', () => {
+  /**
+   * Built rather than parsed: `ReviewResultSchema` describes a *proposed* finding, which
+   * has no id, so parsing strips the field the map is keyed on. Production never
+   * round-trips these — `correctiveSelection` hands the generator `ReviewFinding`s
+   * straight off the projection.
+   */
+  const withId = (id: string): ReviewResult => {
+    const findings: ReviewFinding[] = [
+      {
+        id: id as ReviewFinding['id'],
+        severity: 'high',
+        type: 'correctness',
+        description: 'The assertion cannot fail.',
+        suggestedAction: 'Assert on the value, not on the string.',
+        file: 'test/a.test.js',
+        evidence: [],
+      },
+    ];
+
+    return {
+      verdict: 'FAIL',
+      independence: 'cross-provider',
+      reviewer: { runner: 'reviewer', reasoning: 'high' },
+      findings,
+      adjudications: [],
+      residualRisks: [],
+    };
+  };
+
+  it('expects a red suite when the corrected task did', () => {
+    const next = applyFixes(plan(['TASK-001']), withId('FIND-0001'), {
+      validation: ['test'],
+      origin: 'code-review',
+      expectationFor: new Map([['FIND-0001', 'fail' as const]]),
+    });
+
+    expect(next.tasks.at(-1)?.validationExpectation).toBe('fail');
+  });
+
+  it('keeps `pass` for a finding nobody mapped', () => {
+    const next = applyFixes(plan(['TASK-001']), withId('FIND-0002'), {
+      validation: ['test'],
+      origin: 'code-review',
+      expectationFor: new Map([['FIND-0001', 'fail' as const]]),
+    });
+
+    expect(next.tasks.at(-1)?.validationExpectation).toBe('pass');
+  });
+
+  it('keeps `pass` for a run-level finding, which carries no id', () => {
+    const next = applyFixes(plan(['TASK-001']), review([{ file: 'src/a.js' }]), {
+      validation: ['test'],
+      origin: 'final-review',
+    });
+
+    expect(next.tasks.at(-1)?.validationExpectation).toBe('pass');
   });
 });

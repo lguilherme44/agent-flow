@@ -45,6 +45,19 @@ export interface FixOptions {
    * Keyed by finding id. Run-level findings have none and fall through to `origin`.
    */
   readonly originFor?: ReadonlyMap<string, CorrectiveOriginStage>;
+  /**
+   * What the corrected task expected of its own validation, by finding id.
+   *
+   * **A correction stands where the work it corrects stood.** A fix to a test-first task's
+   * tests runs while the suite is deliberately red, and inheriting the default `pass` makes
+   * it fail for the one reason that is not its fault. Both live M6 corrective rounds were
+   * rejected by the plan review over this: "TASK-001 deliberately leaves the suite RED, so
+   * FIX-001 with `validationExpectation: pass` produces a false failure and burns retry
+   * attempts on a task whose content is correct."
+   *
+   * Unmapped findings keep `pass`, which is every run-level finding and every pre-M6 caller.
+   */
+  readonly expectationFor?: ReadonlyMap<string, 'pass' | 'fail' | 'none'>;
   readonly minSeverity?: FindingSeverity;
 }
 
@@ -124,6 +137,7 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
     // finding ran no validation at all — the one outcome this workflow exists
     // to prevent.
     validation: [...options.validation],
+    validationExpectation: expectationOf(finding, options),
   }));
 
   // **Ordered by the files they share** (AD-42, C-16). The generator this replaces
@@ -163,6 +177,16 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
   }));
 
   return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...ordered] });
+}
+
+/** What the corrected task expected, so the fix runs where that task ran. */
+function expectationOf(
+  finding: ReviewResult['findings'][number],
+  options: FixOptions,
+): 'pass' | 'fail' | 'none' {
+  const id = 'id' in finding && typeof finding.id === 'string' ? finding.id : undefined;
+  if (id === undefined) return 'pass';
+  return options.expectationFor?.get(id) ?? 'pass';
 }
 
 /** Where one finding came from, falling back to the batch's origin. */
