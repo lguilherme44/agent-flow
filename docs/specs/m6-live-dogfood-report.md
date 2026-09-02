@@ -40,8 +40,8 @@ scenario 2's job.
 
 ### Reviews
 
-Both by `reviewer` on the other provider from the author, so **independence 3** — the
-maximum, and a fact rather than a configuration aspiration.
+Both recorded **independence 3**. One of them is wrong — see defect 0: `TASK-003` ran on
+`claude`, the reviewer's own provider, and the run said cross-provider.
 
 | Review | Task | Round | Verdict | Tree | Findings |
 |---|---|---|---|---|---|
@@ -165,9 +165,9 @@ it through the M5 policy with no QA-specific code anywhere. **M6-ACC-15, answere
 | REV-0001 | TASK-001 | qa | **1** | changes_requested | 1 medium, 1 low |
 | REV-0002 | TASK-002 | dev | **3** | approve | 1 low, 1 info |
 
-Independence 1 on the first, because `qa` and `reviewer` are both on `claude` — same
-provider, different member. Recorded rather than hidden, which is what §12 asks for. The
-second is 3, because `dev` is on `agy`.
+Independence 1 on the first — recorded rather than hidden, which is what §12 asks for, and
+also wrong: `qa` declares `claude` but `executor.normal` sent the work to `agy`, so it was
+cross-provider. Defect 0 has the full correction.
 
 `REV-0002` is an **approval** — the only one across both scenarios; the other three live reviews all asked for changes.
 Two findings, both non-blocking, and the change proceeds — §44's severity policy doing the
@@ -221,6 +221,52 @@ That is the defect and the fix, on one screen, from a real run.
 ## Defects this dogfood found
 
 Every one of them survived 3893 green tests, and every fix carries a positive control.
+
+### 0. A team member's declared runner is fiction at execution time — BLOCKER, not fixed
+
+**The independence figures in this report are unreliable, including the ones above.** They
+are corrected in the table below.
+
+A team member declares `runner:`. `resolveRole` accepts a member override and its own
+comment says why — "who answers a role is not always what `roles:` says". The capability
+check uses it. The independence calculation uses it. **The execution path does not**:
+`stageRunner.run` is handed a `role` and no override, so the runner comes from the `roles:`
+table and the member's declaration is ignored.
+
+Caught by one line of the live log:
+
+```
+task_assigned   task=FIX-001 agent=qa   role=executor.trivial
+task_finished   task=FIX-001 status=completed runner=agy
+```
+
+`qa` declares `runner: claude`. `executor.trivial` points at `agy`. The work ran on agy and
+every downstream calculation believed claude.
+
+What that does to the evidence:
+
+| Review | Member (declared) | Role → actual runner | Recorded | Actual | |
+|---|---|---|---|---|---|
+| s1 REV-0001 | backend (agy) | executor.normal → agy | 3 | cross-provider | ✅ |
+| s1 REV-0002 | backend (agy) | executor.complex → **claude** | **3** | **same-provider** | ❌ |
+| s2 REV-0001 | qa (claude) | executor.normal → **agy** | **1** | **cross-provider** | ❌ |
+| s2 REV-0002 | dev (agy) | executor.normal → agy | 3 | cross-provider | ✅ |
+| s2 REV-0003 | qa (claude) | executor.trivial → **agy** | **1** | **cross-provider** | ❌ |
+
+Three of five are wrong, and one of them is wrong in the direction that matters: s1
+REV-0002 recorded *maximum* independence for a review where the same provider wrote the
+code and judged it — the exact situation I-42 exists to prevent, reported as its opposite.
+
+**Not fixed here, deliberately.** This is an M5 execution-path defect, and §2 of the M6
+charter says M5 stabilisation is its own work and must not be smuggled into M6. The change
+also moves which provider every team task runs on, which is a real behavioural change for
+anyone with a team configured — not something to land at the end of a milestone on the
+strength of one log line, however clear.
+
+The fix is small and the shape is already there: thread the assigned member's runner and
+model into `StageRunOptions`, and pass them to `resolveRole` as the override it already
+takes. It is the first thing the next cycle should do, and every independence number in the
+product is suspect until it is done.
 
 ### 1. A code-review finding could never become work — BLOCKER
 
@@ -385,7 +431,7 @@ than believed.
 |---|---|---|---|
 | 01 | implementation receives independent reviewer | ✅ | `review-acceptance`, live in both runs |
 | 02 | reviewer cannot equal implementation invocation | ✅ | `assignment.ts` `is_author`, architecture test |
-| 03 | provider independence preferred, degradation recorded | ✅ | live: independence 3, 3, 1, 3 |
+| 03 | provider independence preferred, degradation recorded | ❌ | **recorded, and wrong 3 times in 5 — defect 0** |
 | 04 | structured finding is persisted | ✅ | 11 findings across 4 live reviews |
 | 05 | invalid finding paths refused/dropped safely | ✅ | `normalise.ts`, adversarial suite |
 | 06 | blocking finding prevents review approval | ✅ | live: the DoD held two runs open |
@@ -409,7 +455,7 @@ than believed.
 | 24 | **live handoff/reassignment demonstrated** | ❌ | **not met** |
 | 25 | **live collaboration payload changes downstream behaviour** | ❌ | **not met** |
 | 26 | live review finds a real issue | ✅ | `FIND-0001`, confirmed by three reviewers |
-| 27 | live corrective loop fixes and verifies that issue | ◐ | tasks generated and linked; execution below |
+| 27 | live corrective loop fixes and verifies that issue | ◐ | executed, integrated, re-reviewed live; `fixed` proven by test only |
 | 28 | all mandatory quality gates green | ✅ | 3917 · 343 · 38 e2e · 175 visual · lint · 3 typechecks · 2 builds |
 
 ### Why 24 and 25 are not met, and what would settle them
@@ -436,3 +482,80 @@ The refusal diagnostic added in this milestone is what produces the evidence to 
 run of a scenario-1-shaped team on the current build would name the fields agents actually
 get wrong, and the bootstrap could then carry a schema or an example instead of a
 description. That run was not made.
+
+### The corrective loop, end to end and live
+
+`FIX-001` ran. The whole chain, from the run's own event log:
+
+```
+corrective_task_created   FIX-001 ← FIND-0001, origin code-review
+task_workspace_created    its own branch, based on the integration head
+task_assigned             FIX-001 → qa, 0.80, skills test-gap, testing, missing-test
+task_attempt_validated    judgement satisfied, ids [install, lint, test]
+task_finished             completed
+task_integrated           merge 1c0ab6bf
+reviewer_assigned         REV-0003, reviewer, author qa
+review_started            tree 1c0ab6bf   ← the corrected tree
+finding_raised            FIND-0005 medium test-gap
+review_completed          changes_requested
+quality_gate_evaluated    install passed · lint passed · test passed
+```
+
+A finding raised by a live reviewer became a task, the task was **routed to QA by the
+finding's own category** — `test-gap` is a skill `qa` declares, and nothing QA-specific
+exists in the router — executed in an isolated worktree, validated, integrated, and
+**re-reviewed against the corrected tree**. Three gates green. **M6-ACC-10, 11, 12 and 15,
+all answered by one task.**
+
+The re-review asked for changes rather than clearing `FIND-0001`, and raised a new
+`FIND-0005` instead. That is the design, not a disappointment: a re-review judges the tree
+in front of it. `verified` is reserved for a review that reads a *different* tree and lets
+it go, and this one did not.
+
+**What did not happen: `FIND-0001` never reached `fixed`.** The `corrective_task_created`
+events on disk carry `task:`, written before the key mismatch was found; the projection
+reads `correctiveTask:`. The pairing is proven by a test that drives the real emitter into
+the real projection, and it is *not* proven by this run, whose log predates the fix. Said
+plainly rather than glossed: the lifecycle's last step has a test behind it and no live
+observation.
+
+---
+
+## Manual interventions, all of them
+
+Seven, and none of them silent.
+
+| # | Where | What | Why |
+|---|---|---|---|
+| 1 | Scenario 1 | `recovery_exhausted` on TASK-002 | two attempts spent; the ladder asks a human |
+| 2 | Scenario 1 | `recovery_exhausted` on TASK-004 | same |
+| 3 | Scenario 1 | `review --fix`, twice | the second only after fixing the ordering defect it exposed |
+| 4 | Scenario 2 | first run discarded | I ran `feature`/`run` without `--config`, so the team config was never loaded and no review happened at all — my error, not the product's |
+| 5 | Scenario 2 | `review --fix`, twice | the second exposed the duplicate-task defect |
+| 6 | Scenario 2 | `agent-flow revise` | the documented path after a plan review rejects |
+| 7 | Scenario 2 | `approve --force` | see below |
+
+The `--force` deserves its own line, because the product is right to make it loud. The
+revised plan's review returned `FAIL` on one `medium` finding: FIX-001's added assertion
+uses a contiguous `taken` run, so it cannot distinguish "first free candidate" from a
+step-by-2 loop. That is a fair criticism of the *test* the correction adds, not a reason
+the plan is unsafe to run, and executing it is what this dogfood exists to do. The
+abandoned guarantee is recorded on the run, which is exactly the behaviour that makes using
+it acceptable.
+
+## Two more things the runs said
+
+**"Its findings are above."** `agent-flow revise` prints that line after a rejecting plan
+review, and prints no findings. The verdict is in
+`.agent-flow/runs/<id>/reviews/plan-review.json` and nowhere on screen — so the one command
+whose output tells you what to fix tells you to look at nothing. Minor, and worth a line in
+M7.
+
+**The final review can be confidently wrong about the tree.** Scenario 2's second `--fix`
+generated FIX-002 from a final-review finding whose premises the plan review then
+demolished: "it claims `git log` shows commits for TASK-001/002/003 — checked: `git log`
+is scaffolding, test-script fix, baseline; `src/slug.js` is 11 lines and exports only
+slugify". A model asserted verified fact about a tree it had misread, and a *different*
+model caught it. Nothing downstream trusted the first one. That is the review layer
+working, and it is also the clearest argument in either scenario for why §9–§12 insist
+semantic review, QA and deterministic validation are not equivalent.
