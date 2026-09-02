@@ -92,6 +92,7 @@ describe('checkDefinitionOfDone (§42)', () => {
       'all tasks completed',
       'lint, tests and build passing',
       'final review PASS',
+      'no blocking review finding is open',
     ]);
   });
 
@@ -167,5 +168,57 @@ describe('mechanical verification is three-valued (AD-45, C-11)', () => {
     const review = check.conditions.find((entry) => entry.name.includes('final review'));
 
     expect(review?.met).toBe(true);
+  });
+});
+
+/**
+ * §43: the final quality decision is every required gate passing, no blocking finding
+ * open, the review approved and the Definition of Done satisfied. The first three lived
+ * in `decideQuality`; this one did not know about findings at all, so a run whose reviewer
+ * had raised a `critical` on integrated work would still be marked `completed`.
+ */
+describe('a blocking review finding is not done (§43, I-44)', () => {
+  it('holds the run open while one is still open', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      openBlockingFindings: ['FIND-0001'],
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.missing).toContain('no blocking review finding is open');
+  });
+
+  it('names them, because "not done" without the id sends nobody anywhere', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      openBlockingFindings: ['FIND-0001', 'FIND-0004'],
+    });
+
+    expect(result.conditions.at(-1)?.detail).toBe('still open: FIND-0001, FIND-0004');
+  });
+
+  /**
+   * Unlike the review verdict, which is suppressed when the commands could not run. That
+   * suppression is about a *model's* conclusion formed against a broken environment; a
+   * defect someone observed in the diff is a defect either way.
+   */
+  it('still blocks when the commands could not run', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      mechanicalVerification: 'NOT_RUN',
+      openBlockingFindings: ['FIND-0001'],
+    });
+
+    expect(result.missing).toContain('no blocking review finding is open');
+  });
+
+  it('behaves exactly as before when no review raised one', () => {
+    const result = checkDefinitionOfDone({ ...done, taskStates: [...done.taskStates] });
+
+    expect(result.done).toBe(true);
+    expect(result.missing).toEqual([]);
   });
 });

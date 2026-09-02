@@ -25,6 +25,23 @@ export interface DoneInput {
   readonly taskStates: readonly TaskState[];
   readonly mechanicalVerification: MechanicalVerification;
   readonly finalReviewVerdict: 'PASS' | 'FAIL' | null;
+  /**
+   * Blocking code-review findings still open, by id (§43, I-44).
+   *
+   * **A run could be `completed` with one of these open.** The run-level review is a single
+   * verdict about the whole tree; M6's per-task reviews are separate statements, and this
+   * check knew nothing about them — so a reviewer could raise a `critical` on integrated
+   * work and the Definition of Done would still say done, because the four conditions it
+   * knew about all held.
+   *
+   * Not suppressed when the commands could not run, unlike the review verdict above. That
+   * suppression exists because a model's verdict formed against a broken environment is
+   * not a conclusion about the code; a defect someone *observed in the diff* is one either
+   * way.
+   *
+   * Absent means none, which is exactly how every pre-M6 run behaves.
+   */
+  readonly openBlockingFindings?: readonly string[];
 }
 
 export interface DoneCheck {
@@ -78,6 +95,15 @@ export function checkDefinitionOfDone(input: DoneInput): DoneCheck {
         : input.finalReviewVerdict === null
           ? { detail: 'no final review has run' }
           : {}),
+    },
+    {
+      name: 'no blocking review finding is open',
+      met: (input.openBlockingFindings ?? []).length === 0,
+      ...((input.openBlockingFindings ?? []).length > 0
+        ? {
+            detail: `still open: ${(input.openBlockingFindings ?? []).join(', ')}`,
+          }
+        : {}),
     },
   ];
 

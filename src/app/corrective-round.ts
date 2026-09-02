@@ -1,9 +1,10 @@
 import { recordCorrectiveRound } from './autonomy-budget.js';
 import { repairCorrectivePlan } from '../core/corrective-plan-repair.js';
 import { decideCorrectivePlanRepair } from '../core/recovery-policy.js';
-import type { RecoveryConfig } from '../contracts/index.js';
+import type { CorrectiveOriginStage, RecoveryConfig } from '../contracts/index.js';
 import type { Plan, ReviewResult, Task } from '../contracts/index.js';
 import { applyFixes } from '../core/corrective-plan.js';
+import { correctiveLinks } from '../core/review/corrective.js';
 import {
   evaluateRound,
   type EnvelopeContext,
@@ -27,6 +28,13 @@ export interface CorrectiveRoundOptions {
   readonly finalReview: ReviewResult;
   /** Which review produced them — carried onto every corrective task. */
   readonly origin: 'verification' | 'final-review';
+  /**
+   * The origin of individual findings, when the batch mixes them (M6-05).
+   *
+   * `review --fix` carries the run-level verdict and the per-task code reviews together;
+   * this keeps each task labelled with the review that actually asked for it.
+   */
+  readonly originFor?: ReadonlyMap<string, CorrectiveOriginStage>;
   readonly sdd: string;
   readonly architectureImpact: string;
   readonly validation: ValidationRegistry;
@@ -87,6 +95,7 @@ export async function runCorrectiveRound(
   const next = applyFixes(plan, options.finalReview, {
     validation: options.validation.ids,
     origin: options.origin,
+    ...(options.originFor === undefined ? {} : { originFor: options.originFor }),
   });
 
   const added = next.tasks.slice(plan.tasks.length);
@@ -183,6 +192,22 @@ export async function runCorrectiveRound(
     origin: options.origin,
     approvalKept: envelope?.mayProceed === true,
   });
+
+  // **One event per finding that became a task, and this is the link the lifecycle runs on.**
+  //
+  // `projectFindings` derives `fixed` from `corrective_task_created` paired with the task
+  // completing — it has read this event since M6 was written, and nothing emitted it. The
+  // live dogfood is how that surfaced: seven findings, one of them blocking, and a status
+  // projection that could only ever answer `open` because the first link in the chain was
+  // never written. A test could not see it; every test that exercised the projection
+  // supplied the event itself.
+  for (const link of correctiveLinks(added)) {
+    await store.appendEvent(runId, 'corrective_task_created', {
+      task: link.task,
+      finding: link.finding,
+      origin: options.originFor?.get(link.finding) ?? options.origin,
+    });
+  }
 
   const service = new PlanReviewService({
     store,

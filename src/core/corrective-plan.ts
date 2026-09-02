@@ -34,6 +34,17 @@ export interface FixOptions {
    * caller record a provenance it never established.
    */
   readonly origin: CorrectiveOriginStage;
+  /**
+   * The origin of individual findings, when they did not all come from the same place.
+   *
+   * `agent-flow review --fix` carries two kinds at once: the run-level final review, and
+   * the per-task code reviews M6 added. They are different statements and the vocabulary
+   * distinguishes them, so a batch-wide origin would record `final-review` on work that a
+   * code review asked for — losing exactly the traceability `'code-review'` was added for.
+   *
+   * Keyed by finding id. Run-level findings have none and fall through to `origin`.
+   */
+  readonly originFor?: ReadonlyMap<string, CorrectiveOriginStage>;
   readonly minSeverity?: FindingSeverity;
 }
 
@@ -89,7 +100,7 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
     // functional requirement nobody had connected it to.
     requirements: finding.requirement === undefined ? [] : [finding.requirement],
     correctiveFor: {
-      stage: options.origin,
+      stage: originOf(finding, options),
       findingType: finding.type,
       // **Carried when the finding has one, which is what makes `fixed` a fact.** A
       // finding's status is projected, and `fixed` asks whether a corrective task for
@@ -139,6 +150,16 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
   }));
 
   return PlanSchema.parse({ ...plan, tasks: [...plan.tasks, ...ordered] });
+}
+
+/** Where one finding came from, falling back to the batch's origin. */
+function originOf(
+  finding: ReviewResult['findings'][number],
+  options: FixOptions,
+): CorrectiveOriginStage {
+  const id = 'id' in finding && typeof finding.id === 'string' ? finding.id : undefined;
+  if (id === undefined) return options.origin;
+  return options.originFor?.get(id) ?? options.origin;
 }
 
 /**

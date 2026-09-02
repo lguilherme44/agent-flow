@@ -3912,3 +3912,74 @@ describe('a review proposes and a gate decides (M6, I-42 … I-47)', () => {
     expect(generators).toEqual(['src/core/corrective-plan.ts']);
   });
 });
+
+/**
+ * §70's reality test, as a rule rather than a habit.
+ *
+ * **The live dogfood found what 3893 green tests could not.** `correctiveSelection` was
+ * written, reviewed and covered, and no production code called it: a code-review finding
+ * could not become a corrective task, so the whole `open → fixed → verified` lifecycle
+ * was unreachable however many findings a real reviewer raised. The tests all called the
+ * selector themselves, which is precisely the shape §70 warns about — "could every test
+ * pass while no real agent could ever reach this path?"
+ *
+ * So the rule asks the question mechanically. A pure function nobody calls is not dead
+ * code to be tidied later; in this layer it is a feature that does not exist.
+ */
+describe('every review capability is reachable from production code (§70)', () => {
+  const REVIEW_CORE = 'src/core/review';
+
+  /** Exported names, from the declaration forms this codebase actually uses. */
+  function exportedNames(text: string): string[] {
+    const code = codeOnly(text);
+    const out: string[] = [];
+    for (const match of code.matchAll(/export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)) {
+      if (match[1]) out.push(match[1]);
+    }
+    for (const match of code.matchAll(/export\s+const\s+([A-Za-z_$][\w$]*)\s*=/g)) {
+      if (match[1]) out.push(match[1]);
+    }
+    return out;
+  }
+
+  it('reaches every function it exports from something the product runs', () => {
+    const files = sourceFiles(REVIEW_CORE).map(read);
+    const own = new Set(files.map(({ path }) => path));
+
+    // Where a name is declared, so reaching a name can make its file live.
+    const declaredIn = new Map<string, string>();
+    for (const { path, text } of files) {
+      for (const name of exportedNames(text)) declaredIn.set(name, path);
+    }
+
+    // **Live** starts as everything outside this directory: the app, the server, the CLI,
+    // the adapters — the code the product actually runs. Tests are not here on purpose. A
+    // capability whose only caller is a test is the situation this rule rejects.
+    const live = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !own.has(path))
+      .map(({ text }) => codeOnly(text));
+
+    // A name referenced by live code is reached; reaching it makes its own file live, so
+    // whatever *it* calls is reached too. Repeated to a fixed point, which is what makes
+    // an internal collaborator three modules deep count as wired.
+    const reached = new Set<string>();
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const [name, path] of declaredIn) {
+        if (reached.has(name)) continue;
+        if (!live.some((text) => new RegExp(`\\b${name}\\b`).test(text))) continue;
+        reached.add(name);
+        const source = files.find((file) => file.path === path);
+        if (source !== undefined) live.push(codeOnly(source.text));
+        changed = true;
+      }
+    }
+
+    const unreachable = [...declaredIn]
+      .filter(([name]) => !reached.has(name))
+      .map(([name, path]) => `${path}: ${name}`);
+
+    expect(unreachable).toEqual([]);
+  });
+});

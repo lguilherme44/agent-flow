@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   ReviewResultSchema,
   type Plan,
+  type CorrectiveOriginStage,
   type ReviewResult,
   type RunState,
   type TaskState,
@@ -58,6 +59,10 @@ import {
   buildReview,
 } from './stages/final-review.js';
 import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js';
+import { ReviewStore } from './review-store.js';
+import { CollaborationStore } from './collaboration-store.js';
+import { projectFindings } from '../core/review/findings.js';
+import { correctiveSelection } from '../core/review/corrective.js';
 import { assessIndependence, explainIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { extractRequirementIds } from '../core/sdd-validator.js';
@@ -1889,12 +1894,20 @@ async function judgeRun(
     `${JSON.stringify(finalReview, null, 2)}\n`,
   );
 
+  // **Read before the gate, because the gate now depends on it.** A blocking finding
+  // raised by a per-task review is a statement about this tree, and a Definition of Done
+  // that cannot see it will say done while a `critical` is open (§43, I-44).
+  const fromCodeReview = await codeReviewFindings(context, runId);
+
   // ---- Definition of Done, evaluated as code (§42), over the same tree.
   const doneCheck = checkDefinitionOfDone({
     approved: state.approved,
     taskStates: state.tasks.map((task) => task.state),
     mechanicalVerification,
     finalReviewVerdict: finalReview.verdict,
+    ...(fromCodeReview === undefined
+      ? {}
+      : { openBlockingFindings: fromCodeReview.review.findings.map(idOf) }),
   });
 
   await context.store.updateRun(runId, (current) => ({
@@ -1905,6 +1918,29 @@ async function judgeRun(
 
   const finalState = await context.store.loadRun(runId);
 
+  // **The per-task code reviews join the same corrective round** (§29, M6-05).
+  //
+  // They were unreachable before this. `correctiveSelection` existed, was tested, and had
+  // no production caller; the live dogfood produced two reviews and seven findings — one
+  // of them a blocking `high` — and not one corrective task, because nothing carried a
+  // code-review finding to the generator. The tests could not see it: every one of them
+  // called the selector directly.
+  //
+  // One round rather than two. The run-level verdict and the code reviews are different
+  // statements about the same tree, and `--fix` is one question — "turn what is wrong into
+  // work". Two rounds would mean two plan reviews, two budget draws and a second plan built
+  // on the first one's output. Only the provenance differs, and `originFor` keeps that.
+  const mergedReview: ReviewResult =
+    fromCodeReview === undefined
+      ? finalReview
+      : {
+          ...finalReview,
+          findings: [...finalReview.findings, ...fromCodeReview.review.findings],
+          // A run-level `PASS` beside a blocking finding is not a pass. The generator only
+          // reads `findings`, but the value is persisted and read by people.
+          verdict: 'FAIL',
+        };
+
   const corrective =
     doneCheck.done || options.fix !== true
       ? undefined
@@ -1913,10 +1949,11 @@ async function judgeRun(
           runId,
           plan,
           effectiveSdd,
-          finalReview,
+          mergedReview,
           // The integration diff, which is the mechanical answer to "what has this run
           // already changed" — the first condition of the AD-46 envelope.
           changes.map((change) => change.path),
+          fromCodeReview?.originFor,
         );
 
   return done({
@@ -2010,6 +2047,58 @@ async function readAgentsMd(context: ExecutionContext, cwd: string): Promise<str
     : 'No AGENTS.md in this repository.';
 }
 
+/** A finding's id when it has one — run-level findings do not. */
+function idOf(finding: ReviewResult['findings'][number]): string {
+  return 'id' in finding && typeof finding.id === 'string' ? finding.id : 'unidentified finding';
+}
+
+/**
+ * The blocking code-review findings that still need work, in the shape the generator takes.
+ *
+ * Reads the projection rather than the raw records: a finding whose corrective task already
+ * completed is `fixed`, and one a later review let go is `verified`. Selecting from the
+ * records would regenerate work for both.
+ *
+ * Freshness is deliberately not a filter here. A review of an older tree may be stale as a
+ * *verdict* — it cannot approve what it did not see — but a defect it observed is still a
+ * defect until something addresses it, and the projection is what answers that.
+ *
+ * `undefined` when there is nothing blocking, which is the ordinary case.
+ */
+async function codeReviewFindings(
+  context: ExecutionContext,
+  runId: string,
+): Promise<{ review: ReviewResult; originFor: ReadonlyMap<string, CorrectiveOriginStage> } | undefined> {
+  const reviews = await new ReviewStore({
+    fs: context.fs,
+    projectDir: context.projectDir,
+  }).readReviews(runId);
+  if (reviews.length === 0) return undefined;
+
+  const findings = projectFindings({
+    reviews,
+    messages: await new CollaborationStore({
+      fs: context.fs,
+      projectDir: context.projectDir,
+    }).readMessages(runId),
+    events: await context.store.readEvents(runId),
+  });
+
+  const selection = correctiveSelection({
+    findings,
+    quality: context.config.global.quality,
+    // Whoever wrote the most recent review. Provenance on the generated task, and a member
+    // id rather than a runner — which is what a team makes it.
+    reviewer: reviews[reviews.length - 1]?.reviewer ?? 'reviewer',
+  });
+  if (selection === undefined) return undefined;
+
+  return {
+    review: selection.review,
+    originFor: new Map(selection.findings.map((held) => [held.finding.id, 'code-review'] as const)),
+  };
+}
+
 /** `--fix`: the findings become tasks, and the corrected plan is reviewed. */
 async function correctPlan(
   context: ExecutionContext,
@@ -2019,6 +2108,8 @@ async function correctPlan(
   finalReview: ReviewResult,
   /** Every path this run has already changed, from the integration diff (AD-46). */
   touchedFiles: readonly string[],
+  /** Which findings came from a code review rather than from the run-level verdict. */
+  originFor?: ReadonlyMap<string, CorrectiveOriginStage>,
 ): Promise<CorrectiveRound | undefined> {
   const architectureImpact =
     (await context.store.readArtifact(runId, 'architectureImpact')) ??
@@ -2032,6 +2123,7 @@ async function correctPlan(
     plan,
     finalReview,
     origin: 'final-review',
+    ...(originFor === undefined ? {} : { originFor }),
     sdd,
     architectureImpact,
     // The ids a corrective task may cite come from the project's own

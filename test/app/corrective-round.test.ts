@@ -16,6 +16,7 @@ import {
   ProjectConfigSchema,
   ReviewResultSchema,
   type Plan,
+  type ReviewFinding,
   type ReviewResult,
 } from '../../src/contracts/index.js';
 
@@ -439,5 +440,90 @@ describe('a corrective round inside the envelope keeps its approval (AD-46, C-18
     await w.round();
 
     expect((await w.store.loadRun(w.run.runId)).approved).toBe(false);
+  });
+});
+
+/**
+ * The link a finding's lifecycle runs on.
+ *
+ * `projectFindings` derives `fixed` from `corrective_task_created` paired with the task
+ * completing, and read that event from the day M6 was written while nothing emitted it.
+ * Every test that exercised the projection supplied the event itself, so the suite was
+ * green and no finding in a real run could ever leave `open`.
+ */
+describe('a corrective task records which finding asked for it', () => {
+  /**
+   * Built rather than parsed, and that is the point.
+   *
+   * `ReviewResultSchema` describes a *proposed* finding, which has no id — Agent Flow
+   * assigns those (§16), so parsing here would strip the very field the link is made of.
+   * Production never round-trips these: `correctiveSelection` hands the generator
+   * `ReviewFinding`s straight off the projection. A fixture that parsed would be testing a
+   * state the product never reaches.
+   */
+  const reviewWith = (id: string): ReviewResult => {
+    const findings: ReviewFinding[] = [
+      {
+        id: id as ReviewFinding['id'],
+        severity: 'high',
+        type: 'correctness',
+        description: 'The assertion cannot fail: the substring survives escaped.',
+        suggestedAction: 'Assert on the attribute, not on the whole output.',
+        file: 'test/orders.test.js',
+        evidence: [],
+      },
+    ];
+
+    return {
+      verdict: 'FAIL',
+      independence: 'cross-provider',
+      reviewer: { runner: 'reviewer', reasoning: 'high' },
+      findings,
+      adjudications: [],
+      residualRisks: [],
+    };
+  };
+
+  it('appends the event the finding projection reads', async () => {
+    const w = await world();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    const result = await w.round({ finalReview: reviewWith('FIND-0001') });
+    expect(result.outcome).toBe('applied');
+
+    const created = (await w.store.readEvents(w.run.runId)).filter(
+      (event) => event.type === 'corrective_task_created',
+    );
+
+    expect(created).toHaveLength(1);
+    expect(created[0]?.detail).toMatchObject({ finding: 'FIND-0001' });
+  });
+
+  it('labels the task with the review that raised it, not with the batch', async () => {
+    const w = await world();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    const result = await w.round({
+      finalReview: reviewWith('FIND-0002'),
+      origin: 'final-review',
+      originFor: new Map([['FIND-0002', 'code-review' as const]]),
+    });
+
+    expect(result.outcome).toBe('applied');
+    if (result.outcome !== 'applied') return;
+    expect(result.added[0]?.correctiveFor?.stage).toBe('code-review');
+  });
+
+  it('still labels a run-level finding as the run-level review', async () => {
+    const w = await world();
+    w.runners.claude.pushJson({ verdict: 'PASS', summary: 'Scoped.', findings: [] });
+
+    // No id, which is what a run-level review produces — and so no entry in the map.
+    const result = await w.round({ originFor: new Map([['FIND-0002', 'code-review' as const]]) });
+
+    expect(result.outcome).toBe('applied');
+    if (result.outcome !== 'applied') return;
+    expect(result.added[0]?.correctiveFor?.stage).toBe('final-review');
+    expect(result.added[0]?.correctiveFor?.finding).toBeUndefined();
   });
 });
