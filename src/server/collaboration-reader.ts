@@ -11,6 +11,7 @@ import {
   type AgentMessage,
   type RunEvent,
   type TeamView,
+  type ReviewView,
   RunEventSchema,
   TaskResultSchema,
 } from '../contracts/index.js';
@@ -22,7 +23,7 @@ import { projectHandoffs } from '../core/collaboration/handoffs.js';
 import { projectThreads } from '../core/collaboration/threads.js';
 import { deriveAgentRoster, type AgentRoster } from '../core/collaboration/roster.js';
 import { EMPTY_TEAM, projectTeam } from '../core/team/view.js';
-import { EMPTY_REVIEW, projectReviews, type ReviewView } from '../core/review/view.js';
+import { EMPTY_REVIEW, projectReviews } from '../core/review/view.js';
 import { ReviewStore } from '../app/review-store.js';
 import type { FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';

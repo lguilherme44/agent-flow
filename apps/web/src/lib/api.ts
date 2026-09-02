@@ -6,6 +6,7 @@ import type {
   ArtifactContentView,
   CollaborationView,
   TeamView,
+  ReviewView,
   ConfigView,
   ArtifactView,
   HealthResponse,
@@ -195,6 +196,10 @@ export const api = {
   // task they are running.
   team: (runId: string, projectId?: string) =>
     get<TeamView>(`/runs/${runId}/team`, { projectId }),
+  // Threads, findings, gates and the decision in one call, because a finding's status and
+  // the gate it is weighed against are folds over one log at one instant.
+  review: (runId: string, projectId?: string) =>
+    get<ReviewView>(`/runs/${runId}/review`, { projectId }),
 
   runners: (projectId?: string) => get<RunnerView[]>('/runners', { projectId }),
   runnerHealth: (projectId?: string) =>

@@ -9,6 +9,7 @@ import {
   useArtifacts,
   useCollaboration,
   useTeam,
+  useReview,
   useRun,
   useRunDag,
   useStages,
@@ -27,6 +28,7 @@ import {
 } from '../features/bottom-cards';
 import { CollaborationPanel } from '../features/collaboration';
 import { TeamPanel } from '../features/team';
+import { ReviewPanel } from '../features/review';
 import { Empty, Notice, cx } from '../components/ui';
 import { StructuredPlanView } from '../components/StructuredPlanView';
 import { ArtifactReader } from '../components/ArtifactReader';
@@ -129,6 +131,10 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   // Team card on every dashboard would be a box for a feature that ships off.
   const team = useTeam(projectId, runId);
   const hasTeam = team.data?.configured === true;
+  // M6-09. Shown only for a run that reviewed something — a permanently empty Review card
+  // on every dashboard would be a box for a feature that ships off.
+  const review = useReview(projectId, runId);
+  const hasReview = review.data?.reviewed === true;
   // Built here rather than in the graph, because the graph is lazy-loaded and this is a
   // three-line fold: the last assignment per task wins, since a reassignment appends to
   // the log rather than rewriting it.
@@ -314,6 +320,7 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                 enough for a message; and a permanently empty fifth card on every
                 dashboard would be a box for a feature that ships off. So a project that
                 has not opted in sees exactly the row it saw before M4. */}
+            {hasReview ? <ReviewPanel review={review.data} /> : null}
             {hasCollaboration || hasTeam ? (
               // Side by side above 1280 and stacked below, for the same measured reason
               // the row above splits at that width: two cards at 1024 leave each 500px,

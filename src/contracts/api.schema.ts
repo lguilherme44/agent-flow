@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { QualityGateResult, ReviewFinding } from './review.schema.js';
 import type { ReasoningLevel } from './common.schema.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
 import type {
@@ -1056,4 +1057,88 @@ export interface TeamView {
   readonly assignments: readonly TaskAssignmentView[];
   readonly deferrals: readonly WaveDeferralView[];
   readonly totals: TeamTotals;
+}
+
+/* ─── Review (M6) ──────────────────────────────────────────────────────────── */
+
+/**
+ * The review view, declared where every layer can see it.
+ *
+ * Here rather than in `core/review/view.ts` for the reason `TeamView` is here: contracts
+ * may not import from the core, and the browser needs the shape. The core produces this;
+ * this describes it.
+ *
+ * **Deliberately the whole thing rather than a summary.** The browser renders the
+ * decision the workflow acted on, which means it has to receive all of it — a view that
+ * carried a verdict without its conditions would leave the dashboard to explain a refusal
+ * it cannot see the reasons for, and explaining it would mean deriving them (§59).
+ */
+export type ReviewThreadStatus =
+  | 'in_review'
+  | 'changes_requested'
+  | 'awaiting_recheck'
+  | 'approved'
+  | 'blocked';
+
+export type FindingLifecycle = 'open' | 'acknowledged' | 'disputed' | 'fixed' | 'verified';
+
+export interface ProjectedFindingView {
+  readonly finding: ReviewFinding;
+  readonly reviewId: string;
+  readonly taskId: string;
+  readonly round: number;
+  readonly status: FindingLifecycle;
+  readonly correctiveTask?: string;
+  readonly verifiedBy?: string;
+}
+
+export interface QualityDecisionView {
+  readonly approved: boolean;
+  readonly conditions: readonly { name: string; met: boolean; detail?: string }[];
+  readonly blockedBy: readonly string[];
+}
+
+export interface ReviewThreadView {
+  readonly taskId: string;
+  readonly status: ReviewThreadStatus;
+  readonly freshness: 'current' | 'stale' | 'unverifiable';
+  readonly rounds: number;
+  readonly reviewer: string;
+  readonly reviewerName: string;
+  readonly author: string;
+  readonly independence: number;
+  readonly reviewedTree?: string;
+  readonly integratedTree?: string;
+  readonly findings: readonly ProjectedFindingView[];
+  readonly openBlocking: number;
+  readonly decision: QualityDecisionView;
+}
+
+export interface ReviewTotals {
+  readonly reviews: number;
+  readonly tasksReviewed: number;
+  readonly findings: number;
+  readonly openFindings: number;
+  readonly verifiedFindings: number;
+  readonly staleReviews: number;
+  readonly disputes: number;
+  readonly bySeverity: Readonly<Record<string, number>>;
+  readonly byCategory: Readonly<Record<string, number>>;
+  readonly byIndependence: Readonly<Record<string, number>>;
+}
+
+export interface ReviewView {
+  /** Whether this run reviewed anything. A run with no reviewer is not an empty review. */
+  readonly reviewed: boolean;
+  readonly threads: readonly ReviewThreadView[];
+  readonly gates: readonly QualityGateResult[];
+  /**
+   * The required gates that are not satisfied — answered, not derived.
+   *
+   * `required && status !== 'passed'` is the sentence that turns evidence into a refusal,
+   * and one place answers it. The dashboard's own architecture rule caught the panel
+   * recomputing this, which is exactly the second authority §59 forbids.
+   */
+  readonly unsatisfiedGates: readonly QualityGateResult[];
+  readonly totals: ReviewTotals;
 }

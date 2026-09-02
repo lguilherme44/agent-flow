@@ -7,10 +7,15 @@ import type {
   QualityConfig,
   QualityGateResult,
   ReviewRecord,
+  ReviewThreadStatus,
+  ReviewThreadView,
+  ReviewTotals,
+  ReviewView,
   RunEvent,
 } from '../../contracts/index.js';
 import { projectFindings, type ProjectedFinding } from './findings.js';
 import { decideQuality, latestReview, type QualityDecision } from './decision.js';
+import { unsatisfiedRequired } from './gates.js';
 
 /**
  * A run's reviews, folded for whoever is reading (M6-09, M6-ACC-21).
@@ -41,57 +46,18 @@ export interface ReviewProjectionInput {
   readonly integratedTrees?: ReadonlyMap<string, string>;
 }
 
-export type ReviewThreadStatus =
-  | 'in_review'
-  | 'changes_requested'
-  | 'awaiting_recheck'
-  | 'approved'
-  | 'blocked';
-
-export interface ReviewThreadView {
-  readonly taskId: string;
-  readonly status: ReviewThreadStatus;
-  /** `current` when the latest review read the tree that is integrated (I-41). */
-  readonly freshness: 'current' | 'stale' | 'unverifiable';
-  readonly rounds: number;
-  readonly reviewer: string;
-  readonly reviewerName: string;
-  readonly author: string;
-  readonly independence: number;
-  readonly reviewedTree?: string;
-  readonly integratedTree?: string;
-  readonly findings: readonly ProjectedFinding[];
-  readonly openBlocking: number;
-  readonly decision: QualityDecision;
-}
-
-export interface ReviewTotals {
-  readonly reviews: number;
-  readonly tasksReviewed: number;
-  readonly findings: number;
-  readonly openFindings: number;
-  readonly verifiedFindings: number;
-  readonly staleReviews: number;
-  readonly disputes: number;
-  /** How often each severity was raised. Keyed, so an unknown one appears without a change. */
-  readonly bySeverity: Readonly<Record<string, number>>;
-  readonly byCategory: Readonly<Record<string, number>>;
-  /** Independence achieved, counted. `1` appearing often is a finding about the team. */
-  readonly byIndependence: Readonly<Record<string, number>>;
-}
-
-export interface ReviewView {
-  /** Whether this run reviewed anything. A run with no reviewer is not an empty review. */
-  readonly reviewed: boolean;
-  readonly threads: readonly ReviewThreadView[];
-  readonly gates: readonly QualityGateResult[];
-  readonly totals: ReviewTotals;
-}
+/**
+ * The shapes this module produces are declared in `contracts/api.schema.ts`.
+ *
+ * Contracts may not import from the core, and the browser needs them — so the type lives
+ * where every layer can see it and the fold lives here. The same split `TeamView` uses.
+ */
 
 export const EMPTY_REVIEW: ReviewView = {
   reviewed: false,
   threads: [],
   gates: [],
+  unsatisfiedGates: [],
   totals: {
     reviews: 0,
     tasksReviewed: 0,
@@ -131,6 +97,7 @@ export function projectReviews(input: ReviewProjectionInput): ReviewView {
     reviewed: true,
     threads,
     gates,
+    unsatisfiedGates: unsatisfiedRequired(gates),
     totals: totalsOf(input.reviews, findings, threads),
   };
 }

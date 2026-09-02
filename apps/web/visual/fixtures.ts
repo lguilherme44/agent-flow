@@ -1264,6 +1264,180 @@ export const TEAM = {
   },
 };
 
+/**
+ * A run with no review, which is the reference run and most runs.
+ *
+ * Team-less for the same reason `TEAM_NONE` is: a review in the shared fixture would add
+ * a card to every screenshot in this suite and move every baseline at once. The review's
+ * own compositions are photographed in `review.spec.ts`, which overrides this.
+ */
+export const REVIEW_NONE = {
+  reviewed: false,
+  threads: [],
+  gates: [],
+  unsatisfiedGates: [],
+  totals: {
+    reviews: 0,
+    tasksReviewed: 0,
+    findings: 0,
+    openFindings: 0,
+    verifiedFindings: 0,
+    staleReviews: 0,
+    disputes: 0,
+    bySeverity: {},
+    byCategory: {},
+    byIndependence: {},
+  },
+};
+
+/**
+ * A review mid-cycle, composed to put every branch in one frame (§57).
+ *
+ * One change approved, one asking for changes with an open critical finding, one stale,
+ * and one awaiting a recheck with a fix already integrated. A required gate that did not
+ * run, because that is the row easiest to render as forgettable and the one that must
+ * never be.
+ */
+export const REVIEW = {
+  reviewed: true,
+  threads: [
+    {
+      taskId: 'TASK-003',
+      status: 'changes_requested',
+      freshness: 'current',
+      rounds: 1,
+      reviewer: 'reviewer',
+      reviewerName: 'Reviewer',
+      author: 'backend',
+      independence: 3,
+      reviewedTree: 'a'.repeat(40),
+      integratedTree: 'a'.repeat(40),
+      findings: [
+        {
+          finding: {
+            id: 'FIND-0001',
+            severity: 'critical',
+            type: 'security',
+            description: 'the recurrence token is written to the attempt log in clear text',
+            suggestedAction: 'redact it before the log line is composed',
+            file: 'src/server/routes.ts',
+            location: { line: 84 },
+            evidence: [],
+          },
+          reviewId: 'REV-0001',
+          taskId: 'TASK-003',
+          round: 1,
+          status: 'open',
+        },
+        {
+          finding: {
+            id: 'FIND-0002',
+            severity: 'medium',
+            type: 'test-gap',
+            description: 'nothing covers the empty-window case the SDD calls out',
+            suggestedAction: 'add a case for a window with no occurrences',
+            file: 'test/recurrence.test.ts',
+            evidence: [],
+          },
+          reviewId: 'REV-0001',
+          taskId: 'TASK-003',
+          round: 1,
+          status: 'acknowledged',
+        },
+      ],
+      openBlocking: 2,
+      decision: {
+        approved: false,
+        conditions: [
+          { name: 'every required quality gate passed', met: false, detail: 'security not run' },
+          { name: 'no blocking finding is open', met: false, detail: 'FIND-0001 critical (open)' },
+        ],
+        blockedBy: ['every required quality gate passed', 'no blocking finding is open'],
+      },
+    },
+    {
+      taskId: 'TASK-004',
+      status: 'awaiting_recheck',
+      freshness: 'stale',
+      rounds: 2,
+      reviewer: 'reviewer',
+      reviewerName: 'Reviewer',
+      author: 'frontend',
+      independence: 1,
+      reviewedTree: 'b'.repeat(40),
+      integratedTree: 'c'.repeat(40),
+      findings: [
+        {
+          finding: {
+            id: 'FIND-0003',
+            severity: 'high',
+            type: 'correctness',
+            description: 'the retry re-sends a body the first attempt already consumed',
+            suggestedAction: 'buffer the body before the first attempt',
+            file: 'src/server/retry.ts',
+            location: { line: 31 },
+            evidence: [],
+          },
+          reviewId: 'REV-0002',
+          taskId: 'TASK-004',
+          round: 1,
+          status: 'fixed',
+          correctiveTask: 'FIX-001',
+        },
+      ],
+      openBlocking: 1,
+      decision: {
+        approved: false,
+        conditions: [
+          {
+            name: 'the review read the tree that is integrated',
+            met: false,
+            detail: 'REV-0002 read bbbbbbbb and cccccccc is integrated — it is stale',
+          },
+        ],
+        blockedBy: ['the review read the tree that is integrated'],
+      },
+    },
+    {
+      taskId: 'TASK-005',
+      status: 'approved',
+      freshness: 'current',
+      rounds: 1,
+      reviewer: 'remote',
+      reviewerName: 'Remote reviewer',
+      author: 'backend',
+      independence: 3,
+      reviewedTree: 'd'.repeat(40),
+      integratedTree: 'd'.repeat(40),
+      findings: [],
+      openBlocking: 0,
+      decision: { approved: true, conditions: [], blockedBy: [] },
+    },
+  ],
+  gates: [
+    { gateId: 'lint', category: 'lint', required: true, status: 'passed', exitCode: 0, durationMs: 2100 },
+    { gateId: 'security', category: 'security', required: true, status: 'not_run', detail: 'no command is configured for "security"' },
+    { gateId: 'test', category: 'unit', required: true, status: 'passed', exitCode: 0, durationMs: 18400 },
+    { gateId: 'typecheck', category: 'typecheck', required: true, status: 'passed', exitCode: 0, durationMs: 6200 },
+    { gateId: 'visual', category: 'visual', required: false, status: 'not_applicable', detail: 'this change touches nothing under apps/web/**' },
+  ],
+  unsatisfiedGates: [
+    { gateId: 'security', category: 'security', required: true, status: 'not_run', detail: 'no command is configured for "security"' },
+  ],
+  totals: {
+    reviews: 4,
+    tasksReviewed: 3,
+    findings: 3,
+    openFindings: 1,
+    verifiedFindings: 0,
+    staleReviews: 1,
+    disputes: 0,
+    bySeverity: { critical: 1, high: 1, medium: 1 },
+    byCategory: { correctness: 1, security: 1, 'test-gap': 1 },
+    byIndependence: { '1': 1, '3': 3 },
+  },
+};
+
 export const ROUTES: Record<string, unknown> = {
   '/api/v1/health': { status: 'ok', version: '0.1.0', projects: 4, host: '127.0.0.1', port: 4782 },
   '/api/v1/projects': PROJECTS,
@@ -1278,6 +1452,7 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}/telemetry`]: TELEMETRY,
   [`/api/v1/runs/${RUN_ID}/collaboration`]: COLLABORATION,
   [`/api/v1/runs/${RUN_ID}/team`]: TEAM_NONE,
+  [`/api/v1/runs/${RUN_ID}/review`]: REVIEW_NONE,
   '/api/v1/runners': RUNNERS,
   '/api/v1/agents': AGENTS,
   '/api/v1/prompts': PROMPTS,

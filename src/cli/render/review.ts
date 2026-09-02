@@ -1,4 +1,4 @@
-import type { ReviewThreadView, ReviewView } from '../../core/review/view.js';
+import type { ReviewThreadView, ReviewView } from '../../contracts/index.js';
 
 /**
  * What the reviewers found, in a terminal (M6-09, M6-ACC-21).

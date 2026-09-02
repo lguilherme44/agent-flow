@@ -5,6 +5,7 @@ import type {
   ArtifactContentView,
   CollaborationView,
   TeamView,
+  ReviewView,
   ConfigView,
   ArtifactView,
   ProjectView,
@@ -68,6 +69,8 @@ export const keys = {
     ['collaboration', { runId, projectId }] as const,
   team: (projectId: string | undefined, runId: string) =>
     ['team', { runId, projectId }] as const,
+  review: (projectId: string | undefined, runId: string) =>
+    ['review', { runId, projectId }] as const,
   runnerHealth: (projectId?: string) => ['runner-health', { projectId }] as const,
   runners: (projectId?: string) => ['runners', { projectId }] as const,
   agents: (projectId?: string) => ['agents', { projectId }] as const,
@@ -315,6 +318,24 @@ export function useTeam(
   return useQuery({
     queryKey: keys.team(projectId, runId ?? ''),
     queryFn: () => api.team(runId as string, projectId),
+    enabled: runId !== undefined,
+  });
+}
+
+/**
+ * The run's reviews (M6-09, M6-ACC-21).
+ *
+ * **The component renders this and derives none of it.** Review status, a finding's
+ * blocking status, a gate's verdict and a review's freshness all arrive answered — §59
+ * names all four, and a browser that computed any would be a second authority.
+ */
+export function useReview(
+  projectId: string | undefined,
+  runId: string | undefined,
+): UseQueryResult<ReviewView> {
+  return useQuery({
+    queryKey: keys.review(projectId, runId ?? ''),
+    queryFn: () => api.review(runId as string, projectId),
     enabled: runId !== undefined,
   });
 }
