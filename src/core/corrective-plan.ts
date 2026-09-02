@@ -91,6 +91,11 @@ export function applyFixes(plan: Plan, review: ReviewResult, options: FixOptions
     correctiveFor: {
       stage: options.origin,
       findingType: finding.type,
+      // **Carried when the finding has one, which is what makes `fixed` a fact.** A
+      // finding's status is projected, and `fixed` asks whether a corrective task for
+      // *it* completed — unanswerable while the task carried the description and not the
+      // id. The run-level reviews produce findings with no id, and those carry none.
+      ...('id' in finding && typeof finding.id === 'string' ? { finding: finding.id } : {}),
       severity: finding.severity,
       ...(finding.requirement === undefined ? {} : { requirement: finding.requirement }),
       description: finding.description,

@@ -202,7 +202,13 @@ export const FindingStatusSchema = z.enum(FINDING_STATUSES);
 export type FindingStatus = z.infer<typeof FindingStatusSchema>;
 
 /** The review stages whose findings can become work (§29). */
-export const CORRECTIVE_ORIGINS = ['plan-review', 'verification', 'final-review'] as const;
+export const CORRECTIVE_ORIGINS = [
+  'plan-review',
+  'verification',
+  'final-review',
+  /** One change, reviewed by somebody who did not write it (M6). */
+  'code-review',
+] as const;
 export const CorrectiveOriginStageSchema = z.enum(CORRECTIVE_ORIGINS);
 export type CorrectiveOriginStage = z.infer<typeof CorrectiveOriginStageSchema>;
 
@@ -224,6 +230,15 @@ export const CorrectiveOriginSchema = z.object({
   stage: CorrectiveOriginStageSchema,
   /** The finding's own `type`, verbatim — never normalised into a requirement. */
   findingType: z.string().min(1),
+  /**
+   * Which finding this corrects, when the finding had an identity (M6).
+   *
+   * **The link that makes `fixed` a fact.** A finding's status is projected, and the
+   * transition to `fixed` asks whether a corrective task for it completed — a question
+   * nothing could answer while the corrective task carried the finding's *description*
+   * and not its id. Absent for the run-level reviews, whose findings have no id.
+   */
+  finding: FindingIdSchema.optional(),
   severity: FindingSeveritySchema,
   /** Present only when the finding named one. */
   requirement: RequirementIdSchema.optional(),
