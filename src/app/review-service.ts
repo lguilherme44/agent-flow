@@ -130,6 +130,28 @@ export class ReviewService {
     }
 
     const round = (await this.roundsFor(request.runId, request.task.id)) + 1;
+
+    // **Every loop terminates** (I-46, M6-ACC-19). Checked before the reviewer is named and
+    // before a call is spent: a budget that only stops the *next* round after paying for
+    // this one is not a budget.
+    //
+    // Nothing is approved by running out. The last review stands — and if it asked for
+    // changes, or judged a tree that has since moved, `decideQuality` still refuses. A
+    // budget that ended the argument in the implementer's favour would be worse than no
+    // budget, because it would look like agreement.
+    const budget = this.options.config.global.review.maxRounds;
+    if (round > budget) {
+      await store.appendEvent(request.runId, 'review_budget_exhausted', {
+        task: request.task.id,
+        rounds: round - 1,
+        budget,
+        detail:
+          `review of ${request.task.id} stopped after ${String(budget)} round(s); ` +
+          'the last review stands and nothing was approved by running out',
+      });
+      return { skipped: `the review budget of ${String(budget)} round(s) is spent` };
+    }
+
     const reviewId = await reviews.nextReviewId(request.runId);
 
     await store.appendEvent(request.runId, 'reviewer_assigned', {

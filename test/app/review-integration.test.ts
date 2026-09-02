@@ -49,12 +49,16 @@ const ROLES = {
   finalReviewer: { runner: 'claude', effort: 'high' },
 };
 
-function config(members?: Record<string, Record<string, unknown>>): EffectiveConfig {
+function config(
+  members?: Record<string, Record<string, unknown>>,
+  review?: Record<string, unknown>,
+): EffectiveConfig {
   return {
     global: GlobalConfigSchema.parse({
       runners: { claude: { type: 'claude-code-cli' }, agy: { type: 'agy-cli' } },
       roles: ROLES,
       quality: { gates: { test: { category: 'unit', required: true } } },
+      ...(review === undefined ? {} : { review }),
       ...(members === undefined
         ? {}
         : {
@@ -140,13 +144,14 @@ async function harness(options: {
   members?: Record<string, Record<string, unknown>>;
   answer?: unknown | (() => never);
   author?: string;
+  review?: Record<string, unknown>;
 } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const store = new StateStore({ fs, clock, projectDir: PROJECT });
   const run = await store.createRun('a feature');
   const reviews = new ReviewStore({ fs, projectDir: PROJECT });
-  const effective = config(options.members ?? TEAM);
+  const effective = config(options.members ?? TEAM, options.review);
 
   // The author, as the run recorded it.
   await store.appendEvent(run.runId, 'task_assigned', {
@@ -340,5 +345,67 @@ describe('a sequential run has no tree to name', () => {
     const [record] = await h.reviews.readReviews(h.run.runId);
     expect(record).toBeDefined();
     expect(record?.reviewedTree).toBeUndefined();
+  });
+});
+
+/**
+ * I-46 and M6-ACC-19: every loop terminates.
+ *
+ * The round number was computed from the log and compared against nothing, so a task
+ * whose review kept asking for changes could be reviewed without end. Checked before a
+ * reviewer is named and before a call is spent — a budget that stops the *next* round
+ * after paying for this one is not a budget.
+ */
+describe('a review loop has an end (§30, I-46)', () => {
+  it('stops asking once the rounds are spent', async () => {
+    const h = await harness({ review: { maxRounds: 2 } });
+
+    await h.adapter.review(h.run.runId, task(), result());
+    await h.adapter.review(h.run.runId, task(), result());
+    await h.adapter.review(h.run.runId, task(), result());
+
+    expect((await h.reviews.readReviews(h.run.runId)).map((r) => r.round)).toEqual([1, 2]);
+  });
+
+  it('spends no model call on the round it refuses', async () => {
+    const h = await harness({ review: { maxRounds: 1 } });
+
+    await h.adapter.review(h.run.runId, task(), result());
+    const spent = h.calls.length;
+    await h.adapter.review(h.run.runId, task(), result());
+
+    expect(h.calls.length).toBe(spent);
+  });
+
+  it('records why it stopped, with the budget it was given', async () => {
+    const h = await harness({ review: { maxRounds: 1 } });
+
+    await h.adapter.review(h.run.runId, task(), result());
+    await h.adapter.review(h.run.runId, task(), result());
+
+    const exhausted = (await h.store.readEvents(h.run.runId)).filter(
+      (event) => event.type === 'review_budget_exhausted',
+    );
+
+    expect(exhausted).toHaveLength(1);
+    expect(exhausted[0]?.detail).toMatchObject({ task: 'TASK-003', rounds: 1, budget: 1 });
+  });
+
+  /** Running out is not agreement. Nothing new is written, so the last verdict stands. */
+  it('leaves the last review standing rather than approving anything', async () => {
+    const findings = [
+      { severity: 'high', type: 'correctness', description: 'a', suggestedAction: 'b' },
+    ];
+    const h = await harness({
+      review: { maxRounds: 1 },
+      answer: { verdict: 'changes_requested', findings },
+    });
+
+    await h.adapter.review(h.run.runId, task(), result());
+    await h.adapter.review(h.run.runId, task(), result());
+
+    const records = await h.reviews.readReviews(h.run.runId);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.verdict).toBe('changes_requested');
   });
 });
