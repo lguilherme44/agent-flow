@@ -22,6 +22,7 @@ const parts = (overrides: Partial<Record<string, string>> = {}) => ({
   agentsMd: '# Rules\n',
   advisory: '',
   failureContext: '',
+  collaborationBootstrap: '',
   collaboration: '',
   ...overrides,
 });
@@ -163,5 +164,31 @@ describe('the collaboration source (M4-06)', () => {
     const measured = measurePromptComposition(parts({ collaboration: '' }));
 
     expect(measured.parts.map((part) => part.source)).not.toContain('collaboration');
+  });
+});
+
+describe('availability and relevance are separate sources (M5, I-40)', () => {
+  it('attributes the bootstrap apart from the context', () => {
+    // The number M4 could not produce. One source said 1 373 bytes and could not say how
+    // much of it was "the channel exists" and how much was "here is what was said" — and
+    // the live run turned out to be almost all the former.
+    const measured = measurePromptComposition(
+      parts({ stagePrompt: 'x'.repeat(50), collaborationBootstrap: 'b'.repeat(30), collaboration: 'c'.repeat(20) }),
+    );
+
+    const sources = Object.fromEntries(measured.parts.map((p) => [p.source, p.bytes]));
+    expect(sources['collaborationBootstrap']).toBe(30);
+    expect(sources['collaboration']).toBe(20);
+  });
+
+  it('reports the bootstrap alone on the ordinary task', () => {
+    // Eight tasks in ten look like this: the channel is open, nothing concerns them.
+    const measured = measurePromptComposition(
+      parts({ collaborationBootstrap: 'b'.repeat(600), collaboration: '' }),
+    );
+
+    const names = measured.parts.map((p) => p.source);
+    expect(names).toContain('collaborationBootstrap');
+    expect(names).not.toContain('collaboration');
   });
 });

@@ -84,7 +84,8 @@ import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
 import type { TaskWorkspace } from './task-workspaces.js';
-import type { CollaborationService } from './collaboration-service.js';
+import type { CollaborationBlocks, CollaborationService } from './collaboration-service.js';
+import { buildCollaborationBootstrap } from '../core/collaboration/context.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { judgeValidation } from '../core/validation-outcome.js';
 import {
@@ -238,7 +239,7 @@ export class TaskExecutor {
       ...(assignment.reason === 'routed' ? {} : { agent: assignment.agentId, assignment: assignment.reason }),
     });
 
-    const collaborationContext = await this.collaborationContextFor(runId, task, assignment.agentId);
+    const collaborationBlocks = await this.collaborationContextFor(runId, task, assignment.agentId);
 
     let text: string;
     // What actually ran. Taken from the stage result rather than from the
@@ -278,10 +279,16 @@ export class TaskExecutor {
           // AR-09: what this attempt's context cost, attributable to this attempt.
           task: task.id,
           ...(workspace?.attempt === undefined ? {} : { attempt: workspace.attempt }),
-          // M4-06. Absent when the feature is off, when nobody has said anything, or when
-          // nothing that was said concerns this agent — in every one of those cases the
-          // prompt is byte-for-byte what it was before the milestone.
-          ...(collaborationContext === undefined ? {} : { collaborationContext }),
+          // M5. Two blocks, two sources. The bootstrap goes out whenever the channel is
+          // open; the payload only when a mechanical rule says something concerns this
+          // agent. With the feature off both are absent and the prompt is byte-for-byte
+          // what it was before M4.
+          ...(collaborationBlocks.bootstrap === undefined
+            ? {}
+            : { collaborationBootstrap: collaborationBlocks.bootstrap }),
+          ...(collaborationBlocks.context === undefined
+            ? {}
+            : { collaborationContext: collaborationBlocks.context }),
           // Reaches the agent's process group (PRI-14). An aborted invocation comes back
           // as an ordinary failure, so the `catch` below records the attempt exactly as it
           // records any other — cancel keeps evidence, it does not erase it.
@@ -597,19 +604,20 @@ export class TaskExecutor {
   }
 
   /**
-   * The team-context block this agent should be shown (M4-06).
+   * The two collaboration blocks this agent should be shown (M4-06, M5).
    *
-   * `undefined` on every unhappy path, and never an exception: a prompt is not the place
-   * to discover that a log line was malformed, and a task whose peers said nothing useful
-   * must produce byte-for-byte the prompt it produced before the milestone.
+   * Never throws: a prompt is not the place to discover that a log line was malformed.
+   * On an unhappy path the *invitation* still goes out and the payload does not, because
+   * availability and relevance are different promises (I-40) and only one of them
+   * depends on the log being readable.
    */
   private async collaborationContextFor(
     runId: string,
     task: Task,
     agentId: string,
-  ): Promise<string | undefined> {
+  ): Promise<CollaborationBlocks> {
     const collaboration = this.options.collaboration;
-    if (collaboration === undefined || !collaboration.enabled) return undefined;
+    if (collaboration === undefined || !collaboration.enabled) return {};
 
     try {
       return await collaboration.contextFor({
@@ -619,7 +627,10 @@ export class TaskExecutor {
         files: task.files.likely,
       });
     } catch {
-      return undefined;
+      // A malformed log is not a reason to withhold the *invitation*: the channel is
+      // open, and an agent that cannot be shown what others said can still say
+      // something. Withholding both would let one bad line close the channel silently.
+      return { bootstrap: buildCollaborationBootstrap() };
     }
   }
 

@@ -276,14 +276,37 @@ describe('what the prompt is made of', () => {
     ]);
     await loud.executor.execute(TASK, loud.run.runId, '# SDD');
 
-    // The invitation reaches the first agent on a silent run…
-    expect(promptOf(quiet.runner)).toContain('[TEAM CONTEXT]');
+    // **The invitation reaches the first agent on a silent run** — I-40, and the M4
+    // deadlock as a permanent test.
+    expect(promptOf(quiet.runner)).toContain('[COORDINATION]');
     expect(promptOf(quiet.runner)).toContain('.agent-flow-outbox.json');
-    // …and carries nothing it was not given.
+    // …and no payload, because nothing concerns it. This is the M5 saving: eight tasks
+    // in ten look exactly like this.
+    expect(promptOf(quiet.runner)).not.toContain('[TEAM CONTEXT]');
     expect(promptOf(quiet.runner)).not.toContain('THR-');
 
+    // The agent with something to read gets both.
+    expect(promptOf(loud.runner)).toContain('[COORDINATION]');
     expect(promptOf(loud.runner)).toContain('[TEAM CONTEXT]');
     expect(promptOf(loud.runner)).toContain('the contract says the API mints it');
+  });
+
+  it('costs availability on every task and relevance only where there is any', async () => {
+    // The two numbers M4 could not tell apart, asserted rather than described. The live
+    // run spent 1 373 bytes on five agents to buy one message.
+    const quiet = await harness({ enabled: true });
+    await quiet.executor.execute(TASK, quiet.run.runId, '# SDD');
+
+    const measured = (await quiet.store.readEvents(quiet.run.runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+    const parts = (measured?.detail['parts'] ?? []) as { source: string; bytes: number }[];
+    const sources = Object.fromEntries(parts.map((part) => [part.source, part.bytes]));
+
+    expect(sources['collaborationBootstrap']).toBeGreaterThan(0);
+    expect(sources['collaborationBootstrap']).toBeLessThan(800);
+    // Absent, not zero: the ordinary task pays for availability and nothing else.
+    expect(sources).not.toHaveProperty('collaboration');
   });
 
   it('attributes the block’s bytes to a source of its own', async () => {

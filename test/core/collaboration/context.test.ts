@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildCollaborationContext } from '../../../src/core/collaboration/context.js';
+import {
+  buildCollaborationBootstrap,
+  buildCollaborationContext,
+} from '../../../src/core/collaboration/context.js';
 import { projectBlackboard } from '../../../src/core/collaboration/blackboard.js';
 import { projectThreads } from '../../../src/core/collaboration/threads.js';
 import {
@@ -84,45 +87,28 @@ function build(options: {
 }
 
 describe('buildCollaborationContext (M4-06)', () => {
-  it('invites the first agent on a run, when nobody has said anything yet', () => {
-    // **The defect a live dogfood found and 366 tests missed.** This used to return
-    // `undefined`, which deadlocked the channel: an empty log meant no block, no block
-    // meant the agent never learned the outbox existed, so it wrote none and the log
-    // stayed empty — for every agent, on every run. Every other test in this file seeds
-    // the log first, which is exactly why none of them could see it.
-    const rendered = build({});
-
-    expect(rendered).toBeDefined();
-    expect(rendered?.text).toContain(AGENT_OUTBOX_FILENAME);
-    expect(rendered?.text).toContain('Agents you can address');
+  it('renders no payload when nobody has said anything — the bootstrap carries that', () => {
+    // **The M4 deadlock, and where its fix now lives.** In M4 this function returning
+    // `undefined` on an empty log meant the agent never learned the outbox existed. It
+    // still returns `undefined`, and that is now safe *only* because the invitation is a
+    // separate, unconditional block. The two facts were one function and are not.
+    expect(build({})).toBeUndefined();
   });
 
-  it('still invites an agent when what was said concerns somebody else', () => {
+  it('renders no payload when what was said concerns somebody else', () => {
+    // Eight tasks in ten, per the live run. The agent is told the channel exists and is
+    // shown nothing, which is the whole of the M5 saving.
     const somebody = message({
       from: 'planner',
       to: { kind: 'agent', id: 'architect' },
       taskId: 'TASK-009',
     });
 
-    const rendered = build({ messages: [somebody] });
-
-    expect(rendered?.text).toContain(AGENT_OUTBOX_FILENAME);
-    // Somebody else's conversation about somebody else's task is not shown.
-    expect(rendered?.text).not.toContain('THR-0001');
+    expect(build({ messages: [somebody] })).toBeUndefined();
   });
 
-  it('is closed, not merely quiet, when the byte budget is zero', () => {
-    // The one remaining `undefined`: the channel is shut. Distinct from "nobody has
-    // spoken", which is what conflating the two cost the feature.
-    expect(build({ config: { maxContextBytes: 0 } })).toBeUndefined();
-  });
-
-  it('costs a bounded invitation and no more when the log is empty', () => {
-    // The price of the fix, stated as a number rather than left to be discovered on a
-    // prompt-size report. `stage_context_measured` attributes it to `collaboration`.
-    const rendered = build({});
-
-    expect(new TextEncoder().encode(rendered?.text ?? '').length).toBeLessThan(2048);
+  it('is closed when the byte budget is zero', () => {
+    expect(build({ messages: [message()], config: { maxContextBytes: 0 } })).toBeUndefined();
   });
 
   it('frames the block as untrusted and without authority', () => {
@@ -144,13 +130,6 @@ describe('buildCollaborationContext (M4-06)', () => {
     expect(rendered?.text).not.toContain('  - executor.normal —');
   });
 
-  it('carries the outbox contract, spelled from the shared constant', () => {
-    // Two spellings of this filename would be an agent writing to a file nobody reads.
-    const rendered = build({ messages: [message()] });
-
-    expect(rendered?.text).toContain(AGENT_OUTBOX_FILENAME);
-    expect(rendered?.text).toContain('you cannot set the sender');
-  });
 
   it('renders an open thread with its messages', () => {
     const rendered = build({ messages: [message()] });
@@ -246,5 +225,37 @@ describe('buildCollaborationContext (M4-06)', () => {
     const entries = [entry()];
 
     expect(build({ messages, entries })?.text).toBe(build({ messages, entries })?.text);
+  });
+});
+
+describe('buildCollaborationBootstrap (M5, I-40)', () => {
+  it('exists unconditionally — it takes no argument at all', () => {
+    // The strongest possible statement of I-40: there is no input that could make the
+    // invitation absent, so no future refactor can reintroduce the deadlock by passing
+    // an empty log to it.
+    expect(buildCollaborationBootstrap.length).toBe(0);
+    expect(buildCollaborationBootstrap()).toContain(AGENT_OUTBOX_FILENAME);
+  });
+
+  it('is stable: two calls produce the same bytes', () => {
+    expect(buildCollaborationBootstrap()).toBe(buildCollaborationBootstrap());
+  });
+
+  it('carries the contract and the standing rule, and nothing about this run', () => {
+    const text = buildCollaborationBootstrap();
+
+    expect(text).toContain('you cannot set the sender');
+    expect(text).toContain('Use it only for a real question');
+    // No roster: a list of agents is actionable only once there is something to reply
+    // to, and on the ordinary prompt it is bytes of noise.
+    expect(text).not.toContain('Agents you can address');
+  });
+
+  it('is small enough to put on every prompt', () => {
+    // The number the live run makes meaningful. M4 spent 1 373 bytes on every task to
+    // buy a message that arrived once; this is what availability alone should cost.
+    const bytes = new TextEncoder().encode(buildCollaborationBootstrap()).length;
+
+    expect(bytes).toBeLessThan(800);
   });
 });

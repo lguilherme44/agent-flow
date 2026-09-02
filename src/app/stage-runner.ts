@@ -233,6 +233,14 @@ export interface StageRunOptions {
    * milestone.
    */
   readonly collaborationContext?: string;
+  /**
+   * The unconditional half of the same seam (M5, I-40).
+   *
+   * Appended whether or not {@link collaborationContext} is present, because an agent
+   * that is not told the channel exists never uses it — which is the deadlock M4 shipped
+   * and this field exists to make structurally impossible.
+   */
+  readonly collaborationBootstrap?: string;
 }
 
 /**
@@ -373,6 +381,12 @@ export class StageRunner {
     // M4-06. After the advisory block, so the two are in a fixed order and a prompt is a
     // deterministic function of its inputs; and inside the *base*, so a repair rebuilds
     // from the same material the failed attempt saw.
+    // Bootstrap first, then context: the invitation is what makes the payload
+    // actionable, and an agent that reads a question before it knows how to answer has
+    // met the two halves in the wrong order.
+    const bootstrapBlock = options.collaborationBootstrap ?? '';
+    if (bootstrapBlock.length > 0) basePrompt = `${basePrompt}\n\n${bootstrapBlock}`;
+
     const collaborationBlock = options.collaborationContext ?? '';
     if (collaborationBlock.length > 0) basePrompt = `${basePrompt}\n\n${collaborationBlock}`;
 
@@ -409,6 +423,7 @@ export class StageRunner {
         agentsMd: vars.agentsMd ?? '',
         advisory: advisoryBlock,
         failureContext: vars.failureContext ?? '',
+        collaborationBootstrap: bootstrapBlock,
         collaboration: collaborationBlock,
       },
       ...(options.complexity === undefined ? [] : [{ complexity: options.complexity }]),

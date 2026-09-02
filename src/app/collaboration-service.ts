@@ -6,7 +6,10 @@ import type {
   WorkflowRole,
 } from '../contracts/index.js';
 import type { AgentRoster } from '../core/collaboration/roster.js';
-import { buildCollaborationContext } from '../core/collaboration/context.js';
+import {
+  buildCollaborationBootstrap,
+  buildCollaborationContext,
+} from '../core/collaboration/context.js';
 import { projectThreads } from '../core/collaboration/threads.js';
 import { projectBlackboard } from '../core/collaboration/blackboard.js';
 import { projectHandoffs, resolveTaskAgent, type TaskAssignment } from '../core/collaboration/handoffs.js';
@@ -82,6 +85,23 @@ export interface HarvestSummary {
   readonly outcome: HarvestOutcome;
 }
 
+/**
+ * The two halves an implementation prompt may receive (M5, I-40).
+ *
+ * Separate fields rather than one concatenated string, so the executor can hand each to
+ * its own telemetry source and a reader can tell what *availability* cost from what
+ * *relevance* cost. M4 had one number and could not.
+ */
+export interface CollaborationBlocks {
+  /** Always present when the channel is open. Absent only when it is closed. */
+  readonly bootstrap?: string;
+  /** Present only when a mechanical rule says something concerns this agent. */
+  readonly context?: string;
+}
+
+/** A closed channel: no invitation, no payload. */
+const SILENT_BLOCKS: CollaborationBlocks = {};
+
 const SILENT: HarvestSummary = {
   notes: [],
   outcome: {
@@ -120,30 +140,34 @@ export class CollaborationService {
     readonly taskId: string;
     readonly agentId: AgentId;
     readonly files: readonly string[];
-  }): Promise<string | undefined> {
-    if (!this.enabled) return undefined;
+  }): Promise<CollaborationBlocks> {
+    if (!this.enabled) return SILENT_BLOCKS;
 
     const agent = this.options.roster.byId(request.agentId);
-    if (agent === undefined) return undefined;
+    if (agent === undefined) return SILENT_BLOCKS;
 
-    // Read whatever is there, which on the first attempt of a run is nothing. The empty
-    // case is *not* short-circuited here: see `buildCollaborationContext` on why an
-    // invitation with nothing behind it is the only way a channel ever gets a first
-    // message.
+    // **The invitation is unconditional** (I-40). It does not depend on the log, the
+    // task or the agent, so it is composed before anything is read: an agent that is
+    // not told the channel exists never uses it, which is the deadlock M4 shipped.
+    const bootstrap = buildCollaborationBootstrap();
+
     const messages = await this.options.collaboration.readMessages(request.runId);
     const entries = await this.options.collaboration.readEntries(request.runId);
 
+    // The ordinary task ends here with a bootstrap and nothing else, which is what the
+    // live run says eight tasks in ten look like.
     const rendered = buildCollaborationContext({
       agent,
       taskId: request.taskId,
       files: request.files,
       threads: projectThreads(messages),
       entries: projectBlackboard(entries),
+      handoffs: projectHandoffs(messages),
       roster: this.options.roster.agents,
       config: this.options.config,
     });
 
-    return rendered?.text;
+    return { bootstrap, ...(rendered?.text ? { context: rendered.text } : {}) };
   }
 
   /**

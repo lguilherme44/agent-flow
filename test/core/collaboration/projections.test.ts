@@ -149,24 +149,38 @@ describe('projectThreads (M4-03)', () => {
 describe('threadsFor — who is shown what (M4-06)', () => {
   const audience = { agentId: 'architect', role: 'architect', taskId: 'TASK-003' };
 
-  it('shows a thread addressed to this agent', () => {
+  it('shows a thread addressed to this agent that names no task', () => {
+    // A thread with no task is general: the recipient branches are exactly what it is
+    // for, and nothing narrower can apply to it.
     const threads = projectThreads([
-      message({ from: 'executor.normal', to: { kind: 'agent', id: 'architect' }, taskId: 'TASK-009' }),
+      message({ from: 'executor.normal', to: { kind: 'agent', id: 'architect' }, taskId: undefined }),
     ]);
 
     expect(threadsFor(threads, audience)).toHaveLength(1);
   });
 
-  it('shows a thread addressed to this agent’s role, and to everyone', () => {
+  it('shows a general thread addressed to this agent’s role, and to everyone', () => {
     const byRole = projectThreads([
-      message({ from: 'executor.normal', to: { kind: 'role', role: 'architect' }, taskId: 'TASK-009' }),
+      message({ from: 'executor.normal', to: { kind: 'role', role: 'architect' }, taskId: undefined }),
     ]);
     const toAll = projectThreads([
-      message({ from: 'executor.normal', to: { kind: 'everyone' }, taskId: 'TASK-009' }),
+      message({ from: 'executor.normal', to: { kind: 'everyone' }, taskId: undefined }),
     ]);
 
     expect(threadsFor(byRole, audience)).toHaveLength(1);
     expect(threadsFor(toAll, audience)).toHaveLength(1);
+  });
+
+  it('hides a thread addressed to this agent about a different task', () => {
+    // **The rule the cost measurement forced.** These branches used to stand alone, so a
+    // question addressed to `executor.normal` about TASK-009 reached every
+    // `executor.normal` task — which, with one agent per role, is every task in the run.
+    // A question about somebody else's task belongs to whoever gets that task.
+    const threads = projectThreads([
+      message({ from: 'executor.normal', to: { kind: 'agent', id: 'architect' }, taskId: 'TASK-009' }),
+    ]);
+
+    expect(threadsFor(threads, audience)).toEqual([]);
   });
 
   it('shows a thread about this task, whoever it was addressed to', () => {
@@ -177,12 +191,22 @@ describe('threadsFor — who is shown what (M4-06)', () => {
     expect(threadsFor(threads, audience)).toHaveLength(1);
   });
 
-  it('shows a thread this agent opened and nobody closed', () => {
+  it('shows a general thread this agent opened and nobody closed', () => {
+    const threads = projectThreads([
+      message({ from: 'architect', to: { kind: 'agent', id: 'planner' }, taskId: undefined }),
+    ]);
+
+    expect(threadsFor(threads, audience)).toHaveLength(1);
+  });
+
+  it('hides a thread this agent opened about another task', () => {
+    // Waiting on an answer about TASK-009 is not a reason to carry it into TASK-003's
+    // prompt. It reaches this agent again when it is doing TASK-009.
     const threads = projectThreads([
       message({ from: 'architect', to: { kind: 'agent', id: 'planner' }, taskId: 'TASK-009' }),
     ]);
 
-    expect(threadsFor(threads, audience)).toHaveLength(1);
+    expect(threadsFor(threads, audience)).toEqual([]);
   });
 
   it('hides a resolved thread', () => {
@@ -209,7 +233,7 @@ describe('threadsFor — who is shown what (M4-06)', () => {
 
   it('does not show an agent its own broadcast back to itself', () => {
     const threads = projectThreads([
-      message({ from: 'architect', to: { kind: 'everyone' }, taskId: 'TASK-009' }),
+      message({ from: 'architect', to: { kind: 'everyone' }, taskId: undefined }),
     ]);
 
     // Reached only because this agent opened it, not because it was "addressed" to it.

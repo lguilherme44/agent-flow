@@ -119,7 +119,23 @@ export function threadsFor(
   return threads.filter((thread) => {
     if (thread.status === 'resolved') return false;
 
+    // A thread about *this* task is relevant however it was addressed: the agent doing
+    // the work is the one who needs to know what was asked about it.
     if (thread.taskId !== undefined && thread.taskId === audience.taskId) return true;
+
+    // **Everything below is scoped to the task as well, and the measurement is why.**
+    //
+    // These branches used to stand alone, so a thread addressed to `executor.normal`
+    // about TASK-003 reached *every* `executor.normal` task — and with one agent per
+    // role, which is what a derived roster produces, that is every task in the run. The
+    // ten-task cost test measured the result: M5 spending 24% *more* than the M4 design
+    // it was written to improve on.
+    //
+    // A question about somebody else's task belongs to whoever gets that task. A thread
+    // that names no task is general, and general is what the recipient branches are for.
+    const aboutAnotherTask = thread.taskId !== undefined && thread.taskId !== audience.taskId;
+    if (aboutAnotherTask) return false;
+
     if (thread.opener === audience.agentId) return true;
 
     return thread.messages.some((message) => {

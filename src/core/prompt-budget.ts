@@ -30,6 +30,7 @@ export type PromptSource =
   | 'advisory'
   | 'agentsMd'
   | 'failureContext'
+  | 'collaborationBootstrap'
   | 'collaboration';
 
 export interface PromptPart {
@@ -71,11 +72,21 @@ export interface PromptParts {
   /** AD-40's packet, when this is a retry. */
   readonly failureContext: string;
   /**
-   * M4's team-context block, when the run lets agents speak.
+   * The invitation: the channel exists and here is its contract (M5).
    *
-   * Empty when `collaboration.enabled` is false, and an empty source is *omitted* from
-   * the composition rather than reported at zero — so a run with the feature off produces
-   * byte-for-byte the report it produced before the milestone.
+   * **Separate from `collaboration` because the two answer different questions.** M4
+   * measured one number — 1 373 bytes on every prompt — which could not distinguish what
+   * *availability* cost from what *relevance* cost. It turned out to be almost all
+   * availability: five agents received it and one had anything to read. Two sources make
+   * that visible on every run rather than only in a dogfood.
+   */
+  readonly collaborationBootstrap: string;
+  /**
+   * What other agents actually said that concerns this agent.
+   *
+   * Empty on the ordinary task, which is the point. An empty source is *omitted* from the
+   * composition rather than reported at zero — so "no relevant activity" and "the feature
+   * is off" do not both render as a row of zeroes.
    */
   readonly collaboration: string;
 }
@@ -85,7 +96,14 @@ export function measurePromptComposition(
   task?: Pick<Task, 'complexity'>,
 ): PromptComposition {
   const measured: { source: PromptSource; bytes: number }[] = (
-    ['stagePrompt', 'agentsMd', 'advisory', 'failureContext', 'collaboration'] as const
+    [
+      'stagePrompt',
+      'agentsMd',
+      'advisory',
+      'failureContext',
+      'collaborationBootstrap',
+      'collaboration',
+    ] as const
   )
     .map((source) => ({ source, bytes: bytesOf(parts[source]) }))
     // A source that contributed nothing is omitted rather than reported at zero: "no
