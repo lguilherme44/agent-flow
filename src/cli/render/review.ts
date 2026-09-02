@@ -56,6 +56,24 @@ export function renderReview(review: ReviewView): string | undefined {
     );
   }
 
+  // **Every gate, after the warning rather than instead of it** (§27, §65).
+  //
+  // The warning above is what stops the change; this is the evidence that the rest of the
+  // work was checked at all. Showing only failures made a passing suite invisible — a
+  // person reading `status` could see that `security` did not run and not that `lint`,
+  // `test` and `typecheck` did, which is half the answer to "is this any good".
+  //
+  // One line, bounded. A vertical list here would push the blocking warning off a short
+  // terminal, which is the failure the warning exists to prevent.
+  if (review.gates.length > 0) {
+    const shown = review.gates
+      .slice(0, 8)
+      .map((gate) => `${gate.gateId} ${gate.status.replace(/_/g, ' ')}`)
+      .join(' · ');
+    const rest = review.gates.length - 8;
+    lines.push(`  gates: ${shown}${rest > 0 ? ` · +${String(rest)} more` : ''}`);
+  }
+
   const totals = review.totals;
   lines.push(
     `  ${String(totals.reviews)} review(s) over ${String(totals.tasksReviewed)} task(s), ` +
