@@ -592,7 +592,18 @@ than believed.
 | 27 | live corrective loop fixes and verifies that issue | ◐ | executed, integrated, re-reviewed live; `fixed` proven by test only |
 | 28 | all mandatory quality gates green | ✅ | 3917 · 343 · 38 e2e · 175 visual · lint · 3 typechecks · 2 builds |
 
-### Why 24 and 25 are not met, and what would settle them
+### Where 24 and 25 stand
+
+The completion charter released both. **§53:** module decomposition tracks the ownership
+boundary in this repository, four independent plans showed it, and fabricating a bad plan
+to produce a handoff is forbidden — "isso NÃO bloqueia M6 se o mecanismo permanecer seguro
+e testado". **§54:** the same for dialogue. Both mechanisms keep their scripted coverage,
+and neither was observed live.
+
+What follows is what the runs actually showed, because "not observed" and "cannot happen"
+are different facts.
+
+
 
 **M6-ACC-24.** §55 required this dogfood to include a real handoff or reassignment, because
 Phase A did not produce one. It did not happen. In scenario 1 both failing tasks stopped at
@@ -606,16 +617,30 @@ plans. The experiment that would settle it is a single task whose declared files
 two members' exclusive patterns, dispatched with `agent-flow task` so no planner can
 decompose the conflict away. That was not run.
 
-**M6-ACC-25.** Not met, and the reason changed, which is the useful part. Through M5 the
-answer was "nobody uses the channel". After Phase A gave the bootstrap a handoff form and
-stated ownership, agents used it in **four of six** implementation prompts in scenario 1 —
-and the product refused all four as malformed. The protocol is reachable and unusable as
-specified: the shape is described in prose and cannot be reproduced from prose.
+**M6-ACC-25.** Not observed, and by the end of the completion pass the reason is known
+rather than guessed — which is the useful part, and it took three attempts to get.
 
-The refusal diagnostic added in this milestone is what produces the evidence to fix it. One
-run of a scenario-1-shaped team on the current build would name the fields agents actually
-get wrong, and the bootstrap could then carry a schema or an example instead of a
-description. That run was not made.
+Through M5 the answer was "nobody uses the channel". Phase A added the handoff form and
+stated ownership, and agents then used it in **four of six** implementation prompts in
+scenario 1 — all four refused as malformed, with the event recording nothing about why.
+The refusal diagnostic added in this milestone was written for exactly that gap, and in
+scenario 3 it answered:
+
+```
+entries.0.affects.0: invalid_value
+entries.0.affects.2: invalid_value
+entries.1.affects.1: invalid_value
+```
+
+One field. `affects` takes the nine workflow roles; the bootstrap sketched it as
+`"affects":["<role>"]` and never said what a role is, while every other line in the same
+block names members by id. The agent wrote what the protocol taught it to write and the
+schema rejected the file.
+
+So the channel was never unused — it was unusable, over an enum nobody was shown. The nine
+values are now listed in the bootstrap. Whether that produces a delivered message is the
+first thing to measure in M7, and `affects` accepting a member id is the follow-up that
+would make the natural thing to write also the correct one.
 
 ### The corrective loop, end to end and live
 
@@ -693,6 +718,90 @@ slugify". A model asserted verified fact about a tree it had misread, and a *dif
 model caught it. Nothing downstream trusted the first one. That is the review layer
 working, and it is also the clearest argument in either scenario for why §9–§12 insist
 semantic review, QA and deterministic validation are not equivalent.
+
+---
+
+## Score-floor evidence (§57, §58)
+
+Every assignment in the three scenarios, with the score it won on and the best candidate it
+beat. §57 says do not implement a threshold without evidence; this is the evidence, and it
+does not support one.
+
+| Task | Chosen | Score | Next best | Outcome |
+|---|---|---|---|---|
+| s2 TASK-001 | qa | **0.91** | dev 0.29 | changes_requested, 1 medium |
+| s2 TASK-002 | dev | **0.86** | qa 0.34 | approve |
+| s2 TASK-003 | dev | **0.00** | qa 0.00 | no review (no change) |
+| s2 FIX-001 | qa | **0.80** | dev 0.11 | changes_requested, 1 medium |
+| s3 TASK-001 | qa | **0.91** | dev 0.29 | approve, 2 low |
+| s3 TASK-002 | dev | **0.86** | qa 0.34 | blocked, 1 critical ← *and the review was reading the wrong tree* |
+| s3 FIX-001 | qa | **0.67** | dev 0.11 | blocked twice |
+
+**No relationship is visible, and one row explains why looking is premature.** The worst
+outcome in the table belongs to a 0.86 assignment, and the finding that produced it was a
+false positive caused by defect -1. Two of the three `0.00` rows are tasks whose scope
+matched nobody's skills — a documentation check and a hygiene pass — and both completed.
+
+A floor would have changed nothing here and would have blocked TASK-003 for no reason. The
+decision stays deferred, and the unblocking condition is unchanged: enough runs on a build
+whose reviews are valid to correlate score with *review outcome*. None of these three
+qualify, because in all three the reviewer read the wrong tree.
+
+---
+
+## Collaboration default decision (§56)
+
+`collaboration.enabled` stays **`false`**.
+
+| | Invocations | Outbox attempts | Delivered |
+|---|---|---|---|
+| M4 | 12 | 1 | 1 |
+| M5 + gap closure | 9 | 0 | 0 |
+| M6 s1 | 6 | 4 | 0 |
+| M6 s2 | 3 | 0 | 0 |
+| M6 s3 | 5 | 4 | 0 |
+| **total** | **35** | **9** | **1** |
+
+The cost is measured: 1 034 bytes of bootstrap on every implementation prompt, about 2–3%
+of one. The reason to keep it off is no longer "nobody uses it" — nine attempts in two M6
+scenarios — but that nothing has yet come out the other side. The enum fix landed after the
+last attempt, so the next run is the first that can produce a delivered message. Turning
+the default on before that would be turning on a channel whose only observed behaviour is
+refusal.
+
+---
+
+## Known limitations
+
+1. **`affects` rejects a member id.** The one field that names an audience takes workflow
+   roles, and everything else in the protocol names members. Widening it is an M4 contract
+   change and the audience filter has to learn about members.
+2. **A required gate no task runs stays `not_run` forever.** The planner chooses a task's
+   validation ids; nothing forces the required gates onto it. It fails safe — nothing is
+   falsely green — and no command resolves it.
+3. **A corrective task is not inserted into the chain.** It inherits its origin, its
+   expectation and its validation from the corrected task, but not its position: a fix to a
+   test that a later task's criteria depend on lands beside that task rather than ahead of
+   it. Needs task states in the generator.
+4. **A corrective task's acceptance criterion is the finding's `suggestedAction`.** When a
+   reviewer writes that action to a coordinator — "send TASK-002 back" — the generated task
+   is unverifiable. The plan review catches it; nothing mechanical does.
+5. **Dispute routing is specified and not built** (§32), because the trigger reaches Agent
+   Flow only through the collaboration outbox and nothing has ever come through it.
+6. **Independence is measured, not enforced.** A team with one provider gets level 1 and a
+   recorded degradation, which is the honest answer, not a block.
+
+---
+
+## Deferred to M7
+
+- `ForgeProvider`, GitHub PRs and Issues, CI integration, remote review comments — §72,
+  untouched.
+- The six limitations above, in the order they are listed.
+- The score-floor decision, with its unblocking condition restated: runs whose reviews were
+  valid.
+- Measuring whether a delivered collaboration message now happens, which is the only thing
+  that can move `collaboration.enabled`.
 
 ---
 
