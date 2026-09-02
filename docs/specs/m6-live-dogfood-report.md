@@ -312,6 +312,30 @@ unhandled `TaskStateError` killed the run *after* the corrective task had done i
 The cascade's own comment said "none of them ran, so this is dependency-derived by
 construction" — and a revision is exactly the case where that stops being true.
 
+## Scenario 4 — `AF-2026-003`, the first valid review
+
+Run after defect -1, and its only job was to answer one question: does the reviewer read
+the tree it names?
+
+`REV-0001` on `TASK-001`, verdict **approve**, tree `5eeb0314`, two `low` findings:
+
+> Nenhum teste cobre o caso em que APENAS UM dos lados sluga para vazio.
+>
+> O teste de simetria (**linhas 29-34**) compara duas chamadas entre si sem fixar o valor
+> esperado, então não pode falhar por resultado errado — só por assimetria.
+
+**It cites lines 29–34 of a file that has eleven lines on `master`.** Those lines exist only
+on the integration branch, written by the task under review. Before the fix the reviewer
+could not have seen them; here it read them, and reasoned about what they assert.
+
+The second finding is also the third independent time a reviewer has caught an assertion
+that cannot fail, in a third repository, unprompted.
+
+And the verdict is `approve` with two findings open — §44's severity policy doing the thing
+it exists to do rather than blocking everything (M6-ACC-07, live).
+
+---
+
 ## Defects this dogfood found
 
 Every one of them survived 3893 green tests, and every fix carries a positive control.
