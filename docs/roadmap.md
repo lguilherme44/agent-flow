@@ -14,8 +14,9 @@ MVP 3  ────────────────────────�
 AR     ─────────────────────────────────►  autonomous execution & recovery, in progress
 M4     ─────────────────────────────────►  collaboration foundation, dogfooded live — and still off
 M5     ─────────────────────────────────►  team orchestration, dogfooded live
+M6     ─────────────────────────────────►  collaborative review & quality gates, dogfooded live
                                         ▲
-                                        you are here: M5 built and proved live; M6 next
+                                        you are here: M6 built and proved live; M7 next
 ```
 
 ---
@@ -385,7 +386,7 @@ so without anything noticing:
 
 ---
 
-## M5 — Team Orchestration · specified, not built
+## M5 — Team Orchestration · built and dogfooded live
 
 Specified in [`specs/m5-team-orchestration.md`](specs/m5-team-orchestration.md).
 
@@ -394,14 +395,39 @@ M4 answered *who the agents are*, *what they said* and *what they know*. M5 answ
 what* and *which work may happen at once*.
 
 The structural decision the specification rests on: **`resolveTaskAgent` already exists
-and is already called on every task.** M4 built that seam deliberately, so M5 replaces
-its body and keeps its position — there is no second router and no second scheduler, and
+and is already called on every task.** M4 built that seam deliberately, so M5 replaced
+its body and kept its position — there is no second router and no second scheduler, and
 `core/router.ts` survives as both the fallback path and a *term* in the new score, so a
 high-risk task still gravitates to `executor.complex` even when a trivial executor has
 the skills.
 
-Nothing is implemented. The specification is the deliverable, and it was written after
-the live dogfood rather than before, so it rests on what a real run actually did.
+One M5 defect outlived the milestone and was found by M6's live run: a member declared
+`runner:`, the capability check and the independence calculation honoured it, and the
+*dispatch* resolved the role instead — so the runner a member ran on was whatever
+`roles:` said. Fixed in M6, because M6's own independence figures depended on it.
+
+## M6 — Collaborative Review & Quality Gates · built and dogfooded live
+
+Specified in
+[`specs/m6-collaborative-review-quality.md`](specs/m6-collaborative-review-quality.md),
+with the live evidence in
+[`specs/m6-live-dogfood-report.md`](specs/m6-live-dogfood-report.md).
+
+M5 answered *who does the work*. M6 answers *who checks it*, *what exactly they found*,
+*how the implementer responds*, *who verifies the correction*, *what evidence proves
+quality*, and *when the workflow may continue*.
+
+Half of it already existed — structured findings, corrective task generation, the
+separation of semantic review from mechanical validation, `NOT_RUN` as a third value, a
+Definition of Done evaluated as code, validation commands that only a human can author —
+so the milestone is mostly an argument about ten precise gaps rather than a new domain.
+
+Its most useful outcome was not planned. **A mechanism can be written, reviewed, covered
+by tests, and unreachable by any real agent.** Three defects were exactly that shape: a
+function nothing called, an event nothing emitted, and a key the emitter and the reader
+disagreed about — so a finding raised by a live reviewer could never become work, and no
+finding in a real run could ever leave `open`. Two architecture rules now ask that
+question mechanically, one for exported functions and one for declared events.
 
 ---
 

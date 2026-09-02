@@ -500,18 +500,25 @@ represent the production state the test claims to represent?*
 
 ## 16. Work items
 
-| | Item |
-|---|---|
-| M6-00 | This document, criticised before any code |
-| M6-01 | Review and finding contracts; `reviews.jsonl`; the review vocabulary in the audit log |
-| M6-02 | Reviewer assignment through M5's policy, with independence and `is_author` |
-| M6-03 | Review execution: selected context, structured output, tree identity |
-| M6-04 | Finding lifecycle as a projection; developer response through collaboration |
-| M6-05 | Corrective work through the existing generator, triggered per finding |
-| M6-06 | QA as skills, QA tasks through the ordinary path |
-| M6-07 | Quality gates: metadata beside the validation registry, projected results |
-| M6-08 | Freshness and blocking policy; the final quality decision |
-| M6-09 | Read model, CLI, dashboard; acceptance, crash and threat suites; live dogfood |
+| | Item | |
+|---|---|---|
+| M6-00 | This document, criticised before any code | **done** |
+| M6-01 | Review and finding contracts; `reviews.jsonl`; the review vocabulary in the audit log | **done** |
+| M6-02 | Reviewer assignment through M5's policy, with independence and `is_author` | **done** |
+| M6-03 | Review execution: selected context, structured output, tree identity | **done** |
+| M6-03b | The production caller: the scheduler reviews each integrated change | **done** |
+| M6-04 | Finding lifecycle as a projection; developer response through collaboration | **done** |
+| M6-05 | Corrective work through the existing generator, triggered per finding | **done** |
+| M6-06 | QA as skills, QA tasks through the ordinary path | **done** |
+| M6-07 | Quality gates: metadata beside the validation registry, projected results | **done** |
+| M6-08 | Freshness and blocking policy; the final quality decision | **done** |
+| M6-09 | Read model, CLI, dashboard; acceptance, crash and threat suites; live dogfood | **done** |
+
+**M6-03b was not in the original list, and its absence is the milestone's lesson.** The
+list said "review execution" and the code had a `ReviewService` that executed reviews;
+nothing constructed one. A work item that describes a capability rather than a *caller*
+can be honestly marked done while the capability is unreachable — which is what happened,
+and what the reachability rule now prevents from happening again.
 
 ---
 
