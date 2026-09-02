@@ -1,5 +1,6 @@
 import {
   AGENT_OUTBOX_FILENAME,
+  type AgentId,
   type AgentIdentity,
   type CollaborationConfig,
   type Handoff,
@@ -47,6 +48,29 @@ import { threadsFor } from './threads.js';
 /* ─── Bootstrap ────────────────────────────────────────────────────────────── */
 
 /**
+ * What an agent must be told about an area it does not own (M5 stabilisation).
+ *
+ * **Ownership was a policy no agent could see.** M5 gave a team exclusive areas and gave
+ * the assignment policy teeth, and then told the agent nothing: the map reached the
+ * scheduler, the ranking and the dashboard, and never the prompt. So an implementer could
+ * not know it was about to write into somebody else's area, could not decline, and had no
+ * reason to ask for a handoff — which is exactly why three independent live plans and two
+ * milestones produced not one.
+ *
+ * Small on purpose. The agent's own areas are one line; the foreign ones are listed only
+ * when a member holds them *exclusively*, because `preferred` is a ranking preference and
+ * telling an agent to stay out of an area somebody merely prefers would be inventing a
+ * rule the policy does not enforce.
+ */
+export interface AgentBriefing {
+  readonly agentId: AgentId;
+  /** Patterns this agent owns, preferred or exclusive. */
+  readonly owns: readonly string[];
+  /** Areas another member holds exclusively, and who holds them. */
+  readonly othersHold: readonly { readonly pattern: string; readonly owner: AgentId }[];
+}
+
+/**
  * The invitation: the channel exists, and here is its contract.
  *
  * **Deliberately does not carry the roster.** A list of nine agents is actionable only
@@ -54,11 +78,34 @@ import { threadsFor } from './threads.js';
  * is ~500 bytes of noise, on every task, on every run. The roster moved to the context
  * half, where a reader has a reason to read it.
  *
- * Stable by construction — it depends on nothing about the run, the task or the agent —
- * which is what lets a reader treat a change in its byte count as a change in the
- * product rather than as a property of the run.
+ * **The protocol half depends on nothing** — not the run, not the task, not the agent —
+ * which is what lets a reader treat a change in its byte count as a change in the product
+ * rather than as a property of the run. It is also what keeps the deadlock closed: an
+ * agent the roster has never heard of still gets the invitation, because the invitation
+ * says nothing about who is reading it.
+ *
+ * The briefing half is appended only when a team is configured *and* the agent is one of
+ * its members. A legacy run's bootstrap is byte-identical to M5's.
  */
-export function buildCollaborationBootstrap(): string {
+export function buildCollaborationBootstrap(briefing?: AgentBriefing): string {
+  const boundaries =
+    briefing === undefined
+      ? []
+      : [
+          '',
+          `You are ${briefing.agentId}.${
+            briefing.owns.length === 0 ? '' : ` You own ${briefing.owns.join(', ')}.`
+          }`,
+          ...(briefing.othersHold.length === 0
+            ? []
+            : [
+                `${briefing.othersHold
+                  .map((held) => `${held.pattern} belongs to ${held.owner}`)
+                  .join('; ')}. If this task needs a change there, do not make it: write a`,
+                'handoff_request naming this task, say what the change is, and report BLOCKED.',
+              ]),
+        ];
+
   return [
     '---',
     '[COORDINATION]',
@@ -73,8 +120,17 @@ export function buildCollaborationBootstrap(): string {
     ' "entries":[{"kind":"decision|contract|constraint|discovery|risk","subject":"<topic>",',
     '"statement":"<what is true>","rationale":"<why>","affects":["<role>"]}]}',
     '',
+    // **The handoff, because the prose alone was not actionable.** The line below used to
+    // say "use it for a real question, blocker, finding, handoff or shared decision" over
+    // a type list with no handoff in it and no `taskId` — so an agent that wanted to hand
+    // work over had the word and not the form. Expressed as a delta on the shape above
+    // rather than as a second sketch: the whole cost of saying it is the two facts a
+    // reader could not have guessed, which are the type names and the extra field.
+    'A handoff is that shape with "type":"handoff_request|handoff_accepted|',
+    'handoff_rejected" and a "taskId".',
     'Use it only for a real question, blocker, finding, handoff or shared decision.',
     'Do not narrate your work here.',
+    ...boundaries,
     '---',
   ].join('\n');
 }

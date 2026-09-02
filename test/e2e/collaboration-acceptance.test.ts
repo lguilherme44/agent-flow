@@ -305,7 +305,7 @@ describe('what the prompt is made of', () => {
     const sources = Object.fromEntries(parts.map((part) => [part.source, part.bytes]));
 
     expect(sources['collaborationBootstrap']).toBeGreaterThan(0);
-    expect(sources['collaborationBootstrap']).toBeLessThan(800);
+    expect(sources['collaborationBootstrap']).toBeLessThan(900);
     // Absent, not zero: the ordinary task pays for availability and nothing else.
     expect(sources).not.toHaveProperty('collaboration');
   });

@@ -904,6 +904,46 @@ describe('M5-ACC-17 — the deadlock cannot come back through a fallback', () =>
   });
 });
 
+describe('a configured team reaches the prompt of the agent it governs', () => {
+  it('tells a member which area is somebody else\u2019s, and what to do about it', async () => {
+    // **Ownership was a policy no agent could see.** M5 gave a team exclusive areas and
+    // gave the assignment policy teeth, then told the agent nothing: the map reached the
+    // scheduler, the ranking and the dashboard, and never the prompt. Three independent
+    // live plans across two milestones produced not one handoff, and this is why — an
+    // implementer could not know it was about to write into somebody else's area.
+    //
+    // Asserted through the real executor against the prompt the runner received, because
+    // the unit test for the builder passed while the service was not passing it anything.
+    const h = await harness(
+      config({
+        members: {
+          backend: { ownership: { preferred: ['src/server/**'] } },
+          dba: { ownership: { exclusive: ['src/db/**'] } },
+        },
+      }),
+    );
+
+    await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
+
+    const prompt = h.runner.calls[0]?.prompt ?? '';
+    expect(prompt).toContain('You are backend');
+    expect(prompt).toContain('src/db/** belongs to dba');
+    expect(prompt).toContain('handoff_request');
+  });
+
+  it('says nothing about ownership on a run with no team', async () => {
+    // A legacy run's bootstrap is what M5 shipped, plus the handoff form and nothing else.
+    const h = await harness(config());
+
+    await h.executor.execute(task('TASK-001'), h.run.runId, '# SDD');
+
+    const prompt = h.runner.calls[0]?.prompt ?? '';
+    expect(prompt).toContain('[COORDINATION]');
+    expect(prompt).not.toContain('You are ');
+    expect(prompt).not.toContain('belongs to');
+  });
+});
+
 describe('M5-ACC-18 — irrelevant task does not receive full collaboration context', () => {
   it('sends zero bytes of context to a task nothing concerns', async () => {
     const h = await harness(config({ members: { backend: {} } }));

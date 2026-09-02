@@ -8,9 +8,11 @@ import type {
   TaskAssignment,
   WorkflowRole,
 } from '../contracts/index.js';
+import { teamMembers } from '../core/collaboration/roster.js';
 import type { AgentRoster } from '../core/collaboration/roster.js';
 import {
   buildCollaborationBootstrap,
+  type AgentBriefing,
   buildCollaborationContext,
 } from '../core/collaboration/context.js';
 import { projectThreads } from '../core/collaboration/threads.js';
@@ -167,7 +169,7 @@ export class CollaborationService {
     // implementation prompt in six went out with no mention of the channel at all. That
     // is the M4 condition, reintroduced through a path nothing scripted exercises: it
     // needs a team, a task the team cannot take, and a retry.
-    const bootstrap = buildCollaborationBootstrap();
+    const bootstrap = buildCollaborationBootstrap(this.briefingFor(request.agentId));
 
     // Only the *context* needs to know who is reading it. An unknown agent gets the
     // invitation and no payload, which is the same shape a quiet run produces.
@@ -191,6 +193,37 @@ export class CollaborationService {
     });
 
     return { bootstrap, ...(rendered?.text ? { context: rendered.text } : {}) };
+  }
+
+  /**
+   * What this agent owns, and which areas are somebody else's (M5 stabilisation).
+   *
+   * `undefined` for a legacy run and for any id that is not a configured member — so a
+   * run with no `teams:` block gets the bootstrap M5 shipped, byte for byte, and an
+   * unknown agent still gets the invitation.
+   *
+   * Only *exclusive* foreign areas are named. `preferred` ranks a candidate and forbids
+   * nobody; telling an agent to stay out of an area somebody merely prefers would be
+   * inventing a rule the assignment policy does not enforce and the scheduler does not
+   * apply.
+   */
+  private briefingFor(agentId: AgentId): AgentBriefing | undefined {
+    const members = teamMembers(this.options.globalConfig);
+    const self = members.find((member) => member.agentId === agentId);
+    if (self === undefined) return undefined;
+
+    return {
+      agentId,
+      owns: [...self.member.ownership.preferred, ...self.member.ownership.exclusive],
+      othersHold: members
+        .filter((member) => member.agentId !== agentId)
+        .flatMap((member) =>
+          member.member.ownership.exclusive.map((pattern) => ({
+            pattern,
+            owner: member.agentId,
+          })),
+        ),
+    };
   }
 
   /**

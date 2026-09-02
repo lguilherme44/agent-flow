@@ -229,12 +229,56 @@ describe('buildCollaborationContext (M4-06)', () => {
 });
 
 describe('buildCollaborationBootstrap (M5, I-40)', () => {
-  it('exists unconditionally — it takes no argument at all', () => {
-    // The strongest possible statement of I-40: there is no input that could make the
-    // invitation absent, so no future refactor can reintroduce the deadlock by passing
-    // an empty log to it.
-    expect(buildCollaborationBootstrap.length).toBe(0);
+  it('exists with no input at all', () => {
+    // I-40, asserted as the property rather than as the arity. This used to read
+    // `buildCollaborationBootstrap.length === 0`, which said "there is no input that
+    // could make the invitation absent" by way of "there is no input" — and stopped
+    // being true the moment a team briefing became appendable. The property it protects
+    // did not change: called with nothing, the invitation is whole.
     expect(buildCollaborationBootstrap()).toContain(AGENT_OUTBOX_FILENAME);
+    expect(buildCollaborationBootstrap()).toContain('[COORDINATION]');
+  });
+
+  it('shows the handoff its prose invites', () => {
+    // The word "handoff" was in the closing line and the form was nowhere: no type name,
+    // no `taskId`. An agent that wanted to hand work over had permission and no shape,
+    // which is the M4 deadlock in a different costume — a capability announced without
+    // the means to use it. Three live plans across two milestones produced no handoff.
+    const bootstrap = buildCollaborationBootstrap();
+
+    expect(bootstrap).toContain('handoff_request');
+    expect(bootstrap).toContain('handoff_accepted');
+    expect(bootstrap).toContain('taskId');
+  });
+
+  it('tells a team member which area is not its own', () => {
+    // Ownership was a policy no agent could see: the map reached the scheduler, the
+    // ranking and the dashboard, and never the prompt.
+    const briefed = buildCollaborationBootstrap({
+      agentId: 'backend',
+      owns: ['src/server/**'],
+      othersHold: [{ pattern: 'src/db/**', owner: 'dba' }],
+    });
+
+    expect(briefed).toContain('You are backend');
+    expect(briefed).toContain('You own src/server/**');
+    expect(briefed).toContain('src/db/** belongs to dba');
+    expect(briefed).toContain('report BLOCKED');
+  });
+
+  it('says nothing about boundaries when nobody holds one exclusively', () => {
+    // `preferred` ranks a candidate and forbids nobody. Telling an agent to stay out of
+    // an area somebody merely prefers would be inventing a rule the policy does not
+    // enforce and the scheduler does not apply.
+    const briefed = buildCollaborationBootstrap({
+      agentId: 'backend',
+      owns: ['src/server/**'],
+      othersHold: [],
+    });
+
+    expect(briefed).toContain('You are backend');
+    expect(briefed).not.toContain('belongs to');
+    expect(briefed).not.toContain('BLOCKED');
   });
 
   it('is stable: two calls produce the same bytes', () => {
@@ -256,6 +300,10 @@ describe('buildCollaborationBootstrap (M5, I-40)', () => {
     // buy a message that arrived once; this is what availability alone should cost.
     const bytes = new TextEncoder().encode(buildCollaborationBootstrap()).length;
 
-    expect(bytes).toBeLessThan(800);
+    // **900, and the 105 bytes over M5's 772 are the handoff's form.** A protocol an
+    // agent cannot act on costs the same and buys nothing; this is what the two facts a
+    // reader could not guess — the type names and the extra field — cost to state. Still
+    // well under M4's 1 373, which it is measured against.
+    expect(bytes).toBeLessThan(900);
   });
 });

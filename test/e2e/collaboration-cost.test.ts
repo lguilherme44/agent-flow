@@ -213,11 +213,11 @@ describe('what the channel costs across ten tasks (M5-ACC-19 … 22)', () => {
     expect(new Set(withContext)).toEqual(RELEVANT_TO);
   });
 
-  it('keeps availability under 800 bytes a task', async () => {
+  it('keeps availability under 900 bytes a task', async () => {
     const measured = await costs();
 
     for (const task of measured) {
-      expect(task.bootstrap, task.taskId).toBeLessThan(800);
+      expect(task.bootstrap, task.taskId).toBeLessThan(900);
     }
   });
 
