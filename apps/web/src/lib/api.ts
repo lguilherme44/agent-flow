@@ -4,6 +4,7 @@ import type {
   AnalyticsView,
   ApprovalGateView,
   ArtifactContentView,
+  CollaborationView,
   ConfigView,
   ArtifactView,
   HealthResponse,
@@ -164,6 +165,11 @@ export const api = {
     get<ArtifactContentView>(`/runs/${runId}/artifacts/${name}`, { projectId }),
   telemetry: (runId: string, projectId?: string) =>
     get<TelemetryResponse>(`/runs/${runId}/telemetry`, { projectId }),
+  // One call for threads, handoffs, entries and the roster, because a thread's status
+  // and an entry's status are folds over logs that must be read at one instant. Four
+  // calls would let a repaint show a thread as open beside the entry that closed it.
+  collaboration: (runId: string, projectId?: string) =>
+    get<CollaborationView>(`/runs/${runId}/collaboration`, { projectId }),
 
   runners: (projectId?: string) => get<RunnerView[]>('/runners', { projectId }),
   runnerHealth: (projectId?: string) =>

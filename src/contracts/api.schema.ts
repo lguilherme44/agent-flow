@@ -831,3 +831,96 @@ export interface ApiError {
   readonly error: string;
   readonly message: string;
 }
+
+/* ─── Collaboration (M4-07) ────────────────────────────────────────────────── */
+
+/**
+ * One agent, as the dashboard and `status` both render it.
+ *
+ * The roster is *derived* from configuration rather than persisted, so this is a view of
+ * what the run would resolve rather than of a record. It carries no credential and no
+ * path: a runner *id* is a configuration key the operator chose, and the model is the
+ * opaque string AD-13 keeps it as.
+ */
+export interface AgentView {
+  readonly id: string;
+  readonly displayName: string;
+  readonly role: string;
+  readonly runner: string;
+  readonly model?: string;
+  readonly skills: readonly string[];
+}
+
+export interface MessageView {
+  readonly id: string;
+  readonly threadId: string;
+  readonly from: string;
+  /** The sender's display name, resolved through the run's roster once, here. */
+  readonly fromName: string;
+  /** An agent id, `@role`, or `everyone`. Flattened for display only. */
+  readonly to: string;
+  readonly type: string;
+  readonly taskId?: string;
+  readonly subject: string;
+  readonly body: string;
+  readonly truncated: boolean;
+  readonly createdAt: string;
+}
+
+export interface ThreadView {
+  readonly id: string;
+  readonly status: string;
+  readonly subject: string;
+  readonly opener: string;
+  readonly taskId?: string;
+  readonly participants: readonly string[];
+  readonly messages: readonly MessageView[];
+  readonly openedAt: string;
+  readonly lastMessageAt: string;
+}
+
+export interface HandoffView {
+  readonly threadId: string;
+  readonly taskId: string;
+  readonly from: string;
+  readonly to: string;
+  readonly reason: string;
+  readonly status: string;
+  readonly requestedAt: string;
+  readonly settledAt?: string;
+}
+
+export interface BlackboardEntryView {
+  readonly id: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly subject: string;
+  readonly author: string;
+  readonly authorName: string;
+  readonly statement: string;
+  readonly rationale?: string;
+  readonly affects: readonly string[];
+  readonly supersedes?: string;
+  readonly supersededBy?: string;
+  readonly createdAt: string;
+}
+
+/**
+ * Everything one run's collaboration amounts to, in one response.
+ *
+ * One response rather than four endpoints, because the four are read together — a
+ * dashboard tab shows threads *and* decisions — and because a thread's status and an
+ * entry's status are folds over logs that must be read at one instant. Four calls would
+ * make a repaint able to show a thread as open beside the entry that closed it.
+ *
+ * `enabled` is the run's *configuration*, not whether anything was said. The two are
+ * different answers and the empty state depends on which: "off" invites the operator to
+ * turn it on, and "on, and quiet" does not.
+ */
+export interface CollaborationView {
+  readonly enabled: boolean;
+  readonly agents: readonly AgentView[];
+  readonly threads: readonly ThreadView[];
+  readonly handoffs: readonly HandoffView[];
+  readonly entries: readonly BlackboardEntryView[];
+}

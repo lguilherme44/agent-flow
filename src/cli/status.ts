@@ -12,6 +12,11 @@ import { projectRun, type RunProjection } from '../core/run-projection.js';
 import { loadConfig } from '../config/loader.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
 import { integrationRef } from '../core/worktree-policy.js';
+import { CollaborationStore } from '../app/collaboration-store.js';
+import { renderCollaboration } from './render/collaboration.js';
+import { projectThreads } from '../core/collaboration/threads.js';
+import { projectHandoffs } from '../core/collaboration/handoffs.js';
+import { projectBlackboard } from '../core/collaboration/blackboard.js';
 import type { GlobalOptions } from './index.js';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -113,6 +118,10 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
       events: await store.readEventsBestEffort(state.runId),
     });
 
+    // M4-07. Read through the same projections the prompt was built from and the
+    // dashboard renders, so three surfaces cannot describe one thread differently.
+    const collaboration = await readCollaboration(store, state, fs, globals);
+
     process.stdout.write(
       `${render(
         state,
@@ -122,6 +131,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         completedStages,
         isolation,
         conflicts,
+        collaboration,
       )}\n`,
     );
 
@@ -253,6 +263,7 @@ export function render(
   completedStages: readonly string[],
   isolation: IsolationReport | null,
   conflicts: readonly { task: string; attempt: number; paths: readonly string[] }[],
+  collaboration: string | undefined,
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -304,6 +315,10 @@ export function render(
     lines.push('');
   }
 
+  // Before the degradations and after the review, because it is the same kind of fact:
+  // something about this run a person weighs before deciding it can move on.
+  if (collaboration !== undefined) lines.push(collaboration, '');
+
   if (state.degradations.length > 0) {
     lines.push('Degraded:');
     for (const degradation of state.degradations) {
@@ -326,4 +341,39 @@ export function render(
   }
 
   return lines.join('\n');
+}
+
+
+/**
+ * The run's collaboration, folded exactly as the prompt and the dashboard fold it.
+ *
+ * `undefined` on every unhappy path, and never an exception: `status` is what a person
+ * runs when something is already wrong, and a malformed collaboration log must not be the
+ * reason they cannot see the gate they are blocked on.
+ */
+async function readCollaboration(
+  store: StateStore,
+  state: RunState,
+  fs: NodeFileSystem,
+  globals: GlobalOptions,
+): Promise<string | undefined> {
+  try {
+    const collaboration = new CollaborationStore({ fs, projectDir: globals.cwd });
+    const messages = await collaboration.readMessages(state.runId);
+    const entries = await collaboration.readEntries(state.runId);
+    if (messages.length === 0 && entries.length === 0) return undefined;
+
+    const runTerminated = state.status === 'completed' || state.status === 'failed';
+
+    return renderCollaboration({
+      // Read for display only, exactly as the isolation line is: whether the feature is
+      // on now says nothing about what this run recorded while it was.
+      enabled: true,
+      threads: projectThreads(messages, { runTerminated }),
+      handoffs: projectHandoffs(messages, { runTerminated }),
+      entries: projectBlackboard(entries),
+    });
+  } catch {
+    return undefined;
+  }
 }

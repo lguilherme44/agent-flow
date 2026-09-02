@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { render, renderIsolatedProgress, renderPlanningProgress } from '../../src/cli/status.js';
-import { RunStateSchema, type RunProjection, type RunState } from '../../src/contracts/index.js';
+import {
+  BlackboardEntrySchema,
+  RunStateSchema,
+  type BlackboardEntry,
+  type MessageThread,
+  type RunProjection,
+  type RunState,
+} from '../../src/contracts/index.js';
+import { renderCollaboration } from '../../src/cli/render/collaboration.js';
 
 /**
  * Found by killing a run mid-discovery, not by reading the code.
@@ -104,6 +112,7 @@ describe('the headline comes from the runtime projection, not the persisted stat
       [],
       null,
       [],
+      undefined,
     );
 
     expect(headline(rendered)).toBe('PLANNING');
@@ -119,6 +128,7 @@ describe('the headline comes from the runtime projection, not the persisted stat
       [],
       null,
       [],
+      undefined,
     );
 
     expect(headline(rendered)).toBe('IMPLEMENTING');
@@ -133,6 +143,7 @@ describe('the headline comes from the runtime projection, not the persisted stat
       [],
       null,
       [],
+      undefined,
     );
 
     expect(headline(rendered)).toBe('PLAN_REJECTED_REVISABLE');
@@ -157,6 +168,7 @@ describe('the headline comes from the runtime projection, not the persisted stat
       [],
       null,
       [],
+      undefined,
     );
 
     expect(rendered).toContain('Answer what TASK-002 reported as blocking, then requeue');
@@ -251,5 +263,105 @@ describe('renderIsolatedProgress (§21.4)', () => {
     expect(rendered).toContain('TASK-002 attempt 1 — src/shared.ts, src/other.ts');
     // A refusal with no next step is a dead end.
     expect(rendered).toContain('agent-flow retry');
+  });
+});
+
+describe('the collaboration section (M4-07)', () => {
+  const thread = (patch: Partial<MessageThread> = {}): MessageThread => ({
+    id: 'THR-0001',
+    status: 'open',
+    subject: 'which idempotency key?',
+    opener: 'executor.normal',
+    taskId: 'TASK-003',
+    messages: [],
+    participants: ['executor.normal', 'architect'],
+    openedAt: '2026-09-01T12:00:00.000Z',
+    lastMessageAt: '2026-09-01T12:00:00.000Z',
+    ...patch,
+  });
+
+  const entry = (patch: Partial<BlackboardEntry> = {}): BlackboardEntry =>
+    BlackboardEntrySchema.parse({
+      id: 'CTR-001',
+      runId: 'AF-2026-001',
+      kind: 'contract',
+      subject: 'checkout-idempotency',
+      author: 'architect',
+      statement: 'the API mints the key',
+      createdAt: '2026-09-01T12:00:00.000Z',
+      ...patch,
+    });
+
+  it('renders nothing at all for a run whose agents never spoke', () => {
+    // Every run on every project that has not opted in. A heading here would add a line
+    // to `status` for a feature nobody turned on.
+    expect(renderCollaboration({ enabled: true, threads: [], handoffs: [], entries: [] })).toBeUndefined();
+  });
+
+  it('counts what is open rather than transcribing the conversation', () => {
+    // `status` is read before deciding whether a run can move forward. A transcript in
+    // the middle of it would bury the gate.
+    const rendered = renderCollaboration({
+      enabled: true,
+      threads: [thread(), thread({ id: 'THR-0002', status: 'resolved' })],
+      handoffs: [],
+      entries: [{ entry: entry(), status: 'active' }],
+    });
+
+    expect(rendered).toContain('2 thread(s), 1 unresolved');
+    expect(rendered).toContain('1 live blackboard entry');
+  });
+
+  it('names an unanswered handoff, because it is a task waiting on a person', () => {
+    const rendered = renderCollaboration({
+      enabled: true,
+      threads: [thread()],
+      handoffs: [
+        {
+          threadId: 'THR-0002',
+          taskId: 'TASK-005',
+          from: 'executor.normal',
+          to: 'executor.complex',
+          reason: 'it touches the scheduler',
+          status: 'requested',
+          requestedAt: '2026-09-01T12:00:00.000Z',
+        },
+      ],
+      entries: [],
+    });
+
+    expect(rendered).toContain('TASK-005: executor.normal → executor.complex, unanswered');
+  });
+
+  it('is loud about a contested entry, and says nothing decides it mechanically', () => {
+    // The one piece of collaboration state with no mechanical resolution. Folding it
+    // into a count would hide the thing a person actually has to settle.
+    const rendered = renderCollaboration({
+      enabled: true,
+      threads: [],
+      handoffs: [],
+      entries: [
+        { entry: entry({ id: 'CTR-001' }), status: 'contested', supersededBy: 'CTR-002' },
+        { entry: entry({ id: 'CTR-002', author: 'executor.normal', supersedes: 'CTR-001' }), status: 'contested' },
+      ],
+    });
+
+    expect(rendered).toContain('2 contested entry(ies)');
+    expect(rendered).toContain('nothing decides it for you');
+    expect(rendered).toContain('CTR-001');
+  });
+
+  it('does not count a superseded entry as live', () => {
+    const rendered = renderCollaboration({
+      enabled: true,
+      threads: [],
+      handoffs: [],
+      entries: [
+        { entry: entry({ id: 'DSC-001', kind: 'discovery' }), status: 'superseded', supersededBy: 'DSC-002' },
+        { entry: entry({ id: 'DSC-002', kind: 'discovery' }), status: 'active' },
+      ],
+    });
+
+    expect(rendered).toContain('1 live blackboard entry');
   });
 });

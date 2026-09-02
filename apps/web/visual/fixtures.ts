@@ -14,6 +14,7 @@
  */
 
 import type {
+  CollaborationView,
   AnalyticsView,
   ApprovalGateView,
   ConfigView,
@@ -973,6 +974,144 @@ export const CONFIG: ConfigView = {
 };
 
 /** Path → body. The visual tests answer every call the dashboard makes. */
+/**
+ * A run whose agents talked (M4-07).
+ *
+ * Composed to exercise every branch the panel can take in one screenshot: an answered
+ * thread, an unanswered one, a pending handoff, a plain decision and a **contested**
+ * pair. A fixture that only showed the happy shape would leave the case that matters —
+ * two agents disagreeing — unphotographed, and that is the one whose styling is easiest
+ * to get wrong.
+ */
+export const COLLABORATION: CollaborationView = {
+  enabled: true,
+  agents: [
+    { id: 'architect', displayName: 'Architect', role: 'architect', runner: 'claude', skills: [] },
+    {
+      id: 'executor.normal',
+      displayName: 'Executor (normal)',
+      role: 'executor.normal',
+      runner: 'codex',
+      model: 'a-model',
+      skills: [],
+    },
+  ],
+  threads: [
+    {
+      id: 'THR-0001',
+      status: 'answered',
+      subject: 'where is the idempotency key minted?',
+      opener: 'executor.normal',
+      taskId: 'TASK-003',
+      participants: ['Executor (normal)', 'Architect'],
+      messages: [
+        {
+          id: 'MSG-0001',
+          threadId: 'THR-0001',
+          from: 'executor.normal',
+          fromName: 'Executor (normal)',
+          to: 'architect',
+          type: 'question',
+          taskId: 'TASK-003',
+          subject: 'where is the idempotency key minted?',
+          body: 'The SDD names one but does not say which side generates it.',
+          truncated: false,
+          createdAt: '2026-08-10T19:41:00.000Z',
+        },
+        {
+          id: 'MSG-0002',
+          threadId: 'THR-0001',
+          from: 'architect',
+          fromName: 'Architect',
+          to: 'executor.normal',
+          type: 'answer',
+          taskId: 'TASK-003',
+          subject: 're: where is the idempotency key minted?',
+          body: 'The API mints it and returns it; the client echoes it on retry.',
+          truncated: false,
+          createdAt: '2026-08-10T19:48:00.000Z',
+        },
+      ],
+      openedAt: '2026-08-10T19:41:00.000Z',
+      lastMessageAt: '2026-08-10T19:48:00.000Z',
+    },
+    {
+      id: 'THR-0003',
+      status: 'open',
+      subject: 'is the recurrence table partitioned?',
+      opener: 'executor.normal',
+      taskId: 'TASK-005',
+      participants: ['Executor (normal)'],
+      messages: [
+        {
+          id: 'MSG-0005',
+          threadId: 'THR-0003',
+          from: 'executor.normal',
+          fromName: 'Executor (normal)',
+          to: '@architect',
+          type: 'question',
+          taskId: 'TASK-005',
+          subject: 'is the recurrence table partitioned?',
+          body: 'The migration will need a different shape if it is.',
+          truncated: false,
+          createdAt: '2026-08-10T20:02:00.000Z',
+        },
+      ],
+      openedAt: '2026-08-10T20:02:00.000Z',
+      lastMessageAt: '2026-08-10T20:02:00.000Z',
+    },
+  ],
+  handoffs: [
+    {
+      threadId: 'THR-0002',
+      taskId: 'TASK-006',
+      from: 'executor.normal',
+      to: 'executor.complex',
+      reason: 'it turned out to touch the scheduler',
+      status: 'requested',
+      requestedAt: '2026-08-10T19:55:00.000Z',
+    },
+  ],
+  entries: [
+    {
+      id: 'DEC-001',
+      kind: 'decision',
+      status: 'active',
+      subject: 'checkout-idempotency',
+      author: 'architect',
+      authorName: 'Architect',
+      statement: 'The API mints the idempotency key and the client echoes it on retry.',
+      rationale: 'A client-minted key cannot be deduplicated across devices.',
+      affects: ['executor.normal'],
+      createdAt: '2026-08-10T19:48:00.000Z',
+    },
+    {
+      id: 'CTR-001',
+      kind: 'contract',
+      status: 'contested',
+      subject: 'recurrence-expansion',
+      author: 'architect',
+      authorName: 'Architect',
+      statement: 'Occurrences are expanded lazily, at read time.',
+      affects: [],
+      supersededBy: 'CTR-002',
+      createdAt: '2026-08-10T19:20:00.000Z',
+    },
+    {
+      id: 'CTR-002',
+      kind: 'contract',
+      status: 'contested',
+      subject: 'recurrence-expansion',
+      author: 'executor.normal',
+      authorName: 'Executor (normal)',
+      statement: 'Lazy expansion cannot answer "next 5 occurrences" in one query.',
+      affects: [],
+      supersedes: 'CTR-001',
+      createdAt: '2026-08-10T20:05:00.000Z',
+    },
+  ],
+};
+
 export const ROUTES: Record<string, unknown> = {
   '/api/v1/health': { status: 'ok', version: '0.1.0', projects: 4, host: '127.0.0.1', port: 4782 },
   '/api/v1/projects': PROJECTS,
@@ -985,6 +1124,7 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}/tasks/TASK-003`]: TASK_DETAIL,
   [`/api/v1/runs/${RUN_ID}/artifacts`]: ARTIFACTS,
   [`/api/v1/runs/${RUN_ID}/telemetry`]: TELEMETRY,
+  [`/api/v1/runs/${RUN_ID}/collaboration`]: COLLABORATION,
   '/api/v1/runners': RUNNERS,
   '/api/v1/agents': AGENTS,
   '/api/v1/prompts': PROMPTS,

@@ -7,6 +7,7 @@ import { useGlobalTaskSelection } from '../app/task-selection-context';
 import {
   useArtifact,
   useArtifacts,
+  useCollaboration,
   useRun,
   useRunDag,
   useStages,
@@ -23,6 +24,7 @@ import {
   ExecutionSummaryCard,
   ModelUsageCard,
 } from '../features/bottom-cards';
+import { CollaborationPanel } from '../features/collaboration';
 import { Empty, Notice, cx } from '../components/ui';
 import { StructuredPlanView } from '../components/StructuredPlanView';
 import { ArtifactReader } from '../components/ArtifactReader';
@@ -114,6 +116,11 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   // Fetched only when the graph is open. Structure is cheap to serve and free to
   // skip, and a table nobody has switched away from should not pay for it.
   const dag = useRunDag(projectId, runId, { enabled: asGraph });
+  // M4-07. One query for all four parts, matching the one endpoint: a thread's status and
+  // an entry's status are folds over logs that have to be read at one instant.
+  const collaboration = useCollaboration(projectId, runId);
+  const hasCollaboration =
+    (collaboration.data?.threads.length ?? 0) > 0 || (collaboration.data?.entries.length ?? 0) > 0;
 
   // Selecting a task a later plan no longer contains would leave the inspector
   // showing a task the run does not have.
@@ -265,11 +272,21 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
 
       {asGraph || isFocusMode ? null : (
         <div className="section-logs surface-1 p-0 overflow-hidden">
-          <div className="grid h-full shrink-0 grid-cols-4 gap-3 p-3">
-            <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
-            <ApprovalCard run={run.data} projectId={projectId} />
-            <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
-            <ModelUsageCard telemetry={telemetry.data} />
+          <div className="flex h-full min-h-0 flex-col gap-3 p-3">
+            <div className="grid shrink-0 grid-cols-4 gap-3">
+              <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
+              <ApprovalCard run={run.data} projectId={projectId} />
+              <ExecutionSummaryCard run={run.data} tasks={tasks.data ?? []} />
+              <ModelUsageCard telemetry={telemetry.data} />
+            </div>
+            {/* A second row rather than a fifth column, and only when there is something
+                in it. Five cards at this width would leave each 240px, which is not
+                enough for a message; and a permanently empty fifth card on every
+                dashboard would be a box for a feature that ships off. So a project that
+                has not opted in sees exactly the row it saw before M4. */}
+            {hasCollaboration ? (
+              <CollaborationPanel collaboration={collaboration.data}  />
+            ) : null}
           </div>
         </div>
       )}

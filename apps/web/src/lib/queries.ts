@@ -3,6 +3,7 @@ import { api } from './api';
 import type {
   AnalyticsView,
   ArtifactContentView,
+  CollaborationView,
   ConfigView,
   ArtifactView,
   ProjectView,
@@ -62,6 +63,8 @@ export const keys = {
     ['artifact', { runId, name, projectId }] as const,
   telemetry: (projectId: string | undefined, runId: string) =>
     ['telemetry', { runId, projectId }] as const,
+  collaboration: (projectId: string | undefined, runId: string) =>
+    ['collaboration', { runId, projectId }] as const,
   runnerHealth: (projectId?: string) => ['runner-health', { projectId }] as const,
   runners: (projectId?: string) => ['runners', { projectId }] as const,
   agents: (projectId?: string) => ['agents', { projectId }] as const,
@@ -267,5 +270,24 @@ export function useConfig(projectId?: string): UseQueryResult<ConfigView> {
     queryKey: keys.config(projectId),
     queryFn: () => api.config(projectId),
     staleTime: 30_000,
+  });
+}
+
+/**
+ * What the agents on this run said to each other (M4-07).
+ *
+ * One query for all four parts, matching the one endpoint that serves them: a thread's
+ * status and an entry's status are folds over logs that have to be read at one instant,
+ * and four caches expiring independently would let a repaint show a thread as open beside
+ * the entry that closed it.
+ */
+export function useCollaboration(
+  projectId: string | undefined,
+  runId: string | undefined,
+): UseQueryResult<CollaborationView> {
+  return useQuery({
+    queryKey: keys.collaboration(projectId, runId ?? ''),
+    queryFn: () => api.collaboration(runId as string, projectId),
+    enabled: runId !== undefined,
   });
 }

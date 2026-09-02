@@ -52,6 +52,7 @@ import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import { RunReader } from './run-reader.js';
+import { CollaborationReader } from './collaboration-reader.js';
 import { PromptReader } from './prompt-reader.js';
 import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
 import { ConfigReader } from './config-reader.js';
@@ -132,6 +133,13 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     // §21.2 needs `parallelism.maxTasks` to report what a run asked for beside what
     // it got. The run's *mode* is never read from here — that is captured at
     // creation and immutable (I-13).
+    globalConfigPath: options.globalConfigPath,
+  });
+  // M4-07. Its own reader rather than a method on `RunReader`, for the reason
+  // `AnalyticsReader` is its own: it opens different files, answers a different question,
+  // and folding it in would make the class every run page depends on grow a second job.
+  const collaboration = new CollaborationReader({
+    fs: options.fs,
     globalConfigPath: options.globalConfigPath,
   });
   const prompts = new PromptReader({ fs: options.fs, promptsDir: options.promptsDir });
@@ -279,6 +287,25 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const detail = await reader.taskDetail(project, params.data.runId, params.data.taskId);
     return detail === null ? notFound(reply, 'no such task') : detail;
+  });
+
+  /**
+   * What the agents on this run said to each other, and what they wrote down (M4-07).
+   *
+   * One response rather than four, because a thread's status and an entry's status are
+   * folds over logs that have to be read at one instant — four calls would let a repaint
+   * show a thread as open beside the entry that closed it.
+   *
+   * A run that predates M4, or one whose agents never spoke, answers with empty lists and
+   * `enabled` from configuration. Empty is not an error, and the two facts are separate
+   * on purpose: "off" invites the operator to turn it on and "on, and quiet" does not.
+   */
+  app.get('/api/v1/runs/:runId/collaboration', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const view = await collaboration.collaboration(scope.project, scope.runId);
+    return view === null ? notFound(reply, 'no such run') : view;
   });
 
   app.get('/api/v1/runs/:runId/artifacts', async (request, reply) => {
