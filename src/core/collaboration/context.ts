@@ -52,10 +52,13 @@ export interface RenderedCollaboration {
 }
 
 /**
- * The block, or `undefined` when there is nothing worth spending bytes on.
+ * The block, or `undefined` when this run does not let agents speak at all.
  *
- * `undefined` rather than an empty block: a heading with nothing under it costs a prompt
- * real bytes and teaches the agent that this section is usually noise.
+ * **`undefined` means the channel is closed, never "nobody has spoken yet".** Those are
+ * different facts and conflating them deadlocked the feature: an agent that is not shown
+ * the outbox contract does not write an outbox, so a log that starts empty stays empty.
+ * The first agent on a run receives the invitation with nothing behind it, which is
+ * correct — it is the only way there is ever a second.
  */
 export function buildCollaborationContext(
   input: CollaborationContextInput,
@@ -72,8 +75,21 @@ export function buildCollaborationContext(
     files: input.files,
   })].reverse();
 
-  if (threads.length === 0 && entries.length === 0) return undefined;
-
+  // **Rendered even when nobody has spoken yet, and that is the whole of the fix.**
+  //
+  // This used to return here when both lists were empty, which made the channel unable
+  // to carry its first message: a fresh run's log is empty, so no block reached the
+  // prompt, so the agent never learned the outbox existed, so it wrote none, so the log
+  // stayed empty — for every agent, on every run. The feature was unreachable in
+  // production and 366 tests passed, because every one of them either seeded the log
+  // first or called the harvest directly. A live dogfood is what the ordering above is
+  // written down for.
+  //
+  // The header and the outbox contract are the *invitation*; the threads and entries are
+  // the *content*. An invitation with nothing behind it is a legitimate block — it is
+  // what the first agent on every run receives — and it costs a bounded ~1.2 kB that
+  // `stage_context_measured` attributes to `collaboration`, so an operator who does not
+  // want to pay it turns the feature off.
   const header = renderHeader(input.agent, input.roster);
   const footer = renderOutboxContract();
 
@@ -107,8 +123,6 @@ export function buildCollaborationContext(
     body.push(rendered);
     used += cost;
   }
-
-  if (body.length === 0) return undefined;
 
   const cut =
     omitted === 0

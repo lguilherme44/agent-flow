@@ -126,9 +126,12 @@ export class CollaborationService {
     const agent = this.options.roster.byId(request.agentId);
     if (agent === undefined) return undefined;
 
+    // Read whatever is there, which on the first attempt of a run is nothing. The empty
+    // case is *not* short-circuited here: see `buildCollaborationContext` on why an
+    // invitation with nothing behind it is the only way a channel ever gets a first
+    // message.
     const messages = await this.options.collaboration.readMessages(request.runId);
     const entries = await this.options.collaboration.readEntries(request.runId);
-    if (messages.length === 0 && entries.length === 0) return undefined;
 
     const rendered = buildCollaborationContext({
       agent,

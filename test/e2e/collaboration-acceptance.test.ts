@@ -246,7 +246,14 @@ describe('what the prompt is made of', () => {
   /** What the runner actually received, for the one task the harness runs. */
   const promptOf = (runner: FakeAgentRunner): string => runner.calls[0]?.prompt ?? '';
 
-  it('carries the collaboration block only when there is something in it', async () => {
+  it('invites the first agent, then carries what the others said', async () => {
+    // **This test asserted the deadlock.** It required the block to be absent on a quiet
+    // run, which is precisely what made the channel unable to carry a first message: the
+    // agent was never told the outbox existed, so it wrote none, so the run stayed quiet
+    // forever. The assertion was blessing the defect.
+    //
+    // The correct behaviour is that a run with the feature on always invites, and adds
+    // content once there is any.
     const quiet = await harness({ enabled: true });
     await quiet.executor.execute(TASK, quiet.run.runId, '# SDD');
 
@@ -269,7 +276,12 @@ describe('what the prompt is made of', () => {
     ]);
     await loud.executor.execute(TASK, loud.run.runId, '# SDD');
 
-    expect(promptOf(quiet.runner)).not.toContain('[TEAM CONTEXT]');
+    // The invitation reaches the first agent on a silent run…
+    expect(promptOf(quiet.runner)).toContain('[TEAM CONTEXT]');
+    expect(promptOf(quiet.runner)).toContain('.agent-flow-outbox.json');
+    // …and carries nothing it was not given.
+    expect(promptOf(quiet.runner)).not.toContain('THR-');
+
     expect(promptOf(loud.runner)).toContain('[TEAM CONTEXT]');
     expect(promptOf(loud.runner)).toContain('the contract says the API mints it');
   });

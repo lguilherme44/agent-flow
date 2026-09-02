@@ -84,24 +84,45 @@ function build(options: {
 }
 
 describe('buildCollaborationContext (M4-06)', () => {
-  it('renders nothing when nobody has said anything', () => {
-    // A heading with nothing under it costs real bytes and teaches the agent that the
-    // section is noise.
-    expect(build({})).toBeUndefined();
+  it('invites the first agent on a run, when nobody has said anything yet', () => {
+    // **The defect a live dogfood found and 366 tests missed.** This used to return
+    // `undefined`, which deadlocked the channel: an empty log meant no block, no block
+    // meant the agent never learned the outbox existed, so it wrote none and the log
+    // stayed empty — for every agent, on every run. Every other test in this file seeds
+    // the log first, which is exactly why none of them could see it.
+    const rendered = build({});
+
+    expect(rendered).toBeDefined();
+    expect(rendered?.text).toContain(AGENT_OUTBOX_FILENAME);
+    expect(rendered?.text).toContain('Agents you can address');
   });
 
-  it('renders nothing when nothing that was said concerns this agent', () => {
+  it('still invites an agent when what was said concerns somebody else', () => {
     const somebody = message({
       from: 'planner',
       to: { kind: 'agent', id: 'architect' },
       taskId: 'TASK-009',
     });
 
-    expect(build({ messages: [somebody] })).toBeUndefined();
+    const rendered = build({ messages: [somebody] });
+
+    expect(rendered?.text).toContain(AGENT_OUTBOX_FILENAME);
+    // Somebody else's conversation about somebody else's task is not shown.
+    expect(rendered?.text).not.toContain('THR-0001');
   });
 
-  it('renders nothing when the byte budget is zero', () => {
-    expect(build({ messages: [message()], config: { maxContextBytes: 0 } })).toBeUndefined();
+  it('is closed, not merely quiet, when the byte budget is zero', () => {
+    // The one remaining `undefined`: the channel is shut. Distinct from "nobody has
+    // spoken", which is what conflating the two cost the feature.
+    expect(build({ config: { maxContextBytes: 0 } })).toBeUndefined();
+  });
+
+  it('costs a bounded invitation and no more when the log is empty', () => {
+    // The price of the fix, stated as a number rather than left to be discovered on a
+    // prompt-size report. `stage_context_measured` attributes it to `collaboration`.
+    const rendered = build({});
+
+    expect(new TextEncoder().encode(rendered?.text ?? '').length).toBeLessThan(2048);
   });
 
   it('frames the block as untrusted and without authority', () => {
