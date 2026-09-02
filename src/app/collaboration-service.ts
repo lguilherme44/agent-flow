@@ -275,12 +275,21 @@ export class CollaborationService {
     }
 
     for (const rejection of outcome.rejections) {
-      const type =
-        rejection.reason === 'budget_exhausted' || rejection.reason === 'thread_depth_exceeded'
+      // **Whole-file refusals are tested first, and the order is the fix.** It used to
+      // branch on the reason before the scope, so an *oversized* outbox — which is a
+      // budget refusal and a whole-file refusal at once — was recorded as
+      // `collaboration_budget_exhausted`. The declared vocabulary says
+      // `collaboration_outbox_refused` covers "unparseable, oversized, or pointing
+      // somewhere it should not", so the code and its own contract disagreed, and a
+      // reader looking for the documented meaning would not have found that case.
+      //
+      // Scope is also the more useful fact: "none of it was read" is a different thing
+      // to act on than "this one item did not fit beside the others that did".
+      const type = outcome.refused
+        ? 'collaboration_outbox_refused'
+        : rejection.reason === 'budget_exhausted' || rejection.reason === 'thread_depth_exceeded'
           ? 'collaboration_budget_exhausted'
-          : outcome.refused
-            ? 'collaboration_outbox_refused'
-            : 'collaboration_message_rejected';
+          : 'collaboration_message_rejected';
 
       await store.appendEvent(request.runId, type, {
         ...base,
