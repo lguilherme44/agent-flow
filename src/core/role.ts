@@ -204,14 +204,31 @@ export function resolveRole(
   config: GlobalConfig,
   capabilities: RunnerCapabilitiesMap,
   requirements: RoleRequirements = {},
+  /**
+   * The team member answering for this role, when one is (M5).
+   *
+   * **Who answers a role is not always what `roles:` says.** A team member declares its
+   * own runner and model, and the role table declares the default for a run with no
+   * team. Resolving the role's runner for a member is answering about somebody else —
+   * which passed a member on an inference endpoint through the implementation
+   * capability check, because the *role* pointed at a coding agent.
+   *
+   * An override rather than a second resolver: every check below — registered, enabled,
+   * non-interactive, working directory, read-only, structured output, reasoning clamp —
+   * has to apply to a member exactly as it applies to a role, and a second copy of that
+   * list is a second chance to drop one from it.
+   */
+  member?: { readonly runner: string; readonly model?: string },
 ): ResolvedAgentConfig {
   const roleConfig = roleConfigOf(config.roles, role);
-  const runnerId = roleConfig.runner;
+  const runnerId = member?.runner ?? roleConfig.runner;
+  const model = member?.model ?? roleConfig.model;
 
   const runnerConfig = config.runners[runnerId];
-  // Resolved with the role's model, which is the whole of AD-30: the capabilities that
-  // matter are those of the (runner, model) pair, not of the CLI in the abstract.
-  const runnerCapabilities = capabilitiesOf(capabilities, runnerId, roleConfig.model);
+  // Resolved with the model that will actually be used, which is the whole of AD-30: the
+  // capabilities that matter are those of the (runner, model) pair, not of the CLI in
+  // the abstract.
+  const runnerCapabilities = capabilitiesOf(capabilities, runnerId, model);
 
   if (!runnerConfig || !runnerCapabilities) {
     const known = Object.keys(config.runners).join(', ') || '(none)';
@@ -288,7 +305,7 @@ export function resolveRole(
   return {
     role,
     runner: runnerId,
-    ...(roleConfig.model === undefined ? {} : { model: roleConfig.model }),
+    ...(model === undefined ? {} : { model }),
     reasoning,
     reasoningClamped: clamped,
     requestedReasoning: roleConfig.effort,

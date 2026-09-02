@@ -1189,7 +1189,14 @@ export function canImplementWith(
     if (capabilities === undefined) return false;
 
     try {
-      resolveRole(agent.role, config, capabilities, { workingDirectory: true });
+      // **The member's own runner, not the role's.** A team member declares which runner
+      // it uses; asking about the role would answer for whoever `roles:` points at, which
+      // on a team is usually somebody else — and would let a member on an inference
+      // endpoint through the check that exists to keep it out of implementation work.
+      resolveRole(agent.role, config, capabilities, { workingDirectory: true }, {
+        runner: agent.runner,
+        ...(agent.model === undefined ? {} : { model: agent.model }),
+      });
       return true;
     } catch {
       return false;

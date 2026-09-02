@@ -197,6 +197,14 @@ function legacyRoster(config: GlobalConfig): AgentRoster {
  *
  * The reserved participants are appended exactly as in the legacy path: `human` and
  * `orchestrator` are addressable on every run, whether or not a team is configured.
+ *
+ * **So is every role no member serves**, and that is not a convenience. A `teams:` block
+ * names the members who do implementation work; the architect, the planner, the SDD
+ * author, both reviewers and verification still run, still speak, and still have to be
+ * answerable. Leaving them out made a team run one on which an executor could not ask the
+ * architect a question — an M4 capability silently withdrawn by configuring a team, and
+ * a message addressed to a recipient the roster does not know is dropped rather than
+ * refused. Found by the acceptance criterion that says M4's semantics remain valid.
  */
 function teamRoster(config: GlobalConfig): AgentRoster {
   const derived: AgentIdentity[] = teamMembers(config).map(({ agentId, member }) => ({
@@ -209,13 +217,24 @@ function teamRoster(config: GlobalConfig): AgentRoster {
     specializations: normaliseSkills(member.specializations),
   }));
 
-  const all = [...derived, ...RESERVED];
+  // The stages a team does not staff, under the ids they run as. Only the roles no member
+  // serves: a legacy `executor.normal` beside two members who *are* the normal executors
+  // would be a third participant nothing dispatches, addressable by a message that then
+  // reaches nobody.
+  const staffed = new Set(derived.map((agent) => agent.role));
+  const unstaffed = legacyRoster(config).agents.filter((agent) => !staffed.has(agent.role));
+
+  const all = [...derived, ...unstaffed, ...RESERVED];
   const index = new Map(all.map((agent) => [agent.id, agent]));
 
+  const addressable = [...derived, ...unstaffed];
+
   return {
-    agents: derived,
+    // Members and unstaffed roles both: `agents` is who this run has, and a context block
+    // listing only the members would describe a run half its size.
+    agents: addressable,
     byId: (id) => index.get(id),
-    byRole: (role) => derived.filter((agent) => agent.role === role),
+    byRole: (role) => addressable.filter((agent) => agent.role === role),
     has: (id) => index.has(id),
   };
 }
