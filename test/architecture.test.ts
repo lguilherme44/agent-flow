@@ -3766,3 +3766,149 @@ describe('one module decides who executes a task (M5, I-33 … I-39)', () => {
     expect(body).not.toMatch(/\b(?:ownership|capacity|assignTo|agentId|skills)\s*:/);
   });
 });
+
+/**
+ * Review is advice; the gate is the authority (M6, §66, I-42 … I-47).
+ *
+ * Eleven rules the charter names. Two of them live in the dashboard's own suite, because
+ * that is where the code they forbid would be written; the nine here are about who may
+ * decide what, and each one is a way a model's opinion could quietly become a verdict.
+ */
+describe('a review proposes and a gate decides (M6, I-42 … I-47)', () => {
+  const REVIEW = sourceFiles('src/core/review').map(read);
+
+  it('keeps the review core free of providers, adapters, ports and Node', () => {
+    // The same rule the team core lives under: a module that could reach a provider could
+    // decide a finding by asking one, and the answer would stop being reproducible from
+    // the log.
+    const offenders = REVIEW.filter(({ text }) =>
+      importSpecifiers(text).some(
+        (specifier) =>
+          specifier.startsWith('node:') ||
+          specifier.includes('/adapters/') ||
+          specifier.includes('/ports/') ||
+          specifier.includes('/app/') ||
+          specifier.includes('/server/') ||
+          specifier.includes('/cli/'),
+      ),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('gives an implementer no way to approve its own work (I-42)', () => {
+    // `is_author` is an exclusion in the assignment policy, checked before every other
+    // filter — not a field recorded after the fact, which is what M5 had and what
+    // described the problem while refusing nothing.
+    //
+    // Read with `withoutComments` rather than `codeOnly`: this rule is *about* the
+    // literals, and `codeOnly` blanks exactly those.
+    const assignment = withoutComments(read(join(ROOT, 'src/core/team/assignment.ts')).text);
+
+    expect(assignment).toMatch(/isAuthor\?\.\([^)]*\) === true\) return 'is_author'/);
+    // First, so an author is never reported as merely at capacity — a reason a person
+    // would try to fix by raising a number.
+    expect(assignment.indexOf("return 'is_author'")).toBeLessThan(
+      assignment.indexOf("return 'role_mismatch'"),
+    );
+  });
+
+  it('stores a finding without a status (I-43)', () => {
+    // A *projection* has one by design — that is what it is for. What must not exist is a
+    // persisted one: a column somebody writes is the second copy, and it is the one a
+    // crash between two writes leaves wrong and an agent could eventually reach.
+    const schema = read(join(ROOT, 'src/contracts/review.schema.ts')).text;
+
+    for (const name of ['ReviewFindingSchema', 'ReviewRecordSchema']) {
+      const declaration = schema.slice(schema.indexOf(`export const ${name}`));
+      const body = codeOnly(declaration.slice(0, declaration.indexOf('});')));
+      expect(body, name).not.toMatch(/\bstatus:/);
+    }
+  });
+
+  it('lets collaboration answer a finding and never verify one', () => {
+    // A message may acknowledge or dispute. `verified` comes from a later review that
+    // read a corrected tree, or from a gate — never from something somebody said.
+    const findings = codeOnly(read(join(ROOT, 'src/core/review/findings.ts')).text);
+
+    expect(findings).toMatch(/if \(!hasCorrective\) return undefined;/);
+    expect(findings).not.toMatch(/message[^;\n]*'verified'/);
+  });
+
+  it('gives a review no way to mark a quality gate passed (I-44)', () => {
+    // A gate's status comes from an exit code Agent Flow read. Nothing in the review
+    // domain may produce one from anything else.
+    const service = codeOnly(read(join(ROOT, 'src/app/review-service.ts')).text);
+
+    expect(service).not.toMatch(/status:\s*'passed'/);
+  });
+
+  it('gives a quality gate no field to carry a command in', () => {
+    // §37: "command continua vindo da configuração humana existente. Nunca de LLM
+    // output." The guarantee is structural rather than a substring somebody could keep
+    // while changing what it does — a gate declares what a run *means*, and the only
+    // place a command lives is the validation registry a person wrote.
+    //
+    // Checking that `gates.ts` mentions `registry.resolve` was the first version of this,
+    // and a mutation that stopped resolving through it left the mention behind and passed.
+    const schema = read(join(ROOT, 'src/contracts/review.schema.ts')).text;
+    const declaration = schema.slice(schema.indexOf('export const QualityGateConfigSchema'));
+    const body = codeOnly(declaration.slice(0, declaration.indexOf('});')));
+
+    expect(body).not.toMatch(/\b(?:command|script|run|shell|exec):/);
+  });
+
+  it('spawns nothing from the review core', () => {
+    const offenders = REVIEW.filter(({ text }) =>
+      /\b(?:exec|spawn|execSync|execFile)\s*\(/.test(codeOnly(text)),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('decides review freshness from tree identity, never from a clock', () => {
+    // I-41. A review written after a change can still have read what came before it, so
+    // a timestamp answers a different question from the one being asked.
+    const decision = codeOnly(read(join(ROOT, 'src/core/review/decision.ts')).text);
+
+    expect(decision).toMatch(/reviewedTree !== input\.integratedTree/);
+    expect(decision).not.toMatch(/\bDate\b|createdAt\s*[<>]/);
+  });
+
+  it('has one authority over whether a change may proceed', () => {
+    // `decideQuality`, and nothing beside it. Two functions answering "may this proceed"
+    // is two answers, and the second one is reached by whichever caller imported it.
+    const definitions = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export function decideQuality\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(definitions).toEqual(['src/core/review/decision.ts']);
+  });
+
+  it('leaves corrective work going through the assignment policy and the scheduler', () => {
+    // §66's last three. A corrective task is a task in the plan: the generator adds it
+    // and nothing else touches it, so it is routed, isolated, validated and integrated by
+    // the same machinery as the work it corrects.
+    const corrective = codeOnly(read(join(ROOT, 'src/core/review/corrective.ts')).text);
+
+    // No dispatch, no worktree, no direct patching — it selects and reshapes, and the
+    // task it produces is handed to the generator that puts it in the plan.
+    expect(corrective).not.toMatch(/\bexecute\b|\bdispatch\b|worktree|writeFile|spawn/);
+    // And it reaches nothing that could run the fix itself.
+    expect(
+      importSpecifiers(read(join(ROOT, 'src/core/review/corrective.ts')).text).filter(
+        (specifier) => specifier.includes('/app/') || specifier.startsWith('node:'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('adds corrective tasks to the plan in exactly one place', () => {
+    const generators = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export function applyFixes\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(generators).toEqual(['src/core/corrective-plan.ts']);
+  });
+});
