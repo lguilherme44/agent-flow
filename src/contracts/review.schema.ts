@@ -2,9 +2,11 @@ import { z } from 'zod';
 import { AgentIdSchema, CollaborationReferenceSchema } from './collaboration.schema.js';
 import {
   AnyTaskIdSchema,
+  FindingIdSchema,
   IsoTimestampSchema,
   ReasoningLevelSchema,
   RequirementIdSchema,
+  ReviewIdSchema,
   RunIdSchema,
 } from './common.schema.js';
 
@@ -30,14 +32,6 @@ export type FindingSeverity = z.infer<typeof FindingSeveritySchema>;
 export function severityAtLeast(severity: FindingSeverity, threshold: FindingSeverity): boolean {
   return FINDING_SEVERITIES.indexOf(severity) >= FINDING_SEVERITIES.indexOf(threshold);
 }
-
-/* ─── Ids ──────────────────────────────────────────────────────────────────── */
-
-export const ReviewIdSchema = z.string().regex(/^REV-\d{4}$/, 'expected REV-0000');
-export type ReviewId = z.infer<typeof ReviewIdSchema>;
-
-export const FindingIdSchema = z.string().regex(/^FIND-\d{4}$/, 'expected FIND-0000');
-export type FindingId = z.infer<typeof FindingIdSchema>;
 
 /* ─── Where a finding is ───────────────────────────────────────────────────── */
 

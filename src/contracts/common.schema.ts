@@ -257,6 +257,20 @@ export type IsolationMode = z.infer<typeof IsolationModeSchema>;
  * command, a pipe, a redirect or a substitution. The second defence is
  * `checkPlan`, which requires the id to exist in the project configuration.
  */
+/**
+ * A review, and a finding inside one (M6).
+ *
+ * Here rather than in `review.schema.ts` because a *message* may reference a finding —
+ * that reference is how a developer's response binds to what it answers without a second
+ * messaging store — and the collaboration schema cannot import the review schema, which
+ * imports it. Shared ids live where both sides can see them.
+ */
+export const ReviewIdSchema = z.string().regex(/^REV-\d{4}$/, 'expected REV-0000');
+export type ReviewId = z.infer<typeof ReviewIdSchema>;
+
+export const FindingIdSchema = z.string().regex(/^FIND-\d{4}$/, 'expected FIND-0000');
+export type FindingId = z.infer<typeof FindingIdSchema>;
+
 export const ValidationIdSchema = z
   .string()
   .regex(

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AnyTaskIdSchema,
   ArtifactNameSchema,
+  FindingIdSchema,
   IsoTimestampSchema,
   RunIdSchema,
   WorkflowRoleSchema,
@@ -191,6 +192,16 @@ export const CollaborationReferenceSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('entry'), id: EntryIdSchema }),
   z.object({ kind: z.literal('message'), id: MessageIdSchema }),
+  /**
+   * A finding raised by a review (M6).
+   *
+   * **This is how a developer answers a reviewer without a second messaging store**
+   * (§23, M6-ACC-08). The review domain holds a finding's structure; collaboration holds
+   * the conversation about it; a reference is where the two meet. Adding a `responses`
+   * array to the finding instead would have been the duplicate store §24 forbids — and
+   * the copy an agent could write into.
+   */
+  z.object({ kind: z.literal('finding'), id: FindingIdSchema }),
 ]);
 export type CollaborationReference = z.infer<typeof CollaborationReferenceSchema>;
 

@@ -74,6 +74,15 @@ export interface RunPaths {
   readonly messages: string;
   /** Append-only, one `BlackboardEntry` per line. */
   readonly blackboard: string;
+  /**
+   * Where the run's reviews live (M6).
+   *
+   * Beside the collaboration logs rather than inside them: a review is a *structure* —
+   * a verdict, a tree, a set of identified findings — and the conversation about it is
+   * collaboration's. One log for the shape, one for the dialogue, which is the split
+   * §24 asks for.
+   */
+  readonly reviews: string;
   taskResult(taskId: string): string;
   /**
    * `tasks/<taskId>/attempt-<n>.json` — one attempt's evidence (MVP 2 §10.1).
@@ -133,6 +142,7 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     tasksDir,
     logsDir,
     collaborationDir,
+    reviews: `${dir}/reviews.jsonl`,
     messages: `${collaborationDir}/messages.jsonl`,
     blackboard: `${collaborationDir}/blackboard.jsonl`,
     taskResult: (taskId) => `${tasksDir}/${taskId}/result.json`,
