@@ -556,6 +556,37 @@ Nor does it defend against a person merging the pull request. M7 opens one and s
 there is no merge, no auto-merge, no branch deletion and no repository administration. What
 happens after a human reads it is a human's decision, which is the point.
 
+## The control plane renders decisions and reaches none
+
+M8 puts a board, a queue and a set of buttons in front of an operator. None of it is new
+authority, and three properties keep it that way.
+
+**Eligibility on screen is presentation; the server decides at the click.** A run moves
+between the render and the press — a task finishes, a gate opens, another process takes the
+execution lock. So a button that is enabled and then refused is correct behaviour, and the
+refusal is the server's. There is no write path that trusts what the browser believed a
+second ago, and no request carries a hash, a ref or a path for the same reason it never
+did.
+
+**Nothing on these surfaces is stored.** A lane is a question about a task, the DAG and the
+run; an attention item is a fold over facts something else decided. Neither has a
+`*.schema.ts` module, because every file with that suffix describes something written to
+disk, and a crash mid-write would persist an opinion. The practical consequence is the one
+that matters: an item disappears when its fact does, and there is no dismiss — a failed
+gate somebody could close is a failed gate nobody sees the second time.
+
+**Everything the queue and the board render is untrusted text.** A task title, a finding, a
+degradation's impact sentence, a remote check's name, a delivery failure's detail — every
+one of them was written by a model or by a stranger's repository. All of it renders as
+text. No `dangerouslySetInnerHTML` was added, and the component tests plant a payload in
+each source and assert it appears on screen as characters.
+
+**A remote check is still not a local verdict.** M8 raises red remote checks in the queue,
+because three failed checks on a pull request are something an operator acts on — and the
+item's own sentence says which kind of failure it is, rather than leaving the reader to
+know. An architecture rule asserts the two never merge in the reader that serves them
+together.
+
 ## The limits, stated plainly
 
 **The receipt is not unforgeable against an agent that escapes its worktree.** This is a

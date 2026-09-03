@@ -468,6 +468,44 @@ render because its endpoint was unstubbed in the visual harness, and a packaging
 had been asserting eleven prompts since M6 added a twelfth. The second had been red in CI
 for a whole milestone, invisible because `test:packaging` is not in the canonical gate list.
 
+## M8 — Control Plane & Operational Kanban · built
+
+Four milestones each added a set of authoritative facts and a panel to render them. The
+dashboard became eight correct panels, and an operator still could not answer the four
+questions that decide what they do next: what is happening, what needs me, what is blocked,
+what is delivered.
+
+M8 adds **no workflow authority**. It projects facts the system already decided into an
+*order* and a *lane*, and puts the most actionable one first.
+
+```text
+attention    projected, never stored — no dismiss; an item leaves when its fact does
+lanes        six, projected from task state, the DAG and the run — no `task.column`
+reasons      the join nobody had made: the DAG knew, the deferral knew, the card did not
+snapshot     one read, one instant, so the board and the queue cannot describe two moments
+```
+
+The board carries no drag, and that is the design rather than a gap: dragging BLOCKED →
+DONE would be the browser writing state, and no domain action means "move this task to that
+column". An architecture rule asserts no drag handler exists, which is also what makes the
+board keyboard-operable by construction.
+
+**Phase A came first, and it was not about the UI at all.** M7 closed with `test:packaging`
+red for a whole milestone — CI ran it, CI blocked on it, and no local command asked. The
+gap turned out to be bidirectional: `typecheck:web` and `typecheck:e2e` were in the local
+`check` and in no CI job. `scripts/gates.mjs` is now the only list, CI invokes
+`npm run gate:<lane>` and holds none of its own, and `test/gates.test.ts` proves the drift
+rules fire by mutation rather than assuming they would.
+
+Two defects the work found in its own code, both within an hour of writing it:
+
+- the board asked `core/dag` for readiness, which the server is forbidden to import — and
+  which turned out to be redundant, because `effectiveTaskStates` already resolves `ready`
+  for every reader;
+- a single failed task put a P1 `agent_blocked` on everything downstream of it, because
+  `blocked` is two things — a record the executor wrote and a condition the graph derives —
+  and only the first carries a reason.
+
 ## What the live dogfood changed about M4
 
 Recorded here because it is the milestone's most useful outcome and it was not planned.

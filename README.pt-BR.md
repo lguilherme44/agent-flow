@@ -793,7 +793,11 @@ Não é roadmap — é o que é verdade hoje.
 - [x] Rodadas corretivas revisadas por si mesmas, então o loop não precisa de `--force`
 - [x] `doctor --deep` — probe real por runner, dobrado de volta no veredito
 - [x] Telemetria local, derivada do próprio state e event log do run
-- [x] `agent-flow ui` — servidor local e dashboard, sete páginas em oito rotas
+- [x] `agent-flow ui` — servidor local e dashboard, oito páginas em nove rotas
+- [x] Um control plane que abre pelo que precisa de uma pessoa: atenção projetada de fatos,
+      nunca armazenada, sem dispensar — o item sai quando o fato sai
+- [x] Um board operacional em que todo card diz *por que* está na coluna em que está, e que
+      não tem drag, porque nenhuma ação de domínio significa "mova esta task para aquela coluna"
 - [x] Atualização ao vivo por SSE, com polling como fallback documentado em vez de padrão
 - [x] Ações de escrita — approve, reject, revise, retry, start — como um único conjunto de
       use cases sobre o qual a CLI e a API HTTP são apenas adapters

@@ -60,6 +60,7 @@ reached twice is one project rather than two histories.
 
 | Route | |
 |---|---|
+| `/` | **The control plane.** What needs a person, most urgent first, then every project with the state of its current run. |
 | `/dashboard` | The run most likely to want you: executing, then waiting at a gate, then most recent. Renders the same component `/runs/:runId` does. |
 | `/runs` | History. Filters are local — narrowing the list costs no round trip. |
 | `/runs/:runId` | One run: pipeline, tasks, inspector, artifacts, approval, execution summary, model usage — and, when the agents spoke, what they said. |
@@ -74,7 +75,92 @@ Two search parameters carry state that belongs in a URL rather than in a compone
 - `?project=<id>` — which project you are looking at. A reload, a bookmark and a link
   all mean the same thing. Switching leaves the run behind, because a run id belongs to
   one project.
-- `?view=dag` — the graph instead of the table.
+- `?view=board` — the operational board; `?view=dag` — the graph. Both instead of the
+  table, in the same panel, sharing its filter and its selection.
+
+---
+
+## The control plane (M8)
+
+The landing page answers four questions, in this order:
+
+```text
+What needs me?
+What is running?
+What is blocked?
+What is delivered?
+```
+
+**Attention first, and it is a projection.** Nothing stores `attention = true`. Every item
+is folded from a fact something else already decided — a gate the run is held at, a
+required quality gate that failed *or did not run*, a review whose tree the task has moved
+past, a remote branch that diverged — and it disappears when that fact does. There is no
+dismiss, because a failed gate somebody could close is a failed gate nobody sees twice.
+
+The order is a deterministic ladder in one function, `core/attention.ts`:
+
+| | | |
+|---|---|---|
+| P0 | integrity | acting wrongly here loses work |
+| P1 | needs a decision | a person is the only thing between the run and progress |
+| P2 | failed | something authoritative said no |
+| P3 | degraded | still moving |
+| P4 | for information | actionable, not urgent |
+
+Ties break by age, then by scope, so two reads of the same run produce the same queue.
+**No model ranks it** — a queue that reorders between two reads of identical facts is a
+queue whose top row nobody can trust.
+
+Every item carries one recommended action and one place to go. Never ten buttons, and
+never "something failed, check the logs" — the projection has no branch that can emit one.
+
+### The board
+
+Six lanes, projected from the task state, the run and the wave that formed:
+
+```text
+BACKLOG      planned, dependencies not met
+READY        the graph allows it; a wave has not taken it
+IN PROGRESS  assigned, running, validating or integrating
+REVIEW       waiting on a review decision
+BLOCKED      a person decides what happens next
+DONE         merged onto the integration branch
+```
+
+**The columns are not state.** There is no `task.column` and there will not be one: a lane
+is a question about the task, the DAG and the run, all of which move, and a stored column
+is the copy that goes stale after a crash. A task whose state this build does not
+recognise gets an explicit `UNKNOWN` lane rather than falling into BACKLOG — a task nobody
+can see is worse than a task in a lane labelled honestly.
+
+**There is no drag.** Dragging BLOCKED → DONE would be the browser writing state, and no
+domain action means "move this task to that column". Reassignment stays M5's; WIP is M5
+capacity and is not re-invented on screen. An architecture rule asserts no drag handler
+exists, and the consequence is that the board is keyboard-operable by construction.
+
+**Every card says why it is where it is.** That sentence is the reason the board exists:
+the DAG already knew the task waits on TASK-004, `TeamView.deferrals` already knew the wave
+held it for capacity, and the review thread already knew two findings block it — none of
+them was ever joined to the card an operator was looking at. A Kanban without that join is
+a task table with rounded corners.
+
+### One read, one instant
+
+`GET /runs/:id/control` serves the board, its reasons, the attention queue and the team,
+review and delivery pressure together. The panels above still have their own endpoints and
+still use them; this is the read the board and the queue share, and sharing it is the
+point — two halves of one screen must not describe two moments, and a hundred cards must
+not be a hundred requests.
+
+Each snapshot is stamped with the instant it describes, and the browser refuses one older
+than what is on screen. Without that, a late event repaints a completed card back to
+`running`, which is a lie with a timestamp on it.
+
+`GET /workspace` is the same idea one level up: per project, the active run, an attention
+count and its top priority, progress, blocked count, team load and delivery signal.
+**Only a project with an active run pays for an attention count** — computing one needs the
+review, the team and the delivery record, and fifty idle projects paying that is what makes
+a workspace take seconds to answer a question about the two that are running.
 
 Run ids restart at 001 per project per year, so two repositories initialised in the
 same year both hold `AF-2026-001`. Every link to a run carries its project for exactly

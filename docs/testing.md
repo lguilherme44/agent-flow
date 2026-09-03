@@ -342,6 +342,49 @@ about, and it was red for a whole milestone. Deriving the prompt count from the 
 fixed the instance; **the gap itself is fixed by the gate contract above**, and a mutation
 test now proves the rule fires rather than assuming it.
 
+## Control plane — where a fixture stops being evidence
+
+M8's suites are shaped by one thing the earlier milestones kept proving: **a projection can
+be correct on every fixture and wrong the first time it meets a real run.**
+
+| Layer | What only it can prove |
+|---|---|
+| unit | every task state maps to exactly one lane; the ladder is total and deterministic |
+| architecture | the browser reaches none of those decisions — M8-A01 … A18 |
+| server | the snapshot *composes* the readers: its task views are byte-identical to `/tasks` |
+| component | the reason survives to the screen; status is never colour alone; a payload renders as text |
+| visual | the board at four widths, with the lanes that fit and the ones that do not |
+| **real data** | everything above, against runs this repository actually produced |
+
+That last row is not a formality, and it earned its place within an hour:
+
+- **A run with three failed GitHub checks produced an empty attention queue.** Every
+  fixture in the suite had a green or absent delivery, so nothing had ever asked. There is
+  a `remote_checks_red` kind now, at P2, whose sentence says which kind of failure it is
+  rather than leaving the reader to know.
+- **One task produced two P1 rows** — "exhausted automatic recovery" and "waiting for a
+  review decision" — telling one person to do one thing in two ways.
+- **The board blamed the agent for a block the graph derived.** `blocked` is two things: a
+  record the executor writes when a runner answers BLOCKED, and a condition
+  `blockedByFailure` derives for everything downstream of a failure. Only the first carries
+  a `blockReason`, so reading its absence as "the agent asked for help" put that sentence on
+  the card of every task the agent never touched. Found twice — once in the queue, once on
+  the board — because the second copy was written before the first was fixed.
+- **The board was entirely below the fold.** An escalation banner and a degradation list
+  the queue already summarised left 75 pixels of board at 1440×900. The detail moved below
+  the work; nothing was deleted.
+
+None of those is visible in a screenshot of a nine-task fixture, and all four were visible
+in the first thirty seconds of pointing the dashboard at `.agent-flow/runs/`.
+
+### The gate contract's own tests
+
+`test/gates.test.ts` is a contract test whose rules are proved by **mutation** rather than
+assumed — see [the gate contract](#the-gate-contract--one-definition-of-green) above. The
+same discipline caught two of M8's architecture rules reading nothing: they used `codeOnly`,
+which blanks string literals, so a rule looking for `case 'review_required'` was reading
+`case ''`. Planting the construct is what found it.
+
 ## Dogfood — the real CLIs, never in CI
 
 The layers above are free, fast and deterministic because no coding CLI is ever

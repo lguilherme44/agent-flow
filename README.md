@@ -816,13 +816,19 @@ Not a roadmap — what is true today.
 - [x] Corrective rounds reviewed in their own right, so the loop needs no `--force`
 - [x] `doctor --deep` — live probe per runner, folded back into the verdict
 - [x] Local telemetry, derived from the run's own state and event log
-- [x] `agent-flow ui` — local server and dashboard, seven pages over eight routes
+- [x] `agent-flow ui` — local server and dashboard, eight pages over nine routes
+- [x] A control plane that leads with what needs a person: attention projected from facts,
+      never stored, with no dismiss — an item leaves when its fact does
+- [x] An operational board whose every card says *why* it is in the lane it is in, and
+      which carries no drag, because no domain action means "move this task to that column"
 - [x] Live updates over SSE, with polling as the documented fallback rather than the default
 - [x] Write actions — approve, reject, revise, retry, start — as one set of use cases the
       CLI and the HTTP API are both adapters over
 - [x] Inter-process run lock, proved with eight real processes racing one lock file — and
       with an opt-in stress run of 640 (`AF_LOCK_STRESS=1`)
 - [x] Dependency graph drawn from the server's answer, never rebuilt in the browser
+- [x] One canonical list of the gates this repository must pass, which CI invokes rather
+      than restates — and a mutation test that proves the drift rules fire
 - [x] Workspace mode bounded by `ui.workspaceDepth`, discovering nothing outside the root
 - [x] Empty, error and degraded states that say what happened and what to do about it
 - [x] Deterministic browser E2E — sixteen scenarios across the real local server
