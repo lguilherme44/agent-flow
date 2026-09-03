@@ -6,6 +6,11 @@ coverage/
 
 # Local tooling state, not part of the project
 .atl/
+# One developer's Codex verbosity preference. `.codex/hooks.json` and the continuation
+# note beside it *are* committed — they are shared. This one is a machine setting, and it
+# refused a worktree run for being uncommitted, which is the right behaviour applied to
+# the wrong file.
+.codex/config.toml
 
 # Working documents that predate the public repository
 agent-flow-implementation-spec.md
