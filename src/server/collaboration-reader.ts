@@ -25,6 +25,8 @@ import { deriveAgentRoster, type AgentRoster } from '../core/collaboration/roste
 import { EMPTY_TEAM, projectTeam } from '../core/team/view.js';
 import { EMPTY_REVIEW, projectReviews } from '../core/review/view.js';
 import { ReviewStore } from '../app/review-store.js';
+import { deliveryStatus, FORGE_OFF } from '../app/forge-actions.js';
+import type { DeliveryView } from '../core/forge/delivery.js';
 import type { FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
 
@@ -161,6 +163,26 @@ export class CollaborationReader {
    * projection: identity against the integrated tree is the only thing that answers it,
    * and only this side knows both halves.
    */
+  /**
+   * Where this run went (M7 §41, §57).
+   *
+   * The same `projectDelivery` the CLI renders and the dashboard draws. The browser gets
+   * an answer; it does not get the facts and a fold.
+   *
+   * **Reads no token and reaches no network.** A delivery projection is a fold over a file
+   * this machine already wrote, so a person can ask "where did this run go" without a
+   * credential — and the endpoint cannot be the thing that spends one.
+   */
+  async delivery(project: RegisteredProject, runId: string): Promise<DeliveryView | null> {
+    const state = await this.readState(project, runId);
+    if (state === null) return null;
+
+    const config = await this.configOf(project);
+    const forge = config?.forge ?? FORGE_OFF;
+
+    return deliveryStatus({ fs: this.options.fs, projectDir: project.path, config: forge, runId });
+  }
+
   async review(project: RegisteredProject, runId: string): Promise<ReviewView | null> {
     const state = await this.readState(project, runId);
     if (state === null) return null;

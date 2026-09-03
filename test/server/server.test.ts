@@ -2042,3 +2042,34 @@ describe('AF-L01 — a run another process is executing', () => {
     expect(raw).not.toMatch(/lock|pid|hostname/i);
   });
 });
+
+/**
+ * M7-ACC-25 — the delivery projection reaches the API, and reaches it credential-free.
+ *
+ * The endpoint folds a file this machine already wrote. Asking "where did this run go"
+ * must not require a token, and the server must never be the thing that spends one.
+ */
+describe('M7 — delivery', () => {
+  it('answers with the projection, disabled by default', async () => {
+    const { server } = await serve();
+
+    const response = await server.app.inject('/api/v1/runs/AF-2026-001/delivery');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ state: string }>().state).toBe('disabled');
+  });
+
+  it('404s an unknown run rather than inventing a delivery for it', async () => {
+    const { server } = await serve();
+
+    expect((await server.app.inject('/api/v1/runs/AF-2026-999/delivery')).statusCode).toBe(404);
+  });
+
+  it('reflects no token, because it never reads one', async () => {
+    const { server } = await serve();
+
+    const response = await server.app.inject('/api/v1/runs/AF-2026-001/delivery');
+
+    expect(response.body).not.toMatch(/token|authorization|ghp_/i);
+  });
+});

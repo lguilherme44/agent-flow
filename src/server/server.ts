@@ -394,6 +394,21 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return view === null ? notFound(reply, 'no such run') : view;
   });
 
+  /**
+   * Where this run was delivered, if anywhere.
+   *
+   * Read-only and credential-free: the projection folds a file this machine already wrote,
+   * so the dashboard can show "nothing is configured" without the server ever holding a
+   * token. Every *write* to a forge stays behind the CLI, which is where an operator is.
+   */
+  app.get('/api/v1/runs/:runId/delivery', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const view = await collaboration.delivery(scope.project, scope.runId);
+    return view === null ? notFound(reply, 'no such run') : view;
+  });
+
   app.get('/api/v1/runs/:runId/artifacts', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;
