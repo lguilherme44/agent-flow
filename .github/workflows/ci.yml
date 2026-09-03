@@ -46,24 +46,14 @@ jobs:
       # silently resolved different versions would not be testing this commit.
       - run: npm ci
 
-      - run: npm run typecheck
-
-      - run: npm run lint
-
-      - run: npm run test
-
-      # The CLI is published as a build artifact, so a green test suite over
-      # source proves less than it appears to. This catches a bundler
-      # configuration that no unit test would.
-      - run: npm run build
-
-      # The dashboard is a separate workspace with its own compiler settings and
-      # its own bundler. Its tests run in jsdom and touch no network, so they
-      # cost the same as the rest — and a type error in the browser code would
-      # otherwise only surface when somebody ran `agent-flow ui`.
-      - run: npm run test:web
-
-      - run: npm run build:web
+      # One command, and the list of what it runs lives in `scripts/gates.mjs`.
+      #
+      # It used to be seven `run:` lines here and a different seven in the `check`
+      # script — which is how this job ran the dashboard's *tests* for a year without
+      # ever running its *typecheck*, and how `test:packaging` stayed red for a whole
+      # milestone with CI reporting it and no local command asking. Two hand-kept lists
+      # of one contract is two answers to "is this green".
+      - run: npm run gate:node
 
   # A browser, driven against the real local server (UI-31).
   #
@@ -89,9 +79,10 @@ jobs:
 
       # The suite builds the CLI and the dashboard itself, in `globalSetup`, so a
       # green run cannot be a statement about an artifact from an earlier step.
-      - run: npm run test:e2e
-        env:
-          AF_E2E_CHANNEL: chromium
+      # `--ci` applies the lane's CI environment from the manifest rather than from
+      # here. It matters most for the visual lane below — see the note there — and the
+      # two lanes are kept the same shape so neither becomes the exception.
+      - run: npm run gate:browser -- --ci
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
@@ -129,9 +120,12 @@ jobs:
 
       # The build happens inside the suite's own `webServer` command, so there is no
       # arrangement of steps in which this compares an old bundle (D32-A, D32-B).
-      - run: npm run test:visual
-        env:
-          AF_VISUAL_BROWSER: chromium
+      # The env this needs (`AF_VISUAL_BROWSER=chromium`) is declared in
+      # `scripts/gates.mjs` and applied by `--ci`, deliberately not written here: a
+      # developer who copied that line out of this file to "run it like CI" would
+      # invalidate all 133 darwin baselines at once, because they were captured with
+      # real Chrome and bundled Chromium rasterises type differently.
+      - run: npm run gate:visual -- --ci
 
       # The expected, the actual and the diff for every mismatch. "Screenshot
       # comparison failed" without the images is a failure nobody can act on.
@@ -166,10 +160,9 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
-      - run: npm run build:web
-
-      - run: npm run test:packaging
+      # Both builds are the gate's declared prerequisites in the manifest, so the
+      # ordering is canonical rather than repeated here.
+      - run: npm run gate:packaging
 
   # Separated from `check` because coverage is a report, not a gate: a drop is
   # worth seeing without failing a pull request over a number.
@@ -186,4 +179,4 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run test:coverage
+      - run: npm run gate:coverage

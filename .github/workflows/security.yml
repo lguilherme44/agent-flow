@@ -72,12 +72,12 @@ jobs:
 
       - run: npm ci
 
-      - name: Runtime dependencies (blocking)
-        run: npm audit --omit=dev --audit-level=high
-
-      - name: Toolchain (reported, not blocking)
-        if: always()
-        run: npm audit --audit-level=high || true
+      # Both audits, and which of the two blocks, come from `scripts/gates.mjs`:
+      # `audit:runtime` is `required-local` and `audit:toolchain` is `report-only`, so
+      # the lane runner prints the second as loudly as a failure and still exits 0.
+      # Written here as two steps, the split lived in YAML nobody runs on a laptop —
+      # and the runtime audit was red on `master` for days before M8 looked.
+      - run: npm run gate:security
 
   # ---------------------------------------------------------------------------
   # Static analysis

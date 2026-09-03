@@ -956,7 +956,9 @@ Full roadmap, including what MVP 1 established and what is deliberately out of s
 npm install
 npm run build          # the CLI bundle
 npm run build:web      # the dashboard bundle
-npm run check          # typecheck + lint + Vitest + dashboard unit tests
+
+npm run verify         # every gate this repository requires locally
+npm run check          # the node lane only — and it says what it did not run
 
 npm run dev:web        # dashboard against a running `agent-flow ui`
 ```
@@ -967,12 +969,26 @@ Once built, the CLI runs from the checkout as `node dist/bin/agent-flow.js`, or
 ## Tests
 
 ```bash
-npm run test                    # Vitest — unit, integration, architecture
-npm run test:e2e                # Playwright, through the real local server
-npm run test:visual             # Playwright, screenshots (this platform's baselines)
-npm run test:packaging          # pack, install elsewhere, drive the installed product
-npm run test:packaging:browser  # the same, through gsd-browser
+npm run verify                  # the whole locally required contract, cheapest lane first
+npm run verify:release          # the same, plus what must be green before publishing
+
+npm run gate:node               # types, lint, Vitest, dashboard unit, both builds
+npm run gate:browser            # Playwright, through the real local server
+npm run gate:visual             # Playwright, screenshots (this platform's baselines)
+npm run gate:packaging          # pack, install elsewhere, drive the installed product
+npm run gate:security           # dependency advisories; names the two only GitHub answers
 ```
+
+**The lanes are declared once, in [`scripts/gates.mjs`](scripts/gates.mjs), and CI runs
+those same lanes.** Before M8 the list of gates a milestone ran and the list CI blocked on
+were separate and hand-kept, so `test:packaging` was red for a whole milestone with CI
+reporting it and no local command asking — and CI, in the other direction, ran neither
+`typecheck:web` nor `typecheck:e2e`. `test/gates.test.ts` fails if the manifest, the
+workflows and `package.json` ever drift again.
+
+Every lane ends by naming what it did **not** run, including the two gates
+(`codeql`, `secrets`) that only GitHub can answer. A green lane can no longer be read as
+a finished contract.
 
 **No suite invokes a real coding CLI.** Runners are exercised through a scripted
 `AgentRunner`; adapters are tested by asserting the exact argv they build and by parsing
@@ -989,9 +1005,9 @@ differences in worktree behaviour are exactly the class of thing only real Git c
 including why the gsd-browser smoke does not replace Playwright and why it runs locally
 rather than in CI.
 
-CI runs `check` on Node 20 and 22, the browser E2E and the screenshot suite in a pinned
-container, and coverage as a report rather than a gate. The packaging smokes run
-locally.
+CI runs the `node` lane on Node 20 and 22, `browser` and `visual` in a pinned container,
+`packaging` on its own, and `coverage` as a report rather than a gate. The gsd-browser
+smoke is `required-release` and runs locally — see `docs/testing.md` for why.
 
 ---
 
@@ -1005,7 +1021,7 @@ rejected, with the evidence for each. A change that violates an invariant is a c
 to the specification, not an implementation detail.
 
 ```bash
-npm run check     # must be green
+npm run verify    # must be green
 ```
 
 Two rules that are enforced rather than requested:

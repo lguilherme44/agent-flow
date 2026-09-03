@@ -936,7 +936,9 @@ Os documentos abaixo estão em inglês.
 npm install
 npm run build          # o bundle da CLI
 npm run build:web      # o bundle do dashboard
-npm run check          # typecheck + lint + Vitest + testes unitários do dashboard
+
+npm run verify         # todos os gates que este repositório exige localmente
+npm run check          # só a lane node — e ela diz o que NÃO rodou
 
 npm run dev:web        # dashboard contra um `agent-flow ui` rodando
 ```
@@ -947,12 +949,27 @@ faça `npm link` e use `agent-flow` como documentado acima.
 ## Testes
 
 ```bash
-npm run test                    # Vitest — unitário, integração, arquitetura
-npm run test:e2e                # Playwright, atravessando o servidor local real
-npm run test:visual             # Playwright, screenshots (baselines desta plataforma)
-npm run test:packaging          # pack, install em outro lugar, dirige o produto instalado
-npm run test:packaging:browser  # o mesmo, via gsd-browser
+npm run verify                  # o contrato local inteiro, da lane mais barata para a mais cara
+npm run verify:release          # o mesmo, mais o que precisa estar verde antes de publicar
+
+npm run gate:node               # tipos, lint, Vitest, unitários do dashboard, os dois builds
+npm run gate:browser            # Playwright, atravessando o servidor local real
+npm run gate:visual             # Playwright, screenshots (baselines desta plataforma)
+npm run gate:packaging          # pack, install em outro lugar, dirige o produto instalado
+npm run gate:security           # advisories de dependência; nomeia as duas que só o GitHub responde
 ```
+
+**As lanes são declaradas uma vez, em [`scripts/gates.mjs`](scripts/gates.mjs), e o CI roda
+essas mesmas lanes.** Antes do M8 a lista de gates que um milestone rodava e a lista em que
+o CI bloqueava eram separadas e mantidas à mão, então o `test:packaging` ficou vermelho um
+milestone inteiro com o CI reportando e nenhum comando local perguntando — e o CI, no
+sentido inverso, não rodava nem `typecheck:web` nem `typecheck:e2e`. O
+`test/gates.test.ts` falha se o manifesto, os workflows e o `package.json` divergirem de
+novo.
+
+Toda lane termina nomeando o que **não** rodou, inclusive os dois gates (`codeql`,
+`secrets`) que só o GitHub responde. Uma lane verde deixou de poder ser lida como contrato
+cumprido.
 
 **Nenhuma suíte invoca uma CLI de código real.** Os runners são exercitados por um
 `AgentRunner` roteirizado; os adapters são testados verificando o argv exato que constroem
@@ -970,9 +987,9 @@ O [`docs/testing.md`](docs/testing.md) explica o que cada camada prova e o que n
 inclusive por que o smoke do gsd-browser não substitui o Playwright e por que ele roda
 local em vez de no CI.
 
-O CI roda o `check` no Node 20 e 22, o E2E de browser e a suíte de screenshots em um
-container fixado, e a cobertura como relatório em vez de gate. Os smokes de empacotamento
-rodam localmente.
+O CI roda a lane `node` no Node 20 e 22, `browser` e `visual` em um container fixado,
+`packaging` sozinha, e `coverage` como relatório em vez de gate. O smoke do gsd-browser é
+`required-release` e roda local — o `docs/testing.md` explica por quê.
 
 ---
 
@@ -986,7 +1003,7 @@ rejeitados, com a evidência de cada um. Uma mudança que viola um invariante é
 na especificação, não um detalhe de implementação.
 
 ```bash
-npm run check     # tem que estar verde
+npm run verify    # tem que estar verde
 ```
 
 Duas regras que são garantidas, não pedidas:

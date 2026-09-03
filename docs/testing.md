@@ -17,12 +17,19 @@ matched. What is worth relying on is which question each layer answers, and wher
 stops.
 
 ```bash
-npm run check                  # typecheck + e2e typecheck + lint + Vitest + dashboard unit
-npm run test:e2e               # Playwright, against the real local server
-npm run test:visual            # Playwright, screenshots (this platform's baselines)
-npm run test:packaging         # pack, install elsewhere, drive the installed product
-npm run test:packaging:browser # the same, through gsd-browser
+npm run verify                 # everything this repository requires locally, cheapest first
+npm run verify:release         # the same, plus what must be green before publishing
+
+npm run gate:node              # typecheck ×3, lint, Vitest, dashboard unit, both builds
+npm run gate:browser           # Playwright, against the real local server
+npm run gate:visual            # Playwright, screenshots (this platform's baselines)
+npm run gate:packaging         # pack, install elsewhere, drive the installed product
+npm run gate:security          # dependency advisories, and what only GitHub can answer
 ```
+
+Each lane is declared once in [`scripts/gates.mjs`](../scripts/gates.mjs); CI invokes the
+same lanes; `test/gates.test.ts` fails if any of them drift. **The Gate contract** below is
+about why that file exists.
 
 ---
 
@@ -165,21 +172,76 @@ came from somewhere it cannot see.
 
 ---
 
-## What CI runs
+## The gate contract — one definition of green
 
-| Job | |
-|---|---|
-| `check` (Node 20, 22) | typecheck, lint, Vitest, build, dashboard unit tests, dashboard build |
-| `e2e` | Playwright E2E in the pinned Playwright container |
-| `visual` | Screenshot regression against the Linux baselines, in that same container |
-| `coverage` | A report, not a gate |
+Every job below runs `npm run gate:<lane>` and nothing else. The lanes, the commands
+inside them, and what each command's result is *worth* are declared once, in
+[`scripts/gates.mjs`](../scripts/gates.mjs).
+
+| Lane | Jobs | |
+|---|---|---|
+| `node` | `check` (Node 20, 22) | typecheck ×3, lint, Vitest, dashboard unit, both builds |
+| `browser` | `e2e` | Playwright E2E in the pinned Playwright container |
+| `visual` | `visual` | Screenshot regression against the Linux baselines, same container |
+| `packaging` | `packaging` | Pack, install elsewhere, drive the installed product |
+| `security` | `dependencies`, `secrets`, `codeql` | Advisories, secrets over history, static analysis |
+| `coverage` | `coverage` | A report, not a gate |
 
 `visual` is one job rather than a Node matrix: a page does not render differently under
 Node 20 than under 22, and duplicating it would double the slowest job in the file to
 learn nothing. Both browser jobs upload the Playwright report — expected, actual and
 diff for every mismatch — when they fail.
 
-Packaging and gsd-browser are local. See above for why.
+### What a result is worth
+
+Four classes, because "green" was one word covering four different situations:
+
+| | |
+|---|---|
+| `required-local` | A person can run it, and must see it green before calling work done. CI runs it too. |
+| `required-ci` | Blocking, and only GitHub can produce the evidence — `codeql`, and `secrets` over full history. |
+| `required-release` | Blocking before publishing, not before committing — the gsd-browser smoke. |
+| `report-only` | Runs every time, never blocks, stays visible — coverage, and the toolchain audit. |
+
+Scheduling is modelled separately, as `recurrence`, because it is independent of
+blocking: the secret scan runs weekly **and** blocks on every push, and one field cannot
+say both.
+
+**Every lane ends by naming what it did not run.** `npm run gate:security` exits 0 and
+prints `not observed  secrets, codeql`, `not run  node, browser, visual, packaging`. That
+line is the whole point of the redesign: a green lane is no longer readable as a finished
+contract.
+
+### Why this exists
+
+The gap M7 closed with was not a broken check. It was **two hand-kept lists**:
+
+```text
+what a milestone runs      npm run check   →  typecheck ×3, lint, Vitest, dashboard unit
+what CI blocks on          ci.yml          →  typecheck, lint, Vitest, build ×2, dashboard unit
+```
+
+Neither is a subset of the other. `test:packaging` was in the second and not the first, so
+it was red for a whole milestone with CI reporting it on every push and no local command
+ever asking. `typecheck:web` and `typecheck:e2e` were in the first and not the second, so
+a type error in browser code could reach `master`. The same defect, in both directions, in
+one repository.
+
+The fix is not a sixth list. It is that there is now one, and that
+[`test/gates.test.ts`](../test/gates.test.ts) refuses any of the derived copies drifting
+from it — with the rules proved by mutation rather than assumed:
+
+| Positive control | Rule that fires |
+|---|---|
+| `test:packaging` downgraded to `report-only`, or removed | R6 |
+| a `run:` step in CI naming a command the manifest does not | R1 |
+| a required gate moved into a lane no CI job runs | R2, R3 |
+| a lane's `package.json` script deleted | R7 |
+
+**The M6 validation registry is a different thing and must stay one.** That one asks "did
+the feature this run implemented pass its quality gates" — somebody else's code, evaluated
+inside a run. This one asks "may Agent Flow itself ship". Nothing in `src/` imports
+`scripts/gates.mjs`, and it is not a schema module: nothing here is ever written to disk.
 
 ---
 
@@ -273,11 +335,12 @@ delivery panel logged an error on every dashboard render because its endpoint wa
 in the visual harness — absence on the page is not absence on the wire — and the packaging
 smoke had been asserting eleven prompts since M6 added a twelfth.
 
-That second one is the more uncomfortable finding. `test:packaging` is **not** in the
-canonical gate list every milestone runs, so a check CI runs and blocks on is one the local
-Definition of Done never asks about. It was red for a whole milestone. The count is now
-derived from the checkout rather than typed, which fixes the instance; the gap between
-"what CI runs" and "what the milestone gates run" is still there.
+That second one is the more uncomfortable finding, and it is what M8's first phase went
+back and closed. `test:packaging` was **not** in the canonical gate list every milestone
+ran, so a check CI runs and blocks on was one the local Definition of Done never asked
+about, and it was red for a whole milestone. Deriving the prompt count from the checkout
+fixed the instance; **the gap itself is fixed by the gate contract above**, and a mutation
+test now proves the rule fires rather than assuming it.
 
 ## Dogfood — the real CLIs, never in CI
 
