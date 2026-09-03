@@ -4173,3 +4173,175 @@ describe('a review reads the tree it names (§4, I-41)', () => {
     expect(openers).toEqual(['src/app/integrator.ts']);
   });
 });
+
+/**
+ * M7-A01 … M7-A15 — the fifteen the forge milestone rests on (§54).
+ *
+ * Every one of them is a boundary that reads as obvious and stops being obvious the moment
+ * a deadline meets a missing method. The milestone's first rule is the clearest example:
+ * creating a pull request needs the commit to exist remotely, so the shortest path is to
+ * let the provider push — and a provider that can run Git can rewrite history to make its
+ * own API call succeed.
+ */
+describe('the forge is a destination, never an authority (M7-A01 … A15)', () => {
+  const forgeFiles = () => [
+    ...sourceFiles('src/core/forge'),
+    ...sourceFiles('src/adapters/forge'),
+    join(ROOT, 'src/ports/forge.ts'),
+    join(ROOT, 'src/app/delivery-service.ts'),
+    join(ROOT, 'src/app/forge-fingerprint.ts'),
+  ];
+
+  it('M7-A01 — GitClient imports nothing from the forge', () => {
+    const specifiers = importSpecifiers(read(join(ROOT, 'src/adapters/git/git-client.ts')).text);
+
+    expect(specifiers.filter((s) => /forge|github/i.test(s))).toEqual([]);
+  });
+
+  it('M7-A02 — the forge executes no Git, transitively', () => {
+    // Transitively is the word the spec's own critique said was missing: proving a file
+    // imports no Git module does not prove it cannot *cause* Git to run.
+    const offenders: string[] = [];
+    for (const file of forgeFiles()) {
+      const { path, text } = read(file);
+      // The publisher is the exception by design, and it is not a forge file.
+      const reaches = importSpecifiers(text).filter((s) =>
+        /git-command|git-client|git-workspaces|node:child_process/.test(s),
+      );
+      if (reaches.length > 0) offenders.push(`${path}: ${reaches.join(', ')}`);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M7-A03 — the publisher calls no GitHub API', () => {
+    const publisher = read(join(ROOT, 'src/adapters/git/remote-publisher.ts'));
+
+    expect(importSpecifiers(publisher.text).filter((s) => /forge|github/i.test(s))).toEqual([
+      // The ref rules, which are core and provider-neutral.
+      '../../core/forge/remote-ref.js',
+    ]);
+    expect(codeOnly(publisher.text)).not.toMatch(/\bfetch\b|api\.github/);
+  });
+
+  it('M7-A04 — no GitHub type leaves the adapter', () => {
+    const outside = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !path.startsWith('src/adapters/forge/'))
+      .filter(({ text }) => /check_runs|html_url|pulls\/|x-github/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(outside).toEqual([]);
+  });
+
+  it('M7-A05 and M7-A06 — no schema a model writes carries a ref, a PR or an Issue id', () => {
+    // The shape of the defence M4 established: a field an agent cannot write is a field
+    // nobody has to remember to check.
+    const modelFacing = [
+      'src/contracts/collaboration.schema.ts',
+      'src/contracts/review.schema.ts',
+      'src/contracts/plan.schema.ts',
+      'src/contracts/task.schema.ts',
+    ];
+
+    const offenders: string[] = [];
+    for (const path of modelFacing) {
+      const code = codeOnly(read(join(ROOT, path)).text);
+      for (const field of ['remoteBranch', 'pullRequest', 'issueNumber', 'forgeRepository']) {
+        if (new RegExp(`\\b${field}\\s*:`).test(code)) offenders.push(`${path}: ${field}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M7-A07 — a remote check cannot be a quality gate', () => {
+    // Structural rather than a name scan: the two shapes share no required field, so a
+    // conversion has to be written by hand rather than happening by assignment.
+    const forge = read(join(ROOT, 'src/contracts/forge.schema.ts')).text;
+    const check = /ForgeCheckSchema = z\.object\(\{([\s\S]*?)\}\);/.exec(forge)?.[1] ?? '';
+
+    for (const field of ['required', 'gateId', 'category']) {
+      expect(check).not.toContain(field);
+    }
+  });
+
+  it('M7-A08 — nothing in the forge can move a run’s status', () => {
+    const offenders = forgeFiles()
+      .map(read)
+      .filter(({ text }) => /updateRun\(|status:\s*'completed'|markComplete/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M7-A09 — the default branch cannot be a publication destination', () => {
+    const refs = withoutComments(read(join(ROOT, 'src/core/forge/remote-ref.ts')).text);
+
+    expect(refs).toMatch(/'main'/);
+    expect(refs).toMatch(/'master'/);
+    expect(refs).toMatch(/refuseDestination/);
+  });
+
+  it('M7-A10 — publication takes an exact object id', () => {
+    const publisher = codeOnly(read(join(ROOT, 'src/adapters/git/remote-publisher.ts')).text);
+
+    expect(publisher).toMatch(/CommitOidSchema\.safeParse/);
+  });
+
+  it('M7-A11 — a token reaches no persistence and no rendering', () => {
+    // The value lives in one closure. Anything that writes, renders or logs must not name
+    // it, and no file outside the adapter may even read the variable.
+    const readers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /process\.env\[?['"]?GITHUB_TOKEN/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(readers).toEqual([]);
+
+    const adapter = codeOnly(read(join(ROOT, 'src/adapters/forge/github-forge.ts')).text);
+    expect(adapter).not.toMatch(/appendEvent|writeFile|console\./);
+  });
+
+  it('M7-A12 — the browser derives no delivery status', () => {
+    const web = sourceFiles('apps/web/src').map(read);
+    const offenders = web
+      .filter(({ text }) => /(?:function|const)\s+projectDelivery\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M7-A13 — there is one delivery projection', () => {
+    const definitions = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export function projectDelivery\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(definitions).toEqual(['src/core/forge/delivery.ts']);
+  });
+
+  it('M7-A14 — there is one forge provider seam', () => {
+    const ports = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /export interface ForgeProvider\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(ports).toEqual(['src/ports/forge.ts']);
+  });
+
+  it('M7-A15 — every network mutation is behind its own flag', () => {
+    const service = codeOnly(read(join(ROOT, 'src/app/delivery-service.ts')).text);
+
+    // Each public mutation opens with its own gate. A method that forgot one would be a
+    // write nobody opted into.
+    for (const flag of [
+      'config.publish.enabled',
+      'config.issues.create',
+      'config.pullRequests.create',
+      'config.checks.read',
+    ]) {
+      expect(service).toContain(flag);
+    }
+  });
+});
