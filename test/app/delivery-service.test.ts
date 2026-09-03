@@ -456,3 +456,72 @@ describe('an update sends what was asked for', () => {
     expect(w.remote.pulls).toHaveLength(1);
   });
 });
+
+/**
+ * §53's five kill points, named as such.
+ *
+ * Four are covered above by the adoption tests; this block states the set explicitly so a
+ * reader can check the list rather than infer it, and adds the one that was missing.
+ */
+describe('§53 — a crash between a remote success and its record', () => {
+  it('after push: republishing the same commit changes nothing', async () => {
+    const w = await world();
+
+    await w.service.publish(w.runId, SHA);
+    w.records.forget();
+    const again = await w.service.publish(w.runId, SHA);
+
+    expect(again).toMatchObject({ ok: true });
+    expect(w.records.current?.remoteBranch).toBe(`agent-flow/${w.runId}`);
+  });
+
+  it('after issue: the mark on the remote is what recovery reads', async () => {
+    const w = await world();
+
+    await w.service.issue(w.runId, { title: 't', body: 'b' });
+    w.records.forget();
+    await w.service.issue(w.runId, { title: 't', body: 'b' });
+
+    expect(w.remote.issues).toHaveLength(1);
+  });
+
+  it('after pull request: the open one for this head and base is reused', async () => {
+    const w = await world();
+
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
+    w.records.forget();
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
+
+    expect(w.remote.pulls).toHaveLength(1);
+  });
+
+  it('after comment: the comment carrying the mark is adopted', async () => {
+    const w = await world();
+
+    await w.service.comment(w.runId, { on: 1, body: 'x', topic: 'quality' });
+    w.records.forget();
+    await w.service.comment(w.runId, { on: 1, body: 'x', topic: 'quality' });
+
+    expect(w.remote.comments).toHaveLength(1);
+  });
+
+  /**
+   * The one that was missing, and the one that needs no adoption: a sync writes only what
+   * it read, so an interrupted one leaves the previous observation in place and the next
+   * sync overwrites it. What must not happen is a *partial* record — checks updated and
+   * `syncedAt` left behind, which would date fresh data to an old read.
+   */
+  it('during sync: an interrupted read leaves the last complete observation', async () => {
+    const w = await world();
+
+    await w.service.publish(w.runId, SHA);
+    await w.service.sync(w.runId);
+    const first = w.records.current;
+
+    await w.service.sync(w.runId);
+
+    expect(w.records.current?.checks).toHaveLength(1);
+    expect(w.records.current?.syncedAt).toBe(first?.syncedAt);
+    expect(w.remote.calls.filter((call) => call === 'listChecks')).toHaveLength(2);
+  });
+});

@@ -321,6 +321,36 @@ grey, because it does not block. Status is always in words as well as colour.
 
 ---
 
+## Where the run went
+
+`GET /runs/:runId/delivery` returns the delivery projection: repository, published branch
+and commit, issue, pull request, checks, last sync, and any delivery failure — folded on
+the server, rendered here.
+
+**Read-only and credential-free.** The projection folds a file this machine already wrote,
+so the dashboard can answer "where did this run go" without the server ever holding a
+token. Every *write* to a forge stays behind the CLI, which is where an operator is.
+
+The card is **absent** rather than empty when no forge is configured, which is most runs.
+It shows the delivery state in words, the facts underneath, and — when checks exist — the
+sentence that has to be on the page:
+
+> These are observations. The local quality decision is already made, and a check here does
+> not change it in either direction.
+
+A person who sees red and nothing else concludes the run failed. It did not, and the panel
+says so where they are looking rather than in a document. `checks_red` is marked `!` and
+never `✗`, because the mark a reader associates with a failed run would say the wrong thing
+before the words got a chance.
+
+The browser derives none of it. An architecture rule forbids `projectDelivery` from being
+defined under `apps/web`, for the reason the review panel already learned: a browser that
+folded a check list into a verdict would disagree with the server the first time the
+treatment of an unknown conclusion changed, and the disagreement would look like a caching
+bug rather than a second authority.
+
+---
+
 ## Flags
 
 | | |

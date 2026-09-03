@@ -250,6 +250,35 @@ key mismatch survived. There is now one test that runs the real corrective round
 a real `task_finished`, and asserts the real projection reports `fixed`. It is worth more
 than the six that surround it.
 
+## Forge — where "the API answered" stops being enough
+
+M7's suites exist for four distinctions the network makes and a local test cannot:
+
+```text
+"the API answered"      ≠  "the right remote object was created"
+"the branch published"  ≠  "it holds the approved SHA"
+"the PR exists"         ≠  "it represents this run"
+"CI is green"           ≠  "the local workflow approved"
+```
+
+| Layer | What it proves |
+|---|---|
+| adapter contract | every status class, malformed JSON, an oversized body, missing fields, an unexpected enum, bounded pagination — with an injected `fetch` and no network |
+| idempotency | the five kill points of §53, each simulated by letting the remote succeed and then discarding the local record |
+| architecture | M7-A01 … M7-A15, including the transitive one: proving a file imports no Git module does not prove it cannot *cause* Git to run |
+| live | a real Issue, a real branch, a real pull request, real checks, and a rerun that creates nothing twice |
+
+**The live run is where two defects came from, and neither was reachable locally.** The
+delivery panel logged an error on every dashboard render because its endpoint was unstubbed
+in the visual harness — absence on the page is not absence on the wire — and the packaging
+smoke had been asserting eleven prompts since M6 added a twelfth.
+
+That second one is the more uncomfortable finding. `test:packaging` is **not** in the
+canonical gate list every milestone runs, so a check CI runs and blocks on is one the local
+Definition of Done never asks about. It was red for a whole milestone. The count is now
+derived from the checkout rather than typed, which fixes the instance; the gap between
+"what CI runs" and "what the milestone gates run" is still there.
+
 ## Dogfood — the real CLIs, never in CI
 
 The layers above are free, fast and deterministic because no coding CLI is ever

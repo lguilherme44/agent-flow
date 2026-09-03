@@ -24,6 +24,7 @@ pedido de feature
   → validação determinística ← executada pelo orquestrador, nunca por um agente
   → integração determinística
   → code review             ← por mudança, por um membro que não a escreveu
+  → delivery                ← opt-in: publica o commit aprovado, abre PR, lê os checks
   → final review
   → Definition of Done
 ```

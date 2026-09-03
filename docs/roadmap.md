@@ -15,8 +15,9 @@ AR     ────────────────────────�
 M4     ─────────────────────────────────►  collaboration foundation, dogfooded live — and still off
 M5     ─────────────────────────────────►  team orchestration, dogfooded live
 M6     ─────────────────────────────────►  collaborative review & quality gates, dogfooded live
+M7     ─────────────────────────────────►  forge & remote delivery, dogfooded against real GitHub
                                         ▲
-                                        you are here: M6 built and proved live; M7 next
+                                        you are here: M7 built and proved live; M8 next
 ```
 
 ---
@@ -430,6 +431,42 @@ finding in a real run could ever leave `open`. Two architecture rules now ask th
 question mechanically, one for exported functions and one for declared events.
 
 ---
+
+## M7 — Forge & Remote Delivery · built and dogfooded against real GitHub
+
+Specified in
+[`specs/m7-forge-github-delivery.md`](specs/m7-forge-github-delivery.md).
+
+M6 ended with a run that can prove which commit is approved. M7 publishes exactly that
+commit, creates exactly one remote artifact for it, and observes the remote **without
+handing it any authority**.
+
+```text
+models propose · Agent Flow decides locally · Forge publishes and observes
+```
+
+Three seams, and the point is that they are three: `GitClient` reads local Git,
+`RemoteGitPublisher` puts one exact commit on one exact ref, `ForgeProvider` talks to an
+API. Creating a pull request needs the commit to exist remotely, and that does not make
+pushing a Forge operation — a provider that could run Git could rewrite history to make
+its own call succeed.
+
+Everything is off by default and every write is separately opt-in. Choosing GitHub names a
+destination; it is not consent to write to it.
+
+**What GitHub decides: nothing.** A `ForgeCheck` shares no field with a `QualityGateResult`,
+a red check cannot move `run.status`, and a forge failure cannot un-complete a completed
+run. Fifteen architecture rules hold those boundaries.
+
+The dogfood ran against this repository: issue #18, branch `agent-flow/AF-2026-004`
+carrying the exact approved commit, pull request #19, and ten real checks read from that
+commit. Rerunning every operation produced no second object.
+
+Its most useful outcome, again, was not planned. **Two defects were found by the real CI
+that no local gate would have caught** — a dashboard panel that logged an error on every
+render because its endpoint was unstubbed in the visual harness, and a packaging smoke that
+had been asserting eleven prompts since M6 added a twelfth. The second had been red in CI
+for a whole milestone, invisible because `test:packaging` is not in the canonical gate list.
 
 ## What the live dogfood changed about M4
 

@@ -24,6 +24,7 @@ feature request
   → deterministic validation ← run by the orchestrator, never by an agent
   → deterministic integration
   → code review             ← per change, by a member that did not write it
+  → delivery                ← opt-in: publish the approved commit, open a PR, read its checks
   → final review
   → Definition of Done
 ```
