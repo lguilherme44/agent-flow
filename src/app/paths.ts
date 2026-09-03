@@ -83,6 +83,8 @@ export interface RunPaths {
    * §24 asks for.
    */
   readonly reviews: string;
+  /** `delivery.json` — where this run was published, and what the remote said (M7). */
+  readonly delivery: string;
   taskResult(taskId: string): string;
   /**
    * `tasks/<taskId>/attempt-<n>.json` — one attempt's evidence (MVP 2 §10.1).
@@ -143,6 +145,7 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     logsDir,
     collaborationDir,
     reviews: `${dir}/reviews.jsonl`,
+    delivery: `${dir}/delivery.json`,
     messages: `${collaborationDir}/messages.jsonl`,
     blackboard: `${collaborationDir}/blackboard.jsonl`,
     taskResult: (taskId) => `${tasksDir}/${taskId}/result.json`,

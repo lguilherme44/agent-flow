@@ -16,6 +16,7 @@ import { runStatusCommand } from './status.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
 import { runRunCommand, runRetryCommand } from './run.js';
 import { runReviewCommand } from './review.js';
+import { runForgeCommand, type ForgeAction } from './forge.js';
 import { runCleanCommand } from './clean.js';
 import {
   DEFAULT_UI_HOST,
@@ -243,6 +244,22 @@ export async function main(argv: string[]): Promise<number> {
     .option('--fix', 'report the corrective tasks the findings would produce')
     .action(async (options: { fix?: boolean }, command: Command) => {
       exitCode = await runReviewCommand(options, globalOptions(command));
+    });
+
+  program
+    .command('forge')
+    .description('Publish this run and observe its delivery, without giving GitHub authority')
+    .argument('<action>', 'status | publish | issue | pr | sync')
+    .option('--title <title>', 'title for the issue or pull request')
+    .option('--base <branch>', 'base branch for the pull request')
+    .action(async (action: string, options: { title?: string; base?: string }, command: Command) => {
+      const known = ['status', 'publish', 'issue', 'pr', 'sync'] as const;
+      if (!(known as readonly string[]).includes(action)) {
+        process.stderr.write(`Unknown forge action "${action}". Try: ${known.join(', ')}\n`);
+        exitCode = ExitCode.CONFIG_ERROR;
+        return;
+      }
+      exitCode = await runForgeCommand(action as ForgeAction, options, globalOptions(command));
     });
 
   program

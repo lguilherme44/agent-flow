@@ -17,7 +17,6 @@ import { StateStore } from '../../src/app/state-store.js';
 const REPO = { host: 'github.com', owner: 'lguilherme44', repo: 'agent-flow' };
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
-const RUN = 'AF-2026-001';
 
 /** A remote that remembers what it was told, so a retry meets the object it created. */
 function fakeRemote() {
