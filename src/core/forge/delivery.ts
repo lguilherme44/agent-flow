@@ -111,15 +111,18 @@ export function projectDelivery(input: {
     };
   }
 
-  if (record.remoteBranch === undefined) {
+  // A branch without a commit is not a publication: both facts arrive together, and one
+  // without the other is a record half-written rather than a state to report.
+  if (record.remoteBranch === undefined || record.sourceCommit === undefined) {
     return { ...base, state: 'not_published', detail: 'nothing has been published for this run yet' };
   }
+  const published = record.sourceCommit;
 
   if (record.pullRequest === undefined) {
     return {
       ...base,
       state: 'published',
-      detail: `${record.sourceCommit.slice(0, 8)} is on ${record.remoteBranch}, with no pull request`,
+      detail: `${published.slice(0, 8)} is on ${record.remoteBranch}, with no pull request`,
     };
   }
 
@@ -128,7 +131,7 @@ export function projectDelivery(input: {
   // exists to make impossible.
   if (
     record.pullRequest.headSha !== undefined &&
-    record.pullRequest.headSha !== record.sourceCommit
+    record.pullRequest.headSha !== published
   ) {
     return {
       ...base,
@@ -136,7 +139,7 @@ export function projectDelivery(input: {
       detail:
         `pull request #${String(record.pullRequest.number)} points at ` +
         `${record.pullRequest.headSha.slice(0, 8)}, and this run approved ` +
-        `${record.sourceCommit.slice(0, 8)}`,
+        `${published.slice(0, 8)}`,
     };
   }
 

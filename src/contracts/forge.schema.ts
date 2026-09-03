@@ -143,8 +143,15 @@ export const DeliveryRecordSchema = z.object({
   runId: RunIdSchema,
   provider: ForgeProviderIdSchema,
   repository: ForgeRepositorySchema,
-  /** The approved commit. Compared against what the remote reports, never trusted from it. */
-  sourceCommit: CommitOidSchema,
+  /**
+   * The approved commit, once one has been published.
+   *
+   * **Optional, because an Issue exists before a commit does.** The first version made it
+   * required and a run that linked an Issue during planning could not write its own
+   * delivery record — a model that said publication had already happened. Compared against
+   * what the remote reports, never trusted from it.
+   */
+  sourceCommit: CommitOidSchema.optional(),
   remoteBranch: z.string().max(255).optional(),
   issue: ForgeIssueRefSchema.optional(),
   pullRequest: ForgePullRequestRefSchema.optional(),
