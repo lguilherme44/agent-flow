@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -8,6 +9,7 @@ import {
   FileText,
   FolderGit2,
   LayoutDashboard,
+  Menu,
   Plus,
   Settings,
   Terminal,
@@ -40,17 +42,71 @@ export function Shell(): JSX.Element {
     <I18nProvider>
       <ProjectProvider>
         <TaskSelectionProvider>
-          <div className="app-layout">
-            <Sidebar />
-            <main className="main-content">
-              <Topbar />
-              <UnknownProject />
-              <Outlet />
-            </main>
-          </div>
+          <ShellLayout />
         </TaskSelectionProvider>
       </ProjectProvider>
     </I18nProvider>
+  );
+}
+
+/**
+ * The layout, and the one piece of state it owns: whether the drawer is open.
+ *
+ * Its own component because the state has to sit above both the sidebar and the topbar,
+ * and `Shell` is where the providers are — a `useState` there would re-render every
+ * provider on a menu toggle.
+ *
+ * **The drawer only exists below 1024** (see `ops-control.css`). Above it the sidebar is a
+ * column, the toggle and the backdrop are `display: none`, and this state is inert. That
+ * is deliberate: one layout with a boundary, rather than two layouts to keep in step.
+ */
+function ShellLayout(): JSX.Element {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { pathname } = useLocation();
+
+  // Navigating is the point of the drawer, so navigating closes it. Without this the menu
+  // stays over the page you just asked for, and the first thing a person does on arriving
+  // is dismiss it.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
+
+  // Escape closes it, like every other dismissible surface in this app.
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setDrawerOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [drawerOpen]);
+
+  return (
+    <div className="app-layout">
+      <Sidebar open={drawerOpen} />
+      {drawerOpen ? (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="Close the navigation"
+          onClick={() => {
+            setDrawerOpen(false);
+          }}
+        />
+      ) : null}
+      <main className="main-content">
+        <Topbar
+          drawerOpen={drawerOpen}
+          onToggleDrawer={() => {
+            setDrawerOpen((open) => !open);
+          }}
+        />
+        <UnknownProject />
+        <Outlet />
+      </main>
+    </div>
   );
 }
 
@@ -111,14 +167,16 @@ function useNavEntries(): readonly NavEntry[] {
   ];
 }
 
-function Sidebar(): JSX.Element {
+function Sidebar(props: { open: boolean }): JSX.Element {
   const { t } = useI18n();
   const navEntries = useNavEntries();
   const projects = useProjects();
   const { projectId, select } = useProjectSelection();
 
   return (
-    <aside className="sidebar">
+    // `data-open` rather than a class, so the CSS boundary owns the behaviour and this
+    // component owns nothing about widths. Above 1024 the attribute is present and inert.
+    <aside className="sidebar" data-open={props.open ? 'true' : 'false'}>
       <div className="sidebar-header">
         <div className="brand">
           <div className="brand-logo">AF</div>
@@ -296,13 +354,25 @@ function SidebarFooter(): JSX.Element {
 /**
  * A context bar, not a page title (§69).
  */
-function Topbar(): JSX.Element {
+function Topbar(props: { drawerOpen: boolean; onToggleDrawer: () => void }): JSX.Element {
   const { projectId } = useProjectSelection();
   const { selectedTaskId } = useGlobalTaskSelection();
   const connection = useLiveEvents(projectId);
 
   return (
     <header className="command-bar glass-panel">
+      {/* The only way to the navigation below 1024, so it is a real button with a real
+          accessible name — not an icon a screen reader reads as "button". */}
+      <button
+        type="button"
+        className="sidebar-toggle flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-border bg-surface-2 text-muted hover:text-text"
+        aria-label={props.drawerOpen ? 'Close the navigation' : 'Open the navigation'}
+        aria-expanded={props.drawerOpen}
+        onClick={props.onToggleDrawer}
+      >
+        <Menu className="h-4 w-4" aria-hidden />
+      </button>
+
       <div className="run-context">
         <Breadcrumbs selectedTaskId={selectedTaskId} />
       </div>

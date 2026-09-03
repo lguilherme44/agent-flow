@@ -270,6 +270,107 @@
 .user-name { font-size: 0.875rem; font-weight: 500; }
 .user-role { font-size: 0.75rem; color: var(--text-tertiary); }
 
+/*
+ * Below 1024 the sidebar is a drawer, not a column (M8 §41).
+ *
+ * **Measured, and the measurement is the whole justification.** At 390px the sidebar took
+ * 240 of them — 62% of the screen — and left the content 150px: the run id read
+ * `AF-2026…`, a task card's title read `Gerar pr…`, and the attention queue wrapped to one
+ * word per line. Every one of those is a fact an operator needs, and none of them was
+ * legible. The board already stacked its lanes below this width; the shell around it never
+ * adapted, so the stacking bought nothing.
+ *
+ * A drawer rather than a collapsed rail: §41 says mobile must not hide important
+ * functionality to make the layout fit, and every destination in the sidebar is reachable
+ * from nowhere else. Hidden behind one button is not hidden.
+ *
+ * Nothing here applies at or above 1024. The desktop layout this milestone photographed at
+ * four widths is untouched — the media query is the boundary, and it is one-way.
+ */
+@media (max-width: 1023.98px) {
+  /*
+   * The drawer sits at `translateX(-100%)` when closed, and Chromium counts that geometry
+   * in `documentElement.scrollWidth`: measured 577 against a 390 viewport, 187 of overflow
+   * that no content produced. `clip` rather than `hidden` on purpose — `hidden` would make
+   * this a scroll container and break the `position: sticky` command bar inside it.
+   *
+   * This is the one case §9 distinguishes: an off-canvas panel's own position is not
+   * content overflowing the page, and clipping it is what makes the page-overflow check
+   * mean what it says.
+   */
+  .app-layout {
+    overflow-x: clip;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    height: 100dvh;
+    z-index: 60;
+    /* Off-canvas by default. `transform` rather than `display` so the drawer animates and
+       so its focusable children leave the tab order via `visibility`, not by unmounting —
+       a nav that unmounts loses the router links' active state on every open. */
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 180ms ease, visibility 0s linear 180ms;
+    box-shadow: var(--shadow-lg, 0 10px 30px rgb(0 0 0 / 45%));
+  }
+
+  .sidebar[data-open='true'] {
+    transform: none;
+    visibility: visible;
+    transition: transform 180ms ease, visibility 0s;
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(0 0 0 / 55%);
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .main-content {
+    padding: var(--space-md);
+    gap: var(--space-md);
+  }
+
+  /* The bar carries a menu button now, and the breadcrumb has to be able to give way.
+     Without `min-width: 0` a flex child refuses to shrink below its content and pushes the
+     actions off the right edge — which is page-level overflow, not an internal scroll. */
+  .command-bar {
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .run-context {
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+
+/*
+ * Above the drawer boundary the button does not exist and neither does the backdrop.
+ *
+ * **Descendant selectors, and that is not decoration.** `.sidebar-toggle { display: none }`
+ * is one class, and so is Tailwind's `.flex` on the same element — same specificity, so the
+ * winner is whichever stylesheet is emitted last, and it is not this one. The button
+ * rendered at every width, added ten pixels to the command bar, and shifted every page in
+ * the app down by ten: six visual baselines at 1280 and 1200 caught it, all of them shots
+ * with the inspector open, none of them anywhere near the boundary I thought I had drawn.
+ * `.command-bar .sidebar-toggle` is two classes and wins outright.
+ */
+@media (min-width: 1024px) {
+  .command-bar .sidebar-toggle,
+  .app-layout .sidebar-backdrop {
+    display: none;
+  }
+}
+
 /* Main Content */
 .main-content {
   flex: 1;

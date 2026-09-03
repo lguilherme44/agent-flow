@@ -290,7 +290,12 @@ export function RunHeader(props: {
 
   return (
     <header className="flex flex-col gap-2.5 px-4 pb-3 pt-3.5">
-      <div className="flex items-start justify-between gap-4">
+      {/* Wraps below the drawer boundary and nowhere else (M8 §41). At 390 the identity,
+          the progress cluster and the action group are 600px of content in a 358px row:
+          the run id was drawn over the progress label and `Resume run` was cut off the
+          right edge, which is page-level overflow rather than an internal scroll. Above
+          1024 nothing wraps and the desktop header is byte-identical. */}
+      <div className="flex items-start justify-between gap-4 max-lg:flex-wrap max-lg:gap-y-3">
         <div className="flex min-w-0 flex-col gap-2">
           {/* One line, always. Wrapping pushed the feature under the run id and
               cost the header a row of height for no information. */}
@@ -335,7 +340,7 @@ export function RunHeader(props: {
           </dl>
         </div>
 
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3 max-lg:w-full max-lg:flex-wrap">
           {/* Narrower below 1440. Every pixel this cluster gives up goes to the
               feature title, which is the one thing here that cannot be
               recovered from anywhere else on the screen. */}
@@ -346,7 +351,7 @@ export function RunHeader(props: {
               both stay readable at 112px; the alternative was hiding a view toggle at
               narrow widths, and losing a feature to make a header fit is the trade §41
               refuses. */}
-          <div className="flex w-28 flex-col gap-1 xl:w-40 wide:w-52">
+          <div className="flex w-28 flex-col gap-1 max-lg:w-full xl:w-40 wide:w-52">
             <div className="flex items-baseline justify-between">
               <span className="text-micro uppercase tracking-caps text-faint">
                 Overall progress

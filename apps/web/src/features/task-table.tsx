@@ -64,10 +64,14 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
       className="min-w-0 flex-1"
       header={
         <>
+          {/* The header is a title and four controls. At 390 they were 520px of content in
+              a 358px row, so the title was drawn over the filter chips. Wrapping below the
+              drawer boundary is the whole fix; above it the row is unchanged. */}
           <SectionHeader
+            className="max-lg:flex-wrap max-lg:gap-y-2"
             title={asBoard ? 'Task board' : asGraph ? 'Task dependencies' : 'Implementation tasks'}
           >
-            <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-3 max-lg:flex-wrap max-lg:justify-start">
               <label className="flex min-w-0 max-w-56 flex-1 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 py-1">
                 <Search className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden />
                 <span className="sr-only">Search tasks</span>
@@ -81,7 +85,11 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                 />
               </label>
 
-              <div className="flex shrink-0 gap-px" role="group" aria-label="Filter by status">
+              {/* `shrink-0` keeps the five chips on one line, which is right at every width
+                  the desktop layout covers and wrong at 390: the group is 190px in a row
+                  that has already given its space to the search box, so `failed` was cut
+                  to `F`. A filter you cannot read the name of is a filter nobody uses. */}
+              <div className="flex shrink-0 gap-px max-lg:shrink max-lg:flex-wrap" role="group" aria-label="Filter by status">
                 {(['all', 'running', 'waiting', 'completed', 'failed'] as const).map((option) => (
                   <button
                     key={option}
@@ -132,7 +140,10 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
             </div>
           </SectionHeader>
 
-          <div className="flex items-stretch divide-x divide-border px-4 pb-3">
+          {/* Five counts and four hairlines need 400px; at 390 `FAILED` fell off the end.
+              Wrapping keeps every count on screen — and a count that is not on screen is
+              the one an operator was looking for, since `failed` is last. */}
+          <div className="flex items-stretch divide-x divide-border px-4 pb-3 max-lg:flex-wrap max-lg:gap-y-2 max-lg:divide-x-0">
             <StripItem label="Total" value={counts.total} />
             <StripItem label="Completed" value={counts.completed} tone="success" />
             <StripItem label="Running" value={counts.running} tone="info" />

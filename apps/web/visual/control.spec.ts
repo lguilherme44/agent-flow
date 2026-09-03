@@ -167,3 +167,144 @@ test.describe('control plane', () => {
     }
   });
 });
+
+/**
+ * 390 × 844 — the width M8's spec named and never photographed (§41).
+ *
+ * **One project rather than four.** The viewport is set inside the test, so running this
+ * under every project would produce four identical images of the same 390px page and four
+ * baselines to keep in step for no information. Pinned to `desktop-1440` so there is
+ * exactly one `*-mobile.png` per platform, generated in the same two environments as every
+ * other shot here.
+ *
+ * What the first probe found, before any of these assertions existed: the sidebar was a
+ * fixed 240px column that never collapsed, so at 390 it took 62% of the screen and left the
+ * content 150. The run id read `AF-2026…`, a task card's title read `Gerar pr…`, and the
+ * attention queue wrapped to one word per line. The board had stacked its lanes below 1024
+ * since M8 landed — the shell around it had not, so the stacking bought nothing.
+ */
+test.describe('control plane at 390', () => {
+  const MOBILE = { width: 390, height: 844 };
+
+  test.beforeEach(async ({ page }, info) => {
+    test.skip(
+      (info.project.use.viewport?.width ?? 0) !== 1440,
+      'the viewport is set in the test; one project owns the baseline',
+    );
+    await page.setViewportSize(MOBILE);
+  });
+
+  /**
+   * The mechanical half of §41: nothing may make the *page* scroll sideways.
+   *
+   * Deliberately `documentElement` and nothing else. The pipeline and the board scroll
+   * inside their own regions on purpose and are measured to do so; asserting no scrollable
+   * element anywhere would forbid the design rather than the defect. What is forbidden is
+   * the document itself being wider than the window, which is the shape of a layout that
+   * has overflowed.
+   */
+  async function pageOverflow(page: import('@playwright/test').Page): Promise<number> {
+    return page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+  }
+
+  test('M8-ACC-31 the home leads with attention, and the page does not scroll sideways', async ({
+    page,
+  }) => {
+    await stubApi(page, { [`/api/v1/runs/${GATED_RUN_ID}/control`]: GATED_CONTROL });
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
+
+    // Attention first, at the top, before the project list — the ordering is the milestone
+    // and it has to survive the narrowest viewport rather than only the widest.
+    const headings = await page.locator('main h2').allTextContents();
+    expect(headings[0]).toContain('Needs attention');
+
+    // What, why and the one action, all legible rather than merely present.
+    await expect(page.getByText('the plan is waiting for a decision')).toBeVisible();
+    await expect(page.getByText('Review the plan', { exact: true })).toBeVisible();
+    await expect(page.getByText('P1', { exact: true })).toBeVisible();
+
+    expect(await pageOverflow(page)).toBeLessThanOrEqual(0);
+    await expect(page).toHaveScreenshot('control-home-mobile.png');
+  });
+
+  test('M8-ACC-31 the board stacks its lanes and keeps every count', async ({ page }) => {
+    await stubApi(page);
+    await page.goto(BOARD_URL);
+    await expect(page.getByRole('button', { name: /TASK-001/ })).toBeVisible();
+
+    // §8 — the six lane names, as text, because a screenshot tolerance would not notice one
+    // of them changing meaning. Every lane carries its count in the accessible name, so a
+    // screen reader gets the shape of the board without walking every card.
+    for (const lane of ['Backlog', 'Ready', 'In progress', 'Review', 'Blocked', 'Done']) {
+      await expect(page.getByRole('region', { name: new RegExp(`^${lane}, `) })).toBeVisible();
+    }
+
+    // Stacked, not a six-column board squeezed into 390px. Read from the boxes rather than
+    // from a class name: a media query that stops applying is invisible to a class assertion
+    // and obvious to this one.
+    const lefts = await page
+      .getByRole('region', { name: /, \d+ tasks?$/ })
+      .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().x)));
+    expect(lefts.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(lefts).size, `lanes are side by side at 390: ${lefts.join(', ')}`).toBe(1);
+
+    // The status an operator reads first, and the action they reach for — both on screen.
+    await expect(page.getByText('IMPLEMENTING')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Resume run/ })).toBeVisible();
+
+    // Every count, including the last one: `Failed` is fifth in the strip and was the one
+    // that fell off the end. Matched on the DOM text rather than the rendered capitals —
+    // the strip upper-cases in CSS, and an assertion written against the picture would
+    // pass or fail on a `text-transform` rather than on the label being there.
+    for (const label of ['Total', 'Completed', 'Running', 'Waiting', 'Failed']) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+    }
+
+    // A card's reason, which is the sentence the whole board exists to carry.
+    await expect(page.getByText('waiting on TASK-004').first()).toBeVisible();
+
+    expect(await pageOverflow(page)).toBeLessThanOrEqual(0);
+    await expect(page).toHaveScreenshot('board-mobile.png');
+  });
+
+  test('navigation is one button away, and closes the way everything else does', async ({
+    page,
+  }) => {
+    await stubApi(page);
+    await page.goto(BOARD_URL);
+    await expect(page.getByRole('button', { name: /TASK-001/ })).toBeVisible();
+
+    // §41: nothing important is hidden to make the layout fit. Every destination in the
+    // product is in this drawer and nowhere else, so "behind one button" is the bar.
+    const nav = page.getByRole('navigation', { name: 'Primary' });
+    await expect(nav).not.toBeVisible();
+
+    const toggle = page.getByRole('button', { name: 'Open the navigation' });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
+
+    await expect(nav).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Runs' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Close the navigation' }).first()).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(nav).not.toBeVisible();
+
+    expect(await pageOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('a task opens in the inspector at 390', async ({ page }) => {
+    await stubApi(page);
+    await page.goto(BOARD_URL);
+    await page.getByRole('button', { name: /TASK-003/ }).first().click();
+
+    // Below 1200 the inspector is a drawer, which is a modal dialog — so the assertion is
+    // that the dialog opened, not that the board is still in the accessibility tree.
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(await pageOverflow(page)).toBeLessThanOrEqual(0);
+    await expect(page).toHaveScreenshot('inspector-mobile.png');
+  });
+});
