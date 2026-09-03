@@ -202,12 +202,81 @@ describe('M8-ACC-09 … 13 — the queue contains the blockers it claims to', ()
     expect(notRun[0]?.scope.gateId).toBe('test');
   });
 
+  it('raises red remote checks without calling them a local failure', () => {
+    // Found by the first real-data read: a run whose GitHub checks were red produced an
+    // empty queue. The item exists now, and its sentence carries the separation M7 §10
+    // established rather than leaving the reader to know it.
+    const items = projectAttention(
+      input({
+        delivery: delivery({
+          state: 'checks_red',
+          checkSummary: { total: 5, green: 2, red: 3, pending: 0 },
+        }),
+      }),
+    );
+
+    const item = items.find((candidate) => candidate.kind === 'remote_checks_red');
+    expect(item?.priority).toBe('P2');
+    expect(item?.what).toContain('3 remote checks failed');
+    expect(item?.why).toContain('not local quality');
+    expect(item?.focus).toBe('delivery');
+  });
+
+  it('gives an exhausted task one row rather than two', () => {
+    // Both facts are true — recovery gave up, and the task is waiting for somebody — and
+    // they are one thing for one person to do. Measured on AF-2026-002, where TASK-005
+    // produced two P1 rows saying it in two ways.
+    const items = projectAttention(
+      input({
+        tasks: [task('TASK-005', 'review_required')],
+        runtime: runtime({
+          status: 'auto_recovery_exhausted',
+          escalation: {
+            task: 'TASK-005',
+            failureClass: 'validation_failed',
+            counts: {},
+            evidence: [],
+            attemptedRepairs: [],
+            humanAction: 'Review the attempt evidence, then retry the task',
+          },
+        }),
+      }),
+    );
+
+    expect(kinds(items)).toContain('recovery_exhausted');
+    expect(kinds(items)).not.toContain('task_review_required');
+
+    // A *different* task still gets its own row: the suppression is about one task, not
+    // about the run being in that state.
+    const other = projectAttention(
+      input({
+        tasks: [task('TASK-005', 'review_required'), task('TASK-006', 'review_required')],
+        runtime: runtime({
+          status: 'auto_recovery_exhausted',
+          escalation: {
+            task: 'TASK-005',
+            failureClass: 'validation_failed',
+            counts: {},
+            evidence: [],
+            attemptedRepairs: [],
+            humanAction: 'Review the attempt evidence',
+          },
+        }),
+      }),
+    );
+    expect(other.filter((entry) => entry.scope.taskId === 'TASK-006')).toHaveLength(1);
+  });
+
   it('M8-ACC-13 raises a delivery failure, and a divergence above it', () => {
     const failed = projectAttention(
       input({ delivery: delivery({ state: 'delivery_failed', detail: 'the push was rejected' }) }),
     );
     expect(failed[0]?.kind).toBe('delivery_failed');
     expect(failed[0]?.action.kind).toBe('forge_sync');
+    // Named as a command, because M7 keeps every forge *write* behind the CLI so the local
+    // server never holds a token. An action the surface cannot perform teaches people the
+    // queue is decorative.
+    expect(failed[0]?.action.label).toContain('agent-flow forge sync');
 
     const diverged = projectAttention(
       input({

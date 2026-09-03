@@ -166,6 +166,30 @@ describe('M8-ACC-06 — a blocked card says why, mechanically', () => {
     expect(upstream.waitsFor).toEqual(['TASK-004']);
   });
 
+  it('does not blame the agent for a block the graph derived', () => {
+    // `blocked` is two things — a record the executor wrote and a condition
+    // `blockedByFailure` derives downstream of a failure — and only the first carries a
+    // reason. Reading absence as "the agent asked for help" put that sentence on the card
+    // of every task the agent never touched. Found by the acceptance suite against the
+    // real server, on a run where one failure poisoned two dependents.
+    const derived = boardReason(
+      task('T', 'blocked'),
+      'blocked',
+      context({ waitingOn: new Map([['T', ['TASK-001']]]) }),
+    );
+
+    expect(derived.cause).toBe('dependency');
+    expect(derived.text).toContain('TASK-001');
+
+    // An explicit record from the executor still outranks the graph: the agent said so.
+    const stated = boardReason(
+      task('T', 'blocked', { blockReason: 'agent' }),
+      'blocked',
+      context({ waitingOn: new Map([['T', ['TASK-001']]]) }),
+    );
+    expect(stated.cause).toBe('human');
+  });
+
   it('names the attempt count on a failure', () => {
     const reason = boardReason(task('T', 'failed', { attempts: 3 }), 'blocked', context());
 

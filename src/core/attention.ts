@@ -70,6 +70,7 @@ const PRIORITY: Readonly<Record<AttentionKind, AttentionPriority>> = {
   required_gate_not_run: 'P2',
   blocking_finding_open: 'P2',
   delivery_failed: 'P2',
+  remote_checks_red: 'P2',
 
   review_stale: 'P3',
   capacity_starvation: 'P3',
@@ -213,8 +214,15 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
     );
   }
 
+  // A task the escalation already names has one row, not two. Both facts are true —
+  // recovery gave up, and the task is waiting for somebody — and the exhaustion is the
+  // more specific of the two and carries the action. Measured on AF-2026-002, where
+  // TASK-005 produced two P1 rows telling one person to do one thing.
+  const escalated =
+    runtime.status === 'auto_recovery_exhausted' ? runtime.escalation?.task : undefined;
+
   for (const task of input.tasks) {
-    if (task.state === 'review_required') {
+    if (task.state === 'review_required' && task.id !== escalated) {
       items.push(
         item({
           kind: 'task_review_required',
@@ -307,6 +315,24 @@ function failureItems(input: AttentionInput): AttentionItem[] {
     );
   }
 
+  if (input.delivery?.state === 'checks_red') {
+    const summary = input.delivery.checkSummary;
+    items.push(
+      item({
+        kind: 'remote_checks_red',
+        runId,
+        what: `${summary.red} remote ${summary.red === 1 ? 'check' : 'checks'} failed`,
+        // The sentence carries the separation rather than relying on the reader to know
+        // it. A remote check is an observation; the local workflow already approved or it
+        // would not have published.
+        why: 'this is delivery, not local quality — the run\u2019s own gates are unaffected',
+        since: input.delivery.syncedAt ?? input.run.updatedAt,
+        action: { kind: 'inspect', label: 'Open the delivery', destructive: false },
+        focus: 'delivery',
+      }),
+    );
+  }
+
   if (input.delivery?.state === 'delivery_failed') {
     items.push(
       item({
@@ -315,7 +341,11 @@ function failureItems(input: AttentionInput): AttentionItem[] {
         what: 'delivery to the forge failed',
         why: input.delivery.detail,
         since: input.delivery.syncedAt ?? input.run.updatedAt,
-        action: { kind: 'forge_sync', label: 'Retry the sync', destructive: false },
+        // **Named as a command rather than offered as a button**, and that is M7's
+        // boundary rather than a gap here: every *write* to a forge stays behind the CLI
+        // so the local server never holds a token. An action a surface cannot perform is
+        // worse than no action at all — it teaches people the queue is decorative.
+        action: { kind: 'forge_sync', label: 'Run `agent-flow forge sync`', destructive: false },
         focus: 'delivery',
       }),
     );
@@ -454,7 +484,7 @@ function informationalItems(input: AttentionInput): AttentionItem[] {
         what: `${delivery.checkSummary.pending} remote checks have not reported`,
         why: 'remote checks are an observation and never a local verdict',
         since: delivery.syncedAt ?? input.run.updatedAt,
-        action: { kind: 'forge_sync', label: 'Sync the delivery', destructive: false },
+        action: { kind: 'forge_sync', label: 'Run `agent-flow forge sync`', destructive: false },
         focus: 'delivery',
       }),
     );
@@ -470,7 +500,7 @@ function informationalItems(input: AttentionInput): AttentionItem[] {
         what: 'this run has finished and nothing has been published',
         why: delivery.detail,
         since: input.run.updatedAt,
-        action: { kind: 'forge_publish', label: 'Publish', destructive: false },
+        action: { kind: 'forge_publish', label: 'Run `agent-flow forge publish`', destructive: false },
         focus: 'delivery',
       }),
     );

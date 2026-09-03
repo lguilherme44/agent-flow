@@ -72,6 +72,16 @@ export const ATTENTION_KINDS = [
   'required_gate_not_run',
   'blocking_finding_open',
   'delivery_failed',
+  /**
+   * The remote's own checks went red.
+   *
+   * A P2 beside the local failures and **never merged with them**. M7 §10 is unchanged: a
+   * remote check is an observation and never a local verdict, so the sentence says which
+   * one it is. Found by the first real-data read of this projection — a run with three
+   * failed GitHub checks produced an empty queue, which is the exact silence this
+   * milestone exists to remove.
+   */
+  'remote_checks_red',
   // P3 — degraded
   'review_stale',
   'capacity_starvation',

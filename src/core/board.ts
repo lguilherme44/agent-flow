@@ -140,8 +140,14 @@ export function boardReason(
     // `blockReason` distinguishes the agent answering BLOCKED from an upstream failure
     // holding this task back. Only the second is ever released by recovery, so telling
     // them apart is the difference between waiting and acting.
-    if (task.blockReason === 'dependency') {
-      const waiting = context.waitingOn.get(task.id) ?? [];
+    //
+    // **And absence is not evidence of the first.** `blocked` is two things: a record the
+    // executor wrote when a runner answered BLOCKED, and a condition `blockedByFailure`
+    // derives over the graph for everything downstream of a failure. Only the record
+    // carries a reason, so reading absence as "the agent asked for help" put that sentence
+    // on the card of every task the agent never touched. The unmet dependencies answer it.
+    const waiting = context.waitingOn.get(task.id) ?? [];
+    if (task.blockReason !== 'agent' && (task.blockReason === 'dependency' || waiting.length > 0)) {
       return {
         text:
           waiting.length > 0
