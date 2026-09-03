@@ -18,3 +18,4 @@ export * from './api.schema.js';
 export * from './context-packet.schema.js';
 export * from './context-telemetry.schema.js';
 export * from './projection.js';
+export * from './control-plane.js';
