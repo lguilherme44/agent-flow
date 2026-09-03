@@ -4139,6 +4139,174 @@ describe('the browser renders verdicts and never reaches them (§47, §48, §52)
 });
 
 /**
+ * M8-A01 … M8-A18 — the control plane renders decisions and invents none (M8 §15).
+ *
+ * The milestone adds an *order* and a *lane* over facts six projections already decided.
+ * Every rule below forbids a second answer to one of them, and the shortcut each forbids
+ * is the one a deadline produces: a `switch` in a card component "just for the icon", a
+ * count folded in a header, a drag handler that writes a status because the library made
+ * it easy.
+ */
+describe('the control plane projects, and the browser renders (M8-A01 … A18)', () => {
+  const WEB = sourceFiles('apps/web/src').map(read);
+  const PROJECTIONS = ['src/core/attention.ts', 'src/core/board.ts'];
+
+  /**
+   * The two exemptions, named rather than inferred.
+   *
+   * `lib/status.ts` is the one place a status becomes a colour, and mapping every task
+   * state to a tone is exactly its job — §67 requires that mapping to exist once, and a
+   * rule forbidding it here would be forbidding the thing another rule requires.
+   *
+   * A test file builds fixtures, and a fixture carrying a `P1` is a fixture, not a second
+   * ranking. Excluding the *source* rules from tests would be wrong; excluding tests from
+   * a rule about what production code decides is the same distinction the reachability
+   * rule already draws.
+   */
+  const DECIDES_A_TONE = 'apps/web/src/lib/status.ts';
+  const isTest = (path: string): boolean => /\.test\.tsx?$/.test(path);
+
+  it('M8-A02 — no lane decision exists under apps/web', () => {
+    // The shape of the defect: a component mapping a task state to a column. The lane
+    // arrives on the card, and the card renders it.
+    const offenders: string[] = [];
+    for (const { path, text } of WEB) {
+      const code = codeOnly(text);
+      // **`withoutComments`, not `codeOnly`, for the literal half.** `codeOnly` blanks
+      // string literals, so a rule written against it looking for `case 'review_required'`
+      // reads `case ''` and passes by looking at nothing — the exact shape M6 spent a
+      // milestone on. Proved by mutation: planting that switch did not fail this test
+      // until the helper changed.
+      const literals = withoutComments(text);
+      if (/(?:function|const)\s+(?:boardLane|laneOf|laneFor)\b/.test(code)) {
+        offenders.push(`${path}: defines a lane function`);
+      }
+      // A `case 'review_required':` in the browser is a task state machine, whatever it
+      // returns. Rendering reads `card.lane`, which is a string the server chose.
+      if (
+        path !== DECIDES_A_TONE &&
+        !isTest(path) &&
+        /case\s+'(?:review_required|interrupted|awaiting_integration)'/.test(literals)
+      ) {
+        offenders.push(`${path}: branches on a task state the projection already resolved`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M8-A03 — exactly one task-to-lane projection exists', () => {
+    const definers = [...sourceFiles('src'), ...sourceFiles('apps/web/src')]
+      .map(read)
+      .filter(({ text }) => /export function boardLane\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(definers).toEqual(['src/core/board.ts']);
+  });
+
+  it('M8-A04 — no attention priority is decided under apps/web', () => {
+    // A component may map a priority to a *colour* — that is presentation. It may not
+    // decide which priority an item has, because then two screens rank the same run
+    // differently and the operator has no way to tell which is right.
+    const offenders: string[] = [];
+    for (const { path, text } of WEB) {
+      const code = codeOnly(text);
+      // The literal is the whole point of this rule, so it reads the text that still has
+      // one. See M8-A02 for what happens when it does not.
+      const literals = withoutComments(text);
+      if (!isTest(path) && /(?:priority|rung)\s*[:=]\s*'P[0-4]'/.test(literals)) {
+        offenders.push(`${path}: assigns a priority`);
+      }
+      if (/(?:function|const)\s+(?:projectAttention|attentionPriority|rankAttention)\b/.test(code)) {
+        offenders.push(`${path}: defines an attention ranking`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M8-A05 — exactly one attention projection exists', () => {
+    const definers = [...sourceFiles('src'), ...sourceFiles('apps/web/src')]
+      .map(read)
+      .filter(({ text }) => /export function projectAttention\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(definers).toEqual(['src/core/attention.ts']);
+  });
+
+  it('M8-A10 — the projections import no React and no adapter', () => {
+    for (const file of PROJECTIONS) {
+      const specifiers = importSpecifiers(read(join(ROOT, file)).text);
+      // `core/` already may import only contracts and other core modules; this states the
+      // half that matters for a projection somebody will be tempted to render from.
+      for (const specifier of specifiers) {
+        expect(specifier, `${file} imports ${specifier}`).toMatch(/^\.\.\/contracts\/|^\.\//);
+      }
+    }
+  });
+
+  it('M8-A09 — the control reader composes the readers and reaches no adapter', () => {
+    // The snapshot is a second read path over facts that already have one, and the only
+    // thing that makes that safe is composition. A direct filesystem or Git import here
+    // would be the moment it became a second implementation.
+    const specifiers = importSpecifiers(read(join(ROOT, 'src/server/control-reader.ts')).text);
+
+    expect(specifiers.filter((s) => /adapters\/|node:/.test(s))).toEqual([]);
+    expect(specifiers).toContain('./run-reader.js');
+    expect(specifiers).toContain('./collaboration-reader.js');
+  });
+
+  it('M8-A12 — nothing in the browser drags a task anywhere', () => {
+    // Dragging BLOCKED → DONE would be the browser writing state, and no domain action
+    // means "move this task to that column". So the affordance does not exist — which is
+    // also what makes the board keyboard-operable by construction.
+    const offenders = WEB.filter(({ text }) =>
+      /\b(?:onDragStart|onDragEnd|onDragOver|onDrop|draggable=)/.test(codeOnly(text)),
+    ).map(({ path }) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('M8-A13 — a remote check cannot become a local quality gate', () => {
+    // M7 §10 restated where M8 renders both. A single "green" over the two would let a
+    // green CI hide a failed local gate, which is the one thing the split exists to stop.
+    const reader = codeOnly(read(join(ROOT, 'src/server/control-reader.ts')).text);
+
+    expect(reader).not.toMatch(/checks[\s\S]{0,80}unsatisfiedGates/);
+    expect(reader).not.toMatch(/unsatisfiedGates[\s\S]{0,80}checks/);
+  });
+
+  it('M8-A14 — team load is derived from assignments, never read from a field', () => {
+    const reader = codeOnly(read(join(ROOT, 'src/server/control-reader.ts')).text);
+
+    // `assigned` is the list of running tasks the projection folded from the log. A
+    // persisted `busy` would be a second copy of task state, and after a crash it is the
+    // copy claiming somebody is working on a task that is not.
+    expect(reader).toMatch(/running:\s*member\.assigned\.length/);
+    expect(reader).not.toMatch(/member\.(?:busy|load|isWorking)/);
+  });
+
+  it('M8-A18 — the browser scan reaches .tsx, proved rather than assumed', () => {
+    // M6 found `sourceFiles` walking `.ts` only, so every rule scanning `apps/web/src` was
+    // reading 0 of its 47 components: a rule forbidding the browser from deciding anything
+    // passed while the browser was free to decide everything. The fix was one `endsWith`,
+    // and a fix nobody can see fail is a fix nobody has evidence for.
+    const planted = sourceFiles('test/fixtures/browser-scan');
+
+    expect(planted.map((file) => relative(ROOT, file))).toEqual([
+      'test/fixtures/browser-scan/planted.tsx',
+    ]);
+    // And the construct inside it is one the browser rules forbid, so deleting `.tsx` from
+    // the walker makes this test fail rather than making the suite quietly narrower.
+    expect(codeOnly(read(planted[0] as string).text)).toMatch(/function decideQuality\b/);
+    // The fixture is outside every scanned tree, so the real rules never see it.
+    expect(sourceFiles('apps/web/src').map((file) => relative(ROOT, file))).not.toContain(
+      'test/fixtures/browser-scan/planted.tsx',
+    );
+  });
+});
+
+/**
  * §4: `reviewedTree == tree intended for review`, and never a stale working tree.
  *
  * The record was always right and the *reading* was wrong — the reviewer ran in the
