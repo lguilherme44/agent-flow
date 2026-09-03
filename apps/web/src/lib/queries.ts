@@ -20,7 +20,9 @@ import type {
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
+  ControlSnapshotView,
   DeliveryView,
+  WorkspaceView,
 } from '@contracts/index.js';
 import type { TelemetryResponse } from './api';
 
@@ -84,6 +86,9 @@ export const keys = {
   approval: (projectId: string | undefined, runId: string) =>
     ['approval', { runId, projectId }] as const,
   job: (projectId: string | undefined, runId: string) => ['job', { runId, projectId }] as const,
+  control: (projectId: string | undefined, runId: string) =>
+    ['control', { runId, projectId }] as const,
+  workspace: ['workspace'] as const,
 };
 
 export function useProjects(): UseQueryResult<ProjectView[]> {
@@ -360,4 +365,45 @@ export function useDelivery(
     queryFn: () => api.delivery(runId as string, projectId),
     enabled: runId !== undefined,
   });
+}
+
+/**
+ * The control plane for one run, in one query (M8 §7).
+ *
+ * **The component renders this and derives none of it.** A card's lane, the sentence
+ * explaining it, the attention queue and its order all arrive answered. A browser that
+ * computed any of them would be a second authority — and it would be the one that drifts,
+ * because the real one is not on screen.
+ *
+ * One query rather than eight is what makes a hundred cards one request, and what stops
+ * the board and the queue describing two different instants.
+ */
+export function useControl(
+  projectId: string | undefined,
+  runId: string | undefined,
+): UseQueryResult<ControlSnapshotView> {
+  return useQuery({
+    queryKey: keys.control(projectId, runId ?? ''),
+    queryFn: () => api.control(runId as string, projectId),
+    enabled: runId !== undefined,
+    /**
+     * A late snapshot never replaces a newer one.
+     *
+     * The stream can deliver an event about a task a fresher read already reflects, and
+     * repainting a completed card back to `running` is a lie with a timestamp on it. The
+     * server stamps every snapshot with the instant it describes; this keeps the newer of
+     * the two, whichever arrived last (M8-ACC-23).
+     */
+    structuralSharing: (previous, next) => {
+      const older = previous as ControlSnapshotView | undefined;
+      const newer = next as ControlSnapshotView;
+      if (older === undefined) return newer;
+      return newer.observedAt < older.observedAt ? older : newer;
+    },
+  });
+}
+
+/** Every project, for the control plane home (M8 §37). */
+export function useWorkspace(): UseQueryResult<WorkspaceView> {
+  return useQuery({ queryKey: keys.workspace, queryFn: () => api.workspace() });
 }

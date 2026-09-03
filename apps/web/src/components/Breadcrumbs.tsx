@@ -29,7 +29,10 @@ export function Breadcrumbs(props: { selectedTaskId?: string | undefined }): JSX
   const runs = useRuns(projectId);
 
   const onRunRoute = matchedRunId !== undefined;
-  const onDashboard = pathname === '/dashboard' || pathname === '/';
+  // `/` is the control plane and `/dashboard` is one run. They stopped being the same page
+  // in M8, and folding them together here put `workspace › beahub-api › Runs › AF-2026-104`
+  // above a list of four projects — a trail describing somewhere the reader is not.
+  const onDashboard = pathname === '/dashboard';
   const shownRunId = onRunRoute ? matchedRunId : onDashboard ? pickRun(runs.data ?? []) : undefined;
 
   const runProject = runs.data?.find((entry) => entry.runId === shownRunId)?.projectId;

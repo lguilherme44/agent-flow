@@ -32,11 +32,23 @@ export interface TaskTableProps {
    * panel — header, filters, counts — has no business knowing that exists.
    */
   readonly graph?: ReactNode;
+  /**
+   * The same slot, for the operational board (M8 §28).
+   *
+   * A second prop rather than a mode enum, so the panel keeps knowing nothing about
+   * either renderer. The board and the graph are two views of one projection — the DAG
+   * answers dependency and the board answers operational state — and they share this
+   * panel's header, filter, counts and selection precisely so they cannot become two
+   * surfaces that disagree about which task is open.
+   */
+  readonly board?: ReactNode;
 }
 
 export function TaskTable(props: TaskTableProps): JSX.Element {
   const { filter, onFilterChange } = props;
   const asGraph = props.graph !== undefined;
+  const asBoard = props.board !== undefined;
+  const alternate = props.board ?? props.graph;
 
   const visible = useMemo(
     () => filterTasks(props.tasks, filter),
@@ -52,7 +64,9 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
       className="min-w-0 flex-1"
       header={
         <>
-          <SectionHeader title={asGraph ? 'Task dependencies' : 'Implementation tasks'}>
+          <SectionHeader
+            title={asBoard ? 'Task board' : asGraph ? 'Task dependencies' : 'Implementation tasks'}
+          >
             <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
               <label className="flex min-w-0 max-w-56 flex-1 items-center gap-1.5 rounded-sm border border-border bg-surface-2 px-2 py-1">
                 <Search className="h-3.5 w-3.5 shrink-0 text-faint" aria-hidden />
@@ -132,8 +146,8 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
       {/* The graph replaces the body, not the panel. Same header, same counts,
           same filter, same selection — one surface showing the tasks two ways,
           rather than two surfaces that could disagree about which one is open. */}
-      {asGraph ? (
-        props.graph
+      {alternate !== undefined ? (
+        alternate
       ) : (
       <div className="min-h-0 flex-1 overflow-auto">
         {visible.length === 0 ? (

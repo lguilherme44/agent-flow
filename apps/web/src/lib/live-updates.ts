@@ -24,6 +24,12 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
     ['run', { runId }],
     ['stages', { runId }],
     ['telemetry', { runId }],
+    // M8. The control snapshot is stale for every reason the run is: a task moving, a
+    // stage finishing, a gate opening, a job ending. It is in the run-scoped set rather
+    // than in each branch below because it is *composed* of all of them — a snapshot that
+    // refreshed on task events but not on stage ones would show a board that moves and an
+    // attention queue that does not.
+    ['control', { runId }],
   ];
 
   // A task moving changes its state, never the plan it came from. The graph is
@@ -58,7 +64,7 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
   }
 
   if (event.type === 'run.created' || event.type === 'run.completed') {
-    return [...runScoped, ['runs'], ['projects']];
+    return [...runScoped, ['runs'], ['projects'], ['workspace']];
   }
 
   // `run.updated` and anything this table has never seen. Broad on purpose: a
@@ -71,6 +77,7 @@ export function invalidationsFor(event: ServerEvent): readonly (readonly unknown
     ['dag', { runId }],
     ['runs'],
     ['projects'],
+    ['workspace'],
   ];
 }
 

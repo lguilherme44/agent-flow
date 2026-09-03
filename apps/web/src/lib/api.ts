@@ -23,7 +23,9 @@ import type {
   TaskDetailView,
   TaskSummaryView,
   TelemetryEntry,
+  ControlSnapshotView,
   DeliveryView,
+  WorkspaceView,
 } from '@contracts/index.js';
 import type { TelemetrySummary } from '../../../../src/core/telemetry.js';
 
@@ -205,6 +207,19 @@ export const api = {
   // Where this run went. Credential-free on the server side, so this is an ordinary read.
   delivery: (runId: string, projectId?: string) =>
     get<DeliveryView>(`/runs/${runId}/delivery`, { projectId }),
+
+  /**
+   * The whole control plane for one run, read at one instant (M8 §7).
+   *
+   * The panels above still have their own endpoints and still use them; this is the read
+   * the board and the attention queue share, and sharing it is the point — two halves of
+   * one screen must not describe two moments.
+   */
+  control: (runId: string, projectId?: string): Promise<ControlSnapshotView> =>
+    get<ControlSnapshotView>(`/runs/${runId}/control`, { projectId }),
+
+  /** Every project, at the density a list of fifty of them can afford (M8 §37). */
+  workspace: (): Promise<WorkspaceView> => get<WorkspaceView>('/workspace'),
 
   runners: (projectId?: string) => get<RunnerView[]>('/runners', { projectId }),
   runnerHealth: (projectId?: string) =>

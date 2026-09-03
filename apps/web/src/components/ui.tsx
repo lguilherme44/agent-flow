@@ -362,6 +362,15 @@ export function SearchInput(props: {
   );
 }
 
+/**
+ * A bar that fills its container.
+ *
+ * **Size it with a wrapper, never with a width class on it.** `w-full` is written here and
+ * a `w-24` passed through `className` lands in the same Tailwind layer, so which one wins
+ * is the order the stylesheet happens to emit — and it is not this one. The control plane's
+ * project rows hit exactly that: a 96px bar rendered 400px wide and pushed the percentage
+ * off the end of the row.
+ */
 export function Progress(props: {
   value: number;
   tone?: Tone;

@@ -1,13 +1,14 @@
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { Minimize2, X } from 'lucide-react';
+import { AlertTriangle, Minimize2, X } from 'lucide-react';
 import { useProjectSelection } from '../app/project-context';
 import { useGlobalTaskSelection } from '../app/task-selection-context';
 import {
   useArtifact,
   useArtifacts,
   useCollaboration,
+  useControl,
   useTeam,
   useReview,
   useRun,
@@ -17,7 +18,9 @@ import {
   useTasks,
   useTelemetry,
 } from '../lib/queries';
-import { RunPanel } from '../features/run-overview';
+import { EscalationBanner, RunPanel } from '../features/run-overview';
+import { Board } from '../features/board';
+import { AttentionQueue } from '../features/attention';
 import { NO_FILTER, TaskTable, filterTasks, type TaskFilter } from '../features/task-table';
 import { TaskInspector } from '../features/task-inspector';
 import {
@@ -89,6 +92,10 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
   // between them must not feel like navigating away (§88 — local UI state).
   const [search, setSearch] = useSearchParams();
   const asGraph = search.get('view') === 'dag';
+  // M8. A third rendering of the same task list, in the same slot, sharing the same filter
+  // and the same selection. `?view=board` is where an attention item scoped to a task
+  // lands, so a deep link from the queue opens the board with that card selected.
+  const asBoard = search.get('view') === 'board';
 
   // Focus Mode (Phase C): in-place expanded workspace mode that collapses secondary cards
   const [isFocusMode, setIsFocusMode] = useState(false);
@@ -112,6 +119,22 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
     };
   }, [isFocusMode, isDagFullscreen]);
 
+  // M8-07. One read for the board, its reasons and the attention band — and one instant,
+  // so the two halves of the screen cannot describe two moments.
+  const control = useControl(projectId, runId);
+  // Whether the inspector shares the row. Computed once and read twice: the panel's width
+  // and the inspector's presence are two halves of one decision, and the layout is wrong
+  // whenever they are decided separately.
+  const inspectorInRow = asPane && ((!asGraph && !asBoard) || selectedTask !== undefined);
+  // With the queue on screen the two banners are its *detail*, and they belong below the
+  // work rather than above it. Measured on a real run at 1440x900: header, escalation,
+  // degradations, isolation strip and pipeline left 75px of board.
+  const attentionCount = control.data?.attention.length ?? 0;
+  // **And only when there is a below to move them to.** The lower band is not rendered in
+  // graph mode or focus mode, so a naive `attentionCount > 0` would suppress the escalation
+  // in the header and render it nowhere — information deleted by a layout decision, which
+  // is the defect this move exists to avoid rather than to cause.
+  const bannersBelow = attentionCount > 0 && !isFocusMode && !asGraph;
   const run = useRun(projectId, runId);
   const stages = useStages(projectId, runId);
   const tasks = useTasks(projectId, runId);
@@ -206,12 +229,41 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
             else next.set('view', 'dag');
             setSearch(next, { replace: true });
           }}
+          asBoard={asBoard}
+          onToggleBoard={() => {
+            const next = new URLSearchParams(search);
+            if (asBoard) next.delete('view');
+            else next.set('view', 'board');
+            setSearch(next, { replace: true });
+          }}
           isFocusMode={isFocusMode}
           onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
+          bannersBelow={bannersBelow}
         />
+
+        {/* M8 §27. Between the run's identity and its tasks, because that is the order the
+            questions arrive in: what is this, what needs me, what is happening. It renders
+            nothing at all on a healthy run — a permanently present empty band would be a
+            box teaching people to ignore the place urgent things appear. */}
+        {isFocusMode || attentionCount === 0 ? null : (
+          <AttentionQueue
+            items={control.data?.attention ?? []}
+            {...(projectId === undefined ? {} : { projectId })}
+            /* Four rows of the shape this queue actually produces, then it scrolls. At 64
+               the third was cut mid-sentence, which reads as a rendering fault rather than
+               as a list with more in it. */
+            className="mx-3 mb-3 max-h-[22rem] shrink-0"
+          />
+        )}
       </div>
 
-      <div className={cx("section-dag surface-1 overflow-hidden flex flex-col", isDagFullscreen && asGraph ? 'fixed inset-0 z-50 p-4 gap-3' : '')}>
+      <div
+        className={cx(
+          'section-dag surface-1 overflow-hidden flex flex-col',
+          inspectorInRow ? '' : 'section-dag--full',
+          isDagFullscreen && asGraph ? 'fixed inset-0 z-50 p-4 gap-3' : '',
+        )}
+      >
         {isDagFullscreen && asGraph ? (
           <div className="glass flex h-12 shrink-0 items-center justify-between border-b border-glass-border px-4 rounded-lg shadow-md">
             <div className="flex items-center gap-3 min-w-0">
@@ -243,6 +295,18 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
           onToggleFocusMode={() => {
             setIsFocusMode((prev) => !prev);
           }}
+          {...(asBoard
+            ? {
+                board: (
+                  <Board
+                    cards={control.data?.cards ?? []}
+                    lanes={control.data?.lanes ?? []}
+                    {...(selectedTask === undefined ? {} : { selectedTaskId: selectedTask })}
+                    onSelect={setSelectedTask}
+                  />
+                ),
+              }
+            : {})}
           {...(asGraph
             ? {
                 graph: (
@@ -267,7 +331,12 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
         />
       </div>
 
-      {asPane && (!asGraph || selectedTask !== undefined) ? (
+      {/* The inspector holds the row only when it has something in it.
+          Measured: at 1440 the board gets 750px beside a 400px column reading "Select a
+          task", which is 2.5 of six lanes and IN PROGRESS clipped mid-sentence. The graph
+          already worked this way and the board needs it more — a column is a unit of the
+          layout, and six of them do not fit in two thirds of the screen. */}
+      {inspectorInRow ? (
         <div className="section-agents surface-1 overflow-hidden flex flex-col">
           <TaskInspector
               team={team.data}
@@ -310,6 +379,27 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                 A 2px nudge to the gap would have silenced the heading and left the
                 artifact label clipped; the row was designed at 1440 and simply has too
                 many columns for the widths below it. */}
+            {/* The detail behind the queue's top rows. Below the board rather than above
+                it, because the summary is what an operator reads first and the counters,
+                the repairs and the evidence are what they read once they have decided to
+                look. Rendered here only when the queue took them off the header. */}
+            {!bannersBelow || run.data.runtime.escalation === undefined ? null : (
+              <EscalationBanner escalation={run.data.runtime.escalation} />
+            )}
+            {!bannersBelow || run.data.degradationDetail.length === 0 ? null : (
+              <ul className="flex shrink-0 flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-2.5 py-2">
+                {run.data.degradationDetail.map((degradation) => (
+                  <li key={`${degradation.kind}:${degradation.reason}`} className="flex gap-2">
+                    <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+                    <div className="flex min-w-0 flex-col">
+                      <span className="text-body-lg text-text">{degradation.reason}</span>
+                      <span className="text-label text-muted">{degradation.impact}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
             <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
               <ArtifactsCard artifacts={artifacts.data} onOpen={setOpenArtifact} />
               <ApprovalCard run={run.data} projectId={projectId} />

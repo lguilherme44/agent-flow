@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Shell } from './Shell';
+import { ControlPlanePage } from '../pages/ControlPlanePage';
 import { DashboardPage } from '../pages/DashboardPage';
 import { RunDetailPage } from '../pages/RunDetailPage';
 import { RunsPage } from '../pages/RunsPage';
@@ -42,7 +43,15 @@ export function App(): JSX.Element {
         <BrowserRouter>
           <Routes>
             <Route element={<Shell />}>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              {/*
+                * The landing page is the control plane, not one run (M8 §13).
+                *
+                * `/dashboard` still opens the run most likely to want you, and is still
+                * right for a single project. It answers "what is happening" for one
+                * repository and hides it for the other nine, which is why it is no longer
+                * where a person arrives.
+                */}
+              <Route path="/" element={<ControlPlanePage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:runId" element={<RunDetailPage />} />
@@ -51,7 +60,7 @@ export function App(): JSX.Element {
               <Route path="/prompts" element={<PromptsPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
         </BrowserRouter>

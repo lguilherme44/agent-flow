@@ -1,13 +1,4 @@
-import {
-  AlertTriangle,
-  Clock,
-  GitBranch,
-  GitMerge,
-  ListTree,
-  Split,
-  Timer,
-  User,
-} from 'lucide-react';
+import { AlertTriangle, Clock, GitBranch, GitMerge, LayoutGrid, ListTree, Split, Timer, User } from 'lucide-react';
 import type {
   Degradation,
   IsolationDetailView,
@@ -42,6 +33,10 @@ export function RunPanel(props: {
   projectId: string | undefined;
   asGraph: boolean;
   onToggleGraph: () => void;
+  asBoard?: boolean;
+  onToggleBoard?: () => void;
+  /** The escalation and degradation detail is rendered lower on the page instead. */
+  bannersBelow?: boolean;
   isFocusMode?: boolean;
   onToggleFocusMode?: () => void;
 }): JSX.Element {
@@ -82,6 +77,9 @@ export function RunPanel(props: {
         projectId={props.projectId}
         asGraph={props.asGraph}
         onToggleGraph={props.onToggleGraph}
+        {...(props.asBoard === undefined ? {} : { asBoard: props.asBoard })}
+        {...(props.onToggleBoard === undefined ? {} : { onToggleBoard: props.onToggleBoard })}
+        {...(props.bannersBelow === undefined ? {} : { bannersBelow: props.bannersBelow })}
       />
       {/* Between the header and the pipeline, because it belongs to neither: the
           header says what this run is, the pipeline says how far it got, and this
@@ -281,6 +279,9 @@ export function RunHeader(props: {
   projectId: string | undefined;
   asGraph: boolean;
   onToggleGraph: () => void;
+  asBoard?: boolean;
+  onToggleBoard?: () => void;
+  bannersBelow?: boolean;
 }): JSX.Element {
   const { run } = props;
   const workflow = run.runtime.progress.workflow;
@@ -338,7 +339,14 @@ export function RunHeader(props: {
           {/* Narrower below 1440. Every pixel this cluster gives up goes to the
               feature title, which is the one thing here that cannot be
               recovered from anywhere else on the screen. */}
-          <div className="flex w-40 flex-col gap-1 wide:w-52">
+          {/* Three sizes rather than two, because M8 added a third view toggle beside it
+              and the header stopped fitting at 1024: the status badge and the progress
+              label overlapped by about twenty pixels. Measured against the pre-M8 baseline
+              at the same width, where two buttons cleared it. The bar and the percentage
+              both stay readable at 112px; the alternative was hiding a view toggle at
+              narrow widths, and losing a feature to make a header fit is the trade §41
+              refuses. */}
+          <div className="flex w-28 flex-col gap-1 xl:w-40 wide:w-52">
             <div className="flex items-baseline justify-between">
               <span className="text-micro uppercase tracking-caps text-faint">
                 Overall progress
@@ -367,9 +375,13 @@ export function RunHeader(props: {
           </div>
 
           <div className="flex items-center gap-1.5">
-            {/* Labels collapse to icons below 1440, where the title needs the
-                width more than these need their words. The word stays in the
-                tooltip and in the accessible name.
+            {/* **Icons at every width, and that changed in M8.** The labels used to appear
+                from 1440, where two buttons and their words fitted. A third took about
+                a hundred and twenty pixels more, and the flex child that gives way is the
+                feature title — which collapsed to zero at 1440 and was reported by the
+                workspace E2E as *hidden* rather than as truncated. The words are still in
+                the tooltip and in the accessible name, and the feature is the one thing on
+                this line that cannot be recovered from anywhere else on the screen.
 
                 A toggle, not a destination: the graph and the table are two
                 renderings of the same task list, with the same filter and the
@@ -378,16 +390,32 @@ export function RunHeader(props: {
             {/* Offered only once an implementation DAG can exist: a plan with no
                 tasks has nothing to graph, and the toggle would open to an empty
                 canvas rather than refuse. */}
+            {/* Three renderings of one task list, and the board is the operational one:
+                the table answers "what are the tasks", the graph answers "what depends on
+                what", and the board answers "what is each one doing and why". They share
+                the filter and the selection, which is what makes them views rather than
+                pages. */}
             {run.taskCount > 0 && (
-              <Button
-                variant={props.asGraph ? 'primary' : 'surface'}
-                onClick={props.onToggleGraph}
-                title={props.asGraph ? 'Back to the task table' : 'Show the tasks as a graph'}
-                pressed={props.asGraph}
-              >
-                <GitBranch className="h-3.5 w-3.5" aria-hidden />
-                <span className="sr-only wide:not-sr-only">View as DAG</span>
-              </Button>
+              <>
+                <Button
+                  variant={props.asBoard === true ? 'primary' : 'surface'}
+                  {...(props.onToggleBoard === undefined ? {} : { onClick: props.onToggleBoard })}
+                  title={props.asBoard === true ? 'Back to the task table' : 'Show the tasks as a board'}
+                  pressed={props.asBoard === true}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+                  <span className="sr-only">View as board</span>
+                </Button>
+                <Button
+                  variant={props.asGraph ? 'primary' : 'surface'}
+                  onClick={props.onToggleGraph}
+                  title={props.asGraph ? 'Back to the task table' : 'Show the tasks as a graph'}
+                  pressed={props.asGraph}
+                >
+                  <GitBranch className="h-3.5 w-3.5" aria-hidden />
+                  <span className="sr-only">View as DAG</span>
+                </Button>
+              </>
             )}
 
             {/* Real now, and driven by where the run is: a Start button on an
@@ -402,15 +430,23 @@ export function RunHeader(props: {
           inspect logs". The run holds the class, the counters, every repair it
           attempted and the evidence — the CLI has rendered all of it since AR-08
           (`cli/render/escalation.ts`); this is the same contract, once the
-          dashboard is the surface open when a run stops. */}
-      {run.runtime.escalation === undefined ? null : (
+          dashboard is the surface open when a run stops.
+
+          **Suppressed when the attention queue is on screen, and only then.** Both say
+          the same thing about the same task, with the same one action — the queue is the
+          summary and this is its detail — and stacking them cost 185px above the board on
+          a run that had 75px of board left at 1440×900. Measured on AF-2026-002 through
+          the real server. The detail is still on the page, below the tasks, and the queue
+          row links to the task that holds the evidence. Nothing is lost; the order
+          changed. */}
+      {run.runtime.escalation === undefined || props.bannersBelow === true ? null : (
         <EscalationBanner escalation={run.runtime.escalation} />
       )}
 
       {/* Degradations are not a footnote. A run that reviewed itself, ran below
           its configured effort, or had its gate forced reached its verdict on
           weaker terms, and this is where somebody reads the verdict. */}
-      {run.degradationDetail.length === 0 ? null : (
+      {run.degradationDetail.length === 0 || props.bannersBelow === true ? null : (
         <ul className="flex flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-2.5 py-2">
           {run.degradationDetail.map((degradation) => (
             <li key={`${degradation.kind}:${degradation.reason}`} className="flex gap-2">
@@ -433,7 +469,7 @@ export function RunHeader(props: {
  * run holds the class, the counters, every repair it attempted and the redacted
  * evidence, and none of it reached the dashboard until now.
  */
-function EscalationBanner(props: { escalation: RuntimeEscalation }): JSX.Element {
+export function EscalationBanner(props: { escalation: RuntimeEscalation }): JSX.Element {
   const { escalation } = props;
   const counts = Object.entries(escalation.counts);
   // Same predicate as `isCompleteEscalation` (`core/recovery-policy.ts`), inlined

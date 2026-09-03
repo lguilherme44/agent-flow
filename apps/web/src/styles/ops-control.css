@@ -539,6 +539,18 @@
   min-height: 400px;
 }
 
+/*
+ * The view takes the whole row when the inspector is not in it.
+ *
+ * Measured, not preferred: at 1440 the board got 750px beside an empty 1fr column, which
+ * is 2.5 of six lanes with IN PROGRESS clipped mid-sentence. The grid reserved that column
+ * whether or not anything rendered into it, so removing the inspector bought nothing —
+ * `grid-column: 1 / 2` is a promise about the layout, and the layout has two shapes.
+ */
+.section-dag--full {
+  grid-column: 1 / -1;
+}
+
 .view-toggles {
   display: flex;
   background: var(--surface-2);
