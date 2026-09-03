@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ForgeCheck, ForgeFailure } from './forge.schema.js';
 import type { QualityGateResult, ReviewFinding } from './review.schema.js';
 import type { ReasoningLevel } from './common.schema.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
@@ -1141,4 +1142,48 @@ export interface ReviewView {
    */
   readonly unsatisfiedGates: readonly QualityGateResult[];
   readonly totals: ReviewTotals;
+}
+
+/* ─── Delivery (M7) ────────────────────────────────────────────────────────── */
+
+/**
+ * Declared here rather than in `core/forge/delivery.ts`, for the reason `TeamView` and
+ * `ReviewView` are here: contracts may not import from the core, and the browser needs the
+ * shape. M7 left it in the core and the dashboard reached four directories up to type its
+ * own query — which worked, and was the layering rule holding only because nothing had
+ * asked it a harder question yet. M8's control snapshot is that question.
+ *
+ * The core produces this; this describes it. `core/forge/delivery.ts` re-exports both
+ * names so every existing import keeps working.
+ */
+export const DELIVERY_STATES = [
+  /** No provider. The ordinary case, and not a problem. */
+  'disabled',
+  /** Configured, and nothing has been published yet. */
+  'not_published',
+  'published',
+  'pr_open',
+  'checks_pending',
+  'checks_green',
+  'checks_red',
+  /** The remote branch moved under us. Publishing again would be guessing. */
+  'remote_diverged',
+  'delivery_failed',
+] as const;
+export type DeliveryState = (typeof DELIVERY_STATES)[number];
+
+export interface DeliveryView {
+  readonly state: DeliveryState;
+  readonly provider: string;
+  readonly repository?: string;
+  readonly branch?: string;
+  readonly publishedCommit?: string;
+  readonly issue?: { readonly number: number; readonly url: string };
+  readonly pullRequest?: { readonly number: number; readonly url: string; readonly state: string };
+  readonly checks: readonly ForgeCheck[];
+  readonly checkSummary: { readonly total: number; readonly green: number; readonly red: number; readonly pending: number };
+  readonly syncedAt?: string;
+  readonly failure?: ForgeFailure;
+  /** A sentence for a person, always. A state name alone sends them to the source. */
+  readonly detail: string;
 }

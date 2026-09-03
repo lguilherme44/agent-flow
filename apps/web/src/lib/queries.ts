@@ -20,8 +20,8 @@ import type {
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
+  DeliveryView,
 } from '@contracts/index.js';
-import type { DeliveryView } from '../../../../src/core/forge/delivery.js';
 import type { TelemetryResponse } from './api';
 
 /**

@@ -1,9 +1,4 @@
-import type {
-  DeliveryRecord,
-  ForgeCheck,
-  ForgeConfig,
-  ForgeFailure,
-} from '../../contracts/index.js';
+import type { DeliveryRecord, ForgeCheck, ForgeConfig } from '../../contracts/index.js';
 
 /**
  * What delivery has reached, folded from facts (M7 §40).
@@ -16,37 +11,8 @@ import type {
  * Pure: facts in, a state out. No clock, no network, no filesystem.
  */
 
-export const DELIVERY_STATES = [
-  /** No provider. The ordinary case, and not a problem. */
-  'disabled',
-  /** Configured, and nothing has been published yet. */
-  'not_published',
-  'published',
-  'pr_open',
-  'checks_pending',
-  'checks_green',
-  'checks_red',
-  /** The remote branch moved under us. Publishing again would be guessing. */
-  'remote_diverged',
-  'delivery_failed',
-] as const;
-export type DeliveryState = (typeof DELIVERY_STATES)[number];
-
-export interface DeliveryView {
-  readonly state: DeliveryState;
-  readonly provider: string;
-  readonly repository?: string;
-  readonly branch?: string;
-  readonly publishedCommit?: string;
-  readonly issue?: { readonly number: number; readonly url: string };
-  readonly pullRequest?: { readonly number: number; readonly url: string; readonly state: string };
-  readonly checks: readonly ForgeCheck[];
-  readonly checkSummary: { readonly total: number; readonly green: number; readonly red: number; readonly pending: number };
-  readonly syncedAt?: string;
-  readonly failure?: ForgeFailure;
-  /** A sentence for a person, always. A state name alone sends them to the source. */
-  readonly detail: string;
-}
+export { DELIVERY_STATES, type DeliveryState, type DeliveryView } from '../../contracts/index.js';
+import type { DeliveryView } from '../../contracts/index.js';
 
 const EMPTY = { total: 0, green: 0, red: 0, pending: 0 } as const;
 

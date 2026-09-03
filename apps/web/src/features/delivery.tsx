@@ -1,4 +1,4 @@
-import type { DeliveryView } from '../../../../src/core/forge/delivery.js';
+import type { DeliveryView } from '@contracts/index.js';
 import { useDelivery } from '../lib/queries';
 
 /**

@@ -23,9 +23,9 @@ import type {
   TaskDetailView,
   TaskSummaryView,
   TelemetryEntry,
+  DeliveryView,
 } from '@contracts/index.js';
 import type { TelemetrySummary } from '../../../../src/core/telemetry.js';
-import type { DeliveryView } from '../../../../src/core/forge/delivery.js';
 
 /**
  * The only way this app talks to anything.
