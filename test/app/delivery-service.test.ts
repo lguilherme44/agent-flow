@@ -188,7 +188,7 @@ describe('M7-ACC-12 — a created object carries this run’s fingerprint', () =
   it('puts a different marker in the pull request body', async () => {
     const w = await world();
 
-    await w.service.pullRequest(w.runId, SHA, { title: 't', body: 'b', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
 
     expect(w.remote.pulls[0]?.body).toContain('kind=pull_request');
   });
@@ -250,9 +250,9 @@ describe('M7-ACC-16 and M7-ACC-20 — a pull request is reused, never duplicated
   it('reuses the open pull request for this head and base', async () => {
     const w = await world();
 
-    await w.service.pullRequest(w.runId, SHA, { title: 't', body: 'b', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
     w.records.forget();
-    const second = await w.service.pullRequest(w.runId, SHA, { title: 't', body: 'b2', base: 'master' });
+    const second = await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b2', base: 'master' });
 
     expect(second).toMatchObject({ ok: true, adopted: true });
     expect(w.remote.pulls).toHaveLength(1);
@@ -262,8 +262,8 @@ describe('M7-ACC-16 and M7-ACC-20 — a pull request is reused, never duplicated
   it('updates it rather than opening another when the body changed', async () => {
     const w = await world();
 
-    await w.service.pullRequest(w.runId, SHA, { title: 't', body: 'b', base: 'master' });
-    await w.service.pullRequest(w.runId, SHA, { title: 't2', body: 'b2', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't2', body: 'b2', base: 'master' });
 
     expect(w.remote.calls.filter((call) => call === 'updatePR')).toHaveLength(1);
   });
@@ -273,12 +273,12 @@ describe('M7-ACC-15 and M7-ACC-17 — a pull request points at the approved comm
   it('refuses when the open pull request points somewhere else', async () => {
     const w = await world();
 
-    await w.service.pullRequest(w.runId, SHA, { title: 't', body: 'b', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
     // The branch moved outside this run.
     const pr = w.remote.pulls[0];
     if (pr !== undefined) pr.headSha = OTHER;
 
-    const result = await w.service.pullRequest(w.runId, SHA, { title: 't', body: 'b', base: 'master' });
+    const result = await w.service.pullRequest(w.runId, SHA, { newTitle: 't', body: 'b', base: 'master' });
 
     expect(!result.ok && result.failure.code).toBe('forge_remote_ref_conflict');
     expect(w.remote.calls.filter((call) => call === 'updatePR')).toHaveLength(0);
@@ -313,7 +313,7 @@ describe('M7-ACC-02 — a write that is configured off sends nothing, and says s
     ['issue', (s: DeliveryService, r: string) => s.issue(r, { title: 't', body: 'b' })],
     [
       'pull request',
-      (s: DeliveryService, r: string) => s.pullRequest(r, SHA, { title: 't', body: 'b', base: 'master' }),
+      (s: DeliveryService, r: string) => s.pullRequest(r, SHA, { newTitle: 't', body: 'b', base: 'master' }),
     ],
     ['sync', (s: DeliveryService, r: string) => s.sync(r)],
   ])('refuses %s when the provider is none', async (_name, call) => {
@@ -398,5 +398,61 @@ describe('checks are observed, and observation is all they are', () => {
     const w = await world();
 
     expect(await w.service.sync(w.runId)).toMatchObject({ ok: false });
+  });
+});
+
+/**
+ * Found by the live M7 dogfood, which is the only place it could have been.
+ *
+ * The first `forge pr` carried `--title`. A later call without one recomputed the default
+ * and the update path sent it, silently renaming a pull request a person had titled
+ * deliberately. An update sends what was asked for, not what could be derived.
+ */
+describe('an update sends what was asked for', () => {
+  it('does not retitle a pull request when no title was given', async () => {
+    const w = await world();
+    let sentTitle: string | undefined = 'not called';
+    const original = w.remote.provider.updatePullRequest.bind(w.remote.provider);
+    (w.remote.provider as { updatePullRequest: typeof original }).updatePullRequest = async (
+      input,
+    ) => {
+      sentTitle = input.title;
+      return original(input);
+    };
+
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 'auto', body: 'b', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 'auto', body: 'b2', base: 'master' });
+
+    expect(sentTitle).toBeUndefined();
+  });
+
+  it('still sends a title the operator chose', async () => {
+    const w = await world();
+    let sentTitle: string | undefined;
+    const original = w.remote.provider.updatePullRequest.bind(w.remote.provider);
+    (w.remote.provider as { updatePullRequest: typeof original }).updatePullRequest = async (
+      input,
+    ) => {
+      sentTitle = input.title;
+      return original(input);
+    };
+
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 'auto', body: 'b', base: 'master' });
+    await w.service.pullRequest(w.runId, SHA, {
+      title: 'chosen',
+      newTitle: 'auto',
+      body: 'b2',
+      base: 'master',
+    });
+
+    expect(sentTitle).toBe('chosen');
+  });
+
+  it('uses the derived title when the pull request is new and nobody chose one', async () => {
+    const w = await world();
+
+    await w.service.pullRequest(w.runId, SHA, { newTitle: 'derived', body: 'b', base: 'master' });
+
+    expect(w.remote.pulls).toHaveLength(1);
   });
 });

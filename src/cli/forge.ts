@@ -129,7 +129,12 @@ export async function runForgeCommand(
       }
 
       const result = await setup.service.pullRequest(runId, approved, {
-        title: options.title ?? `${runId}: ${state.feature.slice(0, 100)}`,
+        // **A title only when the operator gave one, and a fallback only for a new PR.**
+        // The live M7 dogfood found this: the first call carried `--title`, a later call
+        // without one recomputed the default, and the update path overwrote a title a
+        // person had chosen. An update sends what was asked for, not what could be derived.
+        ...(options.title === undefined ? {} : { title: options.title }),
+        newTitle: `${runId}: ${state.feature.slice(0, 100)}`,
         body: pullRequestBody(runId, state.feature, approved),
         base,
       });

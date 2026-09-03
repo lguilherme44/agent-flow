@@ -171,7 +171,14 @@ export class DeliveryService {
   async pullRequest(
     runId: string,
     approvedCommit: string,
-    draft: { title: string; body: string; base: string },
+    draft: {
+      /** Set only when a person chose one. An update sends what was asked for. */
+      title?: string;
+      /** Used when a pull request is created. Never sent on an update. */
+      newTitle: string;
+      body: string;
+      base: string;
+    },
   ): Promise<DeliveryStep<number>> {
     const gate = this.gate('pullRequests.create', this.options.config.pullRequests.create);
     if (gate !== undefined) return gate;
@@ -206,7 +213,9 @@ export class DeliveryService {
       if (this.options.config.pullRequests.update) {
         const updated = await this.options.provider.updatePullRequest({
           number: found.value.number,
-          title: draft.title,
+          // Absent unless the caller chose one: a recomputed default here silently
+          // renames a pull request somebody titled deliberately.
+          ...(draft.title === undefined ? {} : { title: draft.title }),
           body: `${draft.body}\n\n${marker}\n`,
         });
         if (!updated.ok) return this.failed(runId, 'pull_request', updated.failure);
@@ -224,7 +233,7 @@ export class DeliveryService {
     }
 
     const created = await this.options.provider.createPullRequest({
-      title: draft.title,
+      title: draft.title ?? draft.newTitle,
       body: `${draft.body}\n\n${marker}\n`,
       head,
       base: draft.base,
