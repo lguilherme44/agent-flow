@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   REPO,
@@ -179,11 +179,22 @@ async function assertServed(url, fixture, root) {
   check(health.status === 'ok', `health reports ${health.status} on port ${String(health.port)}`);
   check(health.projects === 1, 'the registry holds the one project it was pointed at');
 
-  // The prompts came out of the package. Eleven of them, and the planning run above
-  // could not have happened without them — this names the count so a partially
-  // packaged `prompts/` is caught rather than inferred.
+  // The prompts came out of the package, and *all* of them did — a partially packaged
+  // `prompts/` is caught rather than inferred.
+  //
+  // **Counted from the checkout rather than hardcoded, because the hardcoded number
+  // drifted.** It said eleven; M6 added `prompts/code-review.md` and CI went red on this
+  // job and stayed red, invisible to every milestone gate because `test:packaging` is not
+  // in the canonical list those run. A number that has to be edited when a file is added
+  // is a number that will be wrong.
+  const expected = (await readdir(new URL('../prompts', import.meta.url))).filter((name) =>
+    name.endsWith('.md'),
+  ).length;
   const prompts = await json(`${url}/api/v1/prompts`);
-  check(prompts.length === 11, `serves ${String(prompts.length)} packaged prompts`);
+  check(
+    prompts.length === expected,
+    `serves ${String(prompts.length)} packaged prompts (the checkout has ${String(expected)})`,
+  );
 
   // The dashboard, with the checkout's own bundle renamed away. A page that still
   // loads is being served from the install prefix.

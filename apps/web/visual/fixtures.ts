@@ -1271,6 +1271,22 @@ export const TEAM = {
  * a card to every screenshot in this suite and move every baseline at once. The review's
  * own compositions are photographed in `review.spec.ts`, which overrides this.
  */
+/**
+ * No forge, which is what most runs have (M7).
+ *
+ * **In `ROUTES` rather than as an override, and the reason is a defect this caught.** The
+ * panel renders nothing in this state, so it is tempting to leave the endpoint unstubbed —
+ * and an unstubbed endpoint makes the query fail, which logs to the console, which fails
+ * `nothing logs an error while rendering`. Absence on the page is not absence on the wire.
+ */
+export const DELIVERY_NONE = {
+  state: 'disabled',
+  provider: 'none',
+  checks: [],
+  checkSummary: { total: 0, green: 0, red: 0, pending: 0 },
+  detail: 'no forge is configured, so this run delivers nowhere',
+};
+
 export const REVIEW_NONE = {
   reviewed: false,
   threads: [],
@@ -1458,6 +1474,7 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}/collaboration`]: COLLABORATION,
   [`/api/v1/runs/${RUN_ID}/team`]: TEAM_NONE,
   [`/api/v1/runs/${RUN_ID}/review`]: REVIEW_NONE,
+  [`/api/v1/runs/${RUN_ID}/delivery`]: DELIVERY_NONE,
   '/api/v1/runners': RUNNERS,
   '/api/v1/agents': AGENTS,
   '/api/v1/prompts': PROMPTS,
