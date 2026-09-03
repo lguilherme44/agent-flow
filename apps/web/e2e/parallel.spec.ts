@@ -230,10 +230,21 @@ test.describe('a parallel run, through the server', () => {
       page.getByText('TASK-002 attempt 1 conflicted with the integration branch'),
     ).toBeVisible();
     // Repository-relative, which is exactly why it may be shown (§21.3).
-    await expect(page.getByText('src/shared.txt')).toBeVisible();
+    //
+    // **Exact, because M8 made it true twice.** The isolation strip has said this since
+    // M2-10; the attention queue now says it as well, at P0, because a conflict is the
+    // class of thing where acting on the wrong guess loses somebody's work. Two elements
+    // is the feature rather than a duplicate, so the assertion names which one it is —
+    // and the queue's own copy is asserted below rather than left to a loose match.
+    await expect(page.getByText('src/shared.txt', { exact: true })).toBeVisible();
     await expect(
-      page.getByText(/TASK-001 integrated first and moved the head/),
+      page.getByText(/TASK-001 integrated first and moved the head/).first(),
     ).toBeVisible();
+
+    // M8: the same fact, at the top of the queue, with the one action beside it.
+    const queue = page.getByRole('list', { name: /needs? attention/i });
+    await expect(queue.getByText('TASK-002 could not be merged')).toBeVisible();
+    await expect(queue.getByText('P0')).toBeVisible();
 
     // One merge on the branch, and the user's tree still holds nothing.
     const state = (await world.stateOf('booking-api')) as { gitRunKey?: string };

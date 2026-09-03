@@ -13,8 +13,13 @@
  * The clock is pinned by the test, so "Today at 19:34" is stable.
  */
 
+import { projectAttention } from '../../../src/core/attention.js';
+import { laneCounts, projectBoard } from '../../../src/core/board.js';
 import type {
   CollaborationView,
+  ControlSnapshotView,
+  DeliveryView,
+  WorkspaceView,
   AnalyticsView,
   ApprovalGateView,
   ConfigView,
@@ -1279,7 +1284,7 @@ export const TEAM = {
  * and an unstubbed endpoint makes the query fail, which logs to the console, which fails
  * `nothing logs an error while rendering`. Absence on the page is not absence on the wire.
  */
-export const DELIVERY_NONE = {
+export const DELIVERY_NONE: DeliveryView = {
   state: 'disabled',
   provider: 'none',
   checks: [],
@@ -1459,6 +1464,202 @@ export const REVIEW = {
   },
 };
 
+/**
+ * The control snapshot, **derived by the real projections** rather than typed out.
+ *
+ * A fixture written by hand agrees with whatever the author believed the projection does,
+ * which is how a contract fixture comes to describe a bug rather than a contract. These
+ * run `projectAttention`, `projectBoard` and `laneCounts` over the same `RUN` and `TASKS`
+ * every other fixture in this file uses, so a lane that changes meaning changes here too —
+ * and a screenshot that stops matching is a screenshot that should stop matching.
+ */
+const BOARD_CONTEXT = {
+  runtime: RUN.runtime,
+  waitingOn: new Map<string, readonly string[]>(
+    TASKS.map((entry) => [
+      entry.id,
+      entry.dependencies.filter(
+        (dependency) => TASKS.find((other) => other.id === dependency)?.state !== 'completed',
+      ),
+    ]).filter(([, unmet]) => (unmet as string[]).length > 0) as [string, readonly string[]][],
+  ),
+  deferrals: [],
+  threads: [],
+  assignments: new Map<string, { agentId: string; agentName: string }>(),
+};
+
+const ATTENTION = projectAttention({
+  runId: RUN_ID,
+  runtime: RUN.runtime,
+  tasks: TASKS,
+  run: {
+    updatedAt: RUN.updatedAt,
+    degradations: RUN.degradationDetail,
+    integrationConflicts: RUN.integrationConflicts,
+  },
+  events: [],
+});
+
+const CARDS = projectBoard(TASKS, BOARD_CONTEXT, ATTENTION);
+
+export const CONTROL: ControlSnapshotView = {
+  run: RUN,
+  cards: CARDS,
+  lanes: laneCounts(CARDS),
+  attention: ATTENTION,
+  team: { configured: false, members: [], totals: TEAM_NONE.totals },
+  review: { reviewed: false, totals: REVIEW_NONE.totals, unsatisfiedGates: [] },
+  delivery: DELIVERY_NONE,
+  observedAt: RUN.updatedAt,
+};
+
+/**
+ * The other project's run, held at the gate.
+ *
+ * The home opens its queue on the most urgent project, so a fixture for the *run* it lands
+ * on is what makes the workspace shot a picture of the page. Derived by the same
+ * projection, so the item it raises is the item production would raise.
+ */
+export const GATED_RUN_ID = 'AF-2026-088';
+
+const GATED_RUN: RunDetailView = {
+  ...RUN,
+  runId: GATED_RUN_ID,
+  projectId: 'bflow',
+  feature: 'Retry com backoff exponencial na fila de webhooks',
+  status: 'waiting_for_approval',
+  approved: false,
+  progress: 35,
+  runtime: {
+    ...RUN.runtime,
+    status: 'awaiting_human_approval',
+    resumable: false,
+    gate: {
+      gate: 'approval',
+      action: 'Review the plan and run `agent-flow approve`',
+      tasks: [],
+    },
+  },
+};
+
+const GATED_ATTENTION = projectAttention({
+  runId: GATED_RUN_ID,
+  runtime: GATED_RUN.runtime,
+  tasks: [],
+  run: { updatedAt: GATED_RUN.updatedAt, degradations: [], integrationConflicts: [] },
+  events: [],
+});
+
+export const GATED_CONTROL: ControlSnapshotView = {
+  run: GATED_RUN,
+  cards: [],
+  lanes: laneCounts([]),
+  attention: GATED_ATTENTION,
+  team: { configured: false, members: [], totals: TEAM_NONE.totals },
+  review: { reviewed: false, totals: REVIEW_NONE.totals, unsatisfiedGates: [] },
+  delivery: DELIVERY_NONE,
+  observedAt: GATED_RUN.updatedAt,
+};
+
+/**
+ * A hundred tasks, for the question a nine-task board cannot answer (M8 §29).
+ *
+ * Derived by the same projection rather than hand-built, so the lanes are the lanes
+ * production would compute. Every third task is done, every fifth is running, and one is
+ * failed — a spread wide enough that no lane is empty and the board has to place all six.
+ */
+const LARGE_TASKS: TaskSummaryView[] = Array.from({ length: 100 }, (_, index) => {
+  const id = `TASK-${String(index + 1).padStart(3, '0')}`;
+  const state =
+    index % 3 === 0 ? 'completed' : index % 5 === 0 ? 'running' : index === 7 ? 'failed' : 'queued';
+  return {
+    id,
+    title: `Task ${String(index + 1)} — a title long enough to wrap on a narrow card`,
+    complexity: 'normal' as const,
+    risk: index % 11 === 0 ? ('high' as const) : ('low' as const),
+    state,
+    attempts: index === 7 ? 3 : 1,
+    requirements: [],
+    dependencies: index === 0 ? [] : [`TASK-${String(index).padStart(3, '0')}`],
+  };
+});
+
+const LARGE_ATTENTION = projectAttention({
+  runId: RUN_ID,
+  runtime: RUN.runtime,
+  tasks: LARGE_TASKS,
+  run: { updatedAt: RUN.updatedAt, degradations: [], integrationConflicts: [] },
+  events: [],
+});
+
+const LARGE_CARDS = projectBoard(
+  LARGE_TASKS,
+  {
+    runtime: RUN.runtime,
+    waitingOn: new Map<string, readonly string[]>(
+      LARGE_TASKS.map((entry) => [
+        entry.id,
+        entry.dependencies.filter(
+          (dependency) => LARGE_TASKS.find((other) => other.id === dependency)?.state !== 'completed',
+        ),
+      ]).filter(([, unmet]) => (unmet as string[]).length > 0) as [string, readonly string[]][],
+    ),
+    deferrals: [],
+    threads: [],
+    assignments: new Map<string, { agentId: string; agentName: string }>(),
+  },
+  LARGE_ATTENTION,
+);
+
+export const LARGE_CONTROL: ControlSnapshotView = {
+  run: { ...RUN, taskCount: LARGE_TASKS.length },
+  cards: LARGE_CARDS,
+  lanes: laneCounts(LARGE_CARDS),
+  attention: LARGE_ATTENTION,
+  team: { configured: false, members: [], totals: TEAM_NONE.totals },
+  review: { reviewed: false, totals: REVIEW_NONE.totals, unsatisfiedGates: [] },
+  delivery: DELIVERY_NONE,
+  observedAt: RUN.updatedAt,
+};
+
+export const LARGE_TASK_LIST = LARGE_TASKS;
+
+export const WORKSPACE: WorkspaceView = {
+  projects: PROJECTS.map((project) => ({
+    projectId: project.id,
+    name: project.name,
+    ...(project.currentRunId === null ? {} : { runId: project.currentRunId }),
+    ...(project.currentRunId === RUN_ID
+      ? {
+          feature: RUN.feature,
+          status: RUN.status,
+          runtime: RUN.runtime.status,
+          progress: RUN.progress,
+          taskCount: RUN.taskCount,
+          blockedCount: laneCounts(CARDS).find((lane) => lane.lane === 'blocked')?.count ?? 0,
+          attentionCount: ATTENTION.length,
+          ...(ATTENTION[0] === undefined ? {} : { topPriority: ATTENTION[0].priority }),
+        }
+      : project.currentRunId === null
+        ? { progress: 0, taskCount: 0, blockedCount: 0, attentionCount: 0 }
+        : {
+            // A project with a current run always has a runtime beside it — the server
+            // computes both from the same state. A fixture that produced one without the
+            // other described a response nothing can send, and the page crashed on it.
+            feature: project.lastRun?.feature ?? 'a run in flight',
+            status: project.status ?? 'running',
+            runtime: project.status === 'waiting_for_approval' ? 'awaiting_human_approval' : 'implementing',
+            progress: 35,
+            taskCount: 5,
+            blockedCount: 0,
+            attentionCount: project.status === 'waiting_for_approval' ? 1 : 0,
+            ...(project.status === 'waiting_for_approval' ? { topPriority: 'P1' as const } : {}),
+          }),
+    ...(project.lastRun === undefined ? {} : { lastActivityAt: project.lastRun.updatedAt }),
+  })) as WorkspaceView['projects'],
+  observedAt: RUN.updatedAt,
+};
+
 export const ROUTES: Record<string, unknown> = {
   '/api/v1/health': { status: 'ok', version: '0.1.0', projects: 4, host: '127.0.0.1', port: 4782 },
   '/api/v1/projects': PROJECTS,
@@ -1475,6 +1676,8 @@ export const ROUTES: Record<string, unknown> = {
   [`/api/v1/runs/${RUN_ID}/team`]: TEAM_NONE,
   [`/api/v1/runs/${RUN_ID}/review`]: REVIEW_NONE,
   [`/api/v1/runs/${RUN_ID}/delivery`]: DELIVERY_NONE,
+  [`/api/v1/runs/${RUN_ID}/control`]: CONTROL,
+  '/api/v1/workspace': WORKSPACE,
   '/api/v1/runners': RUNNERS,
   '/api/v1/agents': AGENTS,
   '/api/v1/prompts': PROMPTS,

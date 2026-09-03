@@ -28,6 +28,7 @@ fi
 
 echo "→ generating Linux baselines in ${PLAYWRIGHT_IMAGE}"
 
+set +e
 docker run --rm \
   -v "${REPO}:/host:ro" \
   -v "${REPO}/apps/web/visual/__screenshots__:/out" \
@@ -46,7 +47,21 @@ docker run --rm \
     # The build runs inside the webServer command, so this is the current source by
     # construction. `--update-snapshots` writes only the `-linux` directories: the
     # platform is part of the snapshot path.
+    #
+    # **The exit code is captured rather than allowed to abort**, and the reason is
+    # measured: one failing spec out of 202 used to take the whole run down under
+    # `set -e`, so the copy below never ran and two hundred correctly generated
+    # baselines were thrown away with the container. The maintainer then saw
+    # "nothing was generated" and had no way to tell that from "the container could
+    # not start".
+    #
+    # A failure is still a failure — it is reported and re-raised after the copy, so
+    # the run exits non-zero and nobody mistakes this for green. What changes is that
+    # the artifacts survive the signal.
+    set +e
     npx playwright test --update-snapshots
+    suite=$?
+    set -e
 
     # Back out to the host. Only Linux baselines: touching the darwin ones from
     # here would overwrite them with images this container never rendered.
@@ -56,7 +71,23 @@ docker run --rm \
       rm -rf "/out/${name}"
       cp -r "${dir}" "/out/${name}"
     done
+
+    if [ "${suite}" -ne 0 ]; then
+      echo "→ the suite exited ${suite}; baselines were still copied out" >&2
+      exit "${suite}"
+    fi
   '
 
-echo "→ done. Baselines written to apps/web/visual/__screenshots__/*-linux"
+status=$?
+
+# The same rule one level out: `set -e` would skip the summary below on a failing
+# suite, leaving a maintainer with a wall of Playwright output and no statement of
+# what landed on disk.
+if [ "${status}" -ne 0 ]; then
+  echo "→ the suite failed (${status}). Baselines that were generated are still below." >&2
+else
+  echo "→ done. Baselines written to apps/web/visual/__screenshots__/*-linux"
+fi
+
 git -C "${REPO}" status --short apps/web/visual/__screenshots__
+exit "${status}"
