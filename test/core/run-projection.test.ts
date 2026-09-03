@@ -644,3 +644,49 @@ describe('C-22 — an exhausted run says what happened and what to do', () => {
     expect(projectRun({ state: state(), nodes: [] }).escalation).toBeUndefined();
   });
 });
+
+describe('a running task outranks a stage that has not caught up (M8 dogfood)', () => {
+  /**
+   * Measured on AF-2026-005, live. `task_started` and
+   * `stage_started {"stage":"implementation"}` were both in the log at 16:41:15;
+   * `state.stage` reached `implementation` at 16:42:13. For that minute the dashboard
+   * reported `planning` while an agent was working, on the one screen somebody watches
+   * while a run starts.
+   */
+  it('reports implementing while the stage still says plan-review', () => {
+    const projection = projectRun({
+      state: state({
+        stage: 'plan-review',
+        status: 'approved',
+        tasks: [task('TASK-001', 'running'), task('TASK-002', 'queued')],
+      }),
+    });
+
+    expect(projection.status).toBe('implementing');
+  });
+
+  it('leaves a stage after implementation alone', () => {
+    // Deliberately narrow. A task left `running` by a crash must not make a run in
+    // verification claim to be implementing — there the stale task is the story, and
+    // `isResumable` already tells that one.
+    for (const stage of ['verification', 'final-review'] as const) {
+      const projection = projectRun({
+        state: state({ stage, status: 'approved', tasks: [task('TASK-001', 'running')] }),
+      });
+
+      expect(projection.status, stage).not.toBe('implementing');
+    }
+  });
+
+  it('still reports planning when nothing is running', () => {
+    const projection = projectRun({
+      state: state({
+        stage: 'plan-review',
+        status: 'approved',
+        tasks: [task('TASK-001', 'queued')],
+      }),
+    });
+
+    expect(projection.status).toBe('planning');
+  });
+});

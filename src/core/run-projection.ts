@@ -144,6 +144,31 @@ export function projectRun(input: ProjectionInput): RunProjection {
   if (state.stage === 'final-review') return { ...base, status: 'reviewing' };
   if (state.stage === 'implementation') return { ...base, status: 'implementing' };
 
+  /**
+   * A task is running, and the stage has not caught up yet (M8 dogfood).
+   *
+   * Measured on AF-2026-005: `task_started` and `stage_started {"stage":"implementation"}`
+   * were both in the log at 16:41:15, `state.stage` reached `implementation` at 16:42:13,
+   * and for that minute the dashboard reported **`planning` while an agent was working** —
+   * on the one screen an operator watches while a run starts.
+   *
+   * The same inversion C-20 was written for, one field further in: `state.stage` is a
+   * record of the last stage the coordinator *wrote*, not of what is happening. A task in
+   * `running` is a fact, and a fact outranks a record that lags it.
+   *
+   * **Deliberately narrow.** Only the stages that precede implementation are overridden,
+   * so a task left `running` by a crash cannot make a run in `verification` or
+   * `final-review` claim to be implementing — there the stale task is the story and
+   * `isResumable` already tells that one.
+   */
+  const BEFORE_IMPLEMENTATION: readonly RunStage[] = ['discovery', 'sdd', 'planning', 'plan-review'];
+  if (
+    BEFORE_IMPLEMENTATION.includes(state.stage) &&
+    tasks.some((task) => task.state === 'running')
+  ) {
+    return { ...base, status: 'implementing' };
+  }
+
   return { ...base, status: 'planning' };
 }
 
