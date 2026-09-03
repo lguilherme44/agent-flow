@@ -32,8 +32,6 @@ import { ATTENTION_PRIORITIES, BOARD_LANES } from '../contracts/index.js';
 export interface BoardContext {
   /** The run's runtime condition. `interrupted` reads differently depending on it. */
   readonly runtime: RunProjection;
-  /** Task ids the DAG reports executable now. */
-  readonly ready: ReadonlySet<string>;
   /**
    * Unmet dependencies per task, in plan order.
    *
@@ -91,7 +89,13 @@ export function boardLane(task: TaskSummaryView, context: BoardContext): BoardLa
       // `TaskState` has no name for, and the one a person watching a parallel run most
       // needs to see. It is progress, not readiness.
       if (task.awaitingIntegration === true) return 'in_progress';
-      return context.ready.has(task.id) ? 'ready' : 'backlog';
+      // **Readiness is not re-derived here.** `ready` is a condition over the graph that
+      // §22 refuses to persist, and `effectiveTaskStates` — the one function every reader
+      // goes through — has already answered it by the time a `TaskSummaryView` exists. A
+      // board that asked the DAG again would be a second answer to "what may start", and
+      // the first time the two disagreed the operator would be reading a column describing
+      // a decision nobody made.
+      return state === 'ready' ? 'ready' : 'backlog';
 
     default: {
       const exhaustive: never = state;

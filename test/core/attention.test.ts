@@ -171,7 +171,7 @@ describe('M8-ACC-09 … 13 — the queue contains the blockers it claims to', ()
       input({
         review: review({
           unsatisfiedGates: [
-            { gateId: 'test', category: 'correctness', required: true, status: 'failed', exitCode: 1 },
+            { gateId: 'test', category: 'unit', required: true, status: 'failed', exitCode: 1 },
           ],
         }),
       }),
@@ -182,7 +182,7 @@ describe('M8-ACC-09 … 13 — the queue contains the blockers it claims to', ()
           unsatisfiedGates: [
             {
               gateId: 'test',
-              category: 'correctness',
+              category: 'unit',
               required: true,
               status: 'not_run',
               detail: 'no runner recorded a result',
@@ -233,7 +233,7 @@ describe('M8-ACC-14 — every item links to the object that caused it', () => {
         tasks: [task('TASK-001', 'failed'), task('TASK-002', 'blocked')],
         review: review({
           unsatisfiedGates: [
-            { gateId: 'lint', category: 'correctness', required: true, status: 'failed' },
+            { gateId: 'lint', category: 'unit', required: true, status: 'failed' },
           ],
         }),
       }),

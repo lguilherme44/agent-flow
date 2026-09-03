@@ -24,6 +24,7 @@ import {
   type PromptView,
   type RoleRouteView,
   type RunSummaryView,
+  type WorkspaceView,
   type RunnerHealthView,
   type RunnerView,
   type ServerEvent,
@@ -56,6 +57,7 @@ import { summariseTelemetry } from '../core/telemetry.js';
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import { RunReader } from './run-reader.js';
 import { CollaborationReader } from './collaboration-reader.js';
+import { ControlReader } from './control-reader.js';
 import { PromptReader } from './prompt-reader.js';
 import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
 import { ConfigReader } from './config-reader.js';
@@ -193,6 +195,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     fs: options.fs,
     globalConfigPath: options.globalConfigPath,
   });
+  // M8-07. Composes the two above and reimplements neither: every part of a snapshot comes
+  // from the same method that serves that part's own endpoint. It exists because eight
+  // correct queries read at eight instants can paint a board showing a task `running`
+  // beside an item saying it failed.
+  const control = new ControlReader({ runs: reader, collaboration, clock: options.clock });
   const prompts = new PromptReader({ fs: options.fs, promptsDir: options.promptsDir });
   const analytics = new AnalyticsReader({ fs: options.fs, clock: options.clock });
   const jobs = new ActionJobs({
@@ -407,6 +414,33 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const view = await collaboration.delivery(scope.project, scope.runId);
     return view === null ? notFound(reply, 'no such run') : view;
+  });
+
+  /**
+   * The whole control plane for one run, read at one instant (M8 §7).
+   *
+   * Everything above still exists and still serves the detail panels, which open one at a
+   * time and are not on the critical path of a first paint. This is the read the board and
+   * the attention queue share, and sharing it is the point: a hundred cards must not be a
+   * hundred requests, and two halves of one screen must not describe two moments.
+   */
+  app.get('/api/v1/runs/:runId/control', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const snapshot = await control.snapshot(scope.project, scope.runId);
+    return snapshot === null ? notFound(reply, 'no such run') : snapshot;
+  });
+
+  /**
+   * Every project, at the density a list of fifty of them can afford (M8 §37).
+   *
+   * Deliberately not `/projects` with more fields. That one answers "what is registered";
+   * this answers "which of these wants me", and the two have different costs — only a
+   * project with an active run pays for an attention count here.
+   */
+  app.get('/api/v1/workspace', async (): Promise<WorkspaceView> => {
+    return control.workspace(options.registry.all());
   });
 
   app.get('/api/v1/runs/:runId/artifacts', async (request, reply) => {

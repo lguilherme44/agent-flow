@@ -232,7 +232,14 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
     // Only the agent's own BLOCKED. A task held back by an upstream failure is a
     // consequence of that failure, and raising both would put two rows on screen for one
     // thing to fix.
-    if (task.state === 'blocked' && task.blockReason !== 'dependency') {
+    //
+    // **Absence of `blockReason` is not evidence of an agent block**, and reading it that
+    // way put a P1 on every task downstream of one failure. `blocked` is two things: a
+    // record the executor wrote when a runner answered BLOCKED, and a *condition*
+    // `effectiveTaskStates` derives over the graph for everything downstream of a failure.
+    // The second never carries a reason, because nothing wrote one. So the graph is asked
+    // directly: a task whose own dependencies are stuck is stuck because of them.
+    if (task.state === 'blocked' && !heldByUpstream(task, input.tasks)) {
       items.push(
         item({
           kind: 'agent_blocked',
@@ -473,6 +480,27 @@ function informationalItems(input: AttentionInput): AttentionItem[] {
 }
 
 /* ─── helpers ──────────────────────────────────────────────────────────────── */
+
+/**
+ * Whether this task is blocked *because something it depends on is*.
+ *
+ * Asked of the dependencies the task already carries rather than of the DAG, for the same
+ * reason the board does not re-derive readiness: `TaskSummaryView` is produced by the one
+ * function every reader goes through, and a second traversal here would be a second answer.
+ */
+function heldByUpstream(
+  task: TaskSummaryView,
+  tasks: readonly TaskSummaryView[],
+): boolean {
+  if (task.blockReason === 'dependency') return true;
+  // An explicit record from the executor outranks the graph: the agent said so.
+  if (task.blockReason === 'agent') return false;
+
+  const stuck = new Set(
+    tasks.filter((entry) => entry.state === 'failed' || entry.state === 'blocked').map((entry) => entry.id),
+  );
+  return task.dependencies.some((dependency) => stuck.has(dependency));
+}
 
 /**
  * Ready tasks that were deferred for capacity and that nothing has since picked up.

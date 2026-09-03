@@ -58,7 +58,6 @@ const runtime = (status: RunProjection['status'] = 'implementing'): RunProjectio
 
 const context = (overrides: Partial<BoardContext> = {}): BoardContext => ({
   runtime: runtime(),
-  ready: new Set<string>(),
   waitingOn: new Map<string, readonly string[]>(),
   deferrals: [],
   threads: [],
@@ -84,7 +83,7 @@ const thread = (overrides: Partial<ReviewThreadView> = {}): ReviewThreadView => 
 describe('M8-ACC-04 — every visible task is in exactly one lane', () => {
   it('places every task state somewhere, and never twice', () => {
     const tasks = TASK_STATES.map((state, index) => task(`TASK-00${index + 1}`, state));
-    const cards = projectBoard(tasks, context({ ready: new Set(['TASK-002']) }));
+    const cards = projectBoard(tasks, context());
 
     expect(cards).toHaveLength(tasks.length);
     // One card per task, and every card's lane is a lane the contract declares. A lane the
@@ -114,19 +113,19 @@ describe('M8-ACC-04 — every visible task is in exactly one lane', () => {
   });
 });
 
-describe('M8-ACC-05 — the lane comes from state, the DAG and the run', () => {
+describe('M8-ACC-05 — the lane comes from the effective state and the run', () => {
   const lanes: [string, TaskSummaryView, BoardContext, BoardLane][] = [
     ['completed is done', task('T', 'completed'), context(), 'done'],
     ['running is in progress', task('T', 'running'), context(), 'in_progress'],
     ['review_required is review', task('T', 'review_required'), context(), 'review'],
     ['blocked is blocked', task('T', 'blocked'), context(), 'blocked'],
     ['failed is blocked', task('T', 'failed'), context(), 'blocked'],
-    ['queued and DAG-ready is ready', task('T', 'queued'), context({ ready: new Set(['T']) }), 'ready'],
-    ['queued and not ready is backlog', task('T', 'queued'), context(), 'backlog'],
+    ['the effective state `ready` is the ready lane', task('T', 'ready'), context(), 'ready'],
+    ['queued is backlog', task('T', 'queued'), context(), 'backlog'],
     [
       'validated and unmerged is in progress',
-      task('T', 'queued', { awaitingIntegration: true }),
-      context({ ready: new Set(['T']) }),
+      task('T', 'ready', { awaitingIntegration: true }),
+      context(),
       'in_progress',
     ],
   ];

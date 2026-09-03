@@ -6,6 +6,7 @@ import {
   type ArtifactView,
   type Plan,
   type RunDagView,
+  type RunEvent,
   type AttemptHistoryView,
   FailedAttemptSchema,
   TaskAttemptResultSchema,
@@ -398,6 +399,21 @@ export class RunReader {
       ...(lastRun === undefined ? {} : { lastRun }),
       runCount: ids.length,
     };
+  }
+
+  /**
+   * The run's audit log, best effort.
+   *
+   * Exposed for the control snapshot, which needs it for one thing only: *when* a fact
+   * became true. Nothing derives a verdict from it here — the projections that do own that
+   * already read it themselves, and a second reading that reached a different conclusion is
+   * the class of defect M6 spent a milestone on.
+   *
+   * Best effort because a malformed line is not a reason to lose the run: `readEvents`
+   * throws on one, and a person looking at a crashed run is exactly who cannot afford that.
+   */
+  async events(project: RegisteredProject, runId: string): Promise<RunEvent[]> {
+    return this.storeFor(project).readEventsBestEffort(runId);
   }
 
   async stages(project: RegisteredProject, runId: string): Promise<StageViewResponse[] | null> {
