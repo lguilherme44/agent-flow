@@ -495,6 +495,67 @@ Nor does it defend against a reviewer on the same provider as the author reachin
 wrong conclusion. Independence is *measured and recorded*, including when it degrades; it
 is not enforced, because a team may honestly have one provider.
 
+## A remote is a destination, and destinations do not decide
+
+M7 gave a run somewhere to go. Everything it publishes is a commit the local workflow has
+already approved, and everything it reads back — a check, a review comment, a workflow
+name — is untrusted text from a machine this process does not own.
+
+The rule underneath every row below: **GitHub is a destination and a diagnostic source.**
+It decides no task completion, no run completion, no approval, no validation, no review
+correctness, no quality gate, no integration, no assignment, no ownership and no recovery.
+
+### Three seams, and the separation is the defence
+
+```text
+GitClient            local Git facts, read-only, no network
+RemoteGitPublisher   one exact commit to one exact ref, through the Git allowlist
+ForgeProvider        Issues, pull requests, checks — a REST API, and no Git at all
+```
+
+Creating a pull request requires the commit to exist remotely. That is a Git operation, and
+it does not become an API operation because an API operation depends on it — **a provider
+that could run Git could rewrite history to make its own call succeed.** The architecture
+suite checks this transitively rather than by direct import, because proving a file imports
+no Git module does not prove it cannot cause Git to run.
+
+### What an operator's credentials are protected from
+
+| Threat | Defence |
+|---|---|
+| **Token leakage** | The configuration stores the *name* of an environment variable, and its pattern rejects a pasted token. The value is read at one composition boundary, held in one closure, and reaches one header. The architecture suite proves no other file names the variable and that the adapter appends no event, writes no file and touches no console. |
+| **Authorization surviving a redirect** | `redirect: 'error'`. Following one re-sends the header, and a redirect to another host is how a token leaves the machine. The API host is a literal in the schema, so a project file cannot move it. |
+| **SSRF** | No text from a repository, an agent or a remote becomes a URL. Every path is built from `encodeURIComponent` over an owner and a repo that passed a strict pattern. |
+| **Git auth confused with API auth** | Two credentials that never meet. The publisher uses the operator's existing credential helper or SSH agent; the REST token is never written into a Git URL and never persisted into a remote. A URL where a remote *name* belongs is refused. |
+| **Repository mismatch** | Three spellings of one URL normalise to three fields, compared field by field before **every** mutation — not once at construction, because a run is long and "we checked at startup" is how work lands in somebody else's repository. |
+| **A malicious remote URL** | A dot segment is refused before `URL` normalises it: `https://github.com/../etc/passwd` resolves to a perfectly ordinary `etc/passwd`, and returning an identity nobody wrote down is what the parser exists to prevent. The SCP-form pattern is anchored end to end, so `git@evil.example:x/y#github.com/o/r` is not read as GitHub. |
+| **A malicious branch or ref** | The destination is *computed* from the run id, never passed. `main`, `master`, `trunk`, `develop` and `HEAD` are refused by name; so is any branch that is not this run's own; so is any shape Git could read as something other than a branch — a leading dash, a range, a reflog selector, a refspec colon, a glob, a `.lock` suffix, a control character. |
+| **Remote branch overwrite** | `--force`, `-f`, `--force-with-lease`, `--force-if-includes`, `--delete`, `--mirror`, `--prune`, `--all`, `--tags` and `--receive-pack` are refused by name at the layer that builds the argv. A remote holding a commit that is not an ancestor is a divergence a person resolves; `--force-with-lease` reads as careful and still discards what the lease did not know about. |
+| **Publishing a stale SHA** | The input is a forty-character object id validated by the schema — never `HEAD`, never a name resolved at push time, never an abbreviation. |
+| **A push that reports success and a branch that holds something else** | The branch is read again afterwards and compared. `exitCode 0` is a claim; "the branch holds the approved commit" is a different sentence. |
+| **Model-controlled PR or Issue fields** | No schema a model writes has a field for a ref, a pull request or an issue number. Bodies are composed from a template over facts, bounded, and labels come from a human allowlist. |
+| **A duplicate object after a crash** | Every mutation writes its intent, calls the remote, then writes the outcome — so a crash between the last two is *visible*. Recovery reads local evidence, then the remote's own copy of this run's fingerprint, then creates. Two objects carrying one mark is `forge_ambiguous_recovery`, never a choice. |
+| **A recovery that misses the object it is looking for** | The scan **lists** rather than searches, because GitHub's search index is eventually consistent and "not found" from a stale index means "create another one". A scan that reaches its bound without an end answers ambiguous rather than empty. |
+| **A malformed response** | Every response is size-checked before and after reading, parsed inside a `try`, and narrowed by a schema. A field that is missing or a shape that is wrong is `forge_invalid_response`, never a partially-trusted object. |
+| **Rate-limit loops** | One request per call, no internal retry. `429`, and `403` with `x-ratelimit-remaining: 0`, become `forge_rate_limited` with the wait the remote asked for. Rate limiting is a delivery failure, never a task failure. |
+| **Unbounded responses** | A declared `content-length` over the ceiling is refused before the body is read, and the body is measured again after. |
+| **Remote prompt injection** | Nothing from the remote reaches an agent. M7 reads Issues, pull requests and checks; it feeds none of them into a prompt, and the delivery projection renders them as text. |
+| **A check becoming local authority** | `ForgeCheck` carries no `required`, no `gateId` and no `category` — the three fields that make a quality gate a gate. A conversion has to be written by hand, and the architecture suite refuses it. An unrecognised status or conclusion is `unknown`, and `unknown` counts as pending rather than green. |
+| **A forge failure mutating run completion** | Nothing under the forge may call `updateRun` or write a completed status, and the suite checks it. A failed delivery is recorded on the delivery record; the run stays exactly as the local workflow left it. |
+| **Cross-repository credential exposure** | A pull request is opened in the configured repository from a run-owned branch in that same repository. Cross-repository pull requests are out of scope, and a fork never sees the token. |
+
+### What this does not defend against
+
+An operator who exports a token with more scope than delivery needs. Agent Flow uses what
+it is given, and nothing here can tell a `repo`-scoped token from one that could also
+administer the organisation. The mitigation is a fine-grained token limited to the one
+repository — a sentence in a document, which is the weakest kind of control and the only
+one available from this side.
+
+Nor does it defend against a person merging the pull request. M7 opens one and stops:
+there is no merge, no auto-merge, no branch deletion and no repository administration. What
+happens after a human reads it is a human's decision, which is the point.
+
 ## The limits, stated plainly
 
 **The receipt is not unforgeable against an agent that escapes its worktree.** This is a
