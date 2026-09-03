@@ -83,7 +83,11 @@ export function projectDelivery(input: {
     checks: record.checks,
     checkSummary: summary,
     ...(record.remoteBranch === undefined ? {} : { branch: record.remoteBranch }),
-    ...(record.remoteBranch === undefined ? {} : { publishedCommit: record.sourceCommit }),
+    // Both, or neither. A branch without a commit is a half-written record, and setting
+    // the key to `undefined` says "there is a published commit and it is nothing".
+    ...(record.remoteBranch === undefined || record.sourceCommit === undefined
+      ? {}
+      : { publishedCommit: record.sourceCommit }),
     ...(record.issue === undefined
       ? {}
       : { issue: { number: record.issue.number, url: record.issue.url } }),

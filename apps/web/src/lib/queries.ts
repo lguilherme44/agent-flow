@@ -21,6 +21,7 @@ import type {
   TaskDetailView,
   TaskSummaryView,
 } from '@contracts/index.js';
+import type { DeliveryView } from '../../../../src/core/forge/delivery.js';
 import type { TelemetryResponse } from './api';
 
 /**
@@ -71,6 +72,8 @@ export const keys = {
     ['team', { runId, projectId }] as const,
   review: (projectId: string | undefined, runId: string) =>
     ['review', { runId, projectId }] as const,
+  delivery: (projectId: string | undefined, runId: string) =>
+    ['delivery', { runId, projectId }] as const,
   runnerHealth: (projectId?: string) => ['runner-health', { projectId }] as const,
   runners: (projectId?: string) => ['runners', { projectId }] as const,
   agents: (projectId?: string) => ['agents', { projectId }] as const,
@@ -336,6 +339,25 @@ export function useReview(
   return useQuery({
     queryKey: keys.review(projectId, runId ?? ''),
     queryFn: () => api.review(runId as string, projectId),
+    enabled: runId !== undefined,
+  });
+}
+
+/**
+ * Where this run was delivered (M7 §57, M7-A12).
+ *
+ * **The component renders this and derives none of it.** Whether delivery is pending,
+ * green, red or diverged arrives decided — a browser that folded a check list into a
+ * verdict would disagree with the server the first time the severity of an unknown
+ * conclusion changed, and the disagreement would look like a caching bug.
+ */
+export function useDelivery(
+  projectId: string | undefined,
+  runId: string | undefined,
+): UseQueryResult<DeliveryView> {
+  return useQuery({
+    queryKey: keys.delivery(projectId, runId ?? ''),
+    queryFn: () => api.delivery(runId as string, projectId),
     enabled: runId !== undefined,
   });
 }

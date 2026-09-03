@@ -29,6 +29,7 @@ import {
 import { CollaborationPanel } from '../features/collaboration';
 import { TeamPanel } from '../features/team';
 import { ReviewPanel } from '../features/review';
+import { DeliveryPanel } from '../features/delivery';
 import { Empty, Notice, cx } from '../components/ui';
 import { StructuredPlanView } from '../components/StructuredPlanView';
 import { ArtifactReader } from '../components/ArtifactReader';
@@ -321,6 +322,9 @@ export function RunDetailPage(props: { runId?: string } = {}): JSX.Element {
                 dashboard would be a box for a feature that ships off. So a project that
                 has not opted in sees exactly the row it saw before M4. */}
             {hasReview ? <ReviewPanel review={review.data} /> : null}
+            {/* Delivery decides its own absence: the panel renders nothing when no forge
+                is configured, which is most runs. Same reasoning as the row above. */}
+            <DeliveryPanel projectId={projectId} runId={runId} />
             {hasCollaboration || hasTeam ? (
               // Side by side above 1280 and stacked below, for the same measured reason
               // the row above splits at that width: two cards at 1024 leave each 500px,

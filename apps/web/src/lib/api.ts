@@ -25,6 +25,7 @@ import type {
   TelemetryEntry,
 } from '@contracts/index.js';
 import type { TelemetrySummary } from '../../../../src/core/telemetry.js';
+import type { DeliveryView } from '../../../../src/core/forge/delivery.js';
 
 /**
  * The only way this app talks to anything.
@@ -200,6 +201,10 @@ export const api = {
   // the gate it is weighed against are folds over one log at one instant.
   review: (runId: string, projectId?: string) =>
     get<ReviewView>(`/runs/${runId}/review`, { projectId }),
+
+  // Where this run went. Credential-free on the server side, so this is an ordinary read.
+  delivery: (runId: string, projectId?: string) =>
+    get<DeliveryView>(`/runs/${runId}/delivery`, { projectId }),
 
   runners: (projectId?: string) => get<RunnerView[]>('/runners', { projectId }),
   runnerHealth: (projectId?: string) =>
