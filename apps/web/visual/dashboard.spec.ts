@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { FIXTURE_RUN_ID, RUN } from './fixtures';
-import { settle, stubApi } from './harness';
+import { settle, settleOverview, settleTasks, stubApi } from './harness';
 
 test.describe('run detail', () => {
   test('the whole composition, nothing selected', async ({ page }) => {
@@ -8,21 +8,64 @@ test.describe('run detail', () => {
     await page.goto('/dashboard');
     await settle(page);
 
-    // The header, the metric strip and the execution summary all count the same
-    // tasks. They read from different responses, so a fixture — or a server —
-    // that let them drift would put two different truths on one screen.
-    await expect(page.getByText('3 / 9')).toHaveCount(2);
+    // **The run opens on the board, and the board is the page.** M8.5's whole claim,
+    // photographed: measured at 1440x900 before it, the document ran to 1753px for a 900px
+    // viewport and the board held 555 of them.
+    await expect(page.getByRole('tab', { name: 'Board' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // The header counts the tasks once. It used to say `3 / 9` twice on one screen —
+    // header and execution summary — plus a five-count strip partitioning the same run a
+    // second way, directly above lane badges partitioning it a third.
+    await expect(page.getByText('3/9 tasks')).toHaveCount(1);
+    await expect(page.getByText('3 / 9')).toHaveCount(0);
 
     await expect(page).toHaveScreenshot('run-detail.png', { fullPage: false });
+  });
+
+  test('the Overview surface holds the pipeline and the four summaries', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/dashboard');
+    await settle(page);
+    await settleOverview(page);
+
+    // The header and the execution summary count the same tasks from different responses,
+    // so a fixture — or a server — that let them drift would put two truths on one screen.
+    // They are one surface apart now, which is why this asserts the summary's own copy.
+    await expect(page.getByText('3 / 9')).toHaveCount(1);
+
+    // **The words, because a screenshot tolerance would not notice a tone changing.** A
+    // reused stage and a stage that never ran are the distinction `cached` exists to draw,
+    // and the fixture carries the only `cached` stage in the repository — so this is also
+    // the only place a picture holds it.
+    const pipeline = page.getByRole('list', { name: 'Pipeline' });
+    await expect(pipeline).toContainText('cached');
+    await expect(pipeline).toContainText('pending');
+
+    await expect(page).toHaveScreenshot('run-overview.png', { fullPage: false });
+  });
+
+  test('the Tasks surface holds the table and its counts', async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/dashboard');
+    await settle(page);
+    await settleTasks(page);
+
+    await expect(page.getByText('Total')).toBeVisible();
+    await expect(page).toHaveScreenshot('run-tasks.png', { fullPage: false });
   });
 
   test('with a running task open in the inspector', async ({ page }) => {
     await stubApi(page);
     await page.goto('/dashboard');
     await settle(page);
+    // From the Tasks surface, which is where the pane still shares the row. Scrolled into
+    // view first: at 1280 the running task sits below the fold of the table's own scroll
+    // container, and clicking it is what the test is for.
+    await settleTasks(page);
 
-    // Scrolled into view first: at 1280 the running task sits below the fold of
-    // the table's own scroll container, and clicking it is what the test is for.
     const row = page.getByText('Recurrence Repository');
     await row.scrollIntoViewIfNeeded();
     await row.click();
@@ -34,13 +77,24 @@ test.describe('run detail', () => {
   });
 
   test('the inspector is a pane above 1200 and a drawer below it', async ({ page }, info) => {
-    // §66's boundary, checked on both sides. The drawer is chosen in
-    // JavaScript, so exactly one inspector exists in the document either way —
-    // a CSS-hidden second copy is invisible to the eye and entirely present to
-    // a screen reader.
+    /**
+     * §66's boundary, checked on both sides — from the Tasks surface, which is where the
+     * pane still exists.
+     *
+     * **M8.5 narrowed which surfaces share the row, and the reason is measured.** The
+     * board's lanes are 244px each and there are six; a 400px pane leaves 560, which is
+     * two lanes and a sliver. A table reflows its own columns and a canvas refits its own
+     * viewport, so those two are genuinely better beside the detail than under it. The
+     * board's drawer case is `control.spec.ts`.
+     *
+     * The choice is made in JavaScript, so exactly one inspector exists in the document
+     * either way — a CSS-hidden second copy is invisible to the eye and entirely present
+     * to a screen reader.
+     */
     await stubApi(page);
     await page.goto('/dashboard');
     await settle(page);
+    await settleTasks(page);
 
     const row = page.getByText('Recurrence Repository');
     await row.scrollIntoViewIfNeeded();
@@ -66,6 +120,9 @@ test.describe('run detail', () => {
     // `<main className="main-content">`. That was harmless until the breadcrumb learned to
     // name the selected task, at which point this counted three and the check had been
     // asserting something other than what it says for as long as it had been failing.
+    //
+    // Two above 1200: the table row and the inspector's own heading. One below, because
+    // the drawer marks everything outside itself `aria-hidden` and the row goes with it.
     await expect(
       page.locator('main > *:not(header)').getByText('Recurrence Repository'),
     ).toHaveCount(width >= 1200 ? 2 : 1);
@@ -83,6 +140,9 @@ test.describe('run detail', () => {
     await stubApi(page);
     await page.goto('/dashboard');
     await settle(page);
+    // From the table, because this asserts focus returns to the `<tr>` that opened the
+    // drawer. The drawer is the same component whichever surface opened it.
+    await settleTasks(page);
 
     const row = page.getByRole('row').filter({ hasText: 'Recurrence Repository' });
     await row.scrollIntoViewIfNeeded();
@@ -118,6 +178,7 @@ test.describe('run detail', () => {
     await stubApi(page);
     await page.goto('/dashboard');
     await settle(page);
+    await settleOverview(page);
 
     const pipeline = page.getByRole('list', { name: 'Pipeline' });
     const hidden = await pipeline.evaluate((row) => row.scrollWidth - row.clientWidth);
@@ -169,7 +230,25 @@ test.describe('run detail', () => {
     // the same way, and the first version of this check walked `th, td` only.
     await stubApi(page);
 
-    for (const route of ['/dashboard', '/runs', '/projects', '/agents', '/prompts', '/analytics']) {
+    /**
+     * **Every tab, not only the landing one.** M8.5 put five more surfaces behind a strip,
+     * and a walk that only visited `/dashboard` would inspect the board and declare the
+     * whole run screen clean — leaving the pipeline, the four summary cards and the team
+     * row exactly as unchecked as the delivery panel was for two milestones.
+     */
+    const routes = [
+      '/dashboard',
+      '/dashboard?view=tasks',
+      '/dashboard?view=overview',
+      '/dashboard?view=team',
+      '/runs',
+      '/projects',
+      '/agents',
+      '/prompts',
+      '/analytics',
+    ];
+
+    for (const route of routes) {
       await page.goto(route);
       await expect(page.getByRole('heading').first()).toBeVisible();
       // Recharts and the overflow observers both settle on the next frame.
@@ -456,6 +535,11 @@ test.describe('motion', () => {
     // in the animation. If a future state ever needs its spinner to be legible,
     // this fails — which is the point.
     await expect(page.getByText('RUNNING').first()).toBeVisible();
+
+    // The pipeline's marker is the other spinner, and it is on Overview now. Checked with
+    // reduce still applied, because the claim is that its word survives the setting.
+    await settleOverview(page);
     await expect(page.getByRole('list', { name: 'Pipeline' })).toContainText('running');
+    expect(await movingElements(page), 'the pipeline still moves under reduce').toEqual([]);
   });
 });

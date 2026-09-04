@@ -1,4 +1,4 @@
-import { expect, openDashboard, test } from './support/harness';
+import { expect, openDashboard, openTasks, test } from './support/harness.js';
 
 /**
  * E2E-08 — the states nobody designs for and everybody meets.
@@ -71,6 +71,7 @@ test.describe('failure states', () => {
     expect(failed.tasks.some((task) => task.state === 'failed')).toBe(true);
 
     // The inspector names the normalised code, not the adapter's prose.
+    await openTasks(page);
     await page.getByRole('row').filter({ hasText: 'Add recurrence types' }).click();
     await expect(page.getByRole('tab', { name: 'Logs' })).toBeVisible();
     await expect(page.getByText('runner_unavailable').first()).toBeVisible();
@@ -93,6 +94,9 @@ test.describe('failure states', () => {
     expect(state.degradations.map((entry) => entry.kind)).toContain('single_provider');
 
     await openDashboard(page, world);
+    // The degradation detail is on Overview as of M8.5, beside the escalation and the
+    // pipeline. The attention strip carries the headline; this is what it points at.
+    await page.getByRole('tab', { name: 'Overview' }).click();
     await expect(page.getByText(/same.provider/i).first()).toBeVisible();
 
     await page.getByRole('button', { name: 'Review & approve' }).first().click();

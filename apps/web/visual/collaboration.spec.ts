@@ -20,6 +20,10 @@ test.describe('collaboration', () => {
     await stubApi(page);
     await page.goto('/dashboard');
     await settle(page);
+    // Collaboration shares the Team tab: "who is doing this" is the context that makes an
+    // open thread legible — "executor.normal is blocked" reads differently once the screen
+    // has said which member that is.
+    await page.getByRole('tab', { name: 'Team' }).click();
 
     // Located through its heading rather than by a role name: `Card` renders a
     // `<section>` with an `<h2>`, and a section only becomes a named region with an
@@ -28,7 +32,7 @@ test.describe('collaboration', () => {
     const panel = page.locator('section').filter({
       has: page.getByRole('heading', { name: 'Collaboration' }),
     });
-    await panel.scrollIntoViewIfNeeded();
+    await expect(panel).toBeVisible();
 
     // The one line whose absence would be a silent product failure: two agents disagree
     // and nothing mechanical settles it, so the screen has to say so.

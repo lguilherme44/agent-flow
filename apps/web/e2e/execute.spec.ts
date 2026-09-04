@@ -1,4 +1,4 @@
-import { expect, openDashboard, recordConsole, test } from './support/harness';
+import { expect, openDashboard, openTasks, recordConsole, test } from './support/harness.js';
 
 /**
  * E2E-05 and E2E-06 — execution and retry.
@@ -27,7 +27,7 @@ test.describe('execution', () => {
     // The job, then the work. `Running…` is the job's own state: a gate the
     // workflow refused never touches `state.json`, so nothing else would report it.
     await expect(page.getByText('Running…')).toBeVisible();
-    await expect(page.getByText('2 / 2').first()).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByText('2/2 tasks')).toBeVisible({ timeout: 120_000 });
     await expect(page.getByText('Running…')).toHaveCount(0);
 
     const state = (await world.stateOf('booking-api')) as { tasks: Array<{ state: string }> };
@@ -35,6 +35,7 @@ test.describe('execution', () => {
 
     // The result the agent reported, read back off disk: the file it says it
     // changed, and the validation command Agent Flow ran itself.
+    await openTasks(page);
     await page.getByRole('row').filter({ hasText: 'Generate occurrences' }).click();
     await expect(page.getByRole('tab', { name: 'Logs' })).toBeVisible();
     await page.getByRole('tab', { name: 'Files (1)' }).click();
@@ -71,6 +72,7 @@ test.describe('retry', () => {
     expect(stopped, 'no task failed, so there is nothing to retry').toBeDefined();
 
     await openDashboard(page, world);
+    await openTasks(page);
 
     await page.getByRole('row').filter({ hasText: 'Add recurrence types' }).click();
     await expect(page.getByRole('tab', { name: 'Logs' })).toBeVisible();

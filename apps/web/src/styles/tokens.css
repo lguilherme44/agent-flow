@@ -137,12 +137,16 @@
   --af-ambient-2: rgba(59, 130, 246, 0.03);
 
   --af-sidebar-width: 216px;
-  --af-topbar-height: 56px;
+  /* 44, not 56. The command bar was a 16px-radius glass panel with a 40px blur, its own
+     shadow and 24px of page gutter above it — 74 pixels of vertical budget and a second
+     elevated surface competing with the run header directly beneath it. Flush and flat
+     costs 44 and competes with nothing: the bar names where you are, and where you are is
+     not the loudest thing on a screen whose job is a board. */
+  --af-topbar-height: 44px;
   /* The lower end of the 440–480px the brief allows. The table is the surface
      people read, and every pixel here comes out of the title column. */
   --af-inspector-width: 448px;
   --af-page-padding: 18px;
-  --af-bottom-height: 164px;
 }
 
 /**
@@ -157,11 +161,10 @@
   :root {
     --af-inspector-width: 400px;
     --af-page-padding: 14px;
-    /* Height is the scarcer axis below 1440, and this row is where it comes
-       from — but there is a floor. At 148px the execution summary's fourth row
-       and the approval hash were both sliced through; 160 clears them and costs
-       the table twelve pixels, which is less than one row. */
-    --af-bottom-height: 160px;
+    /* `--af-bottom-height` used to be here, sizing the band of four summary cards and the
+       review, delivery, team and collaboration panels that ran under the whole page. M8.5
+       made every one of those a tab, so the band has no height to give — and a token
+       nothing reads is a measurement nobody can trust the next time somebody looks it up. */
   }
 }
 

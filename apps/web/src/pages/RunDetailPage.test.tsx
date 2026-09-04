@@ -11,11 +11,17 @@ import { StubEventSource } from '../test-setup';
 import { useLiveEvents } from '../hooks/use-live-events';
 
 /**
- * UI-20 — the run detail composition, against a stubbed API.
+ * UI-20, M8.5 — the run detail composition, against a stubbed API.
  *
- * The whole page: header, pipeline, metrics, table, inspector, bottom cards. It
- * renders from the same response shapes the server produces, so a field the
- * server stops sending fails here rather than becoming a blank cell.
+ * The whole page: header, attention, tabs, and each surface behind them. It renders from
+ * the same response shapes the server produces, so a field the server stops sending fails
+ * here rather than becoming a blank cell.
+ *
+ * **What M8.5 changed about these tests, and it is not the assertions.** The page used to
+ * render every surface at once, so a test could assert the pipeline, the table and the
+ * four cards from one `render`. They are tabs now, so a test that wants the pipeline opens
+ * Overview first. The facts being asserted did not move; the number of them on screen at
+ * one time did, which is the whole point of the milestone.
  */
 
 const RUN = {
@@ -127,6 +133,50 @@ const TELEMETRY = {
   },
 };
 
+/**
+ * The control snapshot, which the board and the attention strip share (M8-07).
+ *
+ * **This file had 24 tests and never rendered the board.** The page used to open on the
+ * table, so `/control` was never asked for and never stubbed; the board's coverage lived
+ * entirely in `board.test.tsx`, one component down, where nothing could tell you whether
+ * the page composed it at all. M8.5 makes the board the landing surface, so the fixture
+ * that feeds it is now the one the default view depends on.
+ *
+ * `attention` is empty here on purpose: the strip is absent on a healthy run, and a
+ * fixture that always carried an item would make every assertion below negotiate with a
+ * banner. The one test that wants a strip supplies its own.
+ */
+const CONTROL = {
+  run: RUN,
+  cards: [
+    {
+      task: TASKS[0],
+      lane: 'done',
+      reason: { text: 'merged onto the integration branch', cause: 'none' },
+      blockingFindings: 0,
+    },
+    {
+      task: TASKS[1],
+      lane: 'in_progress',
+      reason: { text: 'running on codex', cause: 'none' },
+      blockingFindings: 0,
+    },
+  ],
+  lanes: [
+    { lane: 'backlog', count: 0 },
+    { lane: 'ready', count: 0 },
+    { lane: 'in_progress', count: 1 },
+    { lane: 'review', count: 0 },
+    { lane: 'blocked', count: 0 },
+    { lane: 'done', count: 1 },
+  ],
+  attention: [],
+  team: { configured: false, members: [], totals: { members: 0, running: 0, capacity: 0 } },
+  review: { reviewed: false, totals: {}, unsatisfiedGates: [] },
+  delivery: { state: 'disabled', provider: 'none', checks: [], checkSummary: { total: 0, green: 0, red: 0, pending: 0 }, detail: 'No forge is configured.' },
+  observedAt: '2026-08-10T20:15:22.000Z',
+};
+
 const ROUTES: Record<string, unknown> = {
   '/api/v1/projects': [
     { id: 'demo', name: 'demo', path: '/repo', currentRunId: 'AF-2026-001', status: 'running' },
@@ -137,6 +187,7 @@ const ROUTES: Record<string, unknown> = {
   '/api/v1/runs/AF-2026-001/tasks/TASK-001': TASK_DETAIL,
   '/api/v1/runs/AF-2026-001/artifacts': ARTIFACTS,
   '/api/v1/runs/AF-2026-001/telemetry': TELEMETRY,
+  '/api/v1/runs/AF-2026-001/control': CONTROL,
   '/api/v1/runs/AF-2026-001/artifacts/sdd': {
     name: 'sdd',
     label: 'SDD',
@@ -155,6 +206,7 @@ const ROUTES: Record<string, unknown> = {
     unresolved: [],
   },
 };
+
 
 let calls: string[] = [];
 
@@ -191,14 +243,16 @@ afterEach(() => {
   StubEventSource.instances.length = 0;
 });
 
-function renderPage(options: { live?: boolean } = {}): void {
+function renderPage(options: { live?: boolean; at?: string } = {}): void {
   render(
     <QueryClientProvider client={createQueryClient()}>
       <TooltipPrimitive.Provider>
         {/* One client for both, or invalidation from the stream would land
             in a cache the page never reads. */}
         {options.live === true ? <Harness /> : null}
-        <MemoryRouter initialEntries={['/runs/AF-2026-001?project=demo']}>
+        <MemoryRouter
+          initialEntries={[options.at ?? '/runs/AF-2026-001?project=demo']}
+        >
           {/* Inside the router as of UI-29: the project selection lives in the
               URL, so a workspace switch is a thing a reload and a link agree on. */}
           <ProjectProvider>
@@ -217,33 +271,68 @@ function Harness(): JSX.Element {
   return <span data-testid="connection">{connection}</span>;
 }
 
+/**
+ * Move to a tab the way a person does, rather than by rewriting the URL.
+ *
+ * A test that navigated by address would pass over a tab strip that rendered nothing —
+ * which is exactly the failure `?panel=` had for two milestones.
+ */
+async function openTab(name: string): Promise<void> {
+  await userEvent.click(await screen.findByRole('tab', { name }));
+}
+
 describe('the run detail composition', () => {
-  it('renders header, pipeline, metrics, table and the bottom row', async () => {
+  it('opens on the board, with the header and the tabs and nothing else', async () => {
     renderPage();
 
-    // Run Header
+    // Always visible: which run, what state, how far.
     expect(await screen.findByText('Add weekly recurrence')).toBeInTheDocument();
     expect(screen.getByText('AF-2026-001')).toBeInTheDocument();
 
-    // Stage Pipeline — nine stages, approval included
+    // The board is the landing surface, and it is the whole of the work area.
+    expect(await screen.findByRole('tab', { name: 'Board' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // **And this is the milestone, stated as an absence.** The pipeline, the count strip
+    // and the four summary cards were all on this screen at once, above and below a board
+    // that got a third of the page. Each is one click away; none is here.
+    expect(screen.queryByRole('list', { name: 'Pipeline' })).toBeNull();
+    expect(screen.queryByText('Total')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Artifacts' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Plan approval' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Execution summary' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Model usage' })).toBeNull();
+  });
+
+  it('holds the pipeline and the four summaries behind Overview', async () => {
+    renderPage();
+    await openTab('Overview');
+
     expect(await screen.findByRole('list', { name: 'Pipeline' })).toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: 'Pipeline' })).getAllByRole('listitem'))
       .toHaveLength(9);
 
-    // Task Metrics and Task Table
-    expect(screen.getByText('Total')).toBeInTheDocument();
-    expect(await screen.findByText('Implement generation')).toBeInTheDocument();
-
-    // Bottom cards. "Approval" appears twice on purpose — once as a pipeline
-    // stage and once as the card — so the card is matched by its heading role.
+    // "Approval" appears twice on purpose — once as a pipeline stage and once as the card
+    // — so the card is matched by its heading role.
     expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Plan approval' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Execution summary' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Model usage' })).toBeInTheDocument();
   });
 
+  it('holds the table and its counts behind Tasks', async () => {
+    renderPage();
+    await openTab('Tasks');
+
+    expect(await screen.findByText('Implement generation')).toBeInTheDocument();
+    expect(screen.getByText('Total')).toBeInTheDocument();
+  });
+
   it('shows the approved plan hash, which is what the gate is bound to', async () => {
     renderPage();
+    await openTab('Overview');
 
     // A card saying only "approved at 19:12" would describe a property the run
     // may no longer have — approval is granted to one specific plan.
@@ -253,6 +342,7 @@ describe('the run detail composition', () => {
   it('opens a task in the inspector', async () => {
     renderPage();
 
+    // From a board card, which is what the page opens on.
     await userEvent.click(await screen.findByText('Add recurrence types'));
 
     expect(await screen.findByText('Domain types for recurrence.')).toBeInTheDocument();
@@ -274,6 +364,7 @@ describe('the run detail composition', () => {
 
   it('falls back to grouping model usage by runner when no model was reported', async () => {
     renderPage();
+    await openTab('Overview');
 
     // Common in practice: adapters omit the flag when nothing is configured. A
     // donut labelled "unknown 100%" would be worse than saying what it knows.
@@ -284,6 +375,7 @@ describe('the run detail composition', () => {
 
   it('opens an artifact without leaving the page', async () => {
     renderPage();
+    await openTab('Overview');
 
     // "SDD" is also a pipeline stage, so the click is scoped to the card. Both
     // spellings being the same is the point — the stage that produced it and the
@@ -352,6 +444,8 @@ describe('UI-30 — what the page says when something is missing', () => {
     try {
       renderPage();
       await screen.findByText('Add weekly recurrence');
+      // The gate lives on Overview now, beside the plan hash it binds to.
+      await openTab('Overview');
 
       await userEvent.click(await screen.findByRole('button', { name: 'Review the plan' }));
 
@@ -378,29 +472,50 @@ describe('UI-28 — the dependency graph', () => {
     renderPage();
     await screen.findByText('Implement generation');
 
-    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
 
-    expect(await screen.findByText('Task dependencies')).toBeInTheDocument();
+    // The tab strip names the surface now; the panel used to name itself, which is a
+    // heading the board inherited by sharing the panel.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Graph' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+    });
     expect(screen.queryByRole('table')).toBeNull();
     await waitFor(() => {
       expect(calls.filter((call) => call.endsWith('/dag')).length).toBe(1);
     });
-    expect(screen.getByRole('button', { name: 'View as DAG' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
   });
 
   it('carries the selection between the table and the graph', async () => {
-    // The rule of UI-28: one selection. A task chosen in the table is the task
-    // the graph highlights, and the inspector never changes what it is showing
-    // because the reader changed how they are looking at it.
+    // The rule of UI-28: one selection. A task chosen in the table is the task the graph
+    // highlights, and the inspector never changes what it is showing because the reader
+    // changed how they are looking at it.
+    //
+    // **In pane mode, because that is the case the rule is about.** M8.5 gives the board a
+    // drawer at every width — six 244px lanes cannot give 400 of them to a panel — and a
+    // drawer is modal: it marks the tab strip `aria-hidden`, so moving between surfaces
+    // with one open is not a thing a person can do either. The table and the graph keep
+    // the pane, and that is where a selection is carried across a view change.
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+
     renderPage();
+    await openTab('Tasks');
 
     await userEvent.click(await screen.findByText('Add recurrence types'));
     expect(await screen.findByText('Domain types for recurrence.')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
 
     // Still the same task in the inspector, and the graph knows which one it is.
     expect(screen.getByText('Domain types for recurrence.')).toBeInTheDocument();
@@ -411,7 +526,7 @@ describe('UI-28 — the dependency graph', () => {
   it('draws a node per task and an edge per dependency', async () => {
     renderPage();
     await screen.findByText('Implement generation');
-    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
 
     // The accessible name carries the status in words, not only in colour (§97).
     expect(await screen.findByRole('button', { name: /TASK-001.*completed/i })).toBeInTheDocument();
@@ -423,7 +538,7 @@ describe('UI-28 — the dependency graph', () => {
     await screen.findByText('Implement generation');
 
     await userEvent.click(screen.getByRole('button', { name: 'running' }));
-    await userEvent.click(screen.getByRole('button', { name: 'View as DAG' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
 
     // The filter button is still pressed: filtering the table and then finding
     // the graph showing everything would be two answers to one question.
@@ -463,19 +578,24 @@ describe('the inspector as a drawer', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Task inspector' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
 
-    // One inspector, and the tab list is the part only an inspector has. A
-    // CSS-hidden second copy would be invisible to the eye and entirely
-    // present here.
-    expect(document.querySelectorAll('[role="tablist"]')).toHaveLength(1);
+    // One inspector, identified by a tab only an inspector has. It used to be counted as
+    // "one `tablist` in the document", which stopped meaning that the moment the page
+    // grew a tab strip of its own — the assertion would have gone red for the right
+    // reason and the wrong cause. `Logs` belongs to the inspector and to nothing else.
+    expect(screen.getAllByRole('tab', { name: 'Logs' })).toHaveLength(1);
 
-    // The table leaves the accessibility tree while the drawer is open, which is
-    // what makes focus containment real rather than decorative: Tab used to walk
-    // straight out of the panel into rows that are still on screen.
-    expect(screen.queryByRole('table')).toBeNull();
+    // Everything outside the drawer leaves the accessibility tree while it is open, which
+    // is what makes focus containment real rather than decorative: Tab used to walk
+    // straight out of the panel into a board that is still on screen. The run's own tab
+    // strip is the clearest witness — it is behind the overlay and it is gone.
+    expect(screen.queryByRole('tab', { name: 'Board' })).toBeNull();
   });
 
   it('closes on Escape and gives the focus back to the row that opened it', async () => {
     renderPage();
+    // From the table, because a `<tr>` is what this asserts focus returns to — and the
+    // drawer is the same component whichever surface opened it.
+    await openTab('Tasks');
 
     const row = (await screen.findByText('Add recurrence types')).closest('tr');
     await userEvent.click(row as HTMLElement);
@@ -546,53 +666,86 @@ describe('live updates', () => {
     });
   });
 
-  it('toggles Focus Mode and collapses secondary cards inline', async () => {
+  /**
+   * Focus mode is gone, and the two tests it had are one test about why.
+   *
+   * It existed to collapse the four summary cards and the secondary panels so the tasks
+   * could have the screen. The tasks have the screen: the board is the landing surface and
+   * it is the whole of the work area. A mode whose only outcome is the state the page is
+   * already in is a control that teaches people the app has a hidden better layout.
+   */
+  it('offers no focus mode, because the band it collapsed is gone', async () => {
     renderPage();
     await screen.findByText('Add weekly recurrence');
-    expect(screen.getByText('Artifacts')).toBeInTheDocument();
 
-    const focusBtn = screen.getByRole('button', { name: /expand workspace/i });
-    expect(focusBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /expand workspace/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /exit focus mode/i })).toBeNull();
 
-    // Enter Focus Mode
-    await userEvent.click(focusBtn);
+    // The thing it used to hide is not on this surface to begin with.
+    expect(screen.queryByText('Artifacts')).toBeNull();
+  });
 
-    // Bottom cards are collapsed/hidden
+  /**
+   * The tab strip is a `tablist`, so it is drivable from the keyboard the way one is.
+   *
+   * Not decoration: seven surfaces reachable only by pointer would be seven places a
+   * keyboard user cannot get to, on the one page where every projection now lives behind
+   * one of them.
+   */
+  it('moves between surfaces with the arrow keys', async () => {
+    renderPage();
+    const board = await screen.findByRole('tab', { name: 'Board' });
+    expect(board).toHaveAttribute('aria-selected', 'true');
+
+    board.focus();
+    await userEvent.keyboard('{ArrowRight}');
+
     await waitFor(() => {
-      expect(screen.queryByText('Artifacts')).toBeNull();
-    });
-
-    // Task table and search remain fully visible and usable
-    expect(screen.getByPlaceholderText('id, title or requirement')).toBeInTheDocument();
-    expect(screen.getByText('TASK-001')).toBeInTheDocument();
-
-    // Exit Focus Mode by clicking Restore
-    const restoreBtn = screen.getByRole('button', { name: /exit focus mode/i });
-    await userEvent.click(restoreBtn);
-
-    // Bottom cards reappear
-    await waitFor(() => {
-      expect(screen.getByText('Artifacts')).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
     });
   });
 
-  it('exits Focus Mode when Escape key is pressed', async () => {
-    renderPage();
-    await screen.findByText('Add weekly recurrence');
+  /**
+   * `?panel=` and `&task=`, which the queue has emitted since M8 and nothing read.
+   *
+   * A URL parameter nobody reads fails no compiler, no linter and no assertion — and
+   * `routeFor`'s own tests assert the *string* it produces, so they were green the whole
+   * time. These two assert the effect.
+   */
+  it('opens the surface an attention deep link asked for', async () => {
+    renderPage({ at: '/runs/AF-2026-001?project=demo&panel=approval' });
 
-    const focusBtn = screen.getByRole('button', { name: /expand workspace/i });
-    await userEvent.click(focusBtn);
+    // `?panel=approval` is the plan's gate, and the gate lives on Overview beside the
+    // plan hash it is bound to.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+    });
+    expect(await screen.findByRole('heading', { name: 'Plan approval' })).toBeInTheDocument();
+  });
+
+  it('opens the task an attention deep link named', async () => {
+    renderPage({ at: '/runs/AF-2026-001?project=demo&task=TASK-001' });
+
+    // The queue promised "one place to go" and delivered the run with nothing selected.
+    expect(await screen.findByText('Domain types for recurrence.')).toBeInTheDocument();
+  });
+
+  /**
+   * A bookmark for a surface this run does not have.
+   *
+   * It falls back rather than rendering a blank region, and the address is left alone:
+   * rewriting it would turn a stale bookmark into a silently different one.
+   */
+  it('falls back to the board when the URL asks for a surface this run has not got', async () => {
+    renderPage({ at: '/runs/AF-2026-001?project=demo&view=review' });
 
     await waitFor(() => {
-      expect(screen.queryByText('Artifacts')).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true');
     });
-
-    // Press Escape
-    await userEvent.keyboard('{Escape}');
-
-    await waitFor(() => {
-      expect(screen.getByText('Artifacts')).toBeInTheDocument();
-    });
+    expect(screen.queryByRole('tab', { name: 'Review' })).toBeNull();
   });
 
   it('opens and reads markdown artifacts using ArtifactReader', async () => {
@@ -607,6 +760,7 @@ describe('live updates', () => {
 
     renderPage();
     await screen.findByText('Add weekly recurrence');
+    await openTab('Overview');
 
     const sddButton = await screen.findByRole('button', { name: /sdd/i });
     await userEvent.click(sddButton);

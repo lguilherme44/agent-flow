@@ -9,9 +9,21 @@ export const en = {
     settings: 'Settings',
     allProjects: 'All Projects',
     newRun: 'New Feature',
-    connected: 'Agent Flow is running',
-    connecting: 'Connecting…',
-    disconnected: 'Disconnected',
+    /* The *stream's* state, and the words used to be the run's.
+
+       `Agent Flow is running` sat in the command bar beside a run header reading
+       `IMPLEMENTING`, a sidebar row reading `AF-2026-104 running` and a task card reading
+       `RUNNING` — four uses of one word on one screen, three of them about the run and
+       this one about an EventSource. The whole point of distinguishing these three states
+       is that a stream which silently died and a run which is simply idle look identical
+       on screen; a label that borrows the run's vocabulary undoes that.
+
+       `polling` says what the fallback costs rather than hiding it: a ten-second
+       invalidation covers the gap, and a dashboard that polls looks live until you watch a
+       task finish and count to nine. */
+    connected: 'Live',
+    connecting: 'Reconnecting — polling',
+    disconnected: 'Stream offline',
   },
   common: {
     approve: 'Approve',

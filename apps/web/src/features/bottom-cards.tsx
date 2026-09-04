@@ -176,17 +176,14 @@ export function ApprovalCard(props: {
                   {run.approvedPlanHash ?? '—'}
                 </dd>
               </dl>
-              {run.isolation?.integrationHead ? (
-                <dl className="flex items-baseline justify-between text-micro">
-                  <dt className="text-faint">Integration Head</dt>
-                  <dd
-                    className="tabular truncate font-mono text-text"
-                    title={run.isolation.integrationHead}
-                  >
-                    {run.isolation.integrationHead.slice(0, 8)}
-                  </dd>
-                </dl>
-              ) : null}
+              {/* **The integration head used to be repeated here, and M8.5 removed it.**
+                  The isolation strip already reports it beside the branch it is the tip
+                  of and the count of tasks merged onto it, which is where §21.2 groups
+                  those three facts. This card is about the *gate*: the verdict, the
+                  findings and the hash the approval is bound to. While the two lived 900
+                  pixels apart — a header and a bottom band — the repetition was invisible;
+                  putting them on one surface made it obvious, and the E2E had already been
+                  scoping a locator around it to avoid matching two elements. */}
             </div>
           ) : run.status === 'waiting_for_approval' ? (
             // Operational, as §94 asks: the card that says a plan is ready for

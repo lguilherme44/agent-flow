@@ -9,7 +9,8 @@ import type {
 } from '@contracts/index.js';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createQueryClient } from '../app/App';
-import { RunHeader, RunPanel, StagePipeline, countTasks } from './run-overview';
+import { RunHeader, StagePipeline, countTasks, describeStagePosition } from './run-overview';
+import { RunSummary } from './run-summary';
 
 const run = (overrides: Partial<RunDetailView> = {}): RunDetailView => ({
   projectId: 'demo',
@@ -130,14 +131,16 @@ describe('countTasks', () => {
 
 describe('RunHeader', () => {
   it('leads with the run id, its status and the feature', () => {
-    render(withTooltips(<RunHeader run={run()} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
+    render(withTooltips(<RunHeader run={run()} stages={STAGES} projectId="demo" />));
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('AF-2026-001');
     expect(screen.getByText('Add weekly recurrence')).toBeInTheDocument();
     // From `runtime.status` (C-19, C-20), not `run.status`: the persisted status stays
     // `running` for the whole of implementation, verification and final review alike.
     expect(screen.getByText('IMPLEMENTING')).toBeInTheDocument();
-    expect(screen.getByText('7 / 14')).toBeInTheDocument();
+    expect(screen.getByText('7/14 tasks')).toBeInTheDocument();
+    // The pipeline's answer, in nine characters. `implementation` is index 6 of nine.
+    expect(screen.getByText('stage 7 of 9')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
   });
 
@@ -146,7 +149,9 @@ describe('RunHeader', () => {
     // a run that finished hours ago — a stopped run has no clock.
     render(
       withTooltips(
-        <RunHeader run={run({ status: 'completed', durationMs: 2_482_000 })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />,
+        <RunHeader
+          stages={STAGES}
+          run={run({ status: 'completed', durationMs: 2_482_000 })} projectId="demo" />,
       ),
     );
 
@@ -157,17 +162,17 @@ describe('RunHeader', () => {
     // An approved run mid-execution: it can be resumed and it can be revised. It
     // cannot be approved again, and it is not offered a Reject button, because a
     // control whose only outcome is a refusal teaches people to ignore refusals.
-    render(withTooltips(<RunHeader run={run({ approved: true })} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
+    render(withTooltips(<RunHeader
+          stages={STAGES}
+          run={run({ approved: true })} projectId="demo" />));
 
     expect(screen.getByRole('button', { name: 'Resume run' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Revise' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
 
-    // Real as of UI-28, and a toggle rather than a link: the graph is another
-    // rendering of the task list on this page, not a place to go.
-    const graph = screen.getByRole('button', { name: 'View as DAG' });
-    expect(graph).toBeEnabled();
-    expect(graph).toHaveAttribute('aria-pressed', 'false');
+    // The view toggles left this row in M8.5: three renderings of one task list are the
+    // tab strip's job, and a header that also switched views was a toolbar.
+    expect(screen.queryByRole('button', { name: 'View as DAG' })).toBeNull();
 
     // And not offered again once the gate is open.
     expect(screen.queryByRole('button', { name: 'Review & approve' })).toBeNull();
@@ -180,6 +185,7 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
+          stages={STAGES}
           run={run({
             status: 'approved',
             approved: true,
@@ -197,8 +203,6 @@ describe('RunHeader', () => {
             },
           })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -213,10 +217,9 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
+          stages={STAGES}
           run={run({ status: 'running', approved: false, progress: 0, stage: 'planning' })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -229,10 +232,9 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
+          stages={STAGES}
           run={run({ status: 'waiting_for_approval', approved: false, progress: 0 })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -247,6 +249,7 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
+          stages={STAGES}
           run={run({
             status: 'completed',
             approved: true,
@@ -259,8 +262,6 @@ describe('RunHeader', () => {
             },
           })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -270,10 +271,20 @@ describe('RunHeader', () => {
     }
   });
 
+  /**
+   * M8.5 moved it to Overview, beside the pipeline and the escalation. A degradation is
+     * detail behind an attention row that already carries the headline, and the attention
+     * strip is what stays on the always-visible layer.
+   */
   it('puts a degradation where the verdict is read, not in a log', () => {
     render(
       withTooltips(
-        <RunHeader
+        <RunSummary
+          stages={STAGES}
+          tasks={[]}
+          artifacts={[]}
+          telemetry={undefined}
+          onOpenArtifact={() => undefined}
           run={run({
             degradations: 1,
             degradationDetail: [
@@ -286,8 +297,6 @@ describe('RunHeader', () => {
             ],
           })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -300,10 +309,9 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
+          stages={STAGES}
           run={run({ taskCount: 0, completedTasks: 0 })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -311,10 +319,20 @@ describe('RunHeader', () => {
     expect(screen.queryByRole('button', { name: 'View as DAG' })).toBeNull();
   });
 
+  /**
+   * Same move, same reason: C-22's last line is a prohibition on 'something failed, check
+     * the logs', and the run holds the class, the counters, every repair it attempted and
+     * the evidence. All of it is here rather than nowhere.
+   */
   it('shows the C-22 escalation the CLI has rendered since AR-08, once the dashboard has it too', () => {
     render(
       withTooltips(
-        <RunHeader
+        <RunSummary
+          stages={STAGES}
+          tasks={[]}
+          artifacts={[]}
+          telemetry={undefined}
+          onOpenArtifact={() => undefined}
           run={run({
             runtime: {
               status: 'auto_recovery_exhausted',
@@ -332,8 +350,6 @@ describe('RunHeader', () => {
             },
           })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -354,6 +370,7 @@ describe('RunHeader', () => {
     render(
       withTooltips(
         <RunHeader
+          stages={STAGES}
           run={run({
             taskCount: 6,
             completedTasks: 6,
@@ -368,8 +385,6 @@ describe('RunHeader', () => {
             },
           })}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
         />,
       ),
     );
@@ -409,25 +424,95 @@ describe('StagePipeline', () => {
   });
 });
 
-describe('RunPanel', () => {
-  it('is one surface holding the run and its pipeline', () => {
-    // The composition change that matters: header and pipeline answer one
-    // question together, and two bordered cards read as two unrelated widgets.
-    const { container } = render(withTooltips(<RunPanel run={run()} stages={STAGES} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
-
-    const panel = container.querySelector('section');
-    expect(panel).not.toBeNull();
-    expect(within(panel as HTMLElement).getByRole('heading', { level: 1 })).toHaveTextContent(
-      'AF-2026-001',
-    );
-    expect(within(panel as HTMLElement).getByRole('list', { name: 'Pipeline' })).toBeInTheDocument();
-  });
-
-  it('renders without a pipeline the server has not produced yet', () => {
-    render(withTooltips(<RunPanel run={run()} stages={undefined} projectId="demo" asGraph={false} onToggleGraph={() => undefined} />));
+/**
+ * M8.5 split what `RunPanel` used to hold.
+ *
+ * The header answers "which run, what state, how far"; the pipeline, the isolation facts
+ * and the run's own metadata answer "and how did it get there". The first is always on
+ * screen and the second is one tab away, so the two are now separate components — and the
+ * thing worth asserting is that the header does *not* carry the pipeline, because that is
+ * the 90 pixels the board got back.
+ */
+describe('RunHeader and the pipeline are two surfaces now (M8.5 §8)', () => {
+  it('leaves the nine-step pipeline off the always-visible row', () => {
+    render(withTooltips(<RunHeader run={run()} stages={STAGES} projectId="demo" />));
 
     expect(screen.queryByRole('list', { name: 'Pipeline' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('AF-2026-001');
+  });
+
+  it('renders the header without a pipeline the server has not produced yet', () => {
+    render(withTooltips(<RunHeader run={run()} stages={undefined} projectId="demo" />));
+
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    // No stages, no position: a counter reading `stage 1 of 0` is worse than silence.
+    expect(screen.queryByText(/^stage \d+ of/)).toBeNull();
+  });
+
+  it('draws the pipeline on the Overview surface', () => {
+    render(
+      withTooltips(
+        <RunSummary
+          run={run()}
+          stages={STAGES}
+          tasks={[]}
+          artifacts={[]}
+          telemetry={undefined}
+          projectId="demo"
+          onOpenArtifact={() => undefined}
+        />,
+      ),
+    );
+
+    expect(screen.getByRole('list', { name: 'Pipeline' })).toBeInTheDocument();
+    // And the two facts the header dropped, which is where they went rather than what
+    // happened to them.
+    expect(screen.getByText('Started by')).toBeInTheDocument();
+    expect(screen.getByText('Duration')).toBeInTheDocument();
+
+    // **The task count is not one of them.** It came down with the others and landed above
+    // an execution summary that already reports it with a bar, while the header says it on
+    // every surface. Two of three copies of one number is still one too many.
+    expect(screen.queryByText('7 / 14')).toBeNull();
+  });
+});
+
+/**
+ * The counter that replaced ninety pixels of pipeline.
+ *
+ * A position over the server's own statuses, never a decision about what any of them is.
+ */
+describe('describeStagePosition', () => {
+  it('points at the first stage that is not settled', () => {
+    expect(describeStagePosition(STAGES)).toBe('stage 7 of 9');
+  });
+
+  it('counts a cached stage as settled, because the run does not have to do it', () => {
+    // The distinction `cached` exists to draw is between "reused" and "not started", and
+    // a run waiting on nothing is not waiting whichever way the work got done. It still
+    // reads differently in the pipeline — `info`, not `success` — because a reused
+    // artifact is as old as whatever produced it.
+    const stages: StageViewResponse[] = [
+      { stage: 'discovery', status: 'cached' },
+      { stage: 'sdd', status: 'cached' },
+      { stage: 'planning', status: 'running' },
+    ];
+
+    expect(describeStagePosition(stages)).toBe('stage 3 of 3');
+  });
+
+  it('says the last position rather than one past the end when everything is settled', () => {
+    const stages: StageViewResponse[] = [
+      { stage: 'discovery', status: 'completed' },
+      { stage: 'sdd', status: 'completed' },
+    ];
+
+    expect(describeStagePosition(stages)).toBe('stage 2 of 2');
+  });
+
+  it('says nothing at all when there are no stages', () => {
+    expect(describeStagePosition(undefined)).toBeUndefined();
+    expect(describeStagePosition([])).toBeUndefined();
   });
 });
 
@@ -438,16 +523,25 @@ describe('RunPanel', () => {
  * *which* runs get told about isolation and which are left alone, and a snapshot
  * would pass whichever of those it happened to record.
  */
+/**
+ * The isolation strip, on the surface it moved to (M8.5 §15).
+ *
+ * Rendered through `RunSummary` rather than in isolation, because the thing worth keeping
+ * true is that Overview composes it — a strip that only worked when a test rendered it
+ * directly would be a strip nobody sees.
+ */
 describe('the isolation strip', () => {
   const panel = (overrides: Partial<RunDetailView>): void => {
     render(
       withTooltips(
-        <RunPanel
+        <RunSummary
           run={run(overrides)}
           stages={undefined}
+          tasks={[]}
+          artifacts={[]}
+          telemetry={undefined}
           projectId="demo"
-          asGraph={false}
-          onToggleGraph={() => undefined}
+          onOpenArtifact={() => undefined}
         />,
       ),
     );

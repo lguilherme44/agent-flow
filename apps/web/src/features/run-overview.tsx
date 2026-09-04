@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, GitBranch, GitMerge, LayoutGrid, ListTree, Split, Timer, User } from 'lucide-react';
+import { AlertTriangle, GitBranch, GitMerge, ListTree, Split } from 'lucide-react';
 import type {
   Degradation,
   IsolationDetailView,
@@ -8,96 +8,143 @@ import type {
   StageViewResponse,
   TaskSummaryView,
 } from '@contracts/index.js';
-import { Badge, Button, Progress, StatusDot, Tooltip, cx } from '../components/ui';
+import { Badge, Progress, StatusDot, Tooltip, cx } from '../components/ui';
 import { useHorizontalOverflow } from '../hooks/use-horizontal-overflow';
 import { RunActions } from './run-actions';
-import { formatDuration, formatPercent, formatWhen, humanise } from '../lib/format';
+import { formatDuration, formatPercent, humanise } from '../lib/format';
 import { TONE_BG, TONE_TEXT, runtimeLabel, runtimeTone, stageTone } from '../lib/status';
 
 /**
- * The run, as one surface (§70, §71).
+ * The run, in one row (M8.5 §8).
  *
- * Header and pipeline live in the same panel with a hairline between them,
- * because they answer one question together: what is this run and how far has it
- * got. The first pass made them two bordered cards, which read as two unrelated
- * widgets that happened to be stacked.
+ * **This was three bands and 305 pixels.** A hero header with the run id, the status,
+ * the feature title and a four-item metadata row; an isolation strip; and the nine-step
+ * pipeline with its durations — stacked, each hairline-separated on one lifted surface,
+ * above a board that then had 555px of a 900px viewport to work with.
  *
- * This is the hero of the screen. The run id is the largest type on the page at
- * 24px, the feature title sits beside it rather than under it, and the metadata
- * is a single row of icon-and-value pairs — the composition the reference uses,
- * and the reason it reads as a tool rather than as a report.
+ * Everything on the row now answers one of §8's five questions and nothing else answers
+ * a sixth. `Started by you` is a constant in local mode; `Today at 19:34` is the run's
+ * birthday, not its state; the nine chips are the *detail* behind a status badge that
+ * already reads `IMPLEMENTING`. All three moved to Overview, which is one click away and
+ * is where a person goes when the summary has made them want the detail.
+ *
+ * What stayed is what changes while you watch: which run, what state, how far, how long,
+ * and the two or three things you can do about it.
+ *
+ * **The stage counter is the one addition, and it is the thing the pipeline was for.**
+ * `stage 7 of 9` beside the percentage answers "where is this run right now" in nine
+ * characters, which is what the strip answered in ninety pixels. The strip is still on
+ * Overview for the durations, the runners and the models; the *answer* did not move.
  */
-export function RunPanel(props: {
+export function RunHeader(props: {
   run: RunDetailView;
   stages: StageViewResponse[] | undefined;
   projectId: string | undefined;
-  asGraph: boolean;
-  onToggleGraph: () => void;
-  asBoard?: boolean;
-  onToggleBoard?: () => void;
-  /** The escalation and degradation detail is rendered lower on the page instead. */
-  bannersBelow?: boolean;
-  isFocusMode?: boolean;
-  onToggleFocusMode?: () => void;
 }): JSX.Element {
-  if (props.isFocusMode) {
-    return (
-      <section className="glass relative shrink-0 flex items-center justify-between rounded-lg border border-glass-border px-4 py-2 shadow-sm">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="tabular font-bold text-title text-text">{props.run.runId}</span>
-          <Badge tone={runtimeTone(props.run.runtime.status)} caps className="shrink-0 px-2 py-0.5 text-label">
-            {runtimeLabel(props.run.runtime.status)}
-          </Badge>
-          <span className="min-w-0 truncate text-body-lg text-muted" title={props.run.feature}>
-            {props.run.feature}
-          </span>
-          <span className="hidden sm:inline-flex items-center gap-1 rounded-sm border border-primary-border bg-primary-soft px-1.5 py-0.5 text-micro font-medium text-text">
-            Focus Mode
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {props.onToggleFocusMode ? (
-            <Button
-              onClick={props.onToggleFocusMode}
-              title="Restore standard view (Esc)"
-              className="text-micro"
-            >
-              Restore View
-            </Button>
-          ) : null}
-        </div>
-      </section>
-    );
-  }
+  const { run } = props;
+  const workflow = run.runtime.progress.workflow;
+  const workflowPercent =
+    workflow.total === 0 ? 0 : Math.round((workflow.done / workflow.total) * 100);
+  const stagePosition = describeStagePosition(props.stages);
 
   return (
-    <section className="relative shrink-0 overflow-visible rounded-lg border border-border bg-surface shadow-md">
-      <RunHeader
-        run={props.run}
-        projectId={props.projectId}
-        asGraph={props.asGraph}
-        onToggleGraph={props.onToggleGraph}
-        {...(props.asBoard === undefined ? {} : { asBoard: props.asBoard })}
-        {...(props.onToggleBoard === undefined ? {} : { onToggleBoard: props.onToggleBoard })}
-        {...(props.bannersBelow === undefined ? {} : { bannersBelow: props.bannersBelow })}
-      />
-      {/* Between the header and the pipeline, because it belongs to neither: the
-          header says what this run is, the pipeline says how far it got, and this
-          says *how* it is being executed. Hairline-separated on the same surface
-          rather than a card of its own — §21.2 is facts about the run, not a
-          second widget. */}
-      <IsolationStrip
-        isolation={props.run.isolation}
-        conflicts={props.run.integrationConflicts}
-        degradations={props.run.degradationDetail}
-      />
-      {props.stages === undefined ? null : (
-        <div className="border-t border-border px-4 py-3">
-          <StagePipeline stages={props.stages} />
-        </div>
-      )}
-    </section>
+    /*
+     * **Wraps below the drawer boundary and nowhere else.** At 390 the identity, the
+     * counters and the action group are 600px of content in a 358px row: the status badge
+     * was drawn over the `Revise` button, which had collapsed to its pencil, and
+     * `IMPLEMENTING` was sliced mid-word. Above 1024 nothing wraps and the row is one
+     * line, which is the whole point of it.
+     */
+    <header className="flex shrink-0 items-center gap-4 border-b border-border px-page py-2.5 max-lg:flex-wrap max-lg:items-start max-lg:gap-y-2">
+      {/* Identity. One line above 1024 — wrapping there pushed the feature under the run
+          id and cost the header a row of height for no information. Below it the group
+          takes the full width and the actions get their own row. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 max-lg:w-full max-lg:flex-none">
+        <h1 className="tabular shrink-0 text-title font-bold tracking-tight">{run.runId}</h1>
+        <Badge tone={runtimeTone(run.runtime.status)} caps className="shrink-0">
+          {runtimeLabel(run.runtime.status)}
+        </Badge>
+        {/* Regular weight, not medium. The run id carries the hierarchy by size and
+            weight; matching the title's weight to it made two competing headlines on one
+            line. Full text colour, though — secondary is not the same as dim, and this is
+            the only place the feature is named. */}
+        <span className="min-w-0 truncate text-body-lg text-text" title={run.feature}>
+          {run.feature}
+        </span>
+      </div>
+
+      {/* Progress, and the two counts that qualify it. Hidden below the drawer boundary,
+          where the row has already given its width to the identity and the actions — the
+          percentage is on the Overview tab and the status badge is right here. */}
+      <div className="flex shrink-0 items-center gap-2.5 max-lg:hidden">
+        <span className="flex items-center gap-2 text-micro text-faint">
+          <span className="tabular whitespace-nowrap">
+            {run.completedTasks}/{run.taskCount} tasks
+          </span>
+          <span className="h-2.5 w-px bg-border-strong" aria-hidden />
+          <span className="tabular whitespace-nowrap">{formatDuration(run.durationMs)}</span>
+          {stagePosition === undefined ? null : (
+            <>
+              <span className="h-2.5 w-px bg-border-strong" aria-hidden />
+              <span className="whitespace-nowrap">{stagePosition}</span>
+            </>
+          )}
+        </span>
+
+        <span className="flex w-28 shrink-0 items-center gap-2 xl:w-36">
+          {/* Green, always. Progress is a quantity, not a status — the bar used to turn
+              red whenever the run's *verdict* was bad, so AF-2026-002 read `67%` in the
+              colour of failure over six tasks that had genuinely completed, which tells
+              the reader the number itself is wrong. The verdict has its own channel and
+              it is louder: the status badge sits beside the title.
+
+              Derived from `runtime.progress.workflow` (C-21), not from tasks completed
+              over tasks planned: that number reached 100% with verification and final
+              review still pending, and *fell* the moment a corrective task was appended. */}
+          <Progress value={workflowPercent} tone="success" label="Overall progress" />
+          <span className="tabular shrink-0 text-label font-medium text-text">
+            {formatPercent(workflowPercent)}
+          </span>
+        </span>
+      </div>
+
+      {/* Real, and driven by where the run is: a Start button on an unapproved plan is a
+          button whose only outcome is a refusal, and offering it teaches people to ignore
+          the gate rather than to use it. */}
+      <div className="flex shrink-0 items-center gap-1.5 max-lg:w-full max-lg:flex-wrap">
+        <RunActions projectId={props.projectId} run={run} />
+      </div>
+    </header>
   );
+}
+
+/**
+ * "stage 7 of 9", or nothing.
+ *
+ * **A position, not a decision.** The stages arrive from the server in the order the run
+ * records them, already carrying their own statuses; this counts how many are behind the
+ * first unfinished one. It does not decide what any stage's status *is*, which is
+ * `core`'s answer and is read here rather than recomputed.
+ *
+ * `cached` counts as behind, for the same reason `completed` does: a stage served from a
+ * cache is a stage this run does not have to do. It reads differently in the pipeline —
+ * `info` rather than `success`, because a reused artifact is as old as whatever produced
+ * it — but a run waiting on nothing is not waiting, whichever way the work got done.
+ */
+export function describeStagePosition(
+  stages: StageViewResponse[] | undefined,
+): string | undefined {
+  if (stages === undefined || stages.length === 0) return undefined;
+
+  const settled = (status: StageViewResponse['status']): boolean =>
+    status === 'completed' || status === 'cached';
+
+  const current = stages.findIndex((stage) => !settled(stage.status));
+  // Every stage settled: the run is through its pipeline, and "stage 9 of 9" says so
+  // more usefully than a position past the end.
+  const position = current === -1 ? stages.length : current + 1;
+
+  return `stage ${String(position)} of ${String(stages.length)}`;
 }
 
 /**
@@ -143,7 +190,7 @@ export function hasIsolationToShow(
  * *on the branch* rather than how many agents finished — a distinction the
  * header's own task count cannot make.
  */
-function IsolationStrip(props: {
+export function IsolationStrip(props: {
   isolation: IsolationDetailView | undefined;
   conflicts: readonly IntegrationConflictView[];
   degradations: readonly Degradation[];
@@ -271,200 +318,6 @@ function IsolationStrip(props: {
         </ul>
       )}
     </div>
-  );
-}
-
-export function RunHeader(props: {
-  run: RunDetailView;
-  projectId: string | undefined;
-  asGraph: boolean;
-  onToggleGraph: () => void;
-  asBoard?: boolean;
-  onToggleBoard?: () => void;
-  bannersBelow?: boolean;
-}): JSX.Element {
-  const { run } = props;
-  const workflow = run.runtime.progress.workflow;
-  const workflowPercent =
-    workflow.total === 0 ? 0 : Math.round((workflow.done / workflow.total) * 100);
-
-  return (
-    <header className="flex flex-col gap-2.5 px-4 pb-3 pt-3.5">
-      {/* Wraps below the drawer boundary and nowhere else (M8 §41). At 390 the identity,
-          the progress cluster and the action group are 600px of content in a 358px row:
-          the run id was drawn over the progress label and `Resume run` was cut off the
-          right edge, which is page-level overflow rather than an internal scroll. Above
-          1024 nothing wraps and the desktop header is byte-identical. */}
-      <div className="flex items-start justify-between gap-4 max-lg:flex-wrap max-lg:gap-y-3">
-        <div className="flex min-w-0 flex-col gap-2">
-          {/* One line, always. Wrapping pushed the feature under the run id and
-              cost the header a row of height for no information. */}
-          <div className="flex min-w-0 items-center gap-2.5">
-            <h1 className="tabular shrink-0 text-hero font-bold tracking-tight">{run.runId}</h1>
-            <Badge tone={runtimeTone(run.runtime.status)} caps className="shrink-0 px-2 py-0.5 text-label">
-              {runtimeLabel(run.runtime.status)}
-            </Badge>
-            {/* Regular weight, not medium. The run id carries the hierarchy by
-                size *and* weight, as the reference does; matching the title's
-                weight to it made two competing headlines on one line. Full text
-                colour, though — secondary is not the same as dim, and this is
-                the only place the feature is named. */}
-            <span className="min-w-0 truncate text-title font-normal text-text" title={run.feature}>
-              {run.feature}
-            </span>
-          </div>
-
-          {/* One row, hairline-separated. Six stacked label/value pairs was the
-              same information at four times the height. */}
-          <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-body-lg text-muted">
-            {/* Dropped below 1440, where the row would otherwise wrap and cost
-                the table 20px. It is also the least informative of the four:
-                in local mode it always says "you". */}
-            <span className="hidden items-center gap-4 wide:flex">
-              <Fact icon={<User className="h-3.5 w-3.5" />} label="Started by" value="you" />
-              <Divider />
-            </span>
-            <Fact icon={<Clock className="h-3.5 w-3.5" />} value={formatWhen(run.startedAt)} />
-            <Divider />
-            <Fact
-              icon={<Timer className="h-3.5 w-3.5" />}
-              label="Duration"
-              value={formatDuration(run.durationMs)}
-            />
-            <Divider />
-            <Fact
-              icon={<ListTree className="h-3.5 w-3.5" />}
-              label="Tasks"
-              value={`${String(run.completedTasks)} / ${String(run.taskCount)}`}
-            />
-          </dl>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-3 max-lg:w-full max-lg:flex-wrap">
-          {/* Narrower below 1440. Every pixel this cluster gives up goes to the
-              feature title, which is the one thing here that cannot be
-              recovered from anywhere else on the screen. */}
-          {/* Three sizes rather than two, because M8 added a third view toggle beside it
-              and the header stopped fitting at 1024: the status badge and the progress
-              label overlapped by about twenty pixels. Measured against the pre-M8 baseline
-              at the same width, where two buttons cleared it. The bar and the percentage
-              both stay readable at 112px; the alternative was hiding a view toggle at
-              narrow widths, and losing a feature to make a header fit is the trade §41
-              refuses. */}
-          <div className="flex w-28 flex-col gap-1 max-lg:w-full xl:w-40 wide:w-52">
-            <div className="flex items-baseline justify-between">
-              <span className="text-micro uppercase tracking-caps text-faint">
-                Overall progress
-              </span>
-              <span className="tabular text-body-lg font-medium text-text">
-                {formatPercent(workflowPercent)}
-              </span>
-            </div>
-            {/* Green, always. Progress is a quantity, not a status — and the two
-                lines above this one said so while the code did the opposite,
-                turning the bar red whenever the run's *verdict* was bad.
-                AF-2026-002 read `67%` in the colour of failure over six tasks
-                that had genuinely completed, which tells the reader the number
-                itself is wrong.
-                The verdict has its own channel and it is louder: the status
-                badge sits beside the title. Purple is spoken for too — it marks
-                the running pipeline step, and only reads as special while
-                nothing else shares it.
-
-                Derived from `runtime.progress.workflow` (C-21), not from tasks
-                completed over tasks planned: that number reached 100% with
-                verification and final-review still pending, and *fell* the
-                moment a corrective task was appended — this axis is stage-based
-                and monotonic by construction, so neither can happen again. */}
-            <Progress value={workflowPercent} tone="success" label="Overall progress" />
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            {/* **Icons at every width, and that changed in M8.** The labels used to appear
-                from 1440, where two buttons and their words fitted. A third took about
-                a hundred and twenty pixels more, and the flex child that gives way is the
-                feature title — which collapsed to zero at 1440 and was reported by the
-                workspace E2E as *hidden* rather than as truncated. The words are still in
-                the tooltip and in the accessible name, and the feature is the one thing on
-                this line that cannot be recovered from anywhere else on the screen.
-
-                A toggle, not a destination: the graph and the table are two
-                renderings of the same task list, with the same filter and the
-                same selection, so leaving the page to see one of them would be
-                the thing that loses the reader's place. */}
-            {/* Offered only once an implementation DAG can exist: a plan with no
-                tasks has nothing to graph, and the toggle would open to an empty
-                canvas rather than refuse. */}
-            {/* Three renderings of one task list, and the board is the operational one:
-                the table answers "what are the tasks", the graph answers "what depends on
-                what", and the board answers "what is each one doing and why". They share
-                the filter and the selection, which is what makes them views rather than
-                pages. */}
-            {run.taskCount > 0 && (
-              <>
-                <Button
-                  variant={props.asBoard === true ? 'primary' : 'surface'}
-                  {...(props.onToggleBoard === undefined ? {} : { onClick: props.onToggleBoard })}
-                  title={props.asBoard === true ? 'Back to the task table' : 'Show the tasks as a board'}
-                  pressed={props.asBoard === true}
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
-                  <span className="sr-only">View as board</span>
-                </Button>
-                <Button
-                  variant={props.asGraph ? 'primary' : 'surface'}
-                  onClick={props.onToggleGraph}
-                  title={props.asGraph ? 'Back to the task table' : 'Show the tasks as a graph'}
-                  pressed={props.asGraph}
-                >
-                  <GitBranch className="h-3.5 w-3.5" aria-hidden />
-                  <span className="sr-only">View as DAG</span>
-                </Button>
-              </>
-            )}
-
-            {/* Real now, and driven by where the run is: a Start button on an
-                unapproved plan is a button whose only outcome is a refusal, and
-                offering it teaches people to ignore the gate. */}
-            <RunActions projectId={props.projectId} run={run} />
-          </div>
-        </div>
-      </div>
-
-      {/* C-22's last line is a prohibition: no surface renders "something failed,
-          inspect logs". The run holds the class, the counters, every repair it
-          attempted and the evidence — the CLI has rendered all of it since AR-08
-          (`cli/render/escalation.ts`); this is the same contract, once the
-          dashboard is the surface open when a run stops.
-
-          **Suppressed when the attention queue is on screen, and only then.** Both say
-          the same thing about the same task, with the same one action — the queue is the
-          summary and this is its detail — and stacking them cost 185px above the board on
-          a run that had 75px of board left at 1440×900. Measured on AF-2026-002 through
-          the real server. The detail is still on the page, below the tasks, and the queue
-          row links to the task that holds the evidence. Nothing is lost; the order
-          changed. */}
-      {run.runtime.escalation === undefined || props.bannersBelow === true ? null : (
-        <EscalationBanner escalation={run.runtime.escalation} />
-      )}
-
-      {/* Degradations are not a footnote. A run that reviewed itself, ran below
-          its configured effort, or had its gate forced reached its verdict on
-          weaker terms, and this is where somebody reads the verdict. */}
-      {run.degradationDetail.length === 0 || props.bannersBelow === true ? null : (
-        <ul className="flex flex-col gap-1 rounded-md border border-warning/25 bg-warning-soft px-2.5 py-2">
-          {run.degradationDetail.map((degradation) => (
-            <li key={`${degradation.kind}:${degradation.reason}`} className="flex gap-2">
-              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
-              <div className="flex min-w-0 flex-col">
-                <span className="text-body-lg text-text">{degradation.reason}</span>
-                <span className="text-label text-muted">{degradation.impact}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </header>
   );
 }
 
@@ -747,8 +600,11 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
 /**
  * The edge gradient that says "there is more this way".
  *
- * `from-surface` because the pipeline sits inside the run panel, not on the page
- * ground — a fade to the wrong colour is a grey smear rather than an edge.
+ * `from-surface` because the pipeline sits inside a `Panel` on the Overview surface, not
+ * on the page ground — a fade to the wrong colour is a pale smear rather than an edge.
+ * The board's fade is `from-bg` for exactly the same reason and the opposite answer: it
+ * renders straight onto the page. Two gradients, two grounds, and getting either wrong is
+ * invisible to every assertion and obvious in a photograph.
  */
 function Fade(props: { side: 'left' | 'right' }): JSX.Element {
   return (

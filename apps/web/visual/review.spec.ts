@@ -17,15 +17,26 @@ import { stubApi, settle } from './harness';
 
 const WITH_REVIEW = { [`/api/v1/runs/${FIXTURE_RUN_ID}/review`]: REVIEW };
 
+/**
+ * The panel, on the tab M8.5 moved it to.
+ *
+ * It used to be a second row under the four summary cards, 1300 pixels below the fold on a
+ * page that also carried the pipeline, the board and four more panels. The tab is what
+ * that absence became — a run with a reviewer has one, a run without has none, and the
+ * "absent rather than empty" discipline the panel already applied to itself now decides
+ * whether there is a door at all.
+ */
 async function panel(page: import('@playwright/test').Page) {
   await stubApi(page, WITH_REVIEW);
   await page.goto('/dashboard');
   await settle(page);
 
+  await page.getByRole('tab', { name: 'Review' }).click();
+
   const card = page.locator('section').filter({
     has: page.getByRole('heading', { name: 'Review' }),
   });
-  await card.scrollIntoViewIfNeeded();
+  await expect(card).toBeVisible();
   return card;
 }
 

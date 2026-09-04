@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { expect, openDashboard, recordConsole, test } from './support/harness';
+import { expect, openDashboard, openOverview, openTasks, recordConsole, test } from './support/harness.js';
 import type { World } from './support/world';
 
 /**
@@ -93,7 +93,8 @@ test.describe('MVP 2, end to end', () => {
     await world.cli('booking-api', ['approve']);
 
     // Requested 4, and the graph offers 3 — so the *effective* width is what the
-    // wave has, and the page says the run was not reduced.
+    // wave has, and the page says the run was not reduced. On Overview as of M8.5.
+    await openOverview(page);
     await expect(page.getByText('Tasks at once')).toBeVisible();
     await expect(page.getByText(/parallelism.maxTasks is 4/)).toHaveCount(0);
 
@@ -113,6 +114,8 @@ test.describe('MVP 2, end to end', () => {
       'TASK-002',
       'TASK-004',
     ]);
+    // `in worktree` is a cell of the task table, which is the Tasks tab now.
+    await openTasks(page);
     await expect(page.getByText('in worktree')).toHaveCount(3);
 
     const branch = await integrationBranch(world);
@@ -138,7 +141,7 @@ test.describe('MVP 2, end to end', () => {
     await world.release();
 
     // ---- the whole graph finishes ------------------------------------------
-    await expect(page.getByText('4 / 4').first()).toBeVisible({ timeout: 240_000 });
+    await expect(page.getByText('4/4 tasks')).toBeVisible({ timeout: 240_000 });
 
     const after = (await world.stateOf('booking-api')) as {
       integrationHead?: string;

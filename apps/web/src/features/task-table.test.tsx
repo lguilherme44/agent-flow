@@ -1,34 +1,36 @@
 import { describe, it, expect, vi } from 'vitest';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { TaskSummaryView } from '@contracts/index.js';
-import { NO_FILTER, TaskTable, filterTasks, type TaskFilter } from './task-table';
+import { NO_FILTER, TaskTable, TaskToolbar, filterTasks, type TaskFilter } from './task-table';
 import { countTasks } from './run-overview';
 
 /**
- * The filter belongs to the page now, because the graph shares it (UI-28).
+ * The filter belongs to the page, because three surfaces share it (UI-28, M8.5 §20).
  *
- * This holds it so the panel can still be driven the way a person drives it —
- * type, click, see fewer rows — rather than asserted against a prop.
+ * The toolbar and the table are now two components — the toolbar lives in the tab strip,
+ * where the board and the graph can see it, and the table lives on its own tab. This
+ * mounts them the way the page does, so the panel can still be driven the way a person
+ * drives it: type, click, see fewer rows — rather than asserted against a prop.
  */
 function Table(props: {
   tasks: TaskSummaryView[];
   selectedId?: string;
   onSelect?: (taskId: string) => void;
-  graph?: ReactNode;
 }): JSX.Element {
   const [filter, setFilter] = useState<TaskFilter>(NO_FILTER);
 
   return (
-    <TaskTable
-      tasks={props.tasks}
-      selectedId={props.selectedId}
-      onSelect={props.onSelect ?? (() => undefined)}
-      filter={filter}
-      onFilterChange={setFilter}
-      {...(props.graph === undefined ? {} : { graph: props.graph })}
-    />
+    <>
+      <TaskToolbar filter={filter} onFilterChange={setFilter} />
+      <TaskTable
+        tasks={props.tasks}
+        selectedId={props.selectedId}
+        onSelect={props.onSelect ?? (() => undefined)}
+        filter={filter}
+      />
+    </>
   );
 }
 
@@ -149,17 +151,27 @@ describe('TaskTable', () => {
     expect(screen.getByText('No tasks yet.')).toBeInTheDocument();
   });
 
-  it('swaps the body for the graph and keeps the header (UI-28)', () => {
-    // The graph replaces the rows, not the panel. Same search box, same status
-    // filter, same counts — one surface showing the tasks two ways rather than
-    // two surfaces that could disagree about which tasks they are showing.
-    render(<Table tasks={TASKS} graph={<p>the graph</p>} />);
+  it('carries no header of its own, so the surfaces do not each grow one (M8.5 §10)', () => {
+    // The panel used to announce itself and hold the controls, and the board inherited all
+    // of it by sharing the panel: a title, a search box, five chips and a five-count strip
+    // — about 100px of chrome above six lanes. The tab strip names the surface and holds
+    // the filter now, and what is left here is the strip and the rows.
+    render(<Table tasks={TASKS} />);
 
-    expect(screen.getByText('Task dependencies')).toBeInTheDocument();
-    expect(screen.getByText('the graph')).toBeInTheDocument();
-    expect(screen.queryByRole('table')).toBeNull();
-    expect(screen.getByLabelText('Search tasks')).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Filter by status' })).toBeInTheDocument();
+    expect(screen.queryByText('Implementation tasks')).toBeNull();
+    expect(screen.queryByText('Task board')).toBeNull();
+    expect(screen.queryByText('Task dependencies')).toBeNull();
+    expect(screen.getByRole('table')).toBeInTheDocument();
+  });
+
+  it('keeps the five counts, on the one surface where nothing else counts the tasks', () => {
+    // On the board this strip was the *second* statement of the same numbers, sitting
+    // directly above lane badges that partition the same run a different way. Here it is
+    // the only one.
+    render(<Table tasks={TASKS} />);
+
+    expect(screen.getByText('Total')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 });
 
@@ -254,23 +266,14 @@ describe('isolated task states in the table', () => {
     expect(text).not.toMatch(/\.agent-flow\/worktrees/);
   });
 
-  it('renders Focus mode toggle button when onToggleFocusMode is provided', async () => {
-    const onToggle = vi.fn();
-    render(
-      <TaskTable
-        tasks={TASKS}
-        selectedId={undefined}
-        onSelect={() => {}}
-        filter={NO_FILTER}
-        onFilterChange={() => {}}
-        isFocusMode={false}
-        onToggleFocusMode={onToggle}
-      />,
-    );
+  it('offers no focus mode, because there is no longer a band for it to collapse', () => {
+    // Focus mode existed to hide the four summary cards and the review, delivery, team and
+    // collaboration panels so the tasks could have the screen. They are tabs now, so the
+    // tasks have the screen and the mode is a control whose only outcome is the state the
+    // page is already in.
+    render(<Table tasks={TASKS} />);
 
-    const focusBtn = screen.getByRole('button', { name: /expand workspace/i });
-    expect(focusBtn).toBeInTheDocument();
-    await userEvent.click(focusBtn);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /expand workspace/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /focus mode/i })).toBeNull();
   });
 });

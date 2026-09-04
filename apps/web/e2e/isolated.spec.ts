@@ -1,4 +1,4 @@
-import { expect, openDashboard, recordConsole, recordRequests, test } from './support/harness';
+import { expect, openDashboard, openTasks, recordConsole, recordRequests, test } from './support/harness.js';
 
 /**
  * M2-10 — what a run in worktree mode looks like from a browser.
@@ -62,7 +62,7 @@ test.describe('an isolated run, from the browser', () => {
 
     // In worktree mode `completed` means integrated (I-3), so this number moving
     // to 2/2 is already the statement that both merges happened.
-    await expect(page.getByText('2 / 2').first()).toBeVisible({ timeout: 180_000 });
+    await expect(page.getByText('2/2 tasks')).toBeVisible({ timeout: 180_000 });
 
     const state = (await world.stateOf('booking-api')) as {
       integrationHead?: string;
@@ -71,16 +71,16 @@ test.describe('an isolated run, from the browser', () => {
     expect(state.tasks.map((task) => task.state)).toEqual(['completed', 'completed']);
     expect(state.integrationHead, 'nothing recorded an integration head').toMatch(/^[0-9a-f]{40}$/);
 
-    // §21.2 on screen. The branch is derived from `gitRunKey` by the server, and
-    // the browser is shown the name rather than asked for it. The head is scoped
-    // to the isolation strip's `dl`: the ApprovalCard also carries the head under
-    // "Integration Head", so a bare `getByTitle` would match two elements.
+    // §21.2 on screen, on the Overview tab M8.5 moved it to. The branch is derived from
+    // `gitRunKey` by the server, and the browser is shown the name rather than asked for
+    // it. The head is no longer scoped to a `dl`: the ApprovalCard used to carry a second
+    // copy under "Integration Head" and that duplicate is gone, so one element matches.
     const branch = `agent-flow/${planned.gitRunKey ?? ''}/integration`;
+    await page.getByRole('tab', { name: 'Overview' }).click();
     await expect(page.getByText('Isolation')).toBeVisible();
     await expect(page.getByText('worktree', { exact: true })).toBeVisible();
     await expect(page.getByText(branch)).toBeVisible();
-    const isolationStrip = page.locator('dl').filter({ has: page.getByText('Head', { exact: true }) });
-    await expect(isolationStrip.getByTitle(state.integrationHead as string)).toBeVisible();
+    await expect(page.getByTitle(state.integrationHead as string)).toBeVisible();
 
     // The branch the server named is the branch Git actually has, and its tip is
     // the head the run recorded. Asserted against the repository rather than
@@ -100,6 +100,7 @@ test.describe('an isolated run, from the browser', () => {
     // `exact`, because the integration branch name contains the word too — and a
     // substring match here resolved to three elements, which is a selector that
     // would have gone on passing for the wrong element.
+    await openTasks(page);
     await page.getByRole('row').filter({ hasText: 'Add recurrence types' }).click();
     await expect(page.getByText('Integration', { exact: true })).toBeVisible();
     await expect(page.getByText('Attempt', { exact: true })).toBeVisible();
@@ -143,6 +144,8 @@ test.describe('an isolated run, from the browser', () => {
       .poll(async () => world.parked(), { timeout: 120_000 })
       .toEqual(['TASK-001']);
 
+    // `in worktree` is a cell of the task table, which is the Tasks tab now.
+    await openTasks(page);
     const row = page.getByRole('row').filter({ hasText: 'Add recurrence types' });
     await expect(row.getByText('RUNNING')).toBeVisible({ timeout: 30_000 });
     await expect(row.getByText('in worktree')).toBeVisible();
@@ -155,7 +158,7 @@ test.describe('an isolated run, from the browser', () => {
     // Released, and the run is allowed to finish — a parked agent left behind
     // would hold a worktree lock into teardown.
     await world.release();
-    await expect(page.getByText('2 / 2').first()).toBeVisible({ timeout: 180_000 });
+    await expect(page.getByText('2/2 tasks')).toBeVisible({ timeout: 180_000 });
     await expect(row.getByText('in worktree')).toHaveCount(0);
   });
 });

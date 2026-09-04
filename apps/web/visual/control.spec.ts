@@ -91,26 +91,34 @@ test.describe('control plane', () => {
     }
   });
 
-  test('a selected card opens the inspector beside the board', async ({ page }, info) => {
-    // Only from 1200, which is where the inspector is a pane rather than a drawer. Below
-    // it the drawer is a modal dialog and correctly marks the rest of the page
-    // `aria-hidden` — so "the board is still there" stops being a question the
-    // accessibility tree can answer, and asserting it would be asserting the opposite of
-    // what a modal is for. The drawer case has its own test below.
-    test.skip(
-      (info.project.use.viewport?.width ?? 0) < 1200,
-      'the inspector is a drawer below 1200',
-    );
-
+  test('a selected card opens the inspector over the board, not beside it', async ({ page }) => {
+    /**
+     * **The board gets a drawer at every width, and that is M8.5 correcting itself.**
+     *
+     * The inspector used to be a pane from 1200 up, sharing the row with whichever surface
+     * was open. Photographed at 1200 with a card selected, that put a 400px panel beside a
+     * board whose lanes are 244px each: 560px of board, which is two lanes and a sliver,
+     * with `IN PROGRESS` sliced down its middle. A surface built from fixed-width columns
+     * cannot give away a column and a half.
+     *
+     * The table and the graph keep the pane, and that is not an inconsistency: a table
+     * reflows its own columns and a canvas refits its own viewport, and both are genuinely
+     * better beside the detail than under it, because comparing a row to its log is the
+     * reason to open one. Their case is `run-detail-inspector.png`.
+     */
     await stubApi(page);
     await page.goto(BOARD_URL);
     await boardSettled(page);
 
     await page.getByRole('button', { name: /TASK-003/ }).first().click();
 
-    // Still the board, with a selection — not a navigation. The board and the table share
-    // the filter and the selection precisely so moving between them keeps your place.
-    await expect(page.getByRole('region', { name: /^Done, / })).toBeVisible();
+    const drawer = page.getByRole('dialog', { name: 'Task inspector' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer).toHaveAttribute('aria-modal', 'true');
+    // The board is behind it and correctly out of the accessibility tree — which is what a
+    // modal is for, and why this asserts the drawer rather than the lanes.
+    await expect(page.getByRole('region', { name: /^Done, / })).toHaveCount(0);
+
     await expect(page).toHaveScreenshot('board-selected.png', { fullPage: false });
   });
 
@@ -142,7 +150,7 @@ test.describe('control plane', () => {
     await expect(page).toHaveScreenshot('board-large.png', { fullPage: false });
   });
 
-  test('the board is operable with no drag and no mouse', async ({ page }, info) => {
+  test('the board is operable with no drag and no mouse', async ({ page }) => {
     await stubApi(page);
     await page.goto(BOARD_URL);
     await boardSettled(page);
@@ -156,15 +164,15 @@ test.describe('control plane', () => {
     await expect(first).toBeFocused();
     await first.press('Enter');
 
-    // The outcome differs by width and both are correct, so both are asserted. Above 1200
-    // the inspector is a pane and the card stays in the accessibility tree pressed; below
-    // it the inspector is a modal drawer, which hides the board behind it — which is what a
-    // modal is for. What the two share is that a keyboard alone opened the task.
-    if ((info.project.use.viewport?.width ?? 0) >= 1200) {
-      await expect(first).toHaveAttribute('aria-pressed', 'true');
-    } else {
-      await expect(page.getByRole('dialog')).toBeVisible();
-    }
+    // One outcome at every width as of M8.5: the board's inspector is a modal drawer, and
+    // a modal hides what is behind it. What matters here is that a keyboard alone opened
+    // the task — no pointer, and no drag to fall back on.
+    await expect(page.getByRole('dialog', { name: 'Task inspector' })).toBeVisible();
+
+    // And it closes the way every dismissible surface in this app closes.
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(first).toBeFocused();
   });
 });
 
@@ -255,13 +263,25 @@ test.describe('control plane at 390', () => {
     await expect(page.getByText('IMPLEMENTING')).toBeVisible();
     await expect(page.getByRole('button', { name: /Resume run/ })).toBeVisible();
 
-    // Every count, including the last one: `Failed` is fifth in the strip and was the one
-    // that fell off the end. Matched on the DOM text rather than the rendered capitals —
-    // the strip upper-cases in CSS, and an assertion written against the picture would
-    // pass or fail on a `text-transform` rather than on the label being there.
+    // **The five-count strip is not on this surface any more, and its absence is the
+    // point.** On the board it was the *second* statement of the same numbers — `TOTAL 9 ·
+    // COMPLETED 3 · RUNNING 2 · WAITING 4 · FAILED 0` directly above lane badges reading
+    // `BACKLOG 4 · READY 0 · IN PROGRESS 2 · REVIEW 0 · BLOCKED 0 · DONE 3` — one run, two
+    // partitions, on a 390px screen. The counts that matter here are the lane badges,
+    // asserted through the accessible names above, and the strip has the Tasks tab to
+    // itself where nothing else counts the run.
+    for (const label of ['Total', 'Completed', 'Waiting', 'Failed']) {
+      await expect(page.getByText(label, { exact: true })).toHaveCount(0);
+    }
+
+    // And it is one tab away, whole, with the count that used to fall off the end.
+    await page.getByRole('tab', { name: 'Tasks' }).click();
     for (const label of ['Total', 'Completed', 'Running', 'Waiting', 'Failed']) {
       await expect(page.getByText(label, { exact: true })).toBeVisible();
     }
+    expect(await pageOverflow(page)).toBeLessThanOrEqual(0);
+    await page.getByRole('tab', { name: 'Board' }).click();
+    await expect(page.getByRole('button', { name: /TASK-001/ })).toBeVisible();
 
     // A card's reason, which is the sentence the whole board exists to carry.
     await expect(page.getByText('waiting on TASK-004').first()).toBeVisible();

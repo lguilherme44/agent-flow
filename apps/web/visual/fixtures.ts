@@ -156,7 +156,25 @@ export const RUN: RunDetailView = {
 export const STAGES: StageViewResponse[] = [
   { stage: 'discovery', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'high', durationMs: 133_000 },
   { stage: 'architecture-impact', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'high', durationMs: 188_000 },
-  { stage: 'sdd', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'very_high', durationMs: 271_000 },
+  /*
+   * **`cached`, and it is the only fixture in the repository that carries one.**
+   *
+   * The status was added to `PIPELINE_STATUSES` with two deliberate browser-side guards
+   * behind it — `case 'cached'` in `stageTone`, and `solid={… || status === 'cached'}` in
+   * `StageStep` — and no fixture anywhere rendered it, so no screenshot contained one and
+   * no assertion touched either guard. A distinction the vocabulary draws, the code
+   * honours, and no instrument observes.
+   *
+   * SDD rather than another stage because SDD reuse is what the cache is actually for: a
+   * resumed run whose spec already exists does not re-write it. The duration is the
+   * original's, which is the honest reading — `cached` means somebody else paid it.
+   *
+   * Measured on the rendered chip: `cached` paints `rgba(59,130,246,0.12)` with a filled
+   * marker, `pending` paints nothing with a hollow one, and an *unrecognised* status paints
+   * `rgb(21,29,43)` with a hollow one. The background separates all three; the marker is
+   * where a reused stage would collapse back into "not yet".
+   */
+  { stage: 'sdd', status: 'cached', runner: 'claude', model: 'Claude Opus', reasoning: 'very_high', durationMs: 271_000 },
   { stage: 'planning', status: 'completed', runner: 'codex', model: 'GPT-5.6 Sol', reasoning: 'high', durationMs: 171_000 },
   { stage: 'plan-review', status: 'completed', runner: 'claude', model: 'Claude Opus', reasoning: 'high', durationMs: 94_000 },
   { stage: 'approval', status: 'completed', finishedAt: '2026-08-10T19:12:00.000Z' },
@@ -1290,6 +1308,43 @@ export const DELIVERY_NONE: DeliveryView = {
   checks: [],
   checkSummary: { total: 0, green: 0, red: 0, pending: 0 },
   detail: 'no forge is configured, so this run delivers nowhere',
+};
+
+/**
+ * A run that delivered, which no fixture in this repository has ever described.
+ *
+ * **`DELIVERY_NONE` was the only one, and its state is `disabled`, so `DeliveryPanel`
+ * returned `null` in every unit test and in all 296 visual baselines.** Under that cover
+ * the panel was styled with ten class names no stylesheet in the project defines — it
+ * rendered as raw HTML for two milestones and no gate could see it, because a class nobody
+ * writes down fails no compiler, no linter and no DOM assertion.
+ *
+ * The state is `checks_red` on purpose. It is the composition M7 §57 has the most to say
+ * about: red on the page beside a run that passed its own gates, and the sentence that
+ * stops a reader concluding the run failed. A green fixture would photograph the easy case
+ * and leave the one the panel exists for unphotographed.
+ */
+export const DELIVERY: DeliveryView = {
+  state: 'checks_red',
+  provider: 'github',
+  repository: 'lguilherme44/beahub',
+  branch: 'agent-flow/AF-2026-104-9f2c1a/integration',
+  publishedCommit: 'c0ffee1234567890abcdef1234567890abcdef12',
+  issue: { number: 412, url: 'https://github.com/lguilherme44/beahub/issues/412' },
+  pullRequest: {
+    number: 413,
+    url: 'https://github.com/lguilherme44/beahub/pull/413',
+    state: 'open',
+  },
+  checks: [
+    { id: 'c1', name: 'build', status: 'completed', conclusion: 'success' },
+    { id: 'c2', name: 'unit tests', status: 'completed', conclusion: 'success' },
+    { id: 'c3', name: 'integration tests (postgres)', status: 'completed', conclusion: 'failure' },
+    { id: 'c4', name: 'lint', status: 'in_progress' },
+  ],
+  checkSummary: { total: 4, green: 2, red: 1, pending: 1 },
+  syncedAt: '2026-08-10T20:02:00.000Z',
+  detail: 'Published to pull request #413. One remote check has failed and one is still running.',
 };
 
 export const REVIEW_NONE = {

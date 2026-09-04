@@ -24,8 +24,10 @@ async function openGraph(
   if (options.settled ?? true) await settle(page);
   else await expect(page.getByRole('heading', { level: 1 })).toHaveText(FIXTURE_RUN_ID);
 
-  await page.getByRole('button', { name: 'View as DAG' }).click();
-  await expect(page.getByText('Task dependencies')).toBeVisible();
+  // A tab as of M8.5, not a toggle in the run header. The graph is one of three renderings
+  // of the task list and belongs beside the other two rather than in a row of run actions.
+  await page.getByRole('tab', { name: 'Graph' }).click();
+  await expect(page.locator('.af-dag')).toBeVisible();
   // React Flow measures the pane and fits the view on the next frame.
   await page.waitForTimeout(400);
 }
@@ -215,7 +217,7 @@ test.describe('the dependency graph', () => {
     // point of the threshold — so the assertion is that *some* were drawn and
     // that the pane is alive, not that all five hundred exist as DOM nodes.
     expect(await page.locator('.react-flow__node').count()).toBeGreaterThan(0);
-    await expect(page.getByText('Task dependencies')).toBeVisible();
+    await expect(page.locator('.af-dag')).toBeVisible();
     expect(Date.now() - started).toBeLessThan(20_000);
 
     // And it still responds. At this size the view opens fitted — which is to

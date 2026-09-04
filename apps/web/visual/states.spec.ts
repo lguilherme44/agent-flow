@@ -89,8 +89,10 @@ test.describe('a plan waiting for review', () => {
 
     await page.goto('/dashboard');
     await settle(page);
+    // The gate lives on Overview as of M8.5, beside the plan hash approval binds to.
+    await page.getByRole('tab', { name: 'Overview' }).click();
 
-    // Scoped: the run header, the pipeline and the task rows all say WAITING.
+    // Scoped: the run header and the pipeline both say WAITING too.
     const card = page.locator('section').filter({ hasText: 'Plan approval' });
     await expect(card.getByText('WAITING')).toBeVisible();
     await expect(page).toHaveScreenshot('waiting-approval.png', { fullPage: false });

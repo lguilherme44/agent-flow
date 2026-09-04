@@ -23,11 +23,13 @@ test.describe('team', () => {
     await stubApi(page, WITH_TEAM);
     await page.goto('/dashboard');
     await settle(page);
+    // A tab as of M8.5. The panel used to sit in a bottom band with three others.
+    await page.getByRole('tab', { name: 'Team' }).click();
 
     const panel = page.locator('section').filter({
       has: page.getByRole('heading', { name: 'Team' }),
     });
-    await panel.scrollIntoViewIfNeeded();
+    await expect(panel).toBeVisible();
 
     // The line whose absence would be a silent product failure: the team was consulted,
     // could not answer, and the task ran on a role instead.
@@ -57,12 +59,13 @@ test.describe('team', () => {
     await stubApi(page, WITH_TEAM);
     await page.goto('/dashboard');
     await settle(page);
+    await page.getByRole('tab', { name: 'Team' }).click();
 
     const row = page
       .locator('section')
       .filter({ has: page.getByRole('heading', { name: 'Team' }) })
       .locator('..');
-    await row.scrollIntoViewIfNeeded();
+    await expect(row).toBeVisible();
 
     await expect(row).toHaveScreenshot('team-and-collaboration-row.png');
   });
@@ -72,8 +75,8 @@ test.describe('team', () => {
     await page.goto('/dashboard');
     await settle(page);
 
-    // TASK-003's row, opened the way a person opens it. At 1280 it sits below the fold
-    // of the table's own scroll container, so it is scrolled to first.
+    // TASK-003's card, opened the way a person opens it. At 1280 it can sit below the fold
+    // of its lane's own scroll container, so it is scrolled to first.
     const row = page.getByText('Recurrence Repository');
     await row.scrollIntoViewIfNeeded();
     await row.click();
@@ -97,8 +100,8 @@ test.describe('team', () => {
     await page.goto('/dashboard');
     await settle(page);
 
-    await page.getByRole('button', { name: 'View as DAG' }).click();
-    await expect(page.getByText('Task dependencies')).toBeVisible();
+    await page.getByRole('tab', { name: 'Graph' }).click();
+    await expect(page.locator('.af-dag')).toBeVisible();
     // React Flow measures the pane and fits the view on the next frame.
     await page.waitForTimeout(400);
 

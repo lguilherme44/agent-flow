@@ -37,8 +37,35 @@ export async function openDashboard(page: Page, world: World, path = '/dashboard
   await expect(heading).toHaveText(/^AF-\d{4}-\d{3}$/);
   // The stream, not a timer. Everything after this can rely on an event arriving
   // rather than on a poll eventually noticing.
-  await expect(page.getByText('Agent Flow is running')).toBeVisible();
+  await expect(page.getByText('Live', { exact: true })).toBeVisible();
   return (await heading.textContent()) ?? '';
+}
+
+/**
+ * Move to a run surface the way a person does (M8.5).
+ *
+ * A run page draws one surface at a time now: the board opens, and the pipeline, the
+ * table, the summaries, the review, the delivery record and the team are tabs beside it.
+ * A spec that wants a `<tr>` or the stage list says so, and says it by clicking the tab
+ * rather than by rewriting the address — a test that navigated by URL would pass over a
+ * tab strip that rendered nothing, which is exactly the failure `?panel=` had for two
+ * milestones.
+ */
+export async function openSurface(page: Page, name: string): Promise<void> {
+  await page.getByRole('tab', { name }).click();
+  await expect(page.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+}
+
+/** The task table, which is where `getByRole('row')` finds a task. */
+export async function openTasks(page: Page): Promise<void> {
+  await openSurface(page, 'Tasks');
+  await expect(page.getByRole('table')).toBeVisible();
+}
+
+/** The pipeline, the plan, the artifacts and the model spend. */
+export async function openOverview(page: Page): Promise<void> {
+  await openSurface(page, 'Overview');
+  await expect(page.getByRole('list', { name: 'Pipeline' })).toBeVisible();
 }
 
 /** Records every request the browser makes, for the assertions that are about that. */

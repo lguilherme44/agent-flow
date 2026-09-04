@@ -75,15 +75,39 @@ export async function stubApi(
   });
 }
 
-/** Waits for the parts that arrive asynchronously, so no shot catches a skeleton. */
+/**
+ * Waits for the parts that arrive asynchronously, so no shot catches a skeleton.
+ *
+ * **M8.5 changed what "settled" means, because the page no longer renders everything.**
+ * This used to wait for the pipeline and the `Model usage` heading, both of which were on
+ * the same screen as the tasks. They are behind the Overview tab now, so waiting on them
+ * would time out on every shot of every other surface — and a helper that waited for a
+ * thing the page deliberately does not show is a helper that would have to be deleted
+ * rather than fixed.
+ *
+ * What is left is what is on the run screen at every surface: the run id, the tab strip,
+ * and the first card. Surfaces that need more wait for their own thing; `settleOverview`
+ * below is the one that still needs the pipeline.
+ */
 export async function settle(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(FIXTURE_RUN_ID);
-  await expect(page.getByRole('list', { name: 'Pipeline' })).toBeVisible();
-  // The first row, which is above the fold at every viewport this suite covers.
-  // Waiting on a row further down made the 1280 run fail for the honest reason
-  // that fewer rows fit — a fact about the viewport, not about the app.
+  await expect(page.getByRole('tablist', { name: 'Run surfaces' })).toBeVisible();
+  // The first card, which is above the fold at every viewport this suite covers. Waiting
+  // on one further down made the 1280 run fail for the honest reason that fewer fit — a
+  // fact about the viewport, not about the app.
   await expect(page.getByText('Criar entidade Recurrence')).toBeVisible();
+}
+
+/** The Overview surface, whose donut Recharts measures and draws on the next frame. */
+export async function settleOverview(page: Page): Promise<void> {
+  await page.getByRole('tab', { name: 'Overview' }).click();
+  await expect(page.getByRole('list', { name: 'Pipeline' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Model usage' })).toBeVisible();
-  // Recharts measures its container and draws on the next frame.
   await page.waitForTimeout(300);
+}
+
+/** The Tasks surface, which is where the table lives now. */
+export async function settleTasks(page: Page): Promise<void> {
+  await page.getByRole('tab', { name: 'Tasks' }).click();
+  await expect(page.getByRole('table')).toBeVisible();
 }

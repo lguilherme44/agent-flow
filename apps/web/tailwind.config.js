@@ -78,7 +78,6 @@ export default {
         topbar: 'var(--af-topbar-height)',
         inspector: 'var(--af-inspector-width)',
         page: 'var(--af-page-padding)',
-        bottom: 'var(--af-bottom-height)',
       },
       fontFamily: {
         /* No `Inter`, and its absence is the honest state rather than a regression.

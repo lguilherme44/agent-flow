@@ -1,4 +1,4 @@
-import { expect, openDashboard, recordConsole, test } from './support/harness';
+import { expect, openDashboard, openOverview, openTasks, recordConsole, test } from './support/harness.js';
 
 /**
  * M2-11 — two tasks actually running at once, through the production path.
@@ -49,7 +49,10 @@ test.describe('a parallel run, through the server', () => {
     await world.cli('booking-api', ['approve']);
 
     // The run's own mode decides the width, and the page says so before anything
-    // has finished — this is the read model and the scheduler agreeing.
+    // has finished — this is the read model and the scheduler agreeing. On Overview
+    // as of M8.5: the isolation strip is facts about *how* the run executes, which is
+    // the layer behind the header's summary rather than part of it.
+    await openOverview(page);
     await expect(page.getByText('Tasks at once')).toBeVisible();
     await expect(page.getByText('2', { exact: true }).first()).toBeVisible();
     // Nothing was reduced, so nothing is explained away.
@@ -71,6 +74,8 @@ test.describe('a parallel run, through the server', () => {
     expect(mid.tasks.map((task) => task.state)).toEqual(['running', 'running']);
     expect(mid.tasks.map((task) => task.attempts)).toEqual([1, 1]);
 
+    // `in worktree` is a cell of the task table, which is the Tasks tab now.
+    await openTasks(page);
     await expect(page.getByText('in worktree')).toHaveCount(2);
 
     // Two worktrees, two attempt branches, one shared wave base — read out of Git
@@ -97,7 +102,7 @@ test.describe('a parallel run, through the server', () => {
 
     await world.release();
 
-    await expect(page.getByText('2 / 2').first()).toBeVisible({ timeout: 180_000 });
+    await expect(page.getByText('2/2 tasks')).toBeVisible({ timeout: 180_000 });
 
     const after = (await world.stateOf('booking-api')) as {
       integrationHead?: string;
@@ -223,9 +228,20 @@ test.describe('a parallel run, through the server', () => {
 
     await openDashboard(page, world);
 
+    // M8: the fact at the top of the queue, with the one action beside it — and this is
+    // the *always-visible* copy, on the strip that replaced the queue panel on a run
+    // screen. A P0 is the lead item, so it is on screen without opening anything.
+    const queue = page.getByRole('region', { name: /needs? attention/i });
+    await expect(queue.getByText('TASK-002 could not be merged')).toBeVisible();
+    await expect(queue.getByText('P0')).toBeVisible();
+
     // §15: one task integrated, the other is for a person to look at. Not `failed`
     // — the attempt was valid and the plan was not.
+    await openTasks(page);
     await expect(page.getByText('REVIEW REQUIRED')).toBeVisible();
+
+    // The conflict's own detail, on Overview with the rest of the isolation facts.
+    await openOverview(page);
     await expect(
       page.getByText('TASK-002 attempt 1 conflicted with the integration branch'),
     ).toBeVisible();
@@ -240,11 +256,6 @@ test.describe('a parallel run, through the server', () => {
     await expect(
       page.getByText(/TASK-001 integrated first and moved the head/).first(),
     ).toBeVisible();
-
-    // M8: the same fact, at the top of the queue, with the one action beside it.
-    const queue = page.getByRole('list', { name: /needs? attention/i });
-    await expect(queue.getByText('TASK-002 could not be merged')).toBeVisible();
-    await expect(queue.getByText('P0')).toBeVisible();
 
     // One merge on the branch, and the user's tree still holds nothing.
     const state = (await world.stateOf('booking-api')) as { gitRunKey?: string };
@@ -279,9 +290,22 @@ test.describe('a parallel run, through the server', () => {
     await expect.poll(async () => world.parked(), { timeout: 120_000 }).toEqual(['TASK-001']);
 
     // The page says one of two, and says why — this is the row that answers "why is
-    // this still running one task at a time".
+    // this still running one task at a time". On Overview with the rest of §21.2.
+    await openOverview(page);
     await expect(page.getByText('1 of 2')).toBeVisible();
-    await expect(page.getByText(/task workspace isolation does not/)).toBeVisible();
+    // **Two copies, and both are meant.** The attention strip carries the sentence as the
+    // headline it is always showing; the degradation list on Overview carries it as the
+    // detail behind that headline, beside the impact and the pipeline. M8 had the same pair
+    // and had to suppress one, because the queue and a header banner stacked 185px above a
+    // board that had 75px left; that geometry is gone — the strip is one line and the
+    // detail is on a surface you have to ask for. So this names which one it means rather
+    // than matching loosely, and the strip's own copy is asserted in the conflict test.
+    // The detail is a list item carrying the reason *and* its impact; the strip's copy is
+    // a line inside a link. `li` names the one this test is about without depending on
+    // which of the two the DOM happens to emit first.
+    await expect(
+      page.locator('li').filter({ hasText: /task workspace isolation does not/ }),
+    ).toBeVisible();
 
     // Held long enough for a broken limit to dispatch the sibling. Not a proof on
     // its own — the assertion that matters is the state read below — but a second
@@ -294,7 +318,7 @@ test.describe('a parallel run, through the server', () => {
     expect(mid.tasks.filter((task) => task.state === 'running')).toHaveLength(1);
 
     await world.release();
-    await expect(page.getByText('2 / 2').first()).toBeVisible({ timeout: 180_000 });
+    await expect(page.getByText('2/2 tasks')).toBeVisible({ timeout: 180_000 });
 
     // And the reduction is on the run's record, where it outlives the terminal.
     const after = (await world.stateOf('booking-api')) as {

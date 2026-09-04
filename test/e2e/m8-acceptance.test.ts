@@ -442,13 +442,48 @@ describe('M8 acceptance — one truth (ACC-16 … 21)', () => {
     expect(source).not.toMatch(/useMutation|fetch\(/);
   });
 
-  it('M8-ACC-19 URL filters round-trip', () => {
-    // `?view=board` and `?task=` are read from and written to the URL, so a reload, a
-    // bookmark and a link from the queue all mean the same thing.
-    const page = readFileSync(join(ROOT, 'apps/web/src/pages/RunDetailPage.tsx'), 'utf8');
+  it('M8-ACC-19 URL filters round-trip', async () => {
+    /**
+     * **Executed rather than grepped, and the difference found a two-milestone defect.**
+     *
+     * This used to read `RunDetailPage.tsx` and assert two regular expressions against its
+     * source — a check that goes green on a rename and red on a reformat, and that says
+     * nothing about what the page does with the parameter it matched. Its own comment
+     * claimed `?view=board` *and* `?task=` round-tripped; only `view` was asserted, and
+     * `task` was never read by anything. Nor was `?panel=`, which `routeFor` had been
+     * emitting for five of the attention queue's seven destinations since M8: every one of
+     * them navigated to a page that ignored the word it carried.
+     *
+     * M8.5 moved the URL contract into `apps/web/src/lib/run-surface.ts` — plain `.ts`,
+     * no JSX — precisely so this test can call it.
+     */
+    const { surfaceFromParams, paramsForSurface, RUN_SURFACES } = await import(
+      '../../apps/web/src/lib/run-surface.js'
+    );
 
-    expect(page).toMatch(/search\.get\('view'\) === 'board'/);
-    expect(page).toMatch(/next\.set\('view', 'board'\)/);
+    // Every surface a tab can select survives a round trip through the address bar. The
+    // board writes no parameter, because it is where a run opens.
+    for (const surface of RUN_SURFACES) {
+      const written = paramsForSurface(new URLSearchParams('project=demo'), surface);
+      expect(written.get('project'), `${surface} lost the project`).toBe('demo');
+      expect(surfaceFromParams(written) ?? 'board', `${surface} did not round-trip`).toBe(surface);
+    }
+
+    // `?view=dag` is the spelling every M8 link and every document uses, so it stays an
+    // accepted reading of the graph rather than becoming a broken bookmark.
+    expect(surfaceFromParams(new URLSearchParams('view=dag'))).toBe('graph');
+
+    // And `?panel=`, which the attention queue emits and nothing read until now.
+    expect(surfaceFromParams(new URLSearchParams('panel=review'))).toBe('review');
+    expect(surfaceFromParams(new URLSearchParams('panel=quality'))).toBe('review');
+    expect(surfaceFromParams(new URLSearchParams('panel=delivery'))).toBe('delivery');
+    expect(surfaceFromParams(new URLSearchParams('panel=team'))).toBe('team');
+    expect(surfaceFromParams(new URLSearchParams('panel=approval'))).toBe('overview');
+
+    // `?task=` seeds the selection, which is the half the old comment claimed and the old
+    // assertion never checked.
+    const page = readFileSync(join(ROOT, 'apps/web/src/pages/RunDetailPage.tsx'), 'utf8');
+    expect(page).toMatch(/search\.get\('task'\)/);
   });
 
   it('M8-ACC-20 a hundred-task board stays one projection', () => {

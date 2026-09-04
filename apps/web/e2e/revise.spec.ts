@@ -1,5 +1,5 @@
 import { POLL_INTERVAL_MS } from '../src/hooks/use-live-events';
-import { expect, openDashboard, recordRequests, sleep, test } from './support/harness';
+import { expect, openDashboard, openTasks, recordRequests, sleep, test } from './support/harness.js';
 
 /**
  * E2E-04 — revision, as a job.
@@ -39,7 +39,10 @@ test.describe('revision', () => {
     // 202: the job exists. The screen says what is happening rather than freezing.
     await expect(page.getByText('Re-planning…')).toBeVisible();
 
-    // And then the new plan, through the stream.
+    // And then the new plan, through the stream. Read from the table, which is the
+    // Tasks tab now — the stream event lands whichever surface is open, and this
+    // asserts the row.
+    await openTasks(page);
     await expect(page.getByRole('row').filter({ hasText: 'Cover the month boundary' })).toBeVisible(
       { timeout: 60_000 },
     );
@@ -55,7 +58,7 @@ test.describe('revision', () => {
 
     // The graph is the plan's, re-read because the plan changed — not re-laid-out
     // because a task ticked over.
-    await page.getByRole('button', { name: 'View as DAG' }).click();
+    await page.getByRole('tab', { name: 'Graph' }).click();
     await expect(page.locator('.react-flow__node')).toHaveCount(3);
     await expect(page.locator('.react-flow__edge')).toHaveCount(2);
 
@@ -83,7 +86,7 @@ test.describe('revision', () => {
     const runId = await openDashboard(page, world);
     const tasks = `/api/v1/runs/${runId}/tasks`;
 
-    await expect(page.getByText('Agent Flow is running')).toBeVisible();
+    await expect(page.getByText('Live', { exact: true })).toBeVisible();
     const settled = requests.countOf(tasks);
 
     await sleep(POLL_INTERVAL_MS + 2_000);

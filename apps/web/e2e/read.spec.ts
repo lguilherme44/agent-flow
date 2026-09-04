@@ -1,4 +1,4 @@
-import { expect, openDashboard, recordConsole, recordRequests, test } from './support/harness';
+import { expect, openDashboard, openOverview, openTasks, recordConsole, recordRequests, test } from './support/harness.js';
 
 /**
  * E2E-01 — a project and a run, read through the whole stack.
@@ -26,12 +26,16 @@ test.describe('a run, end to end', () => {
       page.getByRole('button', { name: /booking-api/ }).first(),
     ).toBeVisible();
 
-    // The pipeline, and a run that stopped where the workflow says it should.
-    await expect(page.getByRole('list', { name: 'Pipeline' })).toBeVisible();
+    // Where the run stopped, on the row that is always visible.
     await expect(page.getByText('WAITING APPROVAL').first()).toBeVisible();
+
+    // The pipeline, on the tab M8.5 moved it to: it is the detail behind a status badge
+    // the header already carries, so it costs a click rather than 90 permanent pixels.
+    await openOverview(page);
 
     // The plan the planner produced, as rows. Two tasks, and the titles are the
     // fake CLI's answer travelling all the way from a child process to the DOM.
+    await openTasks(page);
     await expect(page.getByRole('row').filter({ hasText: 'Add recurrence types' })).toBeVisible();
     await expect(page.getByRole('row').filter({ hasText: 'Generate occurrences' })).toBeVisible();
 
@@ -41,8 +45,8 @@ test.describe('a run, end to end', () => {
     await expect(page.getByText('Domain types for a weekly series.')).toBeVisible();
 
     // The graph, drawn from the server's own answer about the plan's edges.
-    await page.getByRole('button', { name: 'View as DAG' }).click();
-    await expect(page.getByText('Task dependencies')).toBeVisible();
+    await page.getByRole('tab', { name: 'Graph' }).click();
+    await expect(page.locator('.af-dag')).toBeVisible();
     await expect(page.locator('.react-flow__node')).toHaveCount(2);
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
 

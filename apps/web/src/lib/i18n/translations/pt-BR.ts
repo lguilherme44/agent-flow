@@ -11,9 +11,9 @@ export const ptBR: TranslationDictionary = {
     settings: 'Configurações',
     allProjects: 'Todos os Projetos',
     newRun: 'Nova Feature',
-    connected: 'Agent Flow está executando',
-    connecting: 'Conectando…',
-    disconnected: 'Desconectado',
+    connected: 'Ao vivo',
+    connecting: 'Reconectando — consultando',
+    disconnected: 'Fluxo offline',
   },
   common: {
     approve: 'Aprovar',

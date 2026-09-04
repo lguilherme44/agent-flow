@@ -63,7 +63,7 @@ test.describe('workspace isolation', () => {
 
     await page.goto(`${world.url}/dashboard?project=payments-api`);
     await expect(page.getByText('Add weekly recurrence to payments-api')).toBeVisible();
-    await expect(page.getByText('Agent Flow is running')).toBeVisible();
+    await expect(page.getByText('Live', { exact: true })).toBeVisible();
 
     const reads = (): number =>
       requests.all.filter(

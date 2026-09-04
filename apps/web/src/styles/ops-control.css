@@ -1,112 +1,66 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/**
+ * The shell: sidebar, command bar, content column (§66, M8 §41, M8.5 §7, §8).
+ *
+ * **One palette, and that is what this file stopped being.** It used to open with a
+ * second `:root` — `--surface-1`, `--text-primary`, `--sidebar-w`, its own radii,
+ * shadows and spacing — beside the `--af-*` set in `tokens.css`. The two disagreed,
+ * and the disagreement was visible rather than theoretical: measured in the browser,
+ * the sidebar rendered `#11151E` against a panel's `#0B111C` on a `#070B14` page, and
+ * its text `#F0F2F5` against the panel's `#F1F5F9`. Nobody chose either step. They are
+ * what two stylesheets produce when both describe the same surface.
+ *
+ * Every rule below now resolves through `tokens.css`, so §67 holds for the shell the
+ * way it already held for the content: a colour is written down once.
+ *
+ * **The Google Fonts import went with it, and its absence is a fix rather than a
+ * regression.** The file began by fetching Inter and JetBrains Mono over the network,
+ * and `.app-layout` set `font-family` to a stack headed by Inter — so the whole app,
+ * not just the sidebar, laid itself out in a face fetched from a third party at load.
+ * `tailwind.config.js` says in its own words that nothing loads Inter and that every
+ * measurement in `tokens.css` is in the system face; the probe said `Inter loaded`.
+ * One of the two was wrong, and it was not the file the measurements live in. A
+ * loopback tool with no authentication and no cloud must not need a public network
+ * fetch to decide how wide a column is.
+ *
+ * **Sixty-one of its hundred and seventeen classes were dead.** A whole DAG renderer
+ * (`.dag-node`, `.node-header`, `.dag-edges`, `.edge-running`), a whole log viewer
+ * (`.log-row`, `.log-time`, `.level-info`, `.cursor`), an agent list, an attention
+ * block and a metrics row — the skeleton of a mockup that shipped beside the app it
+ * was a mockup of. None of it failed a gate: a rule for a class nobody writes is
+ * invisible to the compiler, to the linter and to every DOM assertion. They are gone,
+ * and what is left is what the shell actually renders.
+ */
 
-:root {
-  /* Surface colors (Dark mode base) */
-  --bg-base: #090A0F;
-  --surface-0: #0B0E14; /* Global Background */
-  --surface-1: #11151E; /* Base Panels */
-  --surface-2: #161B26; /* Elevated Cards / Elements */
-  --surface-3: #1B212D; /* Interactive / Hover States */
-  
-  /* Glassmorphism Control */
-  --glass-bg: rgba(17, 21, 30, 0.65);
-  --glass-border: rgba(255, 255, 255, 0.06);
-  --glass-blur: blur(20px);
+/* ── The frame ─────────────────────────────────────────────────────── */
 
-  /* Borders */
-  --border-subtle: rgba(255, 255, 255, 0.04);
-  --border-base: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --border-active: rgba(255, 255, 255, 0.25);
-
-  /* Typography Colors */
-  --text-primary: #F0F2F5;
-  --text-secondary: #9BA3B5;
-  --text-tertiary: #6B7280;
-  
-  /* Semantic Colors */
-  --color-running: #60A5FA;
-  --color-running-bg: rgba(96, 165, 250, 0.12);
-  --color-success: #34D399;
-  --color-success-bg: rgba(52, 211, 153, 0.12);
-  --color-warning: #FBBF24;
-  --color-warning-bg: rgba(251, 191, 36, 0.12);
-  --color-error: #F87171;
-  --color-error-bg: rgba(248, 113, 113, 0.12);
-  --color-neutral: #9CA3AF;
-  --color-neutral-bg: rgba(156, 163, 175, 0.12);
-
-  /* Agent Colors */
-  --agent-blue: #60A5FA;
-  --agent-blue-bg: rgba(96, 165, 250, 0.1);
-  --agent-purple: #A78BFA;
-  --agent-purple-bg: rgba(167, 139, 250, 0.1);
-
-  /* Typography Fonts */
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
-
-  /* Spacing */
-  --space-xs: 4px;
-  --space-sm: 8px;
-  --space-md: 16px;
-  --space-lg: 24px;
-  --space-xl: 32px;
-
-  /* Border Radius */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.2);
-  --shadow-glass: 0 16px 40px rgba(0, 0, 0, 0.4);
-
-  /* Layout */
-  --sidebar-w: 240px;
-  --transition-fast: 150ms ease-in-out;
-}
-
-/* Utilities */
-.text-mono { font-family: var(--font-mono); }
-.text-sm { font-size: 0.875rem; }
-.text-xs { font-size: 0.75rem; }
-.text-muted { color: var(--text-secondary); }
-.font-medium { font-weight: 500; }
-.font-semibold { font-weight: 600; }
-.mt-2 { margin-top: var(--space-sm); }
-.mt-4 { margin-top: var(--space-md); }
-
-/* Ambient Background */
-.ambient-background {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: 
-    radial-gradient(circle at 15% 0%, rgba(96, 165, 250, 0.02), transparent 40%),
-    radial-gradient(circle at 85% 100%, rgba(167, 139, 250, 0.015), transparent 40%);
-}
-
-/* Application Shell */
 .app-layout {
   display: flex;
   min-height: 100vh;
   position: relative;
   z-index: 1;
-  background-color: var(--surface-0);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
+  color: var(--af-text);
 }
 
-/* Sidebar */
+/*
+ * The content column, and the padding is a token because the layout and the
+ * design system must not drift apart.
+ */
+.main-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────── */
+
 .sidebar {
-  width: var(--sidebar-w);
+  width: var(--af-sidebar-width);
   flex-shrink: 0;
-  background: var(--surface-1);
-  border-right: 1px solid var(--border-base);
+  background: var(--af-surface);
+  border-right: 1px solid var(--af-border);
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -115,188 +69,135 @@
 }
 
 .sidebar-header {
-  padding: var(--space-lg);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px var(--af-page-padding);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: 8px;
 }
 
+/*
+ * The one full-strength violet outside the running pipeline step.
+ *
+ * Flat, not a gradient. The gradient was the only two-colour fill in the app and it
+ * read as a logo pasted onto a tool — §5 asks for few competing accents, and a mark
+ * that introduces a second hue nothing else uses is the first one to go.
+ */
 .brand-logo {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #60A5FA, #A78BFA);
-  border-radius: var(--radius-md);
+  width: 24px;
+  height: 24px;
+  background: var(--af-primary);
+  border-radius: var(--af-radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.75rem;
+  font-size: 10px;
   font-weight: 700;
+  letter-spacing: 0.04em;
   color: #fff;
-  letter-spacing: 1px;
-}
-
-.brand-info {
-  display: flex;
-  flex-direction: column;
 }
 
 .brand-name {
+  font-size: 14px;
   font-weight: 600;
-  font-size: 0.95rem;
   letter-spacing: -0.01em;
-}
-
-.brand-env {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.status-indicator {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-.status-indicator.live {
-  background-color: var(--color-success);
-  box-shadow: 0 0 6px var(--color-success);
-}
-.status-indicator.offline {
-  background-color: var(--color-error);
-  box-shadow: 0 0 6px var(--color-error);
 }
 
 .sidebar-nav {
   flex: 1;
-  padding: var(--space-md);
+  padding: 6px 10px 10px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.nav-group {
-  margin-bottom: var(--space-lg);
-}
-
+/*
+ * One group label, not three.
+ *
+ * The sidebar carried `OPERATIONAL`, `SYSTEM` and `PROJECTS` over seven destinations
+ * and a project list — two of those headings named categories nobody navigates by,
+ * and each cost a row of height plus a rule the eye has to skip. `PROJECTS` stays: it
+ * labels a genuinely different kind of row, and it is the only one that earns the
+ * space (M8.5 §7).
+ */
 .nav-label {
   display: block;
-  font-size: 0.7rem;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
+  letter-spacing: 0.08em;
+  color: var(--af-text-faint);
   font-weight: 600;
-  margin-bottom: var(--space-sm);
-  padding-left: var(--space-xs);
+  padding: 14px 6px 6px;
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: 8px var(--space-xs);
-  color: var(--text-secondary);
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--af-text-muted);
   text-decoration: none;
-  font-size: 0.875rem;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
+  font-size: 13px;
+  border-radius: var(--af-radius-sm);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .nav-item:hover {
-  background: var(--surface-2);
-  color: var(--text-primary);
+  background: var(--af-surface-2);
+  color: var(--af-text);
 }
 
 .nav-item.active {
-  background: var(--surface-2);
-  color: var(--text-primary);
+  background: var(--af-surface-2);
+  color: var(--af-text);
   font-weight: 500;
 }
 
 .nav-item svg {
-  width: 16px;
-  height: 16px;
-  opacity: 0.6;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  opacity: 0.65;
 }
 
 .nav-item.active svg {
   opacity: 1;
-  color: var(--color-running);
-}
-
-.nav-item .badge {
-  margin-left: auto;
-  background: var(--surface-3);
-  padding: 2px 6px;
-  border-radius: 99px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  border: 1px solid var(--border-base);
+  color: var(--af-primary-bright);
 }
 
 .sidebar-footer {
-  padding: var(--space-md);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.user-profile {
+  padding: 10px var(--af-page-padding);
+  border-top: 1px solid var(--af-border);
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  justify-content: space-between;
+  gap: 8px;
 }
-
-.avatar {
-  width: 32px;
-  height: 32px;
-  background: var(--surface-3);
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.user-details {
-  display: flex;
-  flex-direction: column;
-}
-
-.user-name { font-size: 0.875rem; font-weight: 500; }
-.user-role { font-size: 0.75rem; color: var(--text-tertiary); }
 
 /*
  * Below 1024 the sidebar is a drawer, not a column (M8 §41).
  *
- * **Measured, and the measurement is the whole justification.** At 390px the sidebar took
- * 240 of them — 62% of the screen — and left the content 150px: the run id read
- * `AF-2026…`, a task card's title read `Gerar pr…`, and the attention queue wrapped to one
- * word per line. Every one of those is a fact an operator needs, and none of them was
- * legible. The board already stacked its lanes below this width; the shell around it never
- * adapted, so the stacking bought nothing.
+ * **Measured, and the measurement is the whole justification.** At 390px the sidebar
+ * took 240 of them — 62% of the screen — and left the content 150px: the run id read
+ * `AF-2026…`, a task card's title read `Gerar pr…`, and the attention queue wrapped to
+ * one word per line. Every one of those is a fact an operator needs, and none of them
+ * was legible.
  *
  * A drawer rather than a collapsed rail: §41 says mobile must not hide important
- * functionality to make the layout fit, and every destination in the sidebar is reachable
- * from nowhere else. Hidden behind one button is not hidden.
- *
- * Nothing here applies at or above 1024. The desktop layout this milestone photographed at
- * four widths is untouched — the media query is the boundary, and it is one-way.
+ * functionality to make the layout fit, and every destination in the sidebar is
+ * reachable from nowhere else. Hidden behind one button is not hidden.
  */
 @media (max-width: 1023.98px) {
   /*
-   * The drawer sits at `translateX(-100%)` when closed, and Chromium counts that geometry
-   * in `documentElement.scrollWidth`: measured 577 against a 390 viewport, 187 of overflow
-   * that no content produced. `clip` rather than `hidden` on purpose — `hidden` would make
-   * this a scroll container and break the `position: sticky` command bar inside it.
-   *
-   * This is the one case §9 distinguishes: an off-canvas panel's own position is not
-   * content overflowing the page, and clipping it is what makes the page-overflow check
-   * mean what it says.
+   * The drawer sits at `translateX(-100%)` when closed, and Chromium counts that
+   * geometry in `documentElement.scrollWidth`: measured 577 against a 390 viewport,
+   * 187 of overflow that no content produced. `clip` rather than `hidden` on purpose —
+   * `hidden` would make this a scroll container and break the `position: sticky`
+   * command bar inside it.
    */
   .app-layout {
     overflow-x: clip;
@@ -309,13 +210,14 @@
     bottom: 0;
     height: 100dvh;
     z-index: 60;
-    /* Off-canvas by default. `transform` rather than `display` so the drawer animates and
-       so its focusable children leave the tab order via `visibility`, not by unmounting —
-       a nav that unmounts loses the router links' active state on every open. */
+    /* Off-canvas by default. `transform` rather than `display` so the drawer animates
+       and so its focusable children leave the tab order via `visibility`, not by
+       unmounting — a nav that unmounts loses the router links' active state on every
+       open. */
     transform: translateX(-100%);
     visibility: hidden;
     transition: transform 180ms ease, visibility 0s linear 180ms;
-    box-shadow: var(--shadow-lg, 0 10px 30px rgb(0 0 0 / 45%));
+    box-shadow: var(--af-shadow-lg);
   }
 
   .sidebar[data-open='true'] {
@@ -334,19 +236,10 @@
     cursor: pointer;
   }
 
-  .main-content {
-    padding: var(--space-md);
-    gap: var(--space-md);
-  }
-
   /* The bar carries a menu button now, and the breadcrumb has to be able to give way.
-     Without `min-width: 0` a flex child refuses to shrink below its content and pushes the
-     actions off the right edge — which is page-level overflow, not an internal scroll. */
-  .command-bar {
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-  }
-
+     Without `min-width: 0` a flex child refuses to shrink below its content and pushes
+     the actions off the right edge — which is page-level overflow, not an internal
+     scroll. */
   .run-context {
     min-width: 0;
     overflow: hidden;
@@ -356,13 +249,14 @@
 /*
  * Above the drawer boundary the button does not exist and neither does the backdrop.
  *
- * **Descendant selectors, and that is not decoration.** `.sidebar-toggle { display: none }`
- * is one class, and so is Tailwind's `.flex` on the same element — same specificity, so the
- * winner is whichever stylesheet is emitted last, and it is not this one. The button
- * rendered at every width, added ten pixels to the command bar, and shifted every page in
- * the app down by ten: six visual baselines at 1280 and 1200 caught it, all of them shots
- * with the inspector open, none of them anywhere near the boundary I thought I had drawn.
- * `.command-bar .sidebar-toggle` is two classes and wins outright.
+ * **Descendant selectors, and that is not decoration.** `.sidebar-toggle { display:
+ * none }` is one class, and so is Tailwind's `.flex` on the same element — same
+ * specificity, so the winner is whichever stylesheet is emitted last, and it is not
+ * this one. The button rendered at every width, added ten pixels to the command bar,
+ * and shifted every page in the app down by ten: six visual baselines at 1280 and 1200
+ * caught it, all of them shots with the inspector open, none of them anywhere near the
+ * boundary I thought I had drawn. `.command-bar .sidebar-toggle` is two classes and
+ * wins outright.
  */
 @media (min-width: 1024px) {
   .command-bar .sidebar-toggle,
@@ -371,596 +265,238 @@
   }
 }
 
-/* Main Content */
-.main-content {
-  flex: 1;
-  padding: var(--space-lg);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-  min-width: 0; /* Prevents overflow */
-}
+/* ── Command bar ───────────────────────────────────────────────────── */
 
-/* Command Bar (Glassmorphism) */
-.glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-glass);
-}
-
+/*
+ * A hairline strip, not a floating pill (M8.5 §5).
+ *
+ * It was a 16px-radius glass panel with a 40px blur, its own shadow, and 24px of
+ * page gutter above it — 74px of vertical budget and a second elevated surface
+ * competing with the run header directly beneath it. Flush and flat costs 44 and
+ * competes with nothing: the bar names where you are, and where you are is not the
+ * loudest thing on a screen whose job is a board.
+ */
 .command-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-md) var(--space-lg);
-  border-radius: var(--radius-xl);
-  position: sticky;
-  top: var(--space-lg);
-  z-index: 50;
+  gap: 12px;
+  flex-shrink: 0;
+  height: var(--af-topbar-height);
+  padding: 0 var(--af-page-padding);
+  border-bottom: 1px solid var(--af-border);
+  background: var(--af-surface);
 }
 
 .run-context {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  min-width: 0;
 }
 
-.run-status {
+/*
+ * Everything below the command bar.
+ *
+ * The gutter lives here rather than on `.main-content`, because the bar is flush
+ * against the top of the column and the pages under it are not. `--flush` is for the
+ * one page whose own header and tab strip are full-bleed by design: a run workspace
+ * with a gutter would draw a hairline that stops 18px short of both edges, which reads
+ * as a misaligned box rather than as a division of the page.
+ */
+.page-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
-  align-items: center;
-  gap: var(--space-md);
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--af-page-padding);
 }
 
-.run-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+.page-body--flush {
+  padding: 0;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 99px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  border: 1px solid var(--border-base);
-}
+@media (max-width: 1023.98px) {
+  .page-body {
+    overflow: visible;
+    padding: 12px;
+  }
 
-.badge-running {
-  background: var(--color-running-bg);
-  border-color: rgba(96, 165, 250, 0.2);
-  color: var(--color-running);
-}
-
-.badge-success {
-  background: var(--color-success-bg);
-  border-color: rgba(52, 211, 153, 0.2);
-  color: var(--color-success);
-}
-
-.badge-neutral {
-  background: var(--color-neutral-bg);
-  color: var(--text-secondary);
-}
-
-.badge-blocked {
-  background: var(--color-warning-bg);
-  border-color: rgba(251, 191, 36, 0.2);
-  color: var(--color-warning);
-}
-
-.pulse-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: currentColor;
-  position: relative;
-}
-.pulse-dot::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  opacity: 0.5;
-  animation: pulse 2s infinite ease-out;
-}
-
-@keyframes pulse {
-  0% { transform: scale(0.5); opacity: 1; }
-  100% { transform: scale(2); opacity: 0; }
+  .page-body--flush {
+    padding: 0;
+  }
 }
 
 .command-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-}
-
-.search-input {
-  display: flex;
-  align-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-md);
-  padding: 6px 12px;
   gap: 8px;
-  width: 280px;
-  transition: border-color var(--transition-fast);
+  flex-shrink: 0;
 }
 
-.search-input:focus-within {
-  border-color: var(--border-strong);
-}
-
-.search-input input {
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  outline: none;
-  font-size: 0.875rem;
-  flex: 1;
-}
-
-.search-input input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.search-input kbd {
-  background: var(--surface-3);
-  border: 1px solid var(--border-base);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: 0.7rem;
-  color: var(--text-tertiary);
-  font-family: var(--font-sans);
-}
-
-.icon-btn {
-  background: var(--surface-2);
-  border: 1px solid var(--border-base);
-  color: var(--text-secondary);
-  border-radius: var(--radius-md);
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-.icon-btn:hover {
-  background: var(--surface-3);
-  color: var(--text-primary);
-}
-
-/* Dashboard Grid */
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  grid-auto-rows: min-content;
-  gap: var(--space-lg);
-  flex: 1;
-}
-
-/* Sections Base */
-.surface-1 {
-  background: var(--surface-1);
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-xl);
-  display: flex;
-  flex-direction: column;
-}
-
-.panel-header {
-  padding: var(--space-md) var(--space-lg);
-  border-bottom: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.section-title {
-  font-size: 0.875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-/* Section: Overview */
-.section-overview {
-  grid-column: 1 / -1;
-  padding: var(--space-lg);
-}
-
-.overview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-lg);
-}
-
-.metrics-row {
-  display: flex;
-  gap: var(--space-xl);
-}
-
-.metric {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.metric-value {
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.metric-label {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.overview-progress {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.progress-info {
-  display: flex;
-  justify-content: space-between;
-}
-
-.progress-bar {
-  height: 4px;
-  background: var(--surface-3);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--color-running);
-  border-radius: 99px;
-  box-shadow: 0 0 10px rgba(96, 165, 250, 0.4);
-}
-
-/* Section: DAG */
-.section-dag {
-  grid-column: 1 / 2;
-  min-height: 400px;
-}
+/* ── Live indicator ────────────────────────────────────────────────── */
 
 /*
- * The view takes the whole row when the inspector is not in it.
+ * `.status-indicator` used to be here, and removing it is this file keeping its own rule.
  *
- * Measured, not preferred: at 1440 the board got 750px beside an empty 1fr column, which
- * is 2.5 of six lanes with IN PROGRESS clipped mid-sentence. The grid reserved that column
- * whether or not anything rendered into it, so removing the inspector bought nothing —
- * `grid-column: 1 / 2` is a promise about the layout, and the layout has two shapes.
+ * It marked the sidebar's `Local` line and the footer's runner dot, and the M8.5 sidebar
+ * has neither — the version block those lived in was three constants. Leaving the rules
+ * behind would have reintroduced, one instance at a time, exactly the thing this file just
+ * lost sixty-one of. Verified with a selector-only scan: a name in a doc comment is not a
+ * rule, and the instrument that counts them has to know the difference.
  */
-.section-dag--full {
-  grid-column: 1 / -1;
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  flex-shrink: 0;
 }
 
-.view-toggles {
-  display: flex;
-  background: var(--surface-2);
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-}
-
-.view-toggles .toggle {
-  background: transparent;
-  border: none;
-  padding: 4px 12px;
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-weight: 500;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.view-toggles .toggle.active {
-  background: var(--surface-3);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-.dag-container {
-  flex: 1;
-  position: relative;
-  overflow: hidden;
-  background-image: 
-    radial-gradient(var(--border-subtle) 1px, transparent 0);
-  background-size: 24px 24px;
-  background-position: -12px -12px;
-}
-
-.dag-node {
-  position: absolute;
-  width: 180px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-md);
-  padding: var(--space-sm) var(--space-md);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 10;
-  box-shadow: var(--shadow-sm);
-}
-
-.dag-node.active {
-  border-color: rgba(96, 165, 250, 0.4);
-  box-shadow: 0 4px 20px rgba(96, 165, 250, 0.15);
-}
-
-.node-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.node-icon {
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.7rem;
-  font-weight: 800;
-  border-radius: 4px;
-}
-
-.status-completed .node-icon { background: var(--color-success-bg); color: var(--color-success); }
-.status-running .node-icon { background: var(--color-running-bg); color: var(--color-running); }
-.status-blocked .node-icon { background: var(--color-warning-bg); color: var(--color-warning); }
-
-.node-type {
-  font-size: 0.65rem;
-  color: var(--text-tertiary);
-  letter-spacing: 0.05em;
-}
-
-.node-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.node-title {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.node-meta {
-  font-size: 0.65rem;
-  color: var(--text-secondary);
-}
-
-.text-warning { color: var(--color-warning); }
-
-.dag-edges {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.dag-edges path {
-  fill: none;
-  stroke-width: 2px;
-}
-
-.edge-completed {
-  stroke: var(--border-strong);
-}
-
-.edge-running {
-  stroke: var(--color-running);
-  stroke-dasharray: 4;
-  animation: march 1s linear infinite;
-}
-
-@keyframes march {
-  to { stroke-dashoffset: -8; }
-}
-
-/* Section: Agents & Attention */
-.section-agents {
-  grid-column: 2 / 3;
-}
-
-.agents-list {
-  padding: var(--space-md);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.agent-card {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface-2);
-  border: 1px solid var(--border-base);
-  border-radius: var(--radius-md);
-}
-
-.agent-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.bg-blue { background: var(--agent-blue-bg); color: var(--agent-blue); }
-.bg-purple { background: var(--agent-purple-bg); color: var(--agent-purple); }
-
-.agent-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.agent-name {
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-.agent-task {
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 140px;
-}
-
-.attention-block {
-  background: var(--color-warning-bg);
-  border: 1px solid rgba(251, 191, 36, 0.2);
-  border-radius: var(--radius-md);
-  padding: var(--space-md);
-}
-
-.attention-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.icon-warning {
-  color: var(--color-warning);
-  font-size: 1rem;
-}
-
-.attention-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-warning);
-}
-
-.attention-desc {
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
+/* ── Buttons the shell owns ────────────────────────────────────────── */
 
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
+  border-radius: var(--af-radius-sm);
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  font-family: var(--font-sans);
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  color: var(--af-text-muted);
 }
 
 .btn-sm {
-  padding: 4px 10px;
-  font-size: 0.75rem;
-}
-
-.btn-full {
-  width: 100%;
-  padding: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  height: 26px;
 }
 
 .btn-outline {
-  border: 1px solid var(--border-strong);
-  color: var(--text-primary);
+  border: 1px solid var(--af-border);
+  color: var(--af-text-muted);
 }
 
 .btn-outline:hover {
-  background: var(--surface-3);
+  background: var(--af-surface-2);
+  border-color: var(--af-border-strong);
+  color: var(--af-text);
 }
 
-.btn-ghost {
-  color: var(--text-secondary);
-}
-.btn-ghost:hover {
-  background: var(--surface-2);
-  color: var(--text-primary);
+/* ── Badges the shell owns ─────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
 }
 
-/* Section: Logs */
-.section-logs {
-  grid-column: 1 / -1;
-  min-height: 240px;
+.badge-success {
+  background: var(--af-success-soft);
+  color: var(--af-success);
 }
 
-.log-actions {
-  display: flex;
-  gap: var(--space-xs);
+.badge-neutral {
+  background: var(--af-surface-2);
+  color: var(--af-text-muted);
 }
 
-.logs-container {
-  padding: var(--space-md);
+.badge-blocked {
+  background: var(--af-warning-soft);
+  color: var(--af-warning);
+}
+
+/* ── The run workspace ─────────────────────────────────────────────── */
+
+/*
+ * One column, and the surface at the bottom of it takes what is left (M8.5 §10).
+ *
+ * This replaced `.dashboard-grid`, a `2fr 1fr` grid whose four named areas —
+ * overview, dag, agents, logs — put the run panel, the tasks, the inspector and a
+ * band of eight summary panels on one scrolling page. Measured at 1440×900 before
+ * the change: the document ran to 1753px for a 900px viewport, the board occupied
+ * 555 of them, and 450px of header sat above it. A third of the page for the thing
+ * the page is for.
+ *
+ * The header rows are `flex-shrink: 0` and the surface is `flex: 1; min-height: 0`,
+ * so the board grows into the viewport rather than the page growing past it. Nothing
+ * below the surface scrolls the page; each region scrolls inside itself.
+ */
+.run-workspace {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  overflow-y: auto;
-  max-height: 300px;
+  flex: 1;
+  min-height: 0;
+  gap: 0;
 }
 
-.log-row {
-  display: grid;
-  grid-template-columns: 80px 40px 100px 1fr;
-  gap: var(--space-md);
-  padding: 4px 8px;
-  border-radius: 4px;
+/*
+ * The row that holds the active surface and, when one is open, the inspector.
+ */
+.run-surface-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  gap: var(--af-page-padding);
+  padding: var(--af-page-padding);
 }
 
-.log-row:hover {
-  background: var(--surface-2);
+.run-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
-.log-time { color: var(--text-tertiary); }
-.log-level { font-weight: 600; }
-.log-source { color: var(--color-neutral); }
-.log-message { color: var(--text-secondary); }
-
-.level-info { color: var(--color-running); }
-.level-warn { color: var(--color-warning); }
-.level-debug { color: var(--text-tertiary); }
-
-.active-cursor .log-message {
-  color: var(--text-primary);
+.run-inspector {
+  width: var(--af-inspector-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.cursor {
-  display: inline-block;
-  width: 6px;
-  animation: blink 1s step-end infinite;
+/*
+ * Below the pane boundary the surface owns the row and the inspector is a drawer.
+ * Stated here rather than in JavaScript so the two halves of one decision — the
+ * width and the presence — cannot be made in different places.
+ */
+@media (max-width: 1199.98px) {
+  .run-inspector {
+    display: none;
+  }
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+/*
+ * The board stacks its lanes below 1024, and the workspace has to stop being one
+ * viewport tall for that to be readable: six stacked lanes in 100vh is a 500px
+ * scroll region inside a 768px page.
+ */
+@media (max-width: 1023.98px) {
+  .main-content {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .run-surface-row {
+    padding: 12px;
+  }
+
+  .run-workspace {
+    min-height: 0;
+  }
 }
