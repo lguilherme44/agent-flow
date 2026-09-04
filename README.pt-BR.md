@@ -796,6 +796,9 @@ Não é roadmap — é o que é verdade hoje.
 - [x] `agent-flow ui` — servidor local e dashboard, oito páginas em nove rotas
 - [x] Um control plane que abre pelo que precisa de uma pessoa: atenção projetada de fatos,
       nunca armazenada, sem dispensar — o item sai quando o fato sai
+- [x] Uma superfície por vez em um run: o board abre, e o pipeline, os resumos, o review, o
+      registro de entrega e o time são abas ao lado dele — uma aba sem nada atrás não é
+      renderizada
 - [x] Um board operacional em que todo card diz *por que* está na coluna em que está, e que
       não tem drag, porque nenhuma ação de domínio significa "mova esta task para aquela coluna"
 - [x] Atualização ao vivo por SSE, com polling como fallback documentado em vez de padrão
@@ -899,6 +902,7 @@ Os documentos abaixo estão em inglês.
 |---|---|
 | [`docs/example-walkthrough.md`](docs/example-walkthrough.md) | Uma feature, quatro tasks, do `init` até uma branch mergeável |
 | [`docs/web-ui.md`](docs/web-ui.md) | O dashboard: os dois modos, as páginas, o DAG, os eventos ao vivo, o que ele muda e o que não muda, a API HTTP |
+| [`docs/specs/m8-5-ux-simplification.md`](docs/specs/m8-5-ux-simplification.md) | M8.5: uma superfície por vez — o que a densidade escondia, e os três defeitos que nenhum gate via |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | O que cada mensagem significa e o que fazer a respeito |
 | [`docs/roadmap.md`](docs/roadmap.md) | O que está feito, o que vem depois, e o que está fora de escopo |
 

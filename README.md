@@ -821,6 +821,9 @@ Not a roadmap — what is true today.
       never stored, with no dismiss — an item leaves when its fact does
 - [x] An operational board whose every card says *why* it is in the lane it is in, and
       which carries no drag, because no domain action means "move this task to that column"
+- [x] One surface at a time on a run: the board opens, and the pipeline, the summaries, the
+      review, the delivery record and the team are tabs beside it — a tab with nothing
+      behind it is not rendered
 - [x] Live updates over SSE, with polling as the documented fallback rather than the default
 - [x] Write actions — approve, reject, revise, retry, start — as one set of use cases the
       CLI and the HTTP API are both adapters over
@@ -921,6 +924,7 @@ Full roadmap, including what MVP 1 established and what is deliberately out of s
 |---|---|
 | [`docs/example-walkthrough.md`](docs/example-walkthrough.md) | One feature, four tasks, from `init` to a mergeable branch |
 | [`docs/web-ui.md`](docs/web-ui.md) | The dashboard: the two modes, the pages, the DAG, live events, what it can change and what it cannot, the HTTP API |
+| [`docs/specs/m8-5-ux-simplification.md`](docs/specs/m8-5-ux-simplification.md) | M8.5: one surface at a time — what the density was hiding, and the three defects no gate could see |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do about it |
 | [`docs/roadmap.md`](docs/roadmap.md) | What is done, what is next, and what is out of scope |
 

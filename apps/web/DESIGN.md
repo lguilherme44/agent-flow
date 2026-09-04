@@ -83,10 +83,9 @@ glass:
   blur: "20px"
 spacing:
   sidebar: "216px"
-  topbar: "56px"
+  topbar: "44px"
   inspector: "448px"
   page: "18px"
-  bottom: "164px"
 components:
   button-primary:
     backgroundColor: "{colors.primary}"
@@ -157,8 +156,8 @@ components:
     backgroundColor: "{colors.surface-2}"
     textColor: "{colors.text}"
   nav-item-active:
-    backgroundColor: "{colors.primary}"
-    textColor: "#ffffff"
+    backgroundColor: "{colors.surface-2}"
+    textColor: "{colors.text}"
   tooltip:
     backgroundColor: "{colors.surface-3}"
     textColor: "{colors.text}"
@@ -170,6 +169,15 @@ components:
     textColor: "{colors.text}"
     rounded: "{rounded.lg}"
     width: "min(560px, 92vw)"
+  run-tab:
+    backgroundColor: "transparent"
+    textColor: "{colors.muted}"
+    typography: "{typography.body-lg}"
+    padding: "8px 10px"
+  run-tab-active:
+    textColor: "{colors.text}"
+    borderBottomColor: "{colors.primary-bright}"
+    borderBottomWidth: "2px"
   dag-node:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
@@ -360,9 +368,16 @@ the font stack.
 
 ## Layout
 
-A fixed application frame, not a scrolling document. A 216px sidebar, a 56px
-topbar, and 18px of page padding — all tokens, so the layout and the design
+A fixed application frame, not a scrolling document. A 216px sidebar, a 44px
+command bar, and 18px of page padding — all tokens, so the layout and the design
 system cannot drift apart. The frame never scrolls; individual panes do.
+
+**One surface at a time (M8.5).** A run page draws a one-row header, an attention
+strip when there is one, a tab strip, and then the chosen surface filling
+everything left. It used to draw all of them at once: measured at 1440×900, the
+document ran to 1753px for a 900px viewport and the board held 555. The header
+rows are `flex-shrink: 0` and the surface is `flex: 1; min-height: 0`, so the
+board grows into the viewport rather than the page growing past it.
 
 Vertical rhythm inside panels is Tailwind's 4px scale: 12px/16px panel padding,
 gaps of 4, 6, 8 and 12px. Metrics live in a hairline-divided horizontal strip
@@ -372,21 +387,33 @@ difference.
 
 Two custom breakpoints, both measured rather than inherited:
 
-- **`pane` (1200px)** — where the task inspector stops sharing a row with the
-  table and becomes a right-hand drawer. The switch happens in JavaScript, not
-  with `hidden` classes, because CSS visibility would leave both inspectors in
-  the document and a screen reader would find two panels describing one task.
+- **`pane` (1200px)** — where the task inspector stops sharing a row and becomes
+  a right-hand drawer. The switch happens in JavaScript, not with `hidden`
+  classes, because CSS visibility would leave both inspectors in the document and
+  a screen reader would find two panels describing one task. **The board never
+  shares the row at any width**: its lanes are 244px each and there are six, so a
+  400px pane leaves two and a sliver — photographed at 1200 with `IN PROGRESS`
+  sliced down its middle. A table reflows its own columns and a canvas refits its
+  own viewport; a row of fixed-width columns cannot give one away.
 - **`wide` (1440px)** — the full layout. Below it: the inspector narrows from
-  448px to 400px, page padding from 18px to 14px, the bottom row from 164px to
-  160px (a measured floor — at 148px the execution summary's fourth row and the
-  approval hash were both sliced), the "Started by" fact is dropped, action
-  labels collapse to icons with `sr-only` text, and the nine-step pipeline
-  scrolls sideways instead of compressing.
+  448px to 400px, page padding from 18px to 14px, action labels collapse to icons
+  with `sr-only` text, and the nine-step pipeline scrolls sideways instead of
+  compressing.
+
+Below **1024** the sidebar becomes a drawer, the board stacks its lanes, and the
+tab strip puts its filter on a second row — one row at 390px pinned the five
+status chips to the right edge and sliced them to `All`, `Ru`, `Wa`, `Co`, `Fai`
+while the search box collapsed to a circle. The page-overflow check read zero the
+whole time, because the damage was inside a flex child rather than past the
+document edge.
 
 Horizontal overflow is announced with edge gradients that fade to the *containing
-surface*, driven by measurement, so a row that fits gets no fade at all. Custom
-scrollbars are furniture at every width; a fade appears only where content is
-genuinely hidden.
+surface*, driven by measurement, so a row that fits gets no fade at all. The
+pipeline's fade is `from-surface` because it sits inside a `Panel`; the board's is
+`from-bg` because it renders straight onto the page. Two gradients, two grounds,
+and getting either wrong is invisible to every assertion and obvious in a
+photograph. Custom scrollbars are furniture at every width; a fade appears only
+where content is genuinely hidden.
 
 ### Named Rules
 
@@ -397,6 +424,23 @@ in 530px is not a table.
 **The Scroll-Don't-Shave Rule.** A row of labelled steps scrolls sideways before
 it compresses. A stepper you can push is still a stepper; a stepper reading
 "Architectu…" beside "Implemen…" is not readable at all.
+
+**The Thirty-Second Rule (M8.5).** If an operator does not need a fact in the next
+thirty seconds, it does not get permanent space on the main screen. It gets a tab.
+The test of the rule is what is *absent*: a run page that shows the pipeline, the
+task counts and four summary cards at the same time as the board has failed it,
+whatever each of those looks like on its own.
+
+**The Absent Door Rule (M8.5).** A tab whose projection has nothing behind it is
+not rendered. Most runs have no reviewer and no forge; a permanently empty tab is
+the same box on every dashboard forever, at 60 horizontal pixels instead of 200
+vertical ones.
+
+**The Empty Lane Rule (M8.5).** A container with nothing in it stops being drawn
+as a container. An empty board lane keeps its name and its zero — dropping it
+would change the board's width as a run progresses — and loses its border, its
+fill and its card list. Three bordered 700px voids on a healthy run is half the
+board rendering nothing, loudly.
 
 ## Elevation & Depth
 
@@ -524,13 +568,25 @@ Two, and the difference between them is the hierarchy of the whole screen.
 
 ### Navigation
 
-Sidebar-first. The wordmark is a violet disc with a white dot beside bold
-uppercase 14px text. Nav items are 12px label text at 6px/8px padding on a 6px
-radius: muted at rest, Plane Two on hover, and a **full violet fill with white
-text and medium weight** when active — a perceptible surface, not a marginally
-different grey, because the active destination is the one thing in the sidebar
-that must be findable without reading. Route matching is exact, so a list page
-does not stay lit while a detail page is open.
+Sidebar-first. The wordmark is a flat 24px violet square carrying `AF` beside
+14px semibold text — flat rather than gradient, because a two-colour fill was the
+only one in the app and read as a logo pasted onto a tool.
+
+Nav items are 13px text at 6px/8px padding on an 8px radius: muted at rest, Plane
+Two on hover, and **Plane Two with full text colour, medium weight, a violet icon
+and a 2px violet rail at the left edge** when active. Route matching is exact, so
+a list page does not stay lit while a detail page is open.
+
+> This paragraph said "a full violet fill with white text" for two milestones and
+> the stylesheet has always said `surface-2`. A design document that describes a
+> treatment the app does not have is worse than one that describes nothing: the
+> next person implements from it and produces a third answer.
+
+**Seven destinations, one hairline, one heading (M8.5).** The list used to carry
+`OPERATIONAL` and `SYSTEM` above its two halves — two headings naming categories
+nobody navigates by, each costing a row and a rule the eye has to skip, on a list
+short enough to read whole. A hairline says the same thing at no vertical cost.
+`PROJECTS` stays, because it labels a genuinely different kind of row.
 
 A destination with no page behind it stays in the list, visibly disabled, with a
 title saying it is not implemented. A person cannot tell whether something
@@ -540,10 +596,37 @@ Project rows are two lines — name, then current run and status — with a
 status-toned dot. In a workspace of six repositories, a single line of name plus
 coloured dot answers "which of these needs me" only by hovering each one in turn.
 
-The topbar is a context bar, not a page title: a real breadcrumb reading
-workspace / project / section / run, where the section comes from the same table
-the sidebar highlights, so a destination cannot be lit in one place and named
-something else in the other.
+The footer carries one thing and it is the one thing that changes: whether a
+runner is down. It used to carry a terminal avatar, `Agent Flow v0.1.0` and
+`Local mode` beside a live dot — three constants — while the command bar carried
+an `L` avatar whose tooltip also read "Local mode". A footer of constants is a
+footer people stop looking at, and the runner warning goes with them.
+
+The command bar is a context bar, not a page title: a 44px hairline strip carrying
+a breadcrumb reading workspace / project / section / run, the stream indicator and
+the docs link. It was a 16px-radius glass panel with a 40px blur, its own shadow
+and a 24px gutter above it — 74 pixels and a second elevated surface competing
+with the run header directly beneath.
+
+### Run tabs (M8.5)
+
+Seven surfaces of one run, as an underlined tab strip rather than pills. Seven
+pills is seven bordered rectangles competing with each other and with everything
+below them; an underline marks one and leaves the rest as text.
+
+- **Rest:** 14px muted text, 10px/8px padding, no border and no fill.
+- **Active:** full text colour, medium weight, and a 2px Violet Bright rule
+  flush with the strip's own hairline. Inside the button and at `-bottom-px`, so
+  the marker sits *on* the border rather than a pixel above it — a rule that
+  misses by one reads as a rendering fault.
+- **Roving tabindex:** one stop for the whole strip, arrows move within it and
+  wrap. Seven tab stops would make the strip the longest thing on the page to
+  walk past.
+- **`aria-current="page"` as well as `aria-selected`**, because these tabs are
+  also addresses: every one is linkable and bookmarkable.
+- The filter sits at the right end of the strip as a *sibling* of the `tablist`,
+  never inside it — a search box announced as one of seven tabs is a search box
+  the arrow keys land on.
 
 ### Badges and Status Markers
 
@@ -666,6 +749,30 @@ entirely different things about whether anybody needs to act right now.
 - **Don't** name a font the project does not load, and don't add a webfont as a
   standalone edit. The stack must describe what actually renders, and changing what
   renders re-opens every measured width and both baseline sets.
+  **This rule was true in one file and false in the app for two milestones.**
+  `tailwind.config.js` dropped Inter from its stack and said in its own comment that
+  nothing loaded it — no `@font-face`, no stylesheet link, no font package — while
+  `ops-control.css` opened with a Google Fonts `@import` for Inter and JetBrains Mono
+  and `.app-layout` set `font-family` to a stack headed by Inter. Probed in the browser:
+  `Inter loaded`, and the computed family on `h1`, on every `Panel` and on the command
+  bar was Inter, not the system face every width in `tokens.css` was measured against.
+  A loopback tool with no authentication and no cloud was reaching the public internet
+  to decide how wide a column is. The import is gone. **A rule about what the app does
+  cannot be checked by reading the file that states it.**
+- **Don't** describe one surface with two stylesheets. `ops-control.css` carried a
+  second `:root` — `--surface-1`, `--text-primary`, `--sidebar-w` and their own radii,
+  shadows and spacing — beside `tokens.css`, and the two disagreed where they met:
+  measured, the sidebar rendered `#11151E` against a panel's `#0B111C` with text
+  `#F0F2F5` against `#F1F5F9`. Nobody chose either step; they are what two answers to
+  one question produce.
+- **Don't** leave a rule for a class no component writes. Sixty-one of that file's
+  hundred and seventeen were dead — a whole DAG renderer, a whole log viewer, an agent
+  list, an attention block, a metrics row — the skeleton of a mockup shipped beside the
+  app it was a mockup of. The reverse costs more: a component written against class
+  names no stylesheet defines renders as raw HTML and fails no compiler, no linter and
+  no DOM assertion, because the element is there and simply has no style. The delivery
+  panel spent two milestones that way, under cover of the only fixture for it being one
+  that made it return `null`.
 - **Don't** compress a row of labelled steps to make it fit. Scroll it, and fade
   the edge that hides content.
 - **Don't** render an error as a toast. A notice belongs beside the thing it is

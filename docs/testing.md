@@ -402,6 +402,183 @@ same discipline caught two of M8's architecture rules reading nothing: they used
 which blanks string literals, so a rule looking for `case 'review_required'` was reading
 `case ''`. Planting the construct is what found it.
 
+## M8.5 — where a green gate stops meaning anything
+
+The simplification pass found three defects, and the interesting thing about all three is
+that no gate in this repository could have caught any of them. They are worth naming as a
+class, because the class recurs.
+
+**A URL parameter nobody reads.** `routeFor` emitted `?panel=review` for two milestones
+and the run page read only `?view=`. Three tests covered it and all three were green:
+`attention.test.tsx` asserted the *string* the function returned; `M8-ACC-19` asserted two
+regular expressions against `RunDetailPage.tsx`'s source, and its own comment claimed
+`?task=` round-tripped while nothing checked it. The fix is not a better regex. The URL
+contract moved to `apps/web/src/lib/run-surface.ts` — plain `.ts`, no JSX — so the node
+suite can `await import` it and *call* `surfaceFromParams` over every surface. **An
+acceptance test that greps its subject goes green on a rename and red on a reformat.**
+
+**A CSS class nobody defines.** `DeliveryPanel` was written against ten of them and
+rendered as raw HTML. The element exists; it simply has no style, so the compiler, the
+linter and every `getByRole` are all satisfied. The only thing that reports it is a
+picture — and a picture needs a fixture that renders the component. The only delivery
+fixture was `DELIVERY_NONE`, whose state is `disabled`, so the guard clause returned `null`
+in every unit test and in all 296 baselines. **A component no fixture renders is a
+component with no guaranteed appearance**, and the first photograph of this one found a
+second defect within seconds: an unformatted ISO date.
+
+**A stylesheet nobody compares.** `ops-control.css` carried a second `:root` and a Google
+Fonts import while `tailwind.config.js` stated in its own comment that no font was loaded.
+Both files were internally consistent. The disagreement lived between them, and the only
+instrument that saw it was `getComputedStyle` in a real browser:
+
+```js
+// visual/harness or an ad-hoc probe — the shape that found it
+getComputedStyle(document.querySelector('.sidebar')).fontFamily
+// → "Inter, system-ui, …"   while tailwind.config.js said nothing loads Inter
+```
+
+**And an appearance-only change is invisible to a DOM suite.** Making empty board lanes
+stop drawing a border and a fill was mutation-tested against `board.test.tsx` *before* the
+rule for it existed: thirteen assertions stayed green with the boxes restored. The
+assertion that bites is structural — an empty lane renders no `<ul>` — plus the baseline.
+When you change how something looks and every test still passes, that is information about
+the tests.
+
+The pattern in all four: **ask what instrument would report this, and prove the instrument
+works before trusting its silence.** Every rule added in M8.5 was mutation-tested; the
+sequence is in the milestone's own report.
+
+That is one half of the class. The other half is worse, because the instrument is fine.
+
+### The same class from the other side: the instrument looked, and the code flattened
+
+The four above share a blind instrument. There is a second shape where the instrument is
+fine and the *code* removes the distinction before anything can observe it — and it
+recurred three times in one evening, in `core`, all on the pipeline view.
+
+A stage served from cache read `pending`. A stage generating at that instant read
+`pending`. A stage with one task completed and ten queued read `pending`. Three different
+facts, one symbol, and the symbol asserts the strongest possible claim: *nothing happened
+here*.
+
+Each had its own cause, and the causes are worth separating because the fixes are not
+interchangeable:
+
+- **Reported, never recorded.** Both cache paths called `onProgress`, which reaches the
+  terminal of whoever typed the command and nowhere else. A dashboard opened afterwards
+  had no event to read. The fix is a `stage_reused` event, not a better renderer.
+- **Derived from a field that lags.** `running` asked `state.stage`, which is set to
+  `discovery` before discovery runs and again when it finishes — and the function's own
+  header said so, in prose, above the line that used it anyway. Observed mid-flight: the
+  field read `architecture-impact` while the log was already inside `sdd`.
+- **Fell off the end of a ternary.** Implementation with partial progress matched no
+  branch and landed on the final `: 'pending'`.
+
+**The default branch is where unmodelled states go to die, and `pending` is the most
+dangerous default there is**, because it does not admit ignorance — it asserts absence. A
+reader acts on it: they conclude the run has not started, or has stalled, and go looking
+for a problem that is not there.
+
+Why no test caught any of the three: every one of them had coverage, and the coverage
+exercised the branches somebody thought about. Nobody writes a case for `default:` — that
+is what `default:` is for. The assertion that would have bitten is not about a branch at
+all but about the mapping: **each distinct fact must produce a distinct output**, checked
+across the whole input space rather than at the points that were already understood.
+
+Each of the three was checked by reverting it and watching the new test go red, and each
+was read back off the live API rather than off a fixture — which for these is the check that
+matters, because the whole failure is a projection collapsing three inputs into one output
+and a fixture is a hand-written input.
+
+**Computed style is the other section's main instrument, and it earns exactly one hop of
+this chain.** This paragraph has been wrong twice, in opposite directions, and both drafts
+are worth keeping on the record because the second is the subtler mistake.
+
+The first claimed all three fixes were verified by reading colour off the page. False: two
+were read off the API. The correction then said computed style "would say nothing here,
+because the colour was always faithfully rendering whatever the projection handed it" —
+which threw away a true half with the false one. `stageTone()` maps a status to a tone, and
+**the API cannot see that mapping**: `cached` can arrive in the response and still be drawn
+as an unrecognised status, one layer further out, in the exact shape this section is about.
+
+So it was measured, on a pipeline carrying one of each status plus one the switch has no
+opinion about:
+
+| `status` | chip background | marker |
+|---|---|---|
+| `completed` | `rgba(52,211,153,0.12)` success | `rgb(52,211,153)` filled |
+| `cached` | `rgba(59,130,246,0.12)` info | `rgb(59,130,246)` filled |
+| `running` | `rgba(124,58,237,0.16)` primary | `rgb(124,58,237)` filled |
+| `pending` | `rgba(0,0,0,0)` — nothing | hollow |
+| unrecognised | `rgb(21,29,43)` surface-3 | hollow |
+
+**And the numbers correct the reasoning that predicted them.** The draft that argued for
+measuring said an unrecognised `cached` would draw "the same grey as `pending`". It does
+not: it draws `surface-3`, a visible box, where `pending` draws nothing. The background
+channel separates them fine.
+
+**The collapse is on the marker, and that is the sharper claim.** An unrecognised status and
+`pending` both draw a hollow ring — and hollow-versus-filled is precisely how this pipeline
+says "not yet" against "settled". Which means there are *two independent browser-side
+guards*, not one, and each covers a different channel: `case 'cached'` in `stageTone` keeps
+the fill's hue, and `solid={… || stage.status === 'cached'}` in `StageStep` keeps it filled
+at all. Delete either and `cached` slides one channel back toward "nothing happened here" —
+the same flattening as the three `core` defects above, reached from the browser instead.
+
+The rule that generalises: **each hop in the chain needs its own instrument, and the API is
+not the last hop when the output is a picture.** With the corollary this paragraph earned
+the hard way: **cutting an over-claim is not the same as cutting the claim**, and a
+correction is an assertion too — it wants the same measurement it is demanding.
+
+### And the picture is not the instrument for a tone
+
+Following that rule to its end found a fourth case, and it is the sharpest of the night
+because the blind instrument is the one this repository trusts most for exactly this
+question. `playwright.config.ts` opens by saying that DOM assertions all passed while a
+card title wrapped and a badge upper-cased itself, and that "only a picture tells the
+difference". **For a status tone on a pipeline chip, the picture cannot.**
+
+Changing the reference fixture's SDD stage from `completed` to `cached` turns that chip blue
+with a full-strength blue ring — obvious to anybody looking at it. The visual suite passed,
+227 of 227, against a baseline still showing it green. Measured by moving one knob at a time:
+
+| configuration | pixels counted as different |
+|---|---|
+| `threshold: 0` — count every differing pixel | **6182** (ratio 0.0048) → would fail |
+| `threshold: 0.2`, the default this repo uses | **134** — the ring, and nothing else |
+| those 134 against `maxDiffPixelRatio: 0.002` (2592 px) | passes |
+
+**Two independent margins, either one sufficient on its own.** The per-pixel threshold
+discards 98% of the difference: a `TONE_BG` fill is 12% alpha, so success-soft and info-soft
+composite to `(16,40,43)` and `(17,31,54)` over the panel ground — around nine units of 255
+apart, well inside a 0.2 YIQ distance. What survives is the marker's ring, full-strength and
+about 134 pixels, which the ratio allowance then absorbs.
+
+**Neither number is wrong and the config should not change.** The comment above
+`maxDiffPixelRatio` is right that zero tolerance turns antialiasing into a red suite nobody
+trusts, and it was written by somebody who had measured that. The mistake would be believing
+the gate covers something it does not.
+
+So tone is covered where coverage works, and the split is worth stating because it is not
+obvious:
+
+- **the mapping** — `lib/status.test.ts`, a pure function, exhaustive over the contract enum,
+  mutation-proved (deleting `case 'cached'` turns three assertions red). No brittleness and
+  no tolerance.
+- **the word** — `toContainText('cached')` on the pipeline list. §97 has required status to
+  be icon *plus text* since the first panel, and this is why that requirement pays twice: the
+  channel that makes a greyscale screenshot and a colour-blind reader work is also the only
+  channel a screenshot diff can hold.
+- **the picture** — layout, clipping, wrapping, overflow, alignment. What it was always for.
+
+The general form, and it applies past this repository: **a gate with a tolerance has a
+blind spot the exact size of that tolerance, and it is worth knowing its dimensions rather
+than its name.** Ours is 0.2 YIQ per pixel and 0.2% of the frame. Anything a design
+deliberately makes subtle — a 12% wash, a hairline, a one-step surface change — lives inside
+it.
+
+---
+
 ## Dogfood — the real CLIs, never in CI
 
 The layers above are free, fast and deterministic because no coding CLI is ever

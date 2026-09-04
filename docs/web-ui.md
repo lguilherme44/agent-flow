@@ -63,20 +63,76 @@ reached twice is one project rather than two histories.
 | `/` | **The control plane.** What needs a person, most urgent first, then every project with the state of its current run. |
 | `/dashboard` | The run most likely to want you: executing, then waiting at a gate, then most recent. Renders the same component `/runs/:runId` does. |
 | `/runs` | History. Filters are local — narrowing the list costs no round trip. |
-| `/runs/:runId` | One run: pipeline, tasks, inspector, artifacts, approval, execution summary, model usage — and, when the agents spoke, what they said. |
+| `/runs/:runId` | One run, on **one surface at a time**. The board opens; the graph, the table, the pipeline and its summaries, the review, the delivery record and the team are tabs beside it. |
 | `/projects` | The registry, with each project's current run and — once one is selected — its runner health. |
 | `/agents` | What each of the nine logical roles would run, and which cannot be resolved. Read-only. |
 | `/prompts` | The prompts this installation ships. They belong to the installation, not to a repository. |
 | `/analytics` | Aggregates over recent runs: duration per stage, model usage, outcomes. |
 | `/settings` | The effective configuration, sectioned, with the origin of every value. Read-only. |
 
-Two search parameters carry state that belongs in a URL rather than in a component:
+Four search parameters carry state that belongs in a URL rather than in a component:
 
 - `?project=<id>` — which project you are looking at. A reload, a bookmark and a link
   all mean the same thing. Switching leaves the run behind, because a run id belongs to
   one project.
-- `?view=board` — the operational board; `?view=dag` — the graph. Both instead of the
-  table, in the same panel, sharing its filter and its selection.
+- `?view=` — which surface of a run is open: `board` (the default, and written as
+  nothing), `dag`, `tasks`, `overview`, `review`, `delivery`, `team`.
+- `?panel=` — the same choice in the attention queue's vocabulary: `approval` and
+  `quality` land on `overview` and `review` respectively, the rest map by name.
+- `?task=<id>` — which task the inspector opens on.
+
+**The last two did nothing for two milestones.** `routeFor` emitted them for six of the
+attention queue's seven destinations from M8, and the run page read only `?view=`, so a
+row reading "Review the findings" navigated to a page that ignored the word `review` and
+left the panel below the fold. Its unit tests asserted the *string* the function returned;
+`M8-ACC-19` asserted two regular expressions against the page's source and claimed in its
+own comment that `?task=` round-tripped. Nothing was red. A URL parameter nobody reads
+fails no compiler, no linter and no assertion — the same shape as a CSS class nobody
+defines, which is what the delivery panel was wearing at the same time.
+
+Both are read now, in `apps/web/src/lib/run-surface.ts`, which is plain `.ts` with no JSX
+precisely so `M8-ACC-19` can call `surfaceFromParams` rather than grep for it.
+
+---
+
+## One surface at a time
+
+M8 left the run page rendering everything it knew. Measured at 1440×900 with a real run:
+the document ran to **1753px for a 900px viewport**, the board held **555 of them**, 450px
+of header sat above it and 850px of panels below the fold — a run panel with a hero header,
+an isolation strip and a nine-step pipeline; the task panel with its own title, filter and
+five-count strip; four summary cards; and the review, delivery, team and collaboration
+panels stacked underneath. A third of the page for the thing the page is for, and eight
+panels permanently open for somebody who came to look at one.
+
+Nothing left the product. Every panel is a tab:
+
+```text
+run id · IMPLEMENTING · feature        3/9 tasks · 41m22s · stage 7 of 9 · 50% ▓▓▓  [⏵]
+P1  the plan is waiting for a decision                            Review the plan →
+Board  Graph  Tasks  Overview  Review  Delivery  Team              [search] [filters]
+──────────────────────────────────────────────────────────────────────────────────────
+                          the surface, filling the viewport
+```
+
+**A tab whose projection is empty is not rendered at all** — the same "absent rather than
+empty" the review, delivery and collaboration panels already applied to themselves, moved
+up one level so it costs a door rather than a room. Most runs have no reviewer and no
+forge, and they show four tabs rather than seven.
+
+The board, the graph and the table share the filter and the selection, which is what makes
+them views rather than pages. The header carries what changes while you watch — which run,
+what state, how far, how long, and the two or three things you can do about it. `stage 7 of
+9` is the pipeline's answer in nine characters; the strip itself, with its durations,
+runners and models, is on Overview.
+
+**The inspector is a pane on the table and the graph, and a drawer on the board.** Not a
+width rule: the board's lanes are 244px each and there are six of them, so a 400px pane
+leaves 560 — two lanes and a sliver, photographed at 1200 with `IN PROGRESS` sliced down
+its middle. A table reflows its own columns and a canvas refits its own viewport, and both
+are genuinely better beside the detail than under it. Exactly one inspector is ever in the
+document, chosen in JavaScript rather than hidden in CSS: a CSS-hidden second copy is
+invisible to the eye and entirely present to a screen reader.
 
 ---
 
@@ -138,6 +194,19 @@ domain action means "move this task to that column". Reassignment stays M5's; WI
 capacity and is not re-invented on screen. An architecture rule asserts no drag handler
 exists, and the consequence is that the board is keyboard-operable by construction.
 
+**An empty lane is a heading, not a container.** It keeps its name and its zero — a board
+that dropped BLOCKED while nothing was blocked would change width as a run progresses, and
+a column that appears is a column somebody has to notice appearing — but it draws no
+border, no fill and no card list. That was a 104px rail while the board had 555 pixels of
+page; once the board got the viewport it would have been a 700px empty rectangle, and three
+of them on a healthy run is half the board rendering nothing, loudly.
+
+**A filter narrows the cards and never the count.** While one is on, a lane header reads
+`2 / 4`: the projection put four tasks here and you are looking at two. Recounting the badge
+would answer a different question from the one `BoardLaneView.count` answers, and showing
+`4` over two cards would read as a rendering fault. The predicate is `filterTasks`, the same
+function the table uses — two predicates over one filter is two definitions of `waiting`.
+
 **Every card says why it is where it is.** That sentence is the reason the board exists:
 the DAG already knew the task waits on TASK-004, `TeamView.deferrals` already knew the wave
 held it for capacity, and the review thread already knew two findings block it — none of
@@ -195,9 +264,10 @@ that reason.
 
 ## The dependency graph
 
-The **View as DAG** toggle draws the plan's edges. It is a second rendering of the same
-task list — same filter, same selection — not a separate page, so switching does not
-lose your place.
+The **Graph** tab draws the plan's edges. It is a second rendering of the same task list —
+same filter, same selection — not a separate page, so switching does not lose your place.
+`?view=dag` is still the spelling in the address, because every link M8 shipped and every
+bookmark somebody has says it.
 
 The structure comes from the server, which derives it from the plan through the same
 `core/dag` the scheduler runs on. The browser lays out what it is given and never
@@ -367,10 +437,13 @@ Every answer comes out of the same projections the *prompt* was built from. Noth
 browser folds a log or decides a status — a component that re-derived one would be the one
 that drifts, because the real answer is not on screen.
 
-The panel is a second row under the four bottom cards, and it is **not rendered at all**
-when there is nothing in it. A project that has not enabled collaboration sees exactly the
-row it saw before M4; an always-empty fifth card for a feature that ships off would be a
-box on every dashboard forever.
+The panel shares the **Team** tab, and it is **not rendered at all** when there is nothing
+in it — nor is the tab, when neither it nor the team has anything to say. Team comes first
+there because it answers "who is doing this", which is the context that makes an open
+thread legible: "executor.normal is blocked" reads differently once the screen has said
+which member that is. A project that has not enabled collaboration sees exactly what it saw
+before M4; an always-empty box for a feature that ships off would be on every dashboard
+forever.
 
 Bounded like `Artifacts` already was — the top few of each section, with the footer
 carrying the totals — and ordered by what nothing mechanical settles:
@@ -407,8 +480,9 @@ label. Architecture rules now forbid the dashboard from defining `decideQuality`
 boolean, and from reducing a findings array into a status. `unsatisfiedGates` arrives from
 the server precisely so nothing recomputes it.
 
-Like the collaboration panel, the card is **absent** rather than empty when a run has no
-reviewer. Most runs have none, and a permanent empty box teaches people to skip the row.
+Like the collaboration panel, it is **absent** rather than empty when a run has no
+reviewer — and so is its tab. Most runs have none, and a permanent empty box teaches people
+to skip the row it lives in.
 
 What it shows, in the order that matters:
 
@@ -442,9 +516,26 @@ the server, rendered here.
 so the dashboard can answer "where did this run go" without the server ever holding a
 token. Every *write* to a forge stays behind the CLI, which is where an operator is.
 
-The card is **absent** rather than empty when no forge is configured, which is most runs.
-It shows the delivery state in words, the facts underneath, and — when checks exist — the
-sentence that has to be on the page:
+**It rendered as unstyled HTML for two milestones, and no gate could see it.** The panel
+was written against ten class names — `card`, `card__header`, `delivery__facts`,
+`delivery__checks`, `badge--delivery-published` and their neighbours — that no stylesheet
+in this repository defines and that are not Tailwind utilities either. An unstyled heading,
+a `<dl>` with browser default margins, a bulleted list, inside an app where every other
+panel is a `Panel`. Nothing was going to catch it: a class nobody writes down fails no
+compiler, no linter and no DOM assertion, because the element is there and simply has no
+style. And the only delivery fixture in the repository was `DELIVERY_NONE`, whose state is
+`disabled`, so the component's own guard returned `null` in every unit test and in all 296
+visual baselines. **A component no fixture renders is a component with no guaranteed
+appearance.** M8.5 rebuilt it on the design system, gave it a fixture that publishes, and
+photographed it. The first photograph immediately found a second defect the tests could not:
+`Last sync` was printing a raw ISO string, the only unformatted date anywhere in the app.
+
+The `ForgeFailure` on the projection is drawn now too, and never was. A run whose
+publication was refused for want of a token showed the state and never the reason.
+
+The panel — and its tab — is **absent** rather than empty when no forge is configured,
+which is most runs. It shows the delivery state in words, the facts underneath, and — when
+checks exist — the sentence that has to be on the page:
 
 > These are observations. The local quality decision is already made, and a check here does
 > not change it in either direction.
