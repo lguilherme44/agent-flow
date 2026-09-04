@@ -164,7 +164,12 @@ describe('implementation is read from the tasks', () => {
         { id: 'TASK-002', state: 'queued' },
       ]),
     );
-    expect(find(partial, 'implementation')?.status).toBe('pending');
+    // The guarantee this test exists for: partial progress never reads as done.
+    expect(find(partial, 'implementation')?.status).not.toBe('completed');
+    // And it is not `pending` either — that was the third instance of a state the
+    // vocabulary could express being collapsed into "nothing here". One task
+    // completed among ten queued drew like a stage that had not begun.
+    expect(find(partial, 'implementation')?.status).toBe('running');
 
     const whole = buildStageTimeline(
       [],
@@ -267,5 +272,52 @@ describe('a reused stage is not a stage that never ran', () => {
       state({ stage: 'sdd', status: 'failed' }),
     );
     expect(view.find((entry) => entry.stage === 'sdd')?.status).toBe('pending');
+  });
+});
+
+/**
+ * The same shape a third time: a state the vocabulary could express, collapsed
+ * into "nothing here". Implementation with one task done and ten queued drew
+ * identically to implementation that had not started — measured on AF-2026-002
+ * right after TASK-001 completed.
+ */
+describe('implementation in progress is not implementation not started', () => {
+  const withTasks = (...taskStates: string[]) =>
+    buildStageTimeline(
+      [],
+      state({
+        stage: 'implementation',
+        status: 'approved',
+        tasks: taskStates.map((s, i) => ({ id: `TASK-00${String(i + 1)}`, state: s, attempts: 0 })),
+      }),
+    ).find((entry) => entry.stage === 'implementation');
+
+  it('reports progress once any task has moved off the queue', () => {
+    expect(withTasks('completed', 'queued', 'queued')?.status).toBe('running');
+  });
+
+  it('still reports pending while every task is queued', () => {
+    expect(withTasks('queued', 'queued')?.status).toBe('pending');
+  });
+
+  it('reports pending for a plan with no tasks at all', () => {
+    expect(withTasks()?.status).toBe('pending');
+  });
+
+  it('keeps completed when every task landed', () => {
+    expect(withTasks('completed', 'completed')?.status).toBe('completed');
+  });
+
+  it('lets a failure outrank progress', () => {
+    expect(withTasks('completed', 'failed', 'queued')?.status).toBe('failed');
+  });
+
+  it('lets a running task outrank the derived progress', () => {
+    expect(withTasks('completed', 'running', 'queued')?.status).toBe('running');
+  });
+
+  it('treats a ready task as progress, not as pending', () => {
+    // `ready` means the graph unblocked it: the stage is under way.
+    expect(withTasks('ready', 'queued')?.status).toBe('running');
   });
 });

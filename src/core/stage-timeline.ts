@@ -211,7 +211,21 @@ function implementationView(state: RunState): StageView {
         ? 'blocked'
         : [...states].every((value) => value === 'completed')
           ? 'completed'
-          : 'pending';
+          : // Under way, with nothing executing at this instant.
+            //
+            // The last branch used to be `pending`, and it made a stage with real
+            // work behind it draw exactly like one that had not begun: measured on
+            // AF-2026-002, where TASK-001 was completed, ten tasks were queued, and
+            // the pipeline said `pending`. The third time this shape has appeared —
+            // a state the vocabulary could express, collapsed into "nothing here".
+            //
+            // `running` is the honest answer for the stage even when no agent is
+            // live: `implementation` runs once per task, so it is in progress from
+            // the first task that moved until the last one lands. `pending` is kept
+            // for the case it actually describes — every task still queued.
+            states.size === 1 && states.has('queued')
+            ? 'pending'
+            : 'running';
 
   return { stage: 'implementation', status };
 }
