@@ -23,6 +23,7 @@ import { actionDeps, currentRunId, exitCodeFor, render } from './approve.js';
 import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
+import { writeProgress } from './render/progress.js';
 import {
   composeRunIdentity,
   resolveRunGitIdentity,
@@ -175,44 +176,11 @@ export function resumeHint(stage: string | undefined): string {
 }
 
 /**
- * One line per stage, at the start and at the end of it.
- *
- * The start line used to be behind `--verbose`, and the cost was four minutes of
- * an empty terminal on a real run: `discovery` took 4m08s and printed nothing
- * until it was over. There is no way to tell a slow stage from a dead process in
- * that window, which is the state an operator is least able to wait out.
- *
- * On a TTY the finished line overwrites the started one, so the pipeline stays a
- * single growing list rather than doubling. Piped or redirected — a log file, CI,
- * `nohup` — `\r` means nothing, so both lines are written and the log reads as a
- * timeline, which is what a log is for.
+ * One line per stage. Delegates to the shared renderer — `run` had the identical
+ * defect and the fix should not exist twice.
  */
 export function writeStageProgress(stage: string, status: string, verbose: boolean): void {
-  const interactive = process.stdout.isTTY === true;
-
-  // `stale` is a note about the cache, not a second start. Discovery emits
-  // `started` and then `stale` when the fingerprint no longer matches, and
-  // rendering both printed `→ discovery` twice above a single `✓ discovery` —
-  // measured on a real run. The stage is already announced; that it is running
-  // because the cache expired is detail, and detail is what `--verbose` is for.
-  if (status === 'stale') {
-    if (verbose) process.stdout.write(`  · ${stage} (cache stale, re-running)\n`);
-    return;
-  }
-
-  if (status === 'started') {
-    process.stdout.write(`  → ${stage}${interactive ? '' : '\n'}`);
-    return;
-  }
-
-  const mark = status === 'completed' ? '✓' : status === 'cached' ? '·' : '→';
-  const suffix = status === 'cached' ? ' (cached)' : '';
-
-  // `\r` returns to the start of the line and the pad covers the longest stage
-  // name plus its marker, so a shorter line cannot leave the tail of a longer one
-  // behind it.
-  const prefix = interactive && !verbose ? '\r' : '';
-  process.stdout.write(`${prefix}  ${mark} ${stage}${suffix}`.padEnd(34) + '\n');
+  writeProgress(stage, status, verbose);
 }
 
 /**
@@ -381,7 +349,7 @@ export function nextStepAfterPlanning(verdict: 'PASS' | 'FAIL' | undefined): str
   if (verdict !== 'FAIL') return 'Then: agent-flow approve';
 
   return [
-    'The automated review rejected this plan. Its findings are above.',
+    'The automated review rejected this plan. Its findings are in `agent-flow status`.',
     '',
     'Fix the plan with: agent-flow revise "<instruction>"',
     'Or approve anyway with: agent-flow approve --force  (recorded on the run)',

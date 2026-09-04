@@ -289,7 +289,8 @@ Detalhes, incluindo o que não ter autenticação significa e não significa:
   isolamento por worktree, que precisa de `git worktree add --lock --reason`. O
   `agent-flow doctor` reporta sua versão contra esse piso.
 - Pelo menos uma CLI de agente, instalada e autenticada: **Claude Code**, **Codex CLI**
-  ou **AGY (Antigravity)**. Esses três são os adapters de agente de código que existem;
+  ou **AGY (Antigravity)**. Três dos quatro adapters dirigem uma CLI de código; o quarto
+  fala com um endpoint OpenAI-compatible e serve as stages que não tocam arquivo;
   veja [Agentes de código](#agentes-de-código).
 - *(Opcional)* Um endpoint local ou remoto de modelo compatível com OpenAI (ex.: Ollama, llama.cpp, vLLM) para inteligência de contexto consultiva e triagem mecânica.
 

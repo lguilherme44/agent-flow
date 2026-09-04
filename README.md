@@ -320,9 +320,15 @@ Details, including what having no authentication does and does not mean:
   isolation, which needs `git worktree add --lock --reason`. `agent-flow doctor`
   reports your version against that floor.
 - At least one agent CLI, installed and logged in: **Claude Code**, **Codex CLI** or
-  **AGY (Antigravity)**. Those three are the coding-agent adapters that exist; see
+  **AGY (Antigravity)**. Three of the four adapters drive a coding CLI; the fourth speaks to
+  an OpenAI-compatible endpoint and serves the stages that touch no file. See
   [Coding agents](#coding-agents).
-- *(Optional)* A local or remote OpenAI-compatible model endpoint (e.g. Ollama, llama.cpp, vLLM) for advisory context intelligence and mechanical triage.
+- *(Optional)* A local or remote OpenAI-compatible model endpoint (e.g. Ollama, llama.cpp, vLLM).
+  It can serve nine of the twelve prompts as a first-class runner — `sdd`, `planning`,
+  `plan-review`, `verification`, `final-review` and `architecture-impact` receive text and
+  produce text — as well as advisory context intelligence and mechanical triage. The three it
+  cannot serve (`discovery`, `implementation`, `code-review`) declare `workingDirectory: true`,
+  and an inference endpoint has no filesystem on the other side.
 
 **Credentials & Privacy:**
 - **Local CLI Runners:** Agent Flow invokes the CLIs you have already authenticated in your environment. It never reads, stores, or transmits runner credentials.

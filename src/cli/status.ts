@@ -396,8 +396,25 @@ export function render(
   if (runtime.gate !== undefined) {
     lines.push('', runtime.gate.action);
   }
+  // Two different ways a run stops before a plan, and they need different words
+  // and different commands.
+  //
+  // `plan_rejected_revisable` is the review having read a plan and turned it
+  // down: `revise` is exactly right, and spending a revision cycle is the point.
+  //
+  // A run that died in a planning stage never reached the review, and saying "the
+  // review rejected this plan" sends the reader looking for a quality problem
+  // that does not exist. `--from` is the tool there: it keeps every artifact
+  // before the stage that broke, and costs no revision cycle — which matters,
+  // because a `standard` workflow only has two.
   if (runtime.status === 'plan_rejected_revisable') {
     lines.push('', 'The review rejected this plan. Revise it with: agent-flow revise "<instruction>"');
+  } else if (runtime.status === 'failed' && state.stage !== 'implementation') {
+    lines.push(
+      '',
+      `This run stopped in "${state.stage}"; the stages before it are kept.`,
+      `Resume with: agent-flow feature "<same description>" --from ${state.stage}`,
+    );
   }
 
   return lines.join('\n');

@@ -4,6 +4,7 @@ import { retryTask, start } from '../app/run-actions.js';
 import { explainRouting, routeTask } from '../core/router.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
+import { writeProgress, writeTaskOutcome } from './render/progress.js';
 import { actionDeps, currentRunId, exitCodeFor, printWarnings, render } from './approve.js';
 import type { GlobalOptions } from './index.js';
 
@@ -37,12 +38,15 @@ export async function runRunCommand(
 
     const outcome = await start(deps, runId, {
       ...(options.taskId === undefined ? {} : { taskId: options.taskId }),
+      // Announced on start, not only on finish. The old line was behind
+      // `--verbose`, and a task that took 45 minutes before timing out printed
+      // nothing for all of them — the same defect `feature` had, on a third
+      // surface. See `render/progress.ts`.
       onTaskStart: (taskId) => {
-        if (globals.verbose) process.stdout.write(`  → ${taskId}\n`);
+        writeProgress(taskId, 'started', globals.verbose);
       },
       onTaskFinish: (result) => {
-        const mark = result.status === 'completed' ? '✓' : '✗';
-        process.stdout.write(`  ${mark} ${result.task} (${result.status})\n`);
+        writeTaskOutcome(result.task, result.status, globals.verbose);
       },
     });
 

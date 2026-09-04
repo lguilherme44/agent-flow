@@ -97,6 +97,16 @@ export const FAILURE_CLASSES = [
   'runner_quota_exhausted',
   'runner_permission_required',
   'malformed_runner_output',
+  /**
+   * The output parsed, satisfied the schema, and failed a rule about the plan.
+   *
+   * Distinct from `malformed_runner_output`, which it used to share, and the
+   * distinction is what a reader acts on: malformed sends someone looking at the
+   * contract or the runner, and this one is the only case where `revise` is the
+   * right tool. Measured on a real run — six coherent tasks, valid JSON, rejected
+   * because two of them were independent in the DAG and declared the same file.
+   */
+  'plan_rejected_by_checks',
   // §3.3 TASK — the agent produced work and it was judged.
   'implementation_completed',
   'validation_unsatisfied',

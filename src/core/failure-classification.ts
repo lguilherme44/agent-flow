@@ -190,6 +190,19 @@ const DEFINITIONS: readonly FailureClassDefinition[] = [
     consumesAttempt: true,
     evidence: ['problems list'],
   },
+  {
+    // Parsed, validated, and turned down by a plan rule. `requires_human` because
+    // retrying the same prompt reproduces the same plan: what this needs is an
+    // instruction, which is exactly what `revise` carries.
+    failureClass: 'plan_rejected_by_checks',
+    group: 'RUNNER',
+    refines: 'invalid_output',
+    disposition: 'requires_human',
+    authority: 'mechanical',
+    consumesAttempt: true,
+    evidence: ['problems list'],
+    humanAction: 'Fix the plan with: agent-flow revise "<instruction>"',
+  },
 
   // ---- §3.3 TASK — the agent produced work and it was judged.
   {
@@ -414,6 +427,12 @@ export function defaultClassForRunnerError(code: RunnerErrorCode): FailureClass 
  */
 const AMBIGUOUS_CODE_DEFAULTS: Partial<Record<RunnerErrorCode, FailureClass>> = {
   execution_failed: 'runner_execution_failed',
+  // `invalid_output` is refined by `malformed_runner_output` and by
+  // `plan_rejected_by_checks`, and the generic one is the honest default for the
+  // same reason `execution_failed` has one: only the pipeline knows the schema
+  // passed before a plan rule turned the output down, and it asserts that class
+  // explicitly. Assuming the sharper one from a bare code would be a guess.
+  invalid_output: 'malformed_runner_output',
 };
 
 // ---------------------------------------------------------------------------

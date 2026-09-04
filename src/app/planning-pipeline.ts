@@ -208,6 +208,10 @@ export class PlanningPipeline {
             `The plan violates TRIVIAL ceremony budget/checks:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
             undefined,
             result.execution,
+            // Parsed and schema-valid; turned down by a plan rule. Saying
+            // `malformed_runner_output` here sends the reader looking at the
+            // contract instead of at the plan.
+            { failureClass: 'plan_rejected_by_checks' },
           );
         }
 
@@ -243,6 +247,10 @@ export class PlanningPipeline {
             `The plan violates SIMPLE ceremony budget/checks:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
             undefined,
             result.execution,
+            // Parsed and schema-valid; turned down by a plan rule. Saying
+            // `malformed_runner_output` here sends the reader looking at the
+            // contract instead of at the plan.
+            { failureClass: 'plan_rejected_by_checks' },
           );
         }
 
@@ -351,6 +359,8 @@ export class PlanningPipeline {
           `The plan does not satisfy the SDD:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
           undefined,
           result.execution,
+          // See the two ceremony checks above: valid output, rejected plan.
+          { failureClass: 'plan_rejected_by_checks' },
         );
       }
 

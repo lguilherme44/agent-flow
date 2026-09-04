@@ -277,6 +277,17 @@ export async function runDoctorCommand(
     // which refuses every task in worktree mode. That is the gate working
     // correctly and it is also a wall most Node projects walk into on their
     // first run, so it is worth one throwaway checkout to say so in advance.
+    // Announced before it runs, because it is the slowest thing `doctor` does by
+    // an order of magnitude: a throwaway checkout plus the project's own install
+    // command. Measured on a Vue project, it spent minutes with zero bytes of
+    // output and was taken for a hang and killed. Everything else here buffers
+    // into `lines` and prints at the end, which is right for fast checks and
+    // wrong for this one.
+    const installCommand = config.project?.commands?.install;
+    if (installCommand !== undefined) {
+      process.stdout.write(`  → probing install (\`${installCommand}\` in a fresh checkout)…\n`);
+    }
+
     for (const line of await probeInstallCleanliness({
       fs,
       processRunner,
