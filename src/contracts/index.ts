@@ -1,4 +1,5 @@
 export * from './common.schema.js';
+export * from './model-identity.js';
 export * from './config.schema.js';
 export * from './utility-model-config.schema.js';
 export * from './collaboration-config.schema.js';
