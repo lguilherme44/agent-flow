@@ -497,9 +497,17 @@ command bar that shifted every page in the app down by ten, caught by six existi
 baselines at 1280 and 1200.
 
 **A live run, operated from the dashboard.** `AF-2026-006`, four tasks, approved and
-started from the screen. Three tasks proved READY → IN PROGRESS → DONE naturally, the
+started from the screen. Three tasks moved BACKLOG → IN PROGRESS → DONE naturally, the
 fourth reached REVIEW, and the board moved with the page loaded once and never reloaded —
-`loads=1` at every sample. The stage-lag fix landed in `37a3751` behaved correctly live:
+`loads=1` at every sample.
+
+**No task was ever photographed in the READY lane, and that is a property of the lane, not
+a miss.** READY means "the graph allows it; a wave has not taken it", and in a serial run
+the wave takes a task in the same tick the graph releases it — the ten-second trace
+recorded five distinct board states and READY was in none of them. The lane is proved over
+fixtures and by `M8-ACC`, never live. Making it observable live would mean either a run
+wide enough that readiness outpaces capacity, or recording lane history rather than
+sampling it; neither is M8. The stage-lag fix landed in `37a3751` behaved correctly live:
 the first sample after start already read `implementing`, never `planning`.
 
 **The run did not reach DONE, and the reason is worth recording.** Its fourth task was
@@ -525,6 +533,19 @@ is `fileEdit: false` — only `openai-runner` — on a write stage, which is mec
 to be impossible and still costs an attempt. Wiring that in is small; making the check
 discriminate *at all* means re-measuring `commandExecution` for every adapter, which is a
 new capability model. Documented here rather than built.
+
+**Worktree hygiene, and what it exposed about `clean`.** With no run in flight, `clean`
+was asked what it would reclaim and answered `Nothing to remove — 4 run(s), keeping 5`.
+That is correct — all four runs are evidence — but it is also the whole story, and the whole
+story is a gap: `~/.agent-flow/worktrees` holds 203 directories and 2.9 GB, and `clean`
+cannot reach any of them. Reclamation is scoped per run (`worktrees of <runId>`), so a
+worktree whose run state was already removed has nothing left to attribute it to and
+becomes unreachable by the tool that created it. Nothing was deleted by hand — the disk is
+the only thing at stake and a `rm -rf` here would have hidden the defect rather than fixed
+it. Follow-up: `clean` needs a sweep that starts from the worktree directory rather than
+from the run list.
+
+---
 
 ## 19. Architectural critique of this specification
 
