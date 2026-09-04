@@ -451,6 +451,13 @@ export class RunReader {
       const progress = state.tasks.find((entry) => entry.id === id);
       const result = await store.readTaskResult(runId, id);
 
+      // What ran, when no `result.json` says. See `newestAttemptProvenance` — in worktree
+      // mode this is the ordinary case for a failed or refused task, not an edge.
+      const attempted =
+        result === null
+          ? await this.newestAttemptProvenance(project, runId, id, progress?.attempts ?? 0)
+          : undefined;
+
       views.push({
         id,
         title: task?.title ?? id,
@@ -475,7 +482,7 @@ export class RunReader {
               },
             }),
         ...(result === null
-          ? {}
+          ? (attempted ?? {})
           : {
               runner: result.runner,
               ...(result.model === undefined ? {} : { model: result.model }),
@@ -697,6 +704,66 @@ export class RunReader {
     }
 
     return bytes;
+  }
+
+  /**
+   * What ran, for a task whose `result.json` does not exist (Issue #21).
+   *
+   * **In worktree mode most tasks that ran and did not finish have no `result.json`, and
+   * that is by design rather than by accident.** `task-executor.ts` writes one only in
+   * sequential mode; under worktrees the sole writer is the Integrator's success path, and
+   * its own docstring says an isolated run "does not write `result.json` at all". So every
+   * `failed` and every `review_required` task in an isolated run leaves the summary's
+   * provenance block empty — forever, not until something catches up.
+   *
+   * Measured on this repository's own runs before it was believed: all four are
+   * `isolationMode: worktree`, and two of their eight tasks sit at `review_required` with
+   * `attempts: 2`, no `result.json`, and `attempt-1`/`attempt-2` artifacts naming the
+   * runner that ran them. `validationJudgement` is `unsatisfied` on both, so even
+   * `awaitingIntegration` is false: the row carried a state, a count, and nothing about
+   * what was doing the work.
+   *
+   * **And this reader already had the answer.** `attemptHistoryOf` opens exactly these
+   * files to build `AttemptHistoryView`, model included. The summary simply never asked.
+   *
+   * Newest first, because the question a board answers is what is running this task *now*
+   * — and because an earlier attempt's runner may have been substituted by a fallback
+   * since. `attempts + 1` covers the attempt in flight whose artifact lands before the
+   * counter does, the same bound `attemptHistoryOf` uses and for the same reason.
+   *
+   * **Only the identity triple.** `durationMs` is deliberately not backfilled: it is a
+   * property of the *task*, and the newest attempt of a task that ran twice took less
+   * time than the task did. `validationPassed` likewise — an attempt's `validation.passed`
+   * is about that attempt's commands, and the summary's field reads as the task's verdict.
+   * Reporting either from here would be answering a question with a different question's
+   * answer, which is the whole failure mode this milestone is about.
+   */
+  private async newestAttemptProvenance(
+    project: RegisteredProject,
+    runId: string,
+    taskId: string,
+    attempts: number,
+  ): Promise<Pick<TaskSummaryView, 'runner' | 'model' | 'reasoning'> | undefined> {
+    // A task nothing has dispatched has no artifact to find, and probing for one on every
+    // paint of a nine-task board would be eighteen filesystem calls to learn nothing.
+    if (attempts <= 0) return undefined;
+
+    const paths = runPaths(project.path, runId);
+
+    for (let attempt = attempts + 1; attempt >= 1; attempt -= 1) {
+      const entry =
+        (await this.readFailedAttempt(paths.failedAttempt(taskId, attempt))) ??
+        (await this.readSucceededAttempt(paths.taskAttempt(taskId, attempt)));
+      if (entry === undefined) continue;
+
+      return {
+        runner: entry.runner,
+        ...(entry.model === undefined ? {} : { model: entry.model }),
+        reasoning: entry.reasoning,
+      };
+    }
+
+    return undefined;
   }
 
   private async readFailedAttempt(path: string): Promise<Omit<AttemptHistoryView, 'log'> | undefined> {

@@ -186,6 +186,56 @@ describe('attempt history (AR-08)', () => {
     expect(history?.[1]?.runner).toBe('claude');
   });
 
+  it('keeps a finished attempt on its own model after the configuration moves (Issue #21)', async () => {
+    // **The test above proves the artifact is read. It does not prove the artifact wins.**
+    // `world()` seeds an empty global config and a project block with no `roles:`, so no
+    // model is configured anywhere — and a reader that started preferring configuration
+    // over the artifact would keep it green, because there would be nothing to prefer.
+    //
+    // This is the missing half: a configuration that names a *different* model for the
+    // role, in force at read time, over an attempt that recorded its own. Issue #21's
+    // acceptance turns on exactly this — "changing config after a completed attempt does
+    // not make historical UI claim the new model executed the old attempt".
+    const { fs, reader, run, paths } = await world();
+
+    fs.seed(
+      '/home/.agent-flow/config.yaml',
+      [
+        // The control lives in this block. `parallelism.maxTasks` is the one field the
+        // reader does consult, so an unusual value arriving in the view is proof that this
+        // configuration was loaded, parsed and in force at read time — which is what makes
+        // the model assertions below a preference rather than an absence.
+        'parallelism:',
+        '  maxTasks: 7',
+        'roles:',
+        '  executor.normal:',
+        '    runner: claude',
+        '    model: a-model-configured-later',
+        '  executor.trivial:',
+        '    runner: claude',
+        '    model: a-model-configured-later',
+        '',
+      ].join('\n'),
+    );
+
+    fs.seed(paths.failedAttempt('TASK-001', 1), failed(run.runId, 1, { model: 'the-model-that-ran' }));
+    fs.seed(paths.taskAttempt('TASK-001', 2), succeeded(run.runId, 2, { model: 'the-model-that-ran' }));
+
+    const detail = await reader.taskDetail(PROJECT, run.runId, 'TASK-001');
+    const runView = await reader.runDetail(PROJECT, run.runId);
+
+    // Positive control: this configuration is readable, and the reader read it.
+    expect(
+      runView?.isolation.parallelism.requested,
+      'the configuration was not loaded, so nothing below is a preference',
+    ).toBe(7);
+
+    expect(detail?.attemptHistory?.length).toBe(2);
+    for (const entry of detail?.attemptHistory ?? []) {
+      expect(entry.model, `attempt ${String(entry.attempt)}`).toBe('the-model-that-ran');
+    }
+  });
+
   it('names the failing command, so the entry is actionable on its own', async () => {
     const { fs, reader, run, paths } = await world();
     fs.seed(paths.failedAttempt('TASK-001', 1), failed(run.runId, 1));

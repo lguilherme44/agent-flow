@@ -343,9 +343,39 @@ export interface TaskSummaryView {
   readonly dependencies: string[];
   /** Present on corrective tasks, which answer a finding rather than a requirement. */
   readonly correctiveFor?: { readonly stage: string; readonly findingType: string };
+  /**
+   * What ran, from `result.json` — or from the newest attempt artifact when there is no
+   * `result.json` (Issue #21).
+   *
+   * **Two sources, because one of them is often absent by design.** `task-executor.ts`
+   * writes `result.json` only in sequential mode; under worktrees the sole writer is the
+   * Integrator's success path, so a `failed` or `review_required` task in an isolated run
+   * has none — permanently. This triple then came back empty for a task that had run
+   * twice, on a board whose first question is what is doing the work.
+   *
+   * Never from configuration, in either case. A completed task's model cannot move when
+   * a role's YAML changes, and `run-actions.ts` refuses the one action that could rewrite
+   * the artifact under new configuration: a retry of a `completed` task, which `--force`
+   * deliberately does not open.
+   *
+   * `undefined` means **nothing recorded a model** and nothing more than that. It is not
+   * evidence that the runner chose its own default: a record can be a *plan*
+   * (`plannedExecution` resolves the role without the member), `runners.<id>.model` is a
+   * fourth place a model can be configured that no record sees, and the
+   * openai-compatible adapter sends the literal string `'default'`. See
+   * `contracts/model-identity.ts`.
+   */
   readonly runner?: string;
   readonly model?: string;
   readonly reasoning?: ReasoningLevel;
+  /**
+   * How long the task took, from `result.json` only.
+   *
+   * **Deliberately not backfilled from an attempt.** The newest attempt of a task that
+   * ran twice took less time than the task did, and `validationPassed` below reads as the
+   * task's verdict rather than one attempt's commands. Reporting either from an attempt
+   * would answer a question with a different question's answer.
+   */
   readonly durationMs?: number;
   readonly validationPassed?: boolean;
   /**
