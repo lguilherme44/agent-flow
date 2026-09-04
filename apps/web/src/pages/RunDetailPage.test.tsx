@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -280,6 +280,31 @@ function Harness(): JSX.Element {
 async function openTab(name: string): Promise<void> {
   await userEvent.click(await screen.findByRole('tab', { name }));
 }
+
+/**
+ * Pay for the graph's chunk once, outside anything a test measures.
+ *
+ * `carries the selection between the table and the graph` went red under `gate:node` on a
+ * tree whose full `verify` was green an hour earlier and whose next `gate:node` was green
+ * again — `Unable to find role="button" and name /TASK-001/`, which is `findBy` spending
+ * its default 1000ms and giving up. `DagView` is behind `lazy()`, so that assertion is
+ * waiting on a dynamic `import()` as well as on a mount.
+ *
+ * **Measured, because "it is slow" is not a number.** Cold, the wait for the node is
+ * 267ms; with the chunk already resolved it is 15ms. So the failing run was a 4x
+ * slowdown on a machine that had just finished 4279 node tests, not a logic fault —
+ * and 267 of a 1000ms budget is a margin that depends on the page cache.
+ *
+ * Warming here rather than raising the timeout, because the timeout is not the thing
+ * that is wrong: what these tests are about is the graph mounting with the selection
+ * intact, and resolving a module is not part of that. **This makes the margin 66x rather
+ * than 3.7x; it is not a proof that the flake is gone**, because the red could not be
+ * reproduced on demand — only that the largest variable cost is no longer inside the
+ * window being timed.
+ */
+beforeAll(async () => {
+  await import('../features/dag-view');
+});
 
 describe('the run detail composition', () => {
   it('opens on the board, with the header and the tabs and nothing else', async () => {
