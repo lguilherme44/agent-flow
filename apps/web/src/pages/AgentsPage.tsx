@@ -17,7 +17,7 @@ import {
 } from '../components/ui';
 import { humanise } from '../lib/format';
 import { sanitizeEndpoint } from '../lib/sanitize';
-import { resolveModelProvenance } from '../lib/model-provenance';
+import { configuredModelLabel, hasModel } from '../lib/model-label';
 
 export function AgentsPage(): JSX.Element {
   const { projectId } = useProjectSelection();
@@ -287,11 +287,22 @@ function RoleRow(props: {
 }): JSX.Element {
   const { route } = props;
   const resolved = route.resolved;
-  const provenance = resolveModelProvenance({
-    runner: route.configured.runner,
-    configuredModel: route.configured.model,
-    effectiveModel: resolved?.model,
-  });
+  /**
+   * The model this role points at — configuration, and labelled as configuration.
+   *
+   * **`resolved.model` is not an observation, and this page used to say it was.** It came
+   * from a helper that returned `isObserved: true` with the tooltip "Observed effective
+   * model" over exactly this value. But `resolveRole` clamps the *effort* and never
+   * touches the model, so for a role route `resolved.model` **is** `configured.model` —
+   * the distinction the label claimed was vacuous by construction. The same helper also
+   * blanked a pinned AGY model as "Unobservable by design", which is a provider name
+   * deciding a model question in the browser and, separately, false: `AgyRunner` passes
+   * `--model` straight through.
+   *
+   * The one place on this page where "observed" is earned is the utility model's
+   * `effectiveModel`, which is read off a response body. That panel keeps its wording.
+   */
+  const model = { model: resolved?.model ?? route.configured.model };
 
   return (
     <tr className="border-b border-border/70 align-top hover:bg-surface-2">
@@ -335,13 +346,14 @@ function RoleRow(props: {
       <td className="px-2 py-2">
         <span className="flex min-w-0 flex-col">
           <span
-            className={cx(
-              'truncate text-label',
-              provenance.isUnobservable || !provenance.isObserved ? 'text-faint italic' : 'text-text',
-            )}
-            title={provenance.tooltip}
+            className={cx('truncate text-label', hasModel(model) ? 'text-text' : 'text-faint italic')}
+            title={
+              hasModel(model)
+                ? `Configured model: ${configuredModelLabel(model)}`
+                : 'This role pins no model, so the runner is invoked without one'
+            }
           >
-            {provenance.display}
+            {configuredModelLabel(model)}
           </span>
           {route.error === undefined ? (
             <span className="truncate text-micro text-faint">
@@ -451,8 +463,11 @@ function Fallback(props: { route: RoleRouteView }): JSX.Element {
 
   return (
     <span className="flex min-w-0 flex-col">
+      {/* Model first, runner second, and one wording for the absence. This line used to
+          spell it `runner default` — a sixth phrasing of the same fact across the product,
+          and one that claims to know what the CLI did with an omitted flag. */}
       <span className="truncate text-label text-muted">
-        {fallback.runner} · {fallback.model ?? 'runner default'}
+        {configuredModelLabel(fallback)} · {fallback.runner}
       </span>
       <span className="truncate text-micro capitalize text-faint">
         {fallback.reasoning}

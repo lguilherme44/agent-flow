@@ -4307,6 +4307,111 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
 });
 
 /**
+ * The browser renders a model; it never works out which one (Issue #21).
+ *
+ * `apps/web/src/lib/model-provenance.ts` did both. It opened with
+ * `if (runner === 'agy') return { display: 'Unobservable', … }` — a provider name in the
+ * browser deciding a model question, which is the property `src/core knows no provider`
+ * protects one layer up. It was also false: `AgyRunner` passes `--model` straight through
+ * and keys its own capability table by real model families, so a pinned AGY model is
+ * exactly as observable as a pinned Claude one.
+ *
+ * Nothing failed. No compiler, no linter and no assertion asks whether a browser has
+ * opinions about a vendor, and the module's only test asserted the wrong answer was
+ * returned correctly. This is what asks.
+ */
+describe('no provider name decides a model question in the browser (Issue #21)', () => {
+  /**
+   * Provider, CLI and model-family names, matched as words.
+   *
+   * **`agy` is why this is a regular expression and not `includes`.** It is a substring of
+   * `legacy`, so a needle list fed to `String.includes` would fire on the word "legacy" in
+   * any browser file that ever mentions a legacy run — the rule would then be deleted for
+   * being wrong rather than fixed, which is how a real invariant gets lost.
+   */
+  const PROVIDER = new RegExp(
+    `(?<![a-z0-9])(?:claude|codex|agy|openai|gpt|opus|sonnet|gemini|qwen|anthropic)(?![a-z0-9])`,
+    'i',
+  );
+
+  /** Quoted strings, in all three spellings. */
+  const LITERALS = /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
+
+  const isTest = (path: string): boolean => /\.test\.tsx?$/.test(path);
+
+  it('names no provider in any production file under apps/web/src', () => {
+    // **`withoutComments`, not `codeOnly`.** `codeOnly` blanks string literals, so a rule
+    // written against it looking for `=== 'agy'` reads `=== ''` and passes by looking at
+    // nothing — the exact shape M6 spent a milestone on, and the shape that let
+    // `model-provenance.ts` ship. A literal is the whole subject here, so the text has to
+    // still have one.
+    //
+    // Tests are excluded, following M8-A02: eleven of the twelve files under
+    // `apps/web/src` that name a provider are suites building fixtures, and a fixture
+    // carrying `runner: 'claude'` is a fixture, not a decision. Excluding the source rules
+    // from tests would be wrong; excluding tests from a rule about what production code
+    // decides is the same distinction.
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles('apps/web/src')) {
+      const { path, text } = read(file);
+      if (isTest(path)) continue;
+
+      for (const literal of withoutComments(text).match(LITERALS) ?? []) {
+        if (PROVIDER.test(literal)) offenders.push(`${path}: ${literal}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('can see what it forbids, and does not see what it must not', () => {
+    // A rule that cannot match its own subject passes forever. Same self-check shape as
+    // the `PATH_SHAPED` matcher two thousand lines up, and each line below is a mistake
+    // this rule made or nearly made.
+    expect(PROVIDER.test("'agy'")).toBe(true);
+    expect(PROVIDER.test("'claude'")).toBe(true);
+    expect(PROVIDER.test("'claude-opus-5'")).toBe(true);
+    expect(PROVIDER.test("'openai-compatible'")).toBe(true);
+    expect(PROVIDER.test("'Claude Opus'")).toBe(true);
+
+    // The trap: `agy` inside `legacy`, and `gpt` inside a longer word.
+    expect(PROVIDER.test("'a legacy run'")).toBe(false);
+    expect(PROVIDER.test("'legacy'")).toBe(false);
+    expect(PROVIDER.test("'not reported'")).toBe(false);
+    expect(PROVIDER.test("'no model pinned'")).toBe(false);
+    expect(PROVIDER.test("'/api/v1/agents'")).toBe(false);
+
+    // And the literal scanner finds a literal inside real code rather than only in a
+    // bare string, which is the other half of the instrument.
+    const planted = `const x = runner === 'agy' ? 1 : 2;`;
+    expect((withoutComments(planted).match(LITERALS) ?? []).some((l) => PROVIDER.test(l))).toBe(
+      true,
+    );
+    // A provider named only in a *comment* is prose, and prose is not a decision.
+    const commented = `// agy cannot report its model\nconst x = 1;`;
+    expect(
+      (withoutComments(commented).match(LITERALS) ?? []).some((l) => PROVIDER.test(l)),
+    ).toBe(false);
+  });
+
+  it('leaves the browser one door to the vocabulary, and it is not a mapping', () => {
+    // The replacement for the deleted module. `modelIdentity` decides only whether a
+    // record named a model; the words are the renderer's. A second copy of that decision
+    // under `apps/web` would be the same defect with a different file name.
+    const contract = codeOnly(read(join(ROOT, 'src/contracts/model-identity.ts')).text);
+    expect(contract).toMatch(/export function modelIdentity\b/);
+
+    const definers = sourceFiles('apps/web/src')
+      .map(read)
+      .filter(({ text }) => /(?:function|const)\s+modelIdentity\b/.test(codeOnly(text)))
+      .map(({ path }) => path);
+
+    expect(definers).toEqual([]);
+  });
+});
+
+/**
  * §4: `reviewedTree == tree intended for review`, and never a stale working tree.
  *
  * The record was always right and the *reading* was wrong — the reviewer ran in the

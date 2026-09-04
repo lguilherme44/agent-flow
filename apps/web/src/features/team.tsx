@@ -1,6 +1,12 @@
 import { CircleDashed, Loader2, PauseCircle, Users } from 'lucide-react';
-import type { TeamMemberView, TeamView, WaveDeferralView } from '@contracts/index.js';
+import type {
+  TaskAssignmentView,
+  TeamMemberView,
+  TeamView,
+  WaveDeferralView,
+} from '@contracts/index.js';
 import { Badge, Card, Empty, cx } from '../components/ui';
+import { configuredModelLabel, hasModel } from '../lib/model-label';
 
 /**
  * Who is doing the work, and what the run would not start (§37).
@@ -115,6 +121,31 @@ function Member(props: { member: TeamMemberView }): JSX.Element {
             {member.status}
           </Badge>
         </span>
+        {/* **This model is intent, and it is labelled as intent** (Issue #21).
+            `TeamMemberView.model` comes from `loadConfig` at read time — the contract says
+            so in its own words: "a view of what the run would resolve rather than of a
+            record". Rendering it in the same visual language as a task's *persisted*
+            model would recreate exactly the confusion the model-identity work exists to
+            remove, so the word `configured` rides with it and it is never `not reported`. */}
+        <span className="mt-0.5 flex min-w-0 items-baseline gap-1">
+          <span
+            className={cx(
+              'truncate text-micro',
+              hasModel(member) ? 'text-muted' : 'italic text-faint',
+            )}
+            title={`Configured: ${configuredModelLabel(member)}`}
+          >
+            {configuredModelLabel(member)}
+          </span>
+          {/* **The qualifier rides on a value and not on an absence.** The first draft
+              printed it unconditionally, and the reviewer row read `no model pinned
+              configured` — two words arguing with each other, which the screenshot showed
+              and no assertion would have. There is nothing to qualify when nothing is
+              pinned: the phrase already says it is talking about configuration. */}
+          {hasModel(member) ? (
+            <span className="shrink-0 text-micro text-faint">configured</span>
+          ) : null}
+        </span>
         <span className="mt-0.5 truncate text-micro text-faint">
           {member.role} · {member.runner}
           {member.skills.length === 0 ? null : ` · ${member.skills.join(' ')}`}
@@ -186,15 +217,29 @@ function Waiting(props: { deferrals: readonly WaveDeferralView[] }): JSX.Element
  * candidates would eventually disagree with the run, and the screen would be describing a
  * decision nobody made (I-33, I-34).
  */
+/**
+ * The assignment in force for one task, or nothing.
+ *
+ * The last one wins: a reassignment appends to the log rather than rewriting it, so the
+ * log keeps the history and this keeps the answer.
+ *
+ * **Exported so the inspector's identity row and this note share one fold.** They render
+ * the same assignment two ways — a metadata cell and a disclosure — and two folds over
+ * one list is two chances to disagree about which assignment is current, on the same
+ * screen, at the same time.
+ */
+export function assignmentInForce(
+  team: TeamView | undefined,
+  taskId: string,
+): TaskAssignmentView | undefined {
+  return [...(team?.assignments ?? [])].reverse().find((held) => held.taskId === taskId);
+}
+
 export function TaskAssignmentNote(props: {
   team: TeamView | undefined;
   taskId: string;
 }): JSX.Element | null {
-  // The last assignment for this task, which is the one in force. A reassignment appends
-  // rather than rewrites, so the log keeps the history and this keeps the answer.
-  const assignment = [...(props.team?.assignments ?? [])]
-    .reverse()
-    .find((held) => held.taskId === props.taskId);
+  const assignment = assignmentInForce(props.team, props.taskId);
 
   if (assignment === undefined) return null;
 

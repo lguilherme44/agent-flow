@@ -29,6 +29,43 @@ function sources(): { path: string; text: string }[] {
   return out;
 }
 
+/** Where `@contracts/*` actually points, per `vite.config.ts` and `tsconfig.json`. */
+const CONTRACTS = join(SRC, '../../../src/contracts');
+
+/**
+ * Whether a `@contracts/…` module is safe to import as a *value* from the browser.
+ *
+ * Two properties, and both are about what comes along for the ride rather than about the
+ * module's name: it must import nothing (so nothing transitive can reach Zod) and it must
+ * mention no schema at all (so it cannot become the browser's second validator). A module
+ * that grows either one stops being exempt on the next test run, without anybody having
+ * to remember to remove it from a list.
+ */
+function leafWithNoSchema(specifier: string): boolean {
+  const file = join(CONTRACTS, specifier.replace(/^@contracts\//, '').replace(/\.js$/, '.ts'));
+
+  let source: string;
+  try {
+    source = readFileSync(file, 'utf8');
+  } catch {
+    // A specifier naming nothing is not a leaf. Exempting it would exempt a typo.
+    return false;
+  }
+
+  // **`export … from` as well as `import`, and the barrel is why.** `contracts/index.ts`
+  // has no `import` line at all — it is twenty-one `export * from './x.schema.js'` — so a
+  // predicate looking only for imports declared the whole schema surface a leaf. Caught
+  // by the control below, which is the only reason this line exists.
+  if (/^\s*import\s/m.test(source)) return false;
+  if (/^\s*export\s[^;]*\sfrom\s/m.test(source)) return false;
+
+  // **Comments stripped before looking for a schema.** `model-identity.ts` explains
+  // itself by quoting the very declarations it is reasoning about — "`model` is
+  // `z.string().optional()` with no `.min(1)`" — so a scan over the raw text found `z.`
+  // in prose and refused the one module this exemption is for. Also caught by the control.
+  return !/\bz\.|from\s+'zod'/.test(withoutComments(source));
+}
+
 /** Strips comments and string literals, so prose cannot trip an identifier scan. */
 function codeOnly(text: string): string {
   return withoutComments(text)
@@ -56,19 +93,43 @@ describe('server state lives in the query cache and nowhere else (§88)', () => 
     expect(offenders).toEqual([]);
   });
 
-  it('imports nothing from the contracts as a value', () => {
-    // Type-only, always: importing a schema would pull Zod into the bundle and,
-    // worse, invite the browser to validate — which is the server's job, done once,
+  it('imports no contracts value that could pull Zod in behind it', () => {
+    // Type-only, near enough always: importing a schema would pull Zod into the bundle
+    // and, worse, invite the browser to validate — which is the server's job, done once,
     // on the way in.
+    //
+    // **The exemption is structural rather than a list of names**, because a list of
+    // names is how a rule dies: the next person adds one and the rule stops describing
+    // anything. A value import is allowed only from a contracts module that *cannot*
+    // drag a schema library behind it — no imports of its own, and no `z.` anywhere in
+    // it. `model-identity.ts` is that, deliberately: it is the one place the product
+    // decides what may be said about an absent model, and the alternative to sharing it
+    // is a second copy of that decision in the browser, which is the defect the whole
+    // Issue #21 pass exists to remove.
     const offenders: string[] = [];
 
     for (const { path, text } of sources()) {
-      for (const match of text.matchAll(/(?:^|\n)\s*(import[^;]*?)from\s+'@contracts\//g)) {
-        if (!/import\s+type/.test(match[1] ?? '')) offenders.push(path);
+      for (const match of text.matchAll(/(?:^|\n)\s*(import[^;]*?)from\s+'(@contracts\/[^']+)'/g)) {
+        if (/import\s+type/.test(match[1] ?? '')) continue;
+
+        const specifier = match[2] ?? '';
+        if (leafWithNoSchema(specifier)) continue;
+
+        offenders.push(`${path} → ${specifier}`);
       }
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  it('would reject the contracts barrel, so the exemption above is not a hole', () => {
+    // The positive control. A predicate that let everything through would make the rule
+    // pass forever, and it would pass in exactly the way the rule exists to prevent.
+    expect(leafWithNoSchema('@contracts/index.js'), 'the barrel is exempt').toBe(false);
+    expect(leafWithNoSchema('@contracts/api.schema.js'), 'a schema module is exempt').toBe(false);
+    expect(leafWithNoSchema('@contracts/model-identity.js'), 'the leaf is not exempt').toBe(true);
+    // A specifier that names nothing must not be exempt by accident.
+    expect(leafWithNoSchema('@contracts/does-not-exist.js')).toBe(false);
   });
 
   it('polls only when the stream is down (§89)', () => {

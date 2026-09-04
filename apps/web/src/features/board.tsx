@@ -4,6 +4,7 @@ import type { BoardCardView, BoardLane, BoardLaneView } from '@contracts/index.j
 import { Badge, Empty, cx } from '../components/ui';
 import { useHorizontalOverflow } from '../hooks/use-horizontal-overflow';
 import { taskTone, type Tone } from '../lib/status';
+import { hasModel, recordedModelLabel } from '../lib/model-label';
 import { filterTasks, NO_FILTER, type TaskFilter } from './task-table';
 
 /**
@@ -322,12 +323,35 @@ export function TaskCard(props: {
         <p className="mt-1.5 text-label leading-snug text-muted">{card.reason.text}</p>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-faint">
+      {/* **Model first, and its own line for one reason: truncation** (Issue #21).
+          The operator's question while a run is live is what is doing the work, and the
+          card used to answer it with the agent's display name — which says *who was
+          assigned*, not *what executed*. A long id has to be able to end in an ellipsis
+          rather than push the lane, and `truncate` needs a line it owns; inside the
+          wrapping meta row below it would have reflowed instead of clipped.
+
+          The agent rides here rather than in that row, so the card gains no height: one
+          line appears and the meta row loses its longest item. */}
+      <p className="mt-1.5 flex min-w-0 items-baseline gap-1.5">
+        <span
+          className={cx(
+            'truncate text-label',
+            hasModel(task) ? 'font-medium text-text' : 'italic text-faint',
+          )}
+          title={recordedModelLabel(task)}
+        >
+          {recordedModelLabel(task)}
+        </span>
+        {card.agentName === undefined ? null : (
+          <span className="shrink-0 text-micro text-faint">{card.agentName}</span>
+        )}
+      </p>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-faint">
         {/* State as a word, never as colour alone. */}
         <Badge tone={taskTone(task.state)} caps>
           {task.state.replace(/_/g, ' ')}
         </Badge>
-        {card.agentName === undefined ? null : <span>{card.agentName}</span>}
         {task.risk === 'high' ? <span className="text-warning">high risk</span> : null}
         {card.blockingFindings === 0 ? null : (
           <span className="text-danger">

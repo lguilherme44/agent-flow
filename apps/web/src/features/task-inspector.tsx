@@ -17,7 +17,8 @@ import {
 import { useRetry } from '../lib/mutations';
 import { formatDuration, formatTime } from '../lib/format';
 import { taskLabel, taskTone } from '../lib/status';
-import { TaskAssignmentNote } from './team';
+import { recordedModelLabel } from '../lib/model-label';
+import { assignmentInForce, TaskAssignmentNote } from './team';
 
 /**
  * The execution panel (§73–§77).
@@ -61,6 +62,10 @@ export function TaskInspector(props: {
 
   const task = props.task;
   const tone = taskTone(task.state);
+  // The router's answer to "why here", through the same fold `TaskAssignmentNote` uses.
+  // Absent on a run with no `teams:` block, which is most runs — so `Role` and `Agent` are
+  // absent there rather than rendered as two em-dashes.
+  const assignment = assignmentInForce(props.team, task.id);
 
   return (
     <Panel
@@ -104,9 +109,25 @@ export function TaskInspector(props: {
             </div>
           </div>
 
+          {/* **Four facts, four labels** (Issue #21). This row read
+              `Agent | Model | Effort`, and `Agent` held `task.runner` — so two of the four
+              concepts shared one label and it belonged to neither. A role explains *why*
+              the work was routed here, a runner names the executable, an agent names the
+              team member who owns it, and the model is what did the work.
+
+              Model spans two columns because it is the answer to the operator's first
+              question and because a real id needs the room; `Role` and `Agent` render only
+              when an assignment exists, which is to say only on a team run — §17's "only
+              show fields actually known", rather than two permanent em-dashes. */}
           <dl className="grid grid-cols-3 gap-x-3 gap-y-2 border-t border-border pt-2.5">
-            <MetaCell label="Agent" value={task.runner ?? '—'} />
-            <MetaCell label="Model" value={task.model ?? 'not reported'} />
+            <MetaCell className="col-span-2" label="Model" value={recordedModelLabel(task)} />
+            <MetaCell label="Runner" value={task.runner ?? '—'} />
+            {assignment === undefined ? null : (
+              <MetaCell label="Role" value={assignment.role} />
+            )}
+            {assignment === undefined ? null : (
+              <MetaCell label="Agent" value={assignment.agentName} />
+            )}
             <MetaCell label="Effort" value={task.reasoning ?? '—'} />
             <MetaCell label="Started" value={formatTime(task.startedAt)} />
             <MetaCell label="Duration" value={formatDuration(task.durationMs)} />
@@ -646,8 +667,10 @@ function AttemptCard(props: { attempt: AttemptHistoryView }): JSX.Element {
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-micro text-faint">
         <span>
-          {attempt.runner}
-          {attempt.model === undefined ? '' : ` · ${attempt.model}`}
+          {/* Model first here too: the question this row exists to answer is whether the
+              retry ran on the same model, and it read `runner · model`. */}
+          {recordedModelLabel(attempt)}
+          {` · ${attempt.runner}`}
         </span>
         <span>
           {attempt.reasoning}
@@ -742,8 +765,8 @@ function ContextTab(props: { task: TaskDetailView }): JSX.Element {
 
       <Section title="Execution">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
+          <MetaCell label="Model" value={recordedModelLabel(task)} />
           <MetaCell label="Runner" value={task.runner ?? '—'} />
-          <MetaCell label="Model" value={task.model ?? 'not reported'} />
           <MetaCell label="Effort" value={task.reasoning ?? '—'} />
           <MetaCell label="Risk" value={task.risk} />
         </dl>

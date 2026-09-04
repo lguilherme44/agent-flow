@@ -223,7 +223,8 @@ describe('the routing table', () => {
     await screen.findByText('architect');
 
     const architect = row('architect');
-    expect(within(architect).getByText(/codex · GPT-5.6 Sol/)).toBeInTheDocument();
+    // Model first, runner second — the same hierarchy the rest of the product now uses.
+    expect(within(architect).getByText(/GPT-5.6 Sol · codex/)).toBeInTheDocument();
   });
 
   it('distinguishes a fallback that is off from one that cannot serve the role', async () => {
@@ -298,19 +299,52 @@ describe('the routing table', () => {
     expect(screen.getByText(/Safe Bypass/i)).toBeInTheDocument();
   });
 
-  it('displays Model: Unobservable for AGY runner', async () => {
+  it('shows the model a role pins, whatever runner it points at', async () => {
+    // **This test used to assert the opposite, and the opposite was false.** It expected
+    // `Unobservable` for the AGY runner, from a browser helper that hardcoded
+    // `runner === 'agy'` — a provider name deciding a model question in the browser, which
+    // §14 forbids, and factually wrong besides: `AgyRunner` passes `--model` straight
+    // through to the CLI and its own capability table is keyed by real model families.
+    // A pinned AGY model is exactly as observable as a pinned Claude one.
     routes['/api/v1/agents'] = AGENTS.map((route) =>
       route.role === 'executor.complex'
         ? {
             ...route,
-            configured: { ...route.configured, runner: 'agy' },
-            resolved: { ...route.resolved!, runner: 'agy' },
+            configured: { ...route.configured, runner: 'agy', model: 'gemini-3.1-pro-high' },
+            resolved: { ...route.resolved!, runner: 'agy', model: 'gemini-3.1-pro-high' },
           }
         : route,
     );
 
     renderPage();
-    expect(await screen.findByText('Unobservable')).toBeInTheDocument();
+
+    expect(await screen.findByText('gemini-3.1-pro-high')).toBeInTheDocument();
+    expect(screen.queryByText('Unobservable')).toBeNull();
+  });
+
+  it('says a role pins no model rather than naming its runner', async () => {
+    // The substitution Issue #21 forbids by name: a runner id where a model belongs.
+    routes['/api/v1/agents'] = AGENTS.map((route) =>
+      route.role === 'executor.complex'
+        ? {
+            ...route,
+            configured: { ...route.configured, runner: 'agy', model: undefined },
+            resolved: { ...route.resolved!, runner: 'agy', model: undefined },
+          }
+        : route,
+    );
+
+    renderPage();
+    await screen.findByText('executor.complex');
+
+    // Scoped to the row, because other roles in the fixture pin no model either — and a
+    // page-wide `findByText` over a string several rows produce is a query that would keep
+    // passing after the row under test stopped rendering it.
+    const complex = row('executor.complex');
+    expect(within(complex).getByText('no model pinned')).toBeInTheDocument();
+
+    // The runner still has its own column; what it may not do is stand in for the model.
+    expect(within(complex).getByText('no model pinned').textContent).not.toContain('agy');
   });
 
   it('handles Utility disabled state correctly', async () => {

@@ -15,6 +15,7 @@ import { AlertTriangle, Maximize2, Minimize2, Wrench } from 'lucide-react';
 import type { RunDagView, TaskSummaryView } from '@contracts/index.js';
 import { Empty, StatusDot, cx } from '../components/ui';
 import { formatDuration } from '../lib/format';
+import { recordedModel, recordedModelLabel } from '../lib/model-label';
 import { taskLabel, taskTone, TONE_BG, TONE_BORDER, TONE_TEXT } from '../lib/status';
 import { NODE_HEIGHT, NODE_WIDTH, layoutGraph, selectedPath } from '../lib/dag-layout';
 
@@ -407,9 +408,13 @@ const TaskNodeBody = memo(function TaskNodeBody(props: NodeProps<TaskNode>): JSX
             slot, and where there is none the node is exactly what it was before M5. */}
         <span className="capitalize">{task?.complexity ?? 'unknown'}</span>
         <span aria-hidden>·</span>
-        <span className="truncate">
-          {agentName ?? task?.model ?? task?.runner ?? 'no model yet'}
-        </span>
+        {/* **The runner is no longer the last resort, and that was a defect** (Issue #21).
+            The chain ended `?? task?.runner ?? 'no model yet'`, so a node with no
+            assignment and no recorded model printed `claude` — a runner id standing in a
+            model's slot, which is the one substitution the issue forbids by name. The
+            member still wins the slot for the reason above it; what follows it is the
+            model or the fact that none was recorded, in the product's one wording for that. */}
+        <span className="truncate">{agentName ?? recordedModelLabel(task ?? {})}</span>
         {task?.durationMs === undefined ? null : (
           <>
             <span aria-hidden>·</span>
@@ -443,7 +448,10 @@ function describeNode(
   if (agentName !== undefined) parts.push(`assigned to ${agentName}`);
 
   if (task?.complexity !== undefined) parts.push(task.complexity);
-  if (task?.model !== undefined) parts.push(task.model);
+  // `recordedModel` rather than `task.model`, so a blank string — which the persisted
+  // schemas admit — does not push an empty word into the accessible name.
+  const model = recordedModel(task ?? {});
+  if (model !== undefined) parts.push(model);
   if (task?.durationMs !== undefined) parts.push(formatDuration(task.durationMs));
 
   if (relation === 'ancestor') parts.push('the selected task depends on this');

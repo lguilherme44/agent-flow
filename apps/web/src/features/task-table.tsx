@@ -3,6 +3,7 @@ import { MoreVertical, Search, Wrench } from 'lucide-react';
 import type { TaskSummaryView } from '@contracts/index.js';
 import { Badge, Empty, Panel, StatusDot, StripItem, cx } from '../components/ui';
 import { formatDuration } from '../lib/format';
+import { hasModel, recordedModelLabel } from '../lib/model-label';
 import { taskLabel, taskTone } from '../lib/status';
 import { countTasks } from './run-overview';
 
@@ -156,10 +157,20 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                     cannot see this: a `th` carries no `truncate`, so it has no
                     `text-overflow` for the guard to key on. */}
                 <Th className="hidden w-[90px] xl:table-cell">Complexity</Th>
-                {/* Runner, model and effort in one cell. Effort had its own column and cost
+                {/* Model, runner and effort in one cell. Effort had its own column and cost
                     the title 64px it could not spare — and the reference stacks all three
-                    anyway, because they are one fact about how the task was executed. */}
-                <Th className="w-[132px]">Agent / Model</Th>
+                    anyway, because they are one fact about how the task was executed.
+
+                    **Not `Agent / Model`, which is what it said.** No cell in this column
+                    has ever held an agent: the lines are `model` over `runner · effort`.
+                    The same mislabel was in the inspector's metadata row, where `Agent`
+                    captioned `task.runner` — one wrong word in two places, and the word
+                    belonged to neither of the facts under it (Issue #21).
+
+                    `MODEL / RUNNER` measures the same as `AGENT / MODEL` under
+                    `tracking-caps` to within a pixel, so the 132px stays honest and the
+                    header-collision note above still holds. */}
+                <Th className="w-[132px]">Model / Runner</Th>
                 <Th className="w-[100px]">Status</Th>
                 {/* 74, for the same reason as Complexity above: "DURATION" measures 73px of
                     content under `tracking-caps`. */}
@@ -266,11 +277,18 @@ export function TaskTable(props: TaskTableProps): JSX.Element {
                           and the effort are the qualifier, and a third line cost the table
                           two visible rows. */}
                       <span className="flex min-w-0 flex-col">
+                        {/* One wording for the absence, product-wide. This cell said
+                            `no model` while the inspector two clicks away said
+                            `not reported` and the graph said `no model yet` — three
+                            spellings of one fact, none of them asserted by a test. */}
                         <span
-                          className="truncate text-body-lg text-text"
-                          title={task.model ?? 'model not reported'}
+                          className={cx(
+                            'truncate text-body-lg',
+                            hasModel(task) ? 'text-text' : 'italic text-faint',
+                          )}
+                          title={recordedModelLabel(task)}
                         >
-                          {task.model ?? 'no model'}
+                          {recordedModelLabel(task)}
                         </span>
                         <span className="truncate text-micro capitalize text-faint">
                           {task.runner ?? '—'}

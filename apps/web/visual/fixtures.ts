@@ -235,6 +235,21 @@ export const TASKS: TaskSummaryView[] = [
     validationPassed: true,
   }),
   RUNNING_TASK,
+  /**
+   * **The absent model, photographed for the first time (Issue #21).**
+   *
+   * Every one of the 39 `runner:` entries in this file used to carry a `model:` beside
+   * it, so no baseline in the repository had ever contained a task whose model was
+   * unreported — the darkest branch of the whole model vocabulary was invisible to the
+   * only instrument that can see an appearance at all. The same shape as the delivery
+   * panel's: a state no fixture reaches is a state with no guaranteed rendering.
+   *
+   * A *running* task, deliberately, and not a queued one. This is §20's mandatory case —
+   * a coding CLI invoked with no `--model` because the role pins none — which means it is
+   * a task that is executing right now with nothing recorded about what is executing it.
+   * It sits in IN PROGRESS beside `TASK-003`, which does name a model, so one screenshot
+   * carries both halves of the vocabulary in one lane.
+   */
   task('TASK-004', 'Recurrence Service', {
     complexity: 'complex',
     risk: 'high',
@@ -242,8 +257,7 @@ export const TASKS: TaskSummaryView[] = [
     attempts: 1,
     requirements: ['FR-003', 'FR-004'],
     dependencies: ['TASK-003'],
-    runner: 'codex',
-    model: 'GPT-5.6 Sol',
+    runner: 'claude',
     reasoning: 'high',
     durationMs: 491_000,
   }),

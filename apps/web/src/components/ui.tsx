@@ -562,9 +562,17 @@ export function MetaCell(props: {
   label: string;
   value: ReactNode;
   title?: string;
+  /**
+   * For a cell that needs more of the grid than its neighbours.
+   *
+   * The one caller today is the inspector's `Model`, which spans two of three columns
+   * because a real model id does not fit in a third of 400px and because it is the answer
+   * to the question the panel is opened to ask.
+   */
+  className?: string;
 }): JSX.Element {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
+    <div className={cx('flex min-w-0 flex-col gap-0.5', props.className)}>
       {/* Caption stays at the floor; the value it captions does not. This pair
           is the single most repeated shape in the inspector. */}
       <dt className="whitespace-nowrap text-micro uppercase tracking-caps text-faint">
