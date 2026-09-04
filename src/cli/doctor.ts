@@ -37,7 +37,9 @@ import {
   formatGitVersion,
 } from '../adapters/git/git-workspaces.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
+import { fileURLToPath } from 'node:url';
 import { renderError } from './render/errors.js';
+import { renderStageRouting, renderUnusedRunners } from './render/routing.js';
 import type { GlobalOptions } from './index.js';
 import type { FileSystem } from '../ports/file-system.js';
 import type { Host } from '../ports/host.js';
@@ -328,6 +330,14 @@ export async function runDoctorCommand(
     });
     const capabilityReport = observeCapabilities(routes, registry.capabilities());
     for (const line of renderCapabilityReport(capabilityReport)) lines.push(line);
+
+    // The capability report is by role, which is how configuration is written.
+    // These two are by stage and by runner, which is how routing actually lands —
+    // see `render/routing.ts` for why the two views disagree.
+    const promptsDir = fileURLToPath(new URL('../../prompts', import.meta.url));
+    lines.push('', ...renderStageRouting(config.global, promptsDir));
+    const unused = renderUnusedRunners(config.global);
+    if (unused.length > 0) lines.push('', ...unused);
 
     // ---- Live probe, only when asked for. It spends quota on every runner,
     // which is the entire reason the shallow check exists as the default.
