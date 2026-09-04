@@ -792,16 +792,24 @@ function Section(props: { title: string; children: ReactNode }): JSX.Element {
  * the queue for the scheduler to pick up. None of those is visible from a button
  * label, so the dialog states them.
  *
- * Only offered for a task that has finished badly, or finished at all. A queued task
- * has nothing to retry, and a running one would be a race — the refusal for both
- * would be correct and the button would be teaching people to ignore it.
+ * Only offered for a task that has finished badly. A queued task has nothing to retry
+ * and a running one would be a race — the refusal for both would be correct and the
+ * button would be teaching people to ignore it.
+ *
+ * **`completed` was in this list and the server has never accepted it.** `run-actions.ts`
+ * refuses a retry of a completed task with `task_completed` before anything else, and its
+ * comment says `--force` deliberately does not open it: "this is not a gate a person is
+ * entitled to overrule, it is a contradiction" — in worktree mode `completed` means
+ * integrated, and a second attempt would build a marker for work the branch already has.
+ * So the control rendered, the dialog stated three irreversible consequences, and the
+ * request came back refused every single time. That is the exact failure this list's own
+ * rationale names: a button that teaches people to ignore refusals.
  */
 const RETRYABLE: readonly TaskDetailView['state'][] = [
   'failed',
   'blocked',
   'interrupted',
   'review_required',
-  'completed',
 ];
 
 function RetryTask(props: {
