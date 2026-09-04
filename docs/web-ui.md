@@ -144,6 +144,31 @@ held it for capacity, and the review thread already knew two findings block it �
 them was ever joined to the card an operator was looking at. A Kanban without that join is
 a task table with rounded corners.
 
+### 390 pixels
+
+The spec named 390 among the widths M8 covers, and photographing it is what proved the
+dashboard did not work there: the sidebar was a fixed 240px column that never collapsed, so
+it took 62% of the screen and left the content 150. The run id read `AF-2026…`, a task
+card's title read `Gerar pr…`, and the attention queue wrapped to one word per line. The
+board had stacked its lanes below 1024 since M8 landed; the shell around it had not.
+
+Below 1024 the sidebar is now a drawer — one button, Escape closes it, navigating closes
+it — and the three rows that never wrapped do: the run header, the task panel's header and
+the count strip. Nothing applies at or above 1024, and no existing baseline moved.
+
+**Every mobile shot carries assertions the picture cannot make.** The six lane names as
+text, all five counts, a card's reason sentence, and the page overflow as a number:
+`document.documentElement.scrollWidth` must not exceed the viewport. That last one is
+deliberately about the *document* and nothing else — the pipeline and the board scroll
+inside their own regions on purpose, and a check that forbade every scrollable element
+would forbid the design rather than the defect. It found 187 pixels of real overflow the
+first time it ran, produced by the drawer's own off-canvas geometry rather than by content.
+
+Lane stacking is read from the boxes rather than from a class name. A media query that
+stops applying is invisible to a class assertion and obvious to a bounding-box one, which
+is what the positive control demonstrates: removing `max-lg:flex-col` turns one shared left
+edge into six.
+
 ### One read, one instant
 
 `GET /runs/:id/control` serves the board, its reasons, the attention queue and the team,

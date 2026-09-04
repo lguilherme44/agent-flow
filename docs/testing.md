@@ -377,6 +377,23 @@ That last row is not a formality, and it earned its place within an hour:
 None of those is visible in a screenshot of a nine-task fixture, and all four were visible
 in the first thirty seconds of pointing the dashboard at `.agent-flow/runs/`.
 
+### 390px, and what a picture cannot assert
+
+The mobile scenario is pinned to one Playwright project and sets its own viewport, so there
+is exactly one baseline per platform rather than four identical copies. Every shot carries
+assertions the picture cannot make: the six lane names as text, all five counts, a card's
+reason sentence, and — the one that found a real defect — the page overflow as a number.
+
+`document.documentElement.scrollWidth` must not exceed the viewport, and *only* the
+document. The pipeline and the board scroll inside their own regions by design, so a check
+that forbade every scrollable element would forbid the design rather than the defect. It
+measured 577 against 390 the first time it ran: the drawer's own off-canvas
+`translateX(-100%)`, counted by Chromium, produced by no content.
+
+Lane stacking is read from bounding boxes rather than from a class name. A media query that
+stops applying is invisible to a class assertion; the positive control makes the point —
+removing `max-lg:flex-col` turns one shared left edge into six.
+
 ### The gate contract's own tests
 
 `test/gates.test.ts` is a contract test whose rules are proved by **mutation** rather than

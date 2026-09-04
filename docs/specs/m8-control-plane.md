@@ -482,6 +482,50 @@ untouched.
 
 ---
 
+## 18.1 What the closure pass measured
+
+Two evidence gaps were left open when the milestone was first reported, and this is what
+closing them found.
+
+**390px.** The width was in the spec and had never been photographed, and photographing it
+is what showed the shell had no mobile layout at all (see `web-ui.md`). Three baselines per
+platform now exist, generated in the pinned container, read by eye on both. Two defects
+came from the *assertions* rather than the pictures: 187 pixels of page overflow produced
+by the drawer's own off-canvas geometry, and a menu button that rendered at every width
+because `.sidebar-toggle` and Tailwind's `.flex` have the same specificity — ten pixels of
+command bar that shifted every page in the app down by ten, caught by six existing
+baselines at 1280 and 1200.
+
+**A live run, operated from the dashboard.** `AF-2026-006`, four tasks, approved and
+started from the screen. Three tasks proved READY → IN PROGRESS → DONE naturally, the
+fourth reached REVIEW, and the board moved with the page loaded once and never reloaded —
+`loads=1` at every sample. The stage-lag fix landed in `37a3751` behaved correctly live:
+the first sample after start already read `implementing`, never `planning`.
+
+**The run did not reach DONE, and the reason is worth recording.** Its fourth task was
+"run the positive control and the full verification ladder" — a task whose success looks
+identical to doing nothing — and the plan did not declare `expectsNoChange: true`. So
+`assertObservableChange` refused it, which is exactly what C-12 built that assertion for:
+*"the difference between correctly changed nothing and did nothing is intent, and intent
+belongs in the plan, declared before the fact."* The control plane reported it correctly at
+every step. The gap is in what the planner emits, not in what the operator sees.
+
+**The AGY capability probe (§4 of the closure brief): C — not mechanically knowable.**
+`AF-2026-005` failed because the agent reported `COMPLETED` with `claimedFilesChanged: []`
+and a validated tree identical to its base. `agy` declares `fileEdit: true`; it is declared
+capable of exactly what the task needed, and nothing in the capability model predicts an
+agent that claims success without writing. The `commandExecution: false` that looked like
+the cause is declared by **every** adapter — Claude Code, Codex, agy and OpenAI alike — as
+an *unmeasured grant* marker, so it carries no discriminating information and cannot serve
+as an eligibility filter without excluding every runner from every write stage.
+
+One adjacent gap is real and deferred: `permissionReadiness` exists and is consulted only
+by `doctor`, never before an invocation. The single case where it would discriminate today
+is `fileEdit: false` — only `openai-runner` — on a write stage, which is mechanically known
+to be impossible and still costs an attempt. Wiring that in is small; making the check
+discriminate *at all* means re-measuring `commandExecution` for every adapter, which is a
+new capability model. Documented here rather than built.
+
 ## 19. Architectural critique of this specification
 
 Five things this document gets wrong or leaves exposed, written before the code so they are

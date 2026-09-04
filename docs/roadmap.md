@@ -468,7 +468,7 @@ render because its endpoint was unstubbed in the visual harness, and a packaging
 had been asserting eleven prompts since M6 added a twelfth. The second had been red in CI
 for a whole milestone, invisible because `test:packaging` is not in the canonical gate list.
 
-## M8 — Control Plane & Operational Kanban · built
+## M8 — Control Plane & Operational Kanban · built, and dogfooded live
 
 Four milestones each added a set of authoritative facts and a panel to render them. The
 dashboard became eight correct panels, and an operator still could not answer the four
@@ -489,6 +489,23 @@ The board carries no drag, and that is the design rather than a gap: dragging BL
 DONE would be the browser writing state, and no domain action means "move this task to that
 column". An architecture rule asserts no drag handler exists, which is also what makes the
 board keyboard-operable by construction.
+
+**Two evidence gaps were closed in a second pass, and both of them found something.**
+
+390px was in the spec and had never been photographed — because the dashboard had no
+mobile layout at all: a fixed 240px sidebar took 62% of the screen. It is a drawer below
+1024 now, three rows that never wrapped do, and the new page-overflow assertion caught 187
+pixels produced by the drawer's own geometry. A menu button that rendered at *every* width,
+because a one-class rule ties with Tailwind's `.flex`, was caught by six existing baselines
+at 1280 and 1200 — ten pixels of command bar shifting every page in the app.
+
+`AF-2026-006` was approved and started from the screen. Three tasks proved
+READY → IN PROGRESS → DONE naturally, a fourth reached REVIEW, the board moved with the
+page loaded once and never reloaded, and the stage-lag fix behaved correctly live. The run
+did not reach DONE: its last task was "run the full verification ladder", whose success
+looks identical to doing nothing, and the plan did not declare `expectsNoChange: true` — so
+`assertObservableChange` refused it, which is exactly what C-12 built it for. **The gap is
+in what the planner emits, not in what the operator sees.**
 
 **Phase A came first, and it was not about the UI at all.** M7 closed with `test:packaging`
 red for a whole milestone — CI ran it, CI blocked on it, and no local command asked. The
