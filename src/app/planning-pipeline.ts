@@ -460,6 +460,14 @@ export class PlanningPipeline {
 
       if (cached !== null && fingerprintsMatch(cached, fingerprint)) {
         context.onProgress?.('discovery', 'cached');
+        // Recorded, not just reported. `onProgress` reaches the terminal of whoever
+        // typed the command and nothing else — a dashboard opened afterwards, or by
+        // someone else, had no way to tell a reused stage from one that never ran,
+        // and showed `pending` for work that was already done.
+        await this.options.store.appendEvent(runId, 'stage_reused', {
+          stage: 'discovery',
+          reason: 'discovery_cache_hit',
+        });
         return fs.readFile(cachePath);
       }
 
@@ -503,6 +511,13 @@ export class PlanningPipeline {
       const existing = await this.options.store.readArtifact(runId, artifact);
       if (existing !== null) {
         onProgress?.(stage, 'cached');
+        // See the discovery cache hit above: a resume that reuses an artifact has
+        // to leave a trace, or the pipeline view of a `--from` run reads as though
+        // the skipped stages never happened.
+        await this.options.store.appendEvent(runId, 'stage_reused', {
+          stage,
+          reason: 'resumed_from_later_stage',
+        });
         return existing;
       }
       // Falls through to running the stage: resuming from a later point with a

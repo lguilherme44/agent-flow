@@ -199,3 +199,73 @@ describe('implementation is read from the tasks', () => {
     expect(find(review, 'implementation')?.status).toBe('blocked');
   });
 });
+
+/**
+ * A12 — the pipeline showed `pending` for stages that were reused from cache and
+ * for the stage generating at that instant. Three states drawn as one, on the
+ * screen an operator actually watches.
+ */
+describe('a reused stage is not a stage that never ran', () => {
+  it('reports a cache hit as cached rather than pending', () => {
+    const view = buildStageTimeline(
+      [event('stage_reused', { stage: 'discovery', reason: 'discovery_cache_hit' })],
+      state({ stage: 'sdd' }),
+    );
+    const discovery = view.find((entry) => entry.stage === 'discovery');
+    expect(discovery?.status).toBe('cached');
+    expect(discovery?.reuseReason).toBe('discovery_cache_hit');
+  });
+
+  it('gives a reused stage no duration, because nothing ran', () => {
+    const view = buildStageTimeline(
+      [event('stage_reused', { stage: 'discovery', reason: 'resumed_from_later_stage' })],
+      state({ stage: 'sdd' }),
+    );
+    expect(view.find((entry) => entry.stage === 'discovery')?.durationMs).toBeUndefined();
+  });
+
+  it('prefers a real run over an earlier reuse of the same stage', () => {
+    const view = buildStageTimeline(
+      [
+        event('stage_reused', { stage: 'sdd', reason: 'resumed_from_later_stage' }),
+        event('stage_completed', { stage: 'sdd', runner: 'moe' }),
+      ],
+      state({ stage: 'planning' }),
+    );
+    expect(view.find((entry) => entry.stage === 'sdd')?.status).toBe('completed');
+  });
+
+  it('shows the stage the log is inside, even when state.stage lags behind it', () => {
+    // Measured on AF-2026-002: `state.stage` read `architecture-impact` while the
+    // event log was already inside `sdd`, and the pipeline drew `sdd` as pending
+    // while it was generating.
+    const view = buildStageTimeline(
+      [
+        event('stage_completed', { stage: 'architecture-impact', runner: 'claude' }),
+        event('stage_started', { stage: 'sdd', runner: 'moe' }),
+      ],
+      state({ stage: 'architecture-impact' }),
+    );
+    expect(view.find((entry) => entry.stage === 'sdd')?.status).toBe('running');
+    expect(view.find((entry) => entry.stage === 'sdd')?.runner).toBe('moe');
+  });
+
+  it('stops calling a stage running once it has finished', () => {
+    const view = buildStageTimeline(
+      [
+        event('stage_started', { stage: 'sdd', runner: 'moe' }),
+        event('stage_completed', { stage: 'sdd', runner: 'moe' }),
+      ],
+      state({ stage: 'sdd' }),
+    );
+    expect(view.find((entry) => entry.stage === 'sdd')?.status).toBe('completed');
+  });
+
+  it('does not call a started stage running once the run itself stopped', () => {
+    const view = buildStageTimeline(
+      [event('stage_started', { stage: 'sdd', runner: 'moe' })],
+      state({ stage: 'sdd', status: 'failed' }),
+    );
+    expect(view.find((entry) => entry.stage === 'sdd')?.status).toBe('pending');
+  });
+});

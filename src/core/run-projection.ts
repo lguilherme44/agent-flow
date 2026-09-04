@@ -1,4 +1,4 @@
-import type { RunEvent, RunState, RunStage, TaskProgress } from '../contracts/index.js';
+import { RUN_STAGES, type RunEvent, type RunState, type RunStage, type TaskProgress } from '../contracts/index.js';
 import { buildDag, readyTasks, type DagNode, type TaskStates } from './dag.js';
 
 /**
@@ -61,6 +61,26 @@ const REQUIRED_STAGES: readonly RunStage[] = [
   'verification',
   'final-review',
 ];
+
+/**
+ * How many required stages a run at `stage` has reached.
+ *
+ * Counted by position in `RUN_STAGES` rather than by `REQUIRED_STAGES.indexOf`,
+ * because not every stage a run can sit in is required: `architecture-impact` and
+ * `code-review` are real stages and absent from the list above. `indexOf` answers
+ * `-1` for them, and the axis then reported **0%** for a run that had finished
+ * discovery and was actively inside `architecture-impact` — the progress bar read
+ * empty next to a stage already ticked.
+ *
+ * Counting how many required stages sit at or before the current position is
+ * correct for both cases and stays monotonic, which is the property the axis
+ * promises: `RUN_STAGES` is ordered and a run only moves forward through it.
+ */
+function requiredStagesReached(stage: RunStage): number {
+  const position = RUN_STAGES.indexOf(stage);
+  if (position < 0) return 0;
+  return REQUIRED_STAGES.filter((required) => RUN_STAGES.indexOf(required) <= position).length;
+}
 
 /**
  * The run's runtime condition.
@@ -291,15 +311,12 @@ function projectGate(
  * ordered, and a run only ever moves forward through it.
  */
 export function projectProgress(state: RunState): ProgressAxes {
-  const reached = REQUIRED_STAGES.indexOf(state.stage);
   const planned = state.tasks.filter((task) => !isCorrective(task.id));
   const corrective = state.tasks.filter((task) => isCorrective(task.id));
 
   return {
     workflow: {
-      // `+1` because reaching a stage means it is in progress or done; `stage` points at
-      // the last stage reached, never at the next one.
-      done: reached < 0 ? 0 : reached + 1,
+      done: requiredStagesReached(state.stage),
       total: REQUIRED_STAGES.length,
     },
     implementation: {

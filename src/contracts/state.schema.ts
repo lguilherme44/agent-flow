@@ -66,6 +66,16 @@ export const PIPELINE_STATUSES = [
   'pending',
   'running',
   'completed',
+  /**
+   * The stage was satisfied by an artifact that already existed, and no agent ran.
+   *
+   * Distinct from `completed` because the two answer different questions. A reader
+   * asking "is this done?" wants them together; a reader asking "what did this run
+   * cost?" or "how fresh is this?" does not — a resumed run whose discovery came
+   * from cache did not re-read the repository, and a stale cache is a real failure
+   * mode that only shows if the reuse is visible.
+   */
+  'cached',
   'failed',
   'blocked',
   'waiting_approval',

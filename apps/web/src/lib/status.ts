@@ -117,6 +117,14 @@ export function stageTone(status: PipelineStatus): Tone {
       return 'success';
     case 'running':
       return 'primary';
+    // Satisfied, so not `muted` — it fell into the default before this case
+    // existed and drew identically to a stage that never ran, which is the one
+    // thing it is not. `info` rather than `success` because the two are not the
+    // same claim: green says this run did the work, and a reused artifact is as
+    // old as whatever produced it. A stale cache is a real failure mode, and it
+    // can only be noticed if the reuse is visible.
+    case 'cached':
+      return 'info';
     case 'failed':
       return 'danger';
     case 'blocked':

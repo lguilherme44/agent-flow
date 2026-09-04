@@ -685,7 +685,11 @@ function StageStep(props: { stage: StageViewResponse; last: boolean }): JSX.Elem
             // wordmark and the active nav item. `solid` with the `primary` tone
             // resolves to `bg-primary`: the only full-strength violet on the
             // page besides the wordmark, and the only one that means "right now".
-            solid={stage.status === 'completed' || running}
+            // `cached` is solid for the same reason `completed` is: both are
+            // settled, and a hollow marker is how this pipeline draws "not yet".
+            // The tone is what separates them — `info` rather than `success` —
+            // so the step reads as resolved without claiming this run did it.
+            solid={stage.status === 'completed' || stage.status === 'cached' || running}
             spin={running}
           />
           <span className="flex min-w-0 flex-col">

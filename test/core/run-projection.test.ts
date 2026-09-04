@@ -690,3 +690,50 @@ describe('a running task outranks a stage that has not caught up (M8 dogfood)', 
     expect(projection.status).toBe('planning');
   });
 });
+
+/**
+ * A12 — the header read `OVERALL PROGRESS 0%` on a run that had finished
+ * discovery and was inside `architecture-impact`, with that stage already ticked
+ * one line below. `architecture-impact` and `code-review` are real stages and are
+ * not in `REQUIRED_STAGES`, so `indexOf` answered -1 for them and the axis floored.
+ */
+describe('the workflow axis counts stages that are not themselves required', () => {
+  it('does not fall to zero while the run sits in architecture-impact', () => {
+    const progress = projectProgress(state({ stage: 'architecture-impact', tasks: [] }));
+    // discovery is behind it and required; nothing after it is.
+    expect(progress.workflow.done).toBe(1);
+    expect(progress.workflow.total).toBeGreaterThan(1);
+  });
+
+  it('does not fall to zero while the run sits in code-review', () => {
+    const progress = projectProgress(state({ stage: 'code-review', tasks: [] }));
+    // discovery, sdd, planning, plan-review and implementation are all behind it.
+    expect(progress.workflow.done).toBe(5);
+  });
+
+  it('still counts a required stage as reached when the run is in it', () => {
+    expect(projectProgress(state({ stage: 'discovery', tasks: [] })).workflow.done).toBe(1);
+    expect(projectProgress(state({ stage: 'sdd', tasks: [] })).workflow.done).toBe(2);
+  });
+
+  it('stays monotonic across the whole pipeline', () => {
+    const seen = (
+      [
+        'discovery',
+        'architecture-impact',
+        'sdd',
+        'planning',
+        'plan-review',
+        'implementation',
+        'code-review',
+        'verification',
+        'final-review',
+      ] as const
+    ).map((stage) => projectProgress(state({ stage, tasks: [] })).workflow.done);
+
+    for (let i = 1; i < seen.length; i += 1) {
+      expect(seen[i]).toBeGreaterThanOrEqual(seen[i - 1] as number);
+    }
+    expect(seen.at(-1)).toBe(projectProgress(state({ stage: 'final-review', tasks: [] })).workflow.total);
+  });
+});
