@@ -56,10 +56,18 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
 
     // What finished, from the log that records completion — see
     // `renderPlanningProgress` for why `state.stage` cannot answer this.
-    const completedStages = (await store.readEvents(state.runId))
-      .filter((event) => event.type === 'stage_completed')
-      .map((event) => event.detail['stage'])
-      .filter((stage): stage is string => typeof stage === 'string');
+    const events = await store.readEvents(state.runId);
+    const stagesOf = (type: string): string[] =>
+      events
+        .filter((event) => event.type === type)
+        .map((event) => event.detail['stage'])
+        .filter((stage): stage is string => typeof stage === 'string');
+
+    const completedStages = stagesOf('stage_completed');
+    // What has begun, for the `…` marker — see `renderPlanningProgress`.
+    const startedStages = stagesOf('stage_started');
+    // Reuse is recorded too, and a stage served from cache is not a stage pending.
+    const reusedStages = stagesOf('stage_reused');
 
     const planRaw = await store.readArtifact(state.runId, 'plan');
     const reviewRaw = await store.readArtifact(state.runId, 'planReview');
@@ -148,6 +156,8 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         collaboration,
         team,
         codeReview,
+        startedStages,
+        reusedStages,
       )}\n`,
     );
 
@@ -183,17 +193,37 @@ export function renderPlanningProgress(
   completedStages: readonly string[],
   currentStage: string,
   status: RunState['status'],
+  startedStages: readonly string[] = [],
+  reusedStages: readonly string[] = [],
 ): string[] {
   const done = new Set(completedStages);
+  const begun = new Set(startedStages);
+  const reused = new Set(reusedStages);
 
   return PLANNING_STAGES.map((stage) => {
     const label = STAGE_LABELS[stage] ?? stage;
-    const mark = done.has(stage)
-      ? '✓'
-      : stage === currentStage && status === 'running'
-        ? '…'
-        : '·';
-    return `  ${label.padEnd(16)}${mark}`;
+
+    if (done.has(stage)) return `  ${label.padEnd(16)}✓`;
+
+    // A stage served from cache is satisfied, and printing `·` for it says the
+    // opposite. Measured on a real run: discovery came from the fingerprint cache
+    // and `status` marked it identically to the stages that had not begun.
+    //
+    // `✓` with the provenance beside it, rather than a fourth symbol: the mark
+    // answers "is this done", the suffix answers "did this run do it" — the same
+    // split the dashboard makes with a solid marker in a different tone.
+    if (reused.has(stage)) return `  ${label.padEnd(16)}✓ (cached)`;
+
+    // `state.stage` lags behind the log, and the `…` was the casualty. Observed
+    // on a real run: the field read `architecture-impact` while `stage_started`
+    // for `sdd` was already written and the model was generating — so `sdd`
+    // printed `·`, the same mark as the four stages that had not begun.
+    //
+    // A `stage_started` with no `stage_completed` after it is the stage in
+    // flight. The field stays as a fallback for the window before any event
+    // exists, exactly as `buildStageTimeline` resolves the same question.
+    const running = (begun.has(stage) || stage === currentStage) && status === 'running';
+    return `  ${label.padEnd(16)}${running ? '…' : '·'}`;
   });
 }
 
@@ -282,6 +312,9 @@ export function render(
   collaboration: string | undefined,
   team?: string | undefined,
   codeReview?: string | undefined,
+  /** Stages with a `stage_started` event — see `renderPlanningProgress`. */
+  startedStages: readonly string[] = [],
+  reusedStages: readonly string[] = [],
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -291,7 +324,7 @@ export function render(
     '',
   ];
 
-  lines.push(...renderPlanningProgress(completedStages, state.stage, state.status));
+  lines.push(...renderPlanningProgress(completedStages, state.stage, state.status, startedStages, reusedStages));
 
   lines.push(`  ${'Approval'.padEnd(16)}${state.approved ? '✓' : '·'}`);
   lines.push('');

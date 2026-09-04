@@ -51,6 +51,10 @@ export async function runFeatureCommand(
   options: FeatureOptions,
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
+  // Outside the `try`, because the catch is the one place it is read: the stage a
+  // failed run stopped in is what makes the resume line below complete.
+  let lastStarted: string | undefined;
+
   try {
     const from = options.from === undefined ? undefined : parseStage(options.from);
 
@@ -106,10 +110,8 @@ export async function runFeatureCommand(
       ...(options.skipReview === true ? { skipReview: true } : {}),
       ...(workflowOverride !== undefined ? { workflow: workflowOverride } : {}),
       onProgress: (stage, status) => {
-        const mark = status === 'completed' ? '✓' : status === 'cached' ? '·' : '→';
-        if (status !== 'started' || globals.verbose) {
-          process.stdout.write(`  ${mark} ${stage}${status === 'cached' ? ' (cached)' : ''}\n`);
-        }
+        if (status === 'started') lastStarted = stage;
+        writeStageProgress(stage, status, globals.verbose);
       },
     });
 
@@ -140,8 +142,77 @@ export async function runFeatureCommand(
   } catch (error) {
     const rendered = renderError(error);
     process.stderr.write(`\n${rendered.message}\n`);
+    process.stderr.write(resumeHint(lastStarted));
     return rendered.exitCode;
   }
+}
+
+/**
+ * Where to pick the run back up, printed at the point the run stopped.
+ *
+ * `--from` already resumes a stage keeping the artifacts before it, and the
+ * pipeline supports it well. Nothing on the failure path said so: a planning stage
+ * dying printed the runner's error and stopped, and the only command offered
+ * afterwards was `revise` — which is the wrong tool here twice over. It prepends
+ * *"Revision requested by the reviewer"* to the request, and no reviewer asked
+ * for anything when an HTTP call failed; and it spends one of the run's revision
+ * cycles, which a `standard` workflow only has two of.
+ *
+ * The stage is known — it is the one that had started — so the line can be
+ * complete rather than a pointer to `--help`.
+ *
+ * Quiet when the failure happened before any stage began: there is nothing to
+ * resume from, and a suggestion that cannot be followed is worse than none.
+ */
+export function resumeHint(stage: string | undefined): string {
+  if (stage === undefined) return '';
+  return (
+    `\nThe stages before this one are kept. Resume with:\n` +
+    `  agent-flow feature "<same description>" --from ${stage}\n` +
+    `\nUse \`revise\` instead only when the plan itself needs changing — it spends a\n` +
+    `revision cycle and tells the planner a reviewer asked for the change.\n`
+  );
+}
+
+/**
+ * One line per stage, at the start and at the end of it.
+ *
+ * The start line used to be behind `--verbose`, and the cost was four minutes of
+ * an empty terminal on a real run: `discovery` took 4m08s and printed nothing
+ * until it was over. There is no way to tell a slow stage from a dead process in
+ * that window, which is the state an operator is least able to wait out.
+ *
+ * On a TTY the finished line overwrites the started one, so the pipeline stays a
+ * single growing list rather than doubling. Piped or redirected — a log file, CI,
+ * `nohup` — `\r` means nothing, so both lines are written and the log reads as a
+ * timeline, which is what a log is for.
+ */
+export function writeStageProgress(stage: string, status: string, verbose: boolean): void {
+  const interactive = process.stdout.isTTY === true;
+
+  // `stale` is a note about the cache, not a second start. Discovery emits
+  // `started` and then `stale` when the fingerprint no longer matches, and
+  // rendering both printed `→ discovery` twice above a single `✓ discovery` —
+  // measured on a real run. The stage is already announced; that it is running
+  // because the cache expired is detail, and detail is what `--verbose` is for.
+  if (status === 'stale') {
+    if (verbose) process.stdout.write(`  · ${stage} (cache stale, re-running)\n`);
+    return;
+  }
+
+  if (status === 'started') {
+    process.stdout.write(`  → ${stage}${interactive ? '' : '\n'}`);
+    return;
+  }
+
+  const mark = status === 'completed' ? '✓' : status === 'cached' ? '·' : '→';
+  const suffix = status === 'cached' ? ' (cached)' : '';
+
+  // `\r` returns to the start of the line and the pad covers the longest stage
+  // name plus its marker, so a shorter line cannot leave the tail of a longer one
+  // behind it.
+  const prefix = interactive && !verbose ? '\r' : '';
+  process.stdout.write(`${prefix}  ${mark} ${stage}${suffix}`.padEnd(34) + '\n');
 }
 
 /**
