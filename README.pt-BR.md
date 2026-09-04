@@ -903,6 +903,7 @@ Os documentos abaixo estão em inglês.
 | [`docs/example-walkthrough.md`](docs/example-walkthrough.md) | Uma feature, quatro tasks, do `init` até uma branch mergeável |
 | [`docs/web-ui.md`](docs/web-ui.md) | O dashboard: os dois modos, as páginas, o DAG, os eventos ao vivo, o que ele muda e o que não muda, a API HTTP |
 | [`docs/specs/m8-5-ux-simplification.md`](docs/specs/m8-5-ux-simplification.md) | M8.5: uma superfície por vez — o que a densidade escondia, e os três defeitos que nenhum gate via |
+| [`docs/specs/model-first-identity.md`](docs/specs/model-first-identity.md) | Modelo, papel, runner, agente: qual deles o dashboard mostra primeiro, onde cada um é decidido, e o que se pode afirmar sobre um modelo ausente |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | O que cada mensagem significa e o que fazer a respeito |
 | [`docs/roadmap.md`](docs/roadmap.md) | O que está feito, o que vem depois, e o que está fora de escopo |
 
