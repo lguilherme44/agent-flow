@@ -83,6 +83,42 @@ function requiredStagesReached(stage: RunStage): number {
 }
 
 /**
+ * The stage the run is actually in, from the log, falling back to the field.
+ *
+ * `state.stage` is a record of the last stage the coordinator *wrote*, and it
+ * lags: measured on AF-2026-005 it read `planning` for a minute while an agent
+ * worked, and on a later run it read `architecture-impact` while the log was
+ * already inside `sdd`. Both are the same inversion, and it has now been fixed
+ * three times in three modules — `buildStageTimeline`, `renderPlanningProgress`
+ * and here — so the rule is written once and read from the log the same way:
+ *
+ * a `stage_started` with no `stage_completed`, `stage_failed` or `stage_reused`
+ * after it is the stage in flight.
+ *
+ * The field remains the answer for the window between `createRun` and the first
+ * event, where the log is empty and only the field knows the run has begun.
+ */
+export function currentStage(events: readonly RunEvent[], state: RunState): RunStage {
+  let inFlight: RunStage | undefined;
+
+  for (const event of events) {
+    const stage = event.detail['stage'];
+    if (typeof stage !== 'string') continue;
+    if (event.type === 'stage_started') inFlight = stage as RunStage;
+    else if (
+      inFlight === stage &&
+      (event.type === 'stage_completed' ||
+        event.type === 'stage_failed' ||
+        event.type === 'stage_reused')
+    ) {
+      inFlight = undefined;
+    }
+  }
+
+  return inFlight ?? state.stage;
+}
+
+/**
  * The run's runtime condition.
  *
  * Order of the checks is the contract. Terminal states first, then the conditions that
@@ -160,9 +196,12 @@ export function projectRun(input: ProjectionInput): RunProjection {
   const gate = projectGate(tasks, resumable);
   if (gate !== undefined) return { ...base, status: 'blocked_on_human', gate };
 
-  if (state.stage === 'verification') return { ...base, status: 'verifying' };
-  if (state.stage === 'final-review') return { ...base, status: 'reviewing' };
-  if (state.stage === 'implementation') return { ...base, status: 'implementing' };
+  // Read from the log, not from the field — see `currentStage`.
+  const stage = currentStage(events, state);
+
+  if (stage === 'verification') return { ...base, status: 'verifying' };
+  if (stage === 'final-review') return { ...base, status: 'reviewing' };
+  if (stage === 'implementation') return { ...base, status: 'implementing' };
 
   /**
    * A task is running, and the stage has not caught up yet (M8 dogfood).
@@ -183,7 +222,7 @@ export function projectRun(input: ProjectionInput): RunProjection {
    */
   const BEFORE_IMPLEMENTATION: readonly RunStage[] = ['discovery', 'sdd', 'planning', 'plan-review'];
   if (
-    BEFORE_IMPLEMENTATION.includes(state.stage) &&
+    BEFORE_IMPLEMENTATION.includes(stage) &&
     tasks.some((task) => task.state === 'running')
   ) {
     return { ...base, status: 'implementing' };

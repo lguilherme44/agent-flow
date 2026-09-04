@@ -578,6 +578,21 @@ export class StageRunner {
 
       logLines.push(`repair=${repair} ok durationMs=${result.durationMs}`);
 
+      // "The runner answered" and "the answer was accepted" are two facts, and
+      // `stage_completed` was carrying both. They diverged on a real run: the
+      // planner returned a schema-valid plan, `checkPlan` turned it down, and the
+      // log held `stage_completed` and `stage_failed` for `planning` at the same
+      // timestamp — with `status` then showing `Task Planning ✓` on a FAILED run.
+      //
+      // Emitted as well as, never instead of: every existing reader keeps working,
+      // and a reader that needs the distinction now has it.
+      await store.appendEvent(runId, 'stage_output_received', {
+        stage: stage.name,
+        role: stage.role,
+        runner: lastExecution?.runner ?? resolved.runner,
+        durationMs: result.durationMs,
+      });
+
       const problems = this.validate(stage, result.text, result.json);
       if (problems.length === 0) {
         await this.persist(runId, stage, result.text);

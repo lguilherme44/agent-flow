@@ -376,6 +376,44 @@ export const RECOVERY_EVENT_TYPES = [
 export type RecoveryEventType = (typeof RECOVERY_EVENT_TYPES)[number];
 
 /**
+ * The event names a stage may emit, and what each one asserts.
+ *
+ * Declared here for the reason {@link RECOVERY_EVENT_TYPES} is: the type is an open
+ * string, so this is the *spelling*, owned by the vocabulary layer rather than coined
+ * at a call site.
+ *
+ * The pair worth reading together is `stage_output_received` and `stage_completed`.
+ * They are two facts, and one of them used to carry both: on a real run the planner
+ * returned a schema-valid plan, `checkPlan` turned it down, and the log held
+ * `stage_completed` and `stage_failed` for `planning` at the same timestamp — with
+ * `status` then showing `Task Planning ✓` on a FAILED run.
+ *
+ * **`stage_completed` still means "the runner answered", and moving it would be a
+ * correctness change, not a display one.** It has seven readers, and one of them is
+ * not a screen: `stageRunnersOf` (`plan-review-service.ts`) collects `detail.runner`
+ * from `stage_completed` alone, and `correctivePlanAuthors` uses that list as the set
+ * a corrective plan review must be *independent of*. Narrow `stage_completed` to
+ * "accepted", and a planning stage whose output was rejected drops out of the list —
+ * so the runner that wrote the plan becomes eligible to review it, with the artifact
+ * claiming an independence that does not exist. Silently.
+ *
+ * So the distinction is additive: `stage_output_received` is the new fact, and nothing
+ * was taken away from the old one.
+ */
+export const STAGE_EVENT_TYPES = [
+  'stage_started',
+  /** The runner answered. Says nothing about whether the answer was any good. */
+  'stage_output_received',
+  /** The runner answered *and* the output passed this stage's validation. */
+  'stage_completed',
+  'stage_failed',
+  /** Satisfied by an artifact that already existed; no agent ran. */
+  'stage_reused',
+  'stage_context_measured',
+] as const;
+export type StageEventType = (typeof STAGE_EVENT_TYPES)[number];
+
+/**
  * The event names collaboration is allowed to emit (M4).
  *
  * Declared here, in full, ahead of the code that emits them, for the same reason

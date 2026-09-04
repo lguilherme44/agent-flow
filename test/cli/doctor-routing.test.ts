@@ -99,21 +99,20 @@ describe('the routing table is anchored to the real stage definitions', () => {
     const defs = await import('../../src/app/stages/definitions.js');
     const { PIPELINE_ROUTING } = await import('../../src/cli/render/routing.js');
 
+    // The definitions are already typed; no predicate needed, and one that widened
+    // the type would be the assertion this test exists to prevent.
     const byName = new Map(
       Object.values(defs)
-        .filter(
-          (d): d is { name: string; role: string; prompt: string } =>
-            typeof d === 'object' && d !== null && 'name' in d && 'role' in d && 'prompt' in d,
-        )
+        .filter((d) => typeof d === 'object' && d !== null && 'name' in d && 'prompt' in d)
         // Several definitions share a stage name (planning has trivial and simple
         // variants); the standard one is what the report describes.
-        .map((d) => [`${d.name}:${d.prompt}`, d]),
+        .map((d) => [`${String(d.name)}:${String(d.prompt)}`, d] as const),
     );
 
     for (const entry of PIPELINE_ROUTING) {
       const real = byName.get(`${entry.stage}:${entry.prompt}`);
       if (real === undefined) continue; // implementation and the reviews live elsewhere
-      expect(real.role, `${entry.stage} role`).toBe(entry.role);
+      expect(String(real.role), `${entry.stage} role`).toBe(entry.role);
     }
   });
 

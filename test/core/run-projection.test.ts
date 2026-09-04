@@ -737,3 +737,51 @@ describe('the workflow axis counts stages that are not themselves required', () 
     expect(seen.at(-1)).toBe(projectProgress(state({ stage: 'final-review', tasks: [] })).workflow.total);
   });
 });
+
+/**
+ * The lag, fixed for the third time and now written once.
+ *
+ * `state.stage` records the last stage the coordinator *wrote*. Measured twice on
+ * real runs: it read `planning` for a minute while an agent worked, and
+ * `architecture-impact` while the log was already inside `sdd`. Three modules had
+ * to learn this separately — `buildStageTimeline`, `renderPlanningProgress`, and
+ * the runtime projection.
+ */
+describe('the stage a run is in comes from the log', () => {
+  const ev = (type: string, stage: string, at = '2026-09-04T00:00:00.000Z') =>
+    ({ at, type, detail: { stage } }) as RunEvent;
+
+  it('prefers a started stage with no terminal event after it', () => {
+    const projected = projectRun({
+      state: state({ stage: 'architecture-impact', status: 'running', tasks: [] }),
+      events: [
+        ev('stage_completed', 'architecture-impact'),
+        ev('stage_started', 'verification'),
+      ],
+    });
+    expect(projected.status).toBe('verifying');
+  });
+
+  it('stops preferring it once the stage finished', () => {
+    const projected = projectRun({
+      state: state({ stage: 'planning', status: 'running', tasks: [] }),
+      events: [ev('stage_started', 'verification'), ev('stage_completed', 'verification')],
+    });
+    expect(projected.status).not.toBe('verifying');
+  });
+
+  it('treats a reused stage as finished, not as in flight', () => {
+    const projected = projectRun({
+      state: state({ stage: 'planning', status: 'running', tasks: [] }),
+      events: [ev('stage_started', 'final-review'), ev('stage_reused', 'final-review')],
+    });
+    expect(projected.status).not.toBe('reviewing');
+  });
+
+  it('falls back to the field before any event exists', () => {
+    // Between `createRun` and the first `stage_started` the log is empty, and only
+    // the field knows the run has begun.
+    expect(projectRun({ state: state({ stage: 'verification', status: 'running', tasks: [] }) }).status)
+      .toBe('verifying');
+  });
+});
