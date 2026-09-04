@@ -69,6 +69,9 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       processRunner: deps.processRunner,
       envPass,
       ...(config.command === undefined ? {} : { command: config.command }),
+      // `RunnerConfig.args` (§7): the seam for what this schema does not model,
+      // most concretely pointing a coding CLI at another inference endpoint.
+      extraArgs: config.args,
     }),
 
   'codex-cli': (id, config, deps, envPass) =>
@@ -79,6 +82,9 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       // Needed because `--output-schema` takes a file path rather than a string.
       fs: deps.fs,
       ...(config.command === undefined ? {} : { command: config.command }),
+      // `RunnerConfig.args` (§7): the seam for what this schema does not model,
+      // most concretely pointing a coding CLI at another inference endpoint.
+      extraArgs: config.args,
     }),
 
   'agy-cli': (id, config, deps, envPass) =>
@@ -87,6 +93,9 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       processRunner: deps.processRunner,
       envPass,
       ...(config.command === undefined ? {} : { command: config.command }),
+      // `RunnerConfig.args` (§7): the seam for what this schema does not model,
+      // most concretely pointing a coding CLI at another inference endpoint.
+      extraArgs: config.args,
     }),
 
   /**

@@ -12,7 +12,19 @@ import { TeamsConfigSchema } from './team.schema.js';
 import { QualityConfigSchema } from './review.schema.js';
 import { ForgeConfigSchema } from './forge.schema.js';
 
-/** Default per-role timeout. A hung CLI must not stall a run forever (R-11). */
+/**
+ * Default per-role timeout. A hung CLI must not stall a run forever (R-11).
+ *
+ * **Calibrated for a frontier CLI, and it is short for anything else.** Measured
+ * against a local endpoint: one task died with `errorCode: 'timeout'` at exactly
+ * 900 seconds; the same task, after context was freed, finished in 248. Both
+ * numbers are ordinary for a model generating at tens of tokens per second, and
+ * neither is a sign the model was failing.
+ *
+ * Raise it per role — `roles.executors.normal.timeoutSeconds` — when a role points
+ * at a slower runner. The floor is not raised globally because a frontier CLI that
+ * has genuinely hung should be cut loose in fifteen minutes, not forty-five.
+ */
 export const DEFAULT_TIMEOUT_SECONDS = 900;
 
 export const RunnerConfigSchema = z.object({
@@ -39,6 +51,34 @@ export const RunnerConfigSchema = z.object({
   apiKeyEnv: z.string().min(1).optional(),
   /** The model id to request. Optional for the same reason `RoleConfig.model` is (AD-13). */
   model: z.string().min(1).optional(),
+  /**
+   * Extra arguments appended to the argv the adapter builds.
+   *
+   * The seam for a CLI that has to be told something this schema does not model —
+   * most concretely, pointing a coding CLI at a different inference endpoint, which
+   * every such CLI spells differently and none of them spell the same way twice.
+   *
+   * Without it, that need is met by a wrapper script on each operator's machine:
+   * it works, and it is a shell file outside version control that nobody reviews
+   * and nobody else can reproduce. This makes it configuration.
+   *
+   * Appended, never merged: the adapter owns the argv it builds — the subcommand,
+   * `-m`, the effort flag, the output path — and these ride after it. A value that
+   * fights the adapter is the operator's to resolve, not this schema's.
+   */
+  args: z.array(z.string()).default([]),
+  /**
+   * The model's context window in tokens, when the operator knows it.
+   *
+   * Nothing infers this, and the default is to say nothing rather than to assume a
+   * frontier model. It exists because a local endpoint's window is small enough to
+   * matter — measured at 49k on one — and the failure without it is expensive and
+   * late: the request is refused mid-task, with the work already done and lost.
+   *
+   * `stage_context_measured` already records what each stage sent. This is the
+   * ceiling to compare it against, which is the half that was missing.
+   */
+  contextWindow: z.number().int().positive().optional(),
 });
 export type RunnerConfig = z.infer<typeof RunnerConfigSchema>;
 

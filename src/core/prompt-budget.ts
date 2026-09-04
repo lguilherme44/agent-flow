@@ -48,6 +48,21 @@ export interface PromptComposition {
   readonly overCeiling: boolean;
   /** Which source pushed it over, named. Absent unless `overCeiling`. */
   readonly ceilingDetail?: string;
+  /**
+   * True when the prompt is close enough to the runner's declared context window
+   * to be worth saying so before the call.
+   *
+   * A different question from `overCeiling`, and deliberately not folded into it.
+   * That one is about *proportion* — a task called trivial receiving more context
+   * than the repository's own standing rules. This one is about *capacity*: a
+   * window is a wall, and hitting it is not a smell but a refused request.
+   *
+   * Absent for every runner that does not declare `contextWindow`, which is all of
+   * them until an operator says otherwise.
+   */
+  readonly nearModelWindow?: boolean;
+  /** What was measured against what, when `nearModelWindow`. */
+  readonly windowDetail?: string;
 }
 
 /**
@@ -91,9 +106,31 @@ export interface PromptParts {
   readonly collaboration: string;
 }
 
+/**
+ * Bytes per token, for turning a measured prompt into the unit a window is in.
+ *
+ * 3.8 rather than 4, measured rather than assumed: a 38.822-byte stage prompt was
+ * counted by a real server at 10.262 tokens. Deliberately a rough number — the
+ * question it answers is "is this close to the wall", and a tokenizer per model
+ * would be precision nobody acts on differently.
+ */
+const BYTES_PER_TOKEN = 3.8;
+
+/**
+ * How much of the window may be spent on the prompt before it is worth warning.
+ *
+ * The remainder is not slack: it is what the turn needs to *work* — tool
+ * definitions, the model's own output, and whatever the agent reads on the way.
+ * At 80% a stage still runs; at 100% the server refuses, mid-task, with the work
+ * already done.
+ */
+const WINDOW_WARN_SHARE = 0.8;
+
 export function measurePromptComposition(
   parts: PromptParts,
   task?: Pick<Task, 'complexity'>,
+  /** The runner's declared window, in tokens. Absent unless configured. */
+  contextWindow?: number,
 ): PromptComposition {
   const measured: { source: PromptSource; bytes: number }[] = (
     [
@@ -127,10 +164,27 @@ export function measurePromptComposition(
 
   const largest = withShare[0];
 
+  // Only when the operator declared a window. Nothing is inferred: assuming a
+  // frontier window is what makes the failure late and expensive, and assuming a
+  // small one would warn on every run that never had a problem.
+  const estimatedTokens = Math.round(totalBytes / BYTES_PER_TOKEN);
+  const nearModelWindow =
+    contextWindow !== undefined && estimatedTokens > contextWindow * WINDOW_WARN_SHARE;
+
   return {
     totalBytes,
     parts: withShare,
     overCeiling,
+    ...(nearModelWindow
+      ? {
+          nearModelWindow,
+          windowDetail:
+            `this prompt is about ${String(estimatedTokens)} tokens against a declared ` +
+            `window of ${String(contextWindow)} — ` +
+            `${String(Math.round((estimatedTokens / (contextWindow as number)) * 100))}% of it, ` +
+            `leaving little for tools and the reply`,
+        }
+      : {}),
     ...(overCeiling && largest !== undefined
       ? {
           ceilingDetail:

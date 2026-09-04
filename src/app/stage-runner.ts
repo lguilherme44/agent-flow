@@ -440,6 +440,12 @@ export class StageRunner {
     //
     // `agentsMd` is counted from the rendered variables rather than re-read: what matters
     // is what the runner received, not what is on disk.
+    // The window belongs to the runner this stage resolved to, not to the stage:
+    // the same prompt is comfortable on one model and over the wall on another.
+    // Absent for every runner that does not declare one, which is all of them
+    // until an operator says otherwise.
+    const runnerWindow = config.runners[resolved.runner]?.contextWindow;
+
     const composition = measurePromptComposition(
       {
         stagePrompt: rendered,
@@ -449,7 +455,8 @@ export class StageRunner {
         collaborationBootstrap: bootstrapBlock,
         collaboration: collaborationBlock,
       },
-      ...(options.complexity === undefined ? [] : [{ complexity: options.complexity }]),
+      options.complexity === undefined ? undefined : { complexity: options.complexity },
+      runnerWindow,
     );
 
     await store.appendEvent(runId, 'stage_context_measured', {
@@ -465,6 +472,12 @@ export class StageRunner {
       ...(composition.ceilingDetail === undefined
         ? {}
         : { ceilingDetail: composition.ceilingDetail }),
+      ...(composition.nearModelWindow === undefined
+        ? {}
+        : { nearModelWindow: composition.nearModelWindow }),
+      ...(composition.windowDetail === undefined
+        ? {}
+        : { windowDetail: composition.windowDetail }),
     });
 
     const logLines: string[] = [

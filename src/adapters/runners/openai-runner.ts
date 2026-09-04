@@ -36,6 +36,14 @@ import type {
  * `model` is whatever the server was started with.
  */
 
+/**
+ * This adapter's own floor, and it is the tighter of the two in the codebase.
+ *
+ * 300s is generous for an endpoint answering from a frontier model and tight for a
+ * local one: a measured SDD stage took 101s and a planning stage 165s on a model
+ * generating at ~39 tokens/second, both inside it — but a longer prompt on a slower
+ * machine is not. Set `timeoutSeconds` on the role when that is the case.
+ */
 const DEFAULT_TIMEOUT_SECONDS = 300;
 const HEALTH_TIMEOUT_SECONDS = 10;
 

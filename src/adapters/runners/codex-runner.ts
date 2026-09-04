@@ -39,6 +39,8 @@ export interface CodexRunnerOptions {
   readonly command?: string;
   /** `execution.passEnv`, forwarded to `BaseRunnerOptions` (PRI-17). */
   readonly envPass?: readonly string[];
+  /** `RunnerConfig.args`, forwarded to `BaseRunnerOptions` (§7). */
+  readonly extraArgs?: readonly string[];
   /**
    * Required, unlike the Claude adapter: `--output-schema` takes a *file path*,
    * so producing structured output means writing the schema to disk first.
@@ -77,6 +79,10 @@ export class CodexRunner extends BaseRunner {
       // it is the one that can drop a base option by omission — and `envPass` is optional
       // on the base, so nothing would have complained.
       ...(options.envPass === undefined ? {} : { envPass: options.envPass }),
+      // And `extraArgs` is the second one the comment above predicted: optional on
+      // the base, silently dropped here, and the symptom would be an operator's
+      // configured argument simply never arriving.
+      ...(options.extraArgs === undefined ? {} : { extraArgs: options.extraArgs }),
       ...(options.command === undefined ? {} : { command: options.command }),
     });
     this.fs = options.fs;

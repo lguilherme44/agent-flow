@@ -52,6 +52,13 @@ export interface BaseRunnerOptions {
    * agent needs it for every invocation of it, not for one.
    */
   readonly envPass?: readonly string[];
+  /**
+   * Extra arguments appended to whatever the adapter builds (`RunnerConfig.args`).
+   *
+   * Appended at the spawn rather than inside each adapter, so a new adapter gets the
+   * seam without knowing it exists, and so no adapter can quietly drop it.
+   */
+  readonly extraArgs?: readonly string[];
   /** Overrides the executable looked up on PATH. */
   readonly command?: string;
 }
@@ -72,6 +79,7 @@ export abstract class BaseRunner implements AgentRunner {
   readonly id: string;
   protected readonly processRunner: ProcessRunner;
   protected readonly command: string;
+  private readonly extraArgs: readonly string[];
   /** `execution.passEnv`, carried so every spawn of this runner sees the same list. */
   protected readonly envPass: readonly string[] | undefined;
 
@@ -80,6 +88,7 @@ export abstract class BaseRunner implements AgentRunner {
     this.processRunner = options.processRunner;
     this.command = options.command ?? this.defaultCommand();
     this.envPass = options.envPass;
+    this.extraArgs = options.extraArgs ?? [];
   }
 
   /**
@@ -141,7 +150,10 @@ export abstract class BaseRunner implements AgentRunner {
     try {
       const result = await this.processRunner.run({
         command: invocation.command,
-        args: invocation.args,
+        // The adapter's argv, then the operator's. Appended and never merged: the
+        // adapter owns the subcommand and its flags, and a value that fights them is
+        // the operator's to resolve.
+        args: this.extraArgs.length === 0 ? invocation.args : [...invocation.args, ...this.extraArgs],
         cwd: input.workingDirectory,
         timeoutSeconds: input.timeoutSeconds,
         // Left at the default, `allowlist` (PRI-17). Stated by omission everywhere else in
