@@ -82,6 +82,21 @@ export const RunnerConfigSchema = z.object({
 });
 export type RunnerConfig = z.infer<typeof RunnerConfigSchema>;
 
+/**
+ * What a single stage may override on the role that serves it.
+ *
+ * A subset of `RoleConfig`, and deliberately not the whole of it: nesting a role
+ * inside a role would let an override carry overrides, and there is no question
+ * an operator asks that needs two levels.
+ */
+export const StageOverrideSchema = z.object({
+  runner: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  effort: ReasoningLevelSchema.optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
+});
+export type StageOverride = z.infer<typeof StageOverrideSchema>;
+
 export const RoleConfigSchema = z.object({
   runner: z.string().min(1),
   /**
@@ -92,6 +107,19 @@ export const RoleConfigSchema = z.object({
   model: z.string().min(1).optional(),
   effort: ReasoningLevelSchema,
   timeoutSeconds: z.number().int().positive().default(DEFAULT_TIMEOUT_SECONDS),
+  /**
+   * Per-stage overrides, for a role that serves stages with different needs.
+   *
+   * `architect` serves `discovery`, which reads the repository, and
+   * `architecture-impact`, which reads nothing. Runner is chosen per role, so the
+   * first forces the second onto a coding CLI — measured on one run, 22 kB of
+   * context through a frontier CLI that an inference endpoint would have absorbed
+   * at no quota cost.
+   *
+   * Keyed by stage name. Absent for every role until an operator writes one, and
+   * a stage not named here resolves exactly as it did before this field existed.
+   */
+  stages: z.record(z.string(), StageOverrideSchema).default({}),
 });
 export type RoleConfig = z.infer<typeof RoleConfigSchema>;
 
@@ -440,6 +468,31 @@ export const EffectiveConfigSchema = z.object({
 export type EffectiveConfig = z.infer<typeof EffectiveConfigSchema>;
 
 /** Flat logical role → its slot in the nested config shape. */
+/**
+ * The role config a given stage resolves to, with its override applied.
+ *
+ * Merged rather than replaced: an override naming only `runner` keeps the role's
+ * effort and timeout, which is the common case — the operator is moving one stage
+ * to a cheaper runner, not re-describing the role.
+ */
+export function roleConfigForStage(
+  roles: RolesConfig,
+  role: WorkflowRole,
+  stage: string,
+): RoleConfig {
+  const base = roleConfigOf(roles, role);
+  const override = base.stages[stage];
+  if (override === undefined) return base;
+
+  return {
+    ...base,
+    ...(override.runner === undefined ? {} : { runner: override.runner }),
+    ...(override.model === undefined ? {} : { model: override.model }),
+    ...(override.effort === undefined ? {} : { effort: override.effort }),
+    ...(override.timeoutSeconds === undefined ? {} : { timeoutSeconds: override.timeoutSeconds }),
+  };
+}
+
 export function roleConfigOf(roles: RolesConfig, role: WorkflowRole): RoleConfig {
   switch (role) {
     case 'executor.trivial':

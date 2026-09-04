@@ -1,6 +1,7 @@
 import {
   GlobalConfigSchema,
   roleConfigOf,
+  roleConfigForStage,
   type FailureClass,
   type GlobalConfig,
   type ReasoningLevel,
@@ -78,6 +79,15 @@ export class RoleResolutionError extends Error {
 
 /** What a stage needs from its runner, declared in the prompt front-matter (AD-12). */
 export interface RoleRequirements {
+  /**
+   * Which stage is resolving, when the caller knows.
+   *
+   * Only used to apply `roles.<role>.stages.<stage>` — a role serving stages with
+   * different needs can send one of them somewhere else. Absent for a caller that
+   * resolves a role in the abstract (`doctor`, the capability report), and a role
+   * with no overrides resolves identically either way.
+   */
+  readonly stage?: string;
   /** Read-only stages (§35): discovery, architecture, SDD, planning, reviews. */
   readonly readOnly?: boolean;
   /** True only when a prompted-and-validated fallback is unacceptable. */
@@ -220,7 +230,13 @@ export function resolveRole(
    */
   member?: { readonly runner: string; readonly model?: string },
 ): ResolvedAgentConfig {
-  const roleConfig = roleConfigOf(config.roles, role);
+  // The stage's override when the caller named one, the role's own config otherwise.
+  // Merged, not replaced: an override naming only `runner` keeps the role's effort and
+  // timeout, which is the case an operator actually writes.
+  const roleConfig =
+    requirements.stage === undefined
+      ? roleConfigOf(config.roles, role)
+      : roleConfigForStage(config.roles, role, requirements.stage);
   const runnerId = member?.runner ?? roleConfig.runner;
   const model = member?.model ?? roleConfig.model;
 

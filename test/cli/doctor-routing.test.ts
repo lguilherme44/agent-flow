@@ -123,3 +123,52 @@ describe('the routing table is anchored to the real stage definitions', () => {
     expect(PIPELINE_ROUTING).toHaveLength(9);
   });
 });
+
+describe('the report follows the stage override', () => {
+  it('shows the runner the stage will actually use', async () => {
+    // Caught by running `doctor`, not by a unit test: the first version of this
+    // report resolved through `roleConfigOf` and described a routing the run
+    // would not take.
+    const { GlobalConfigSchema } = await import('../../src/contracts/index.js');
+    const withOverride = GlobalConfigSchema.parse({
+      runners: {
+        claude: { type: 'claude-code-cli' },
+        local: { type: 'openai-compatible', baseUrl: 'http://x/v1' },
+      },
+      roles: {
+        ...config().roles,
+        architect: {
+          runner: 'claude',
+          effort: 'high',
+          stages: { 'architecture-impact': { runner: 'local' } },
+        },
+      },
+    });
+
+    const lines = renderStageRouting(withOverride, promptsDir);
+    const at = lines.findIndex((l) => l.trimStart().startsWith('architecture-impact'));
+    expect(lines[at]).toContain('local');
+    // And the finding is gone, because there is nothing left to point out.
+    expect(lines[at + 1] ?? '').not.toContain('could serve it');
+  });
+
+  it('counts a runner used only by an override as routed', () => {
+    const lines = renderUnusedRunners(
+      GlobalConfigSchema.parse({
+        runners: {
+          claude: { type: 'claude-code-cli' },
+          local: { type: 'openai-compatible', baseUrl: 'http://x/v1' },
+        },
+        roles: {
+          ...config().roles,
+          architect: {
+            runner: 'claude',
+            effort: 'high',
+            stages: { 'architecture-impact': { runner: 'local' } },
+          },
+        },
+      }),
+    );
+    expect(lines.join('\n')).not.toContain('local');
+  });
+});

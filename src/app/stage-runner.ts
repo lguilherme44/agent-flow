@@ -340,6 +340,9 @@ export class StageRunner {
       config,
       capabilities,
       {
+        // Named so a role that serves several stages can send one of them
+        // elsewhere — `roles.architect.stages.architecture-impact.runner`.
+        stage: stage.name,
         readOnly: prompt.meta.permissions === 'read-only',
         nativeStructuredOutput: prompt.meta.nativeStructuredOutput,
         // The prompt decides, exactly as it does for `readOnly` (AD-12). A stage that opens

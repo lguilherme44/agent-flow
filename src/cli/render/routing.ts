@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GlobalConfig, WorkflowRole } from '../../contracts/index.js';
-import { roleConfigOf } from '../../contracts/index.js';
+import { roleConfigForStage } from '../../contracts/index.js';
 
 /**
  * Two questions `doctor` did not answer, and an operator has to.
@@ -75,7 +75,9 @@ export function renderStageRouting(config: GlobalConfig, promptsDir: string): st
   const lines: string[] = ['Stage routing (which runner serves what)'];
 
   for (const entry of PIPELINE_ROUTING) {
-    const role = roleConfigOf(config.roles, entry.role);
+    // Resolved through the stage override, or the report describes a routing the
+    // run will not take — which is what it did on the first pass here.
+    const role = roleConfigForStage(config.roles, entry.role, entry.stage);
     if (role === undefined) continue;
 
     const runnerType = config.runners[role.runner]?.type ?? '(unknown)';
@@ -105,7 +107,8 @@ export function renderStageRouting(config: GlobalConfig, promptsDir: string): st
 export function renderUnusedRunners(config: GlobalConfig): string[] {
   const routed = new Set<string>();
   for (const entry of PIPELINE_ROUTING) {
-    const role = roleConfigOf(config.roles, entry.role);
+    // Through the override too: a runner used only by one stage is routed.
+    const role = roleConfigForStage(config.roles, entry.role, entry.stage);
     if (role !== undefined) routed.add(role.runner);
   }
   for (const fallbackRole of Object.values(config.fallback.roles)) {
