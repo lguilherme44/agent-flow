@@ -8,7 +8,9 @@ import {
   ProjectQuerySchema,
   PromptParamsSchema,
   RejectRequestSchema,
+  PlanRequestSchema,
   RetryRequestSchema,
+  ReviewRequestSchema,
   ReviseRequestSchema,
   RunParamsSchema,
   StartRequestSchema,
@@ -37,11 +39,14 @@ import { RunExecutionLock, type LockRefusal } from '../app/run-execution-lock.js
 import {
   approve,
   cancel,
+  createFeatureRun,
   describeApprovalGate,
   pause,
+  planFeature,
   resume,
   reject,
   retryTask,
+  review,
   revise,
   start,
   type ActionError,
@@ -61,7 +66,7 @@ import { ControlReader } from './control-reader.js';
 import { PromptReader } from './prompt-reader.js';
 import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
 import { ConfigReader } from './config-reader.js';
-import { ActionJobs, type ActionJob, type JobResult } from './action-jobs.js';
+import { ActionJobs, type ActionJob, type JobKind, type JobResult } from './action-jobs.js';
 import { createEventBus, RunWatcher, type EventBus } from './event-bridge.js';
 import type { ProjectRegistry, RegisteredProject } from './project-registry.js';
 import { ContextTelemetryReader } from './context-telemetry-reader.js';
@@ -740,6 +745,48 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return view;
   });
 
+  /**
+   * `agent-flow feature "<description>"`, from the browser (Deck).
+   *
+   * Two halves, deliberately. The run is created here, synchronously — with its Git
+   * identity and the same preflight the CLI runs, so a dirty tree or an uninitialised
+   * project is refused with the CLI's own sentence and no run is written. Then planning,
+   * which spends model calls for minutes, proceeds as a job; the 202 carries the job and
+   * the new run's id, so the page can open the run and watch it plan.
+   *
+   * The project comes from the query, as it does for every read: there is no run id to
+   * hang it on yet, and there is still no request shape that carries a directory.
+   */
+  app.post('/api/v1/runs', async (request, reply) => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const body = PlanRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'a feature needs a description');
+
+    const deps = depsFor(project);
+    const created = await createFeatureRun(deps, body.data.description);
+    if (!created.ok) return rejectAction(reply, created.error);
+
+    const runId = created.value.runId;
+    const { description, workflow, skipReview, noCache } = body.data;
+
+    return await startJob(reply, project, 'plan', runId, async () => {
+      const outcome = await planFeature(deps, runId, description, {
+        ...(workflow === undefined ? {} : { workflow }),
+        ...(skipReview ? { skipReview: true } : {}),
+        ...(noCache ? { noCache: true } : {}),
+      });
+      if (!outcome.ok) return { error: outcome.error };
+
+      return {
+        summary: `Planned ${String(outcome.value.taskCount)} tasks${
+          outcome.value.reviewVerdict === undefined ? '' : `; review ${outcome.value.reviewVerdict}`
+        }.`,
+      };
+    });
+  });
+
   app.post('/api/v1/runs/:runId/approve', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;
@@ -806,7 +853,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   const startJob = async (
     reply: FastifyReply,
     project: RegisteredProject,
-    kind: 'start' | 'revise',
+    kind: JobKind,
     runId: string,
     work: () => Promise<JobResult>,
   ): Promise<ActionJobView | ActionErrorView> => {
@@ -828,7 +875,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       return {
         error: 'run_busy',
         message: `${runId} is already ${
-          outcome.busy.kind === 'start' ? 'running' : 're-planning'
+          outcome.busy.kind === 'start' ? 'running' : outcome.busy.kind === 'review' ? 'being reviewed' : outcome.busy.kind === 'plan' ? 'planning' : 're-planning'
         } in this server.`,
         action: 'Wait for it to finish, or watch it on the run page.',
         detail: { jobId: outcome.busy.id, kind: outcome.busy.kind },
@@ -956,6 +1003,41 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
             ? ''
             : `; review ${outcome.value.reviewVerdict}`
         }.`,
+      };
+    });
+  });
+
+  /**
+   * `agent-flow review`, as a job (Deck).
+   *
+   * The last step of a run was the one nobody typed: seven runs on the machine this was
+   * written on had every task done and sat at "run `agent-flow review`". Same use case as
+   * the CLI — verification, the two reviewers, the Definition of Done, and the run's status
+   * moving to `completed` when it holds — behind the job machinery `start` uses, because
+   * it spawns runners and takes minutes. The lease is the use case's to take, as always.
+   */
+  app.post('/api/v1/runs/:runId/review', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const body = ReviewRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid review request');
+
+    const deps = depsFor(scope.project);
+    const runId = scope.runId;
+    const fix = body.data.fix;
+
+    return await startJob(reply, scope.project, 'review', runId, async () => {
+      const outcome = await review(deps, runId, fix ? { fix: true } : {});
+      if (!outcome.ok) return { error: outcome.error };
+
+      const judged = outcome.value;
+      return {
+        summary: judged.done.done
+          ? 'Definition of Done satisfied; the run is complete.'
+          : `Not done: ${judged.done.missing.join('; ')}${
+              judged.corrective === undefined ? '' : ' — corrective tasks were created.'
+            }`,
       };
     });
   });

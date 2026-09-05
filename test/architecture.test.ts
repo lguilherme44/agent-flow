@@ -1334,8 +1334,10 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       .filter(({ path }) => path !== 'src/app/state-store.ts')
       .filter(({ text }) => /\.createRun\s*\(/.test(codeOnly(text)));
 
-    // There is one, and if a second appears it has to come and satisfy this too.
-    expect(callers.map(({ path }) => path)).toEqual(['src/cli/feature.ts']);
+    // There is one, and if a second appears it has to come and satisfy this too. It moved
+    // from `src/cli/feature.ts` to the use-case module the day the dashboard learned to
+    // start a feature: two adapters, one place a run is born.
+    expect(callers.map(({ path }) => path)).toEqual(['src/app/run-actions.ts']);
 
     for (const { path, text } of callers) {
       const code = codeOnly(text);
@@ -1359,7 +1361,7 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       .map(({ path }) => path)
       .sort();
 
-    expect(users).toEqual(['src/app/run-git-identity.ts', 'src/cli/feature.ts']);
+    expect(users).toEqual(['src/app/run-actions.ts', 'src/app/run-git-identity.ts']);
   });
 
   it('keeps the run identity out of every request contract (I-8)', () => {

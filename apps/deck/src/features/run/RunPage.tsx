@@ -104,16 +104,22 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
 
   const refreshRun = (): void => invalidate((key) => key.includes(`/runs/${runId}`) || key.includes('/workspace'));
 
-  const start = async (): Promise<void> => {
+  const ask = async (call: () => Promise<unknown>, asked: string): Promise<void> => {
     setActionNote(undefined);
     try {
-      await api.start(address);
-      setActionNote({ tone: 'ok', text: 'Asked. Execution runs as a job; progress arrives on the recorder.' });
+      await call();
+      setActionNote({ tone: 'ok', text: asked });
       refreshRun();
     } catch (error) {
       setActionNote({ tone: 'bad', text: error instanceof ApiError ? `${error.message}${error.action === undefined ? '' : ` ${error.action}`}` : String(error) });
     }
   };
+
+  const start = (): Promise<void> => ask(() => api.start(address), 'Asked. Execution runs as a job; progress arrives on the recorder.');
+  // The last step, from the page a person is already on. Verification, the two reviewers
+  // and the Definition of Done run as a job; the run's status moves when they are done.
+  const finalReview = (): Promise<void> =>
+    ask(() => api.review(address), 'Asked. Verification and the final review run as a job; the run closes when the Definition of Done holds.');
 
   const openGate = (tab: 'decide' | 'revise'): void => {
     setGateTab(tab);
@@ -162,7 +168,11 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   const projectName = projects.data?.find((project) => project.id === projectId)?.name ?? projectId;
   const rt = detail?.runtime;
   const gateOffered = gate.data !== undefined && !gate.data.approved && (gate.data.canApprove || gate.data.refusal?.forcible === true);
-  const showStart = rt?.resumable === true && (job.data === null || job.data === undefined);
+  const idle = job.data === null || job.data === undefined;
+  const showStart = rt?.resumable === true && idle;
+  // Offered exactly when the server says the run is held at final acceptance — never as a
+  // button whose only outcome is a refusal.
+  const showReview = rt?.gate?.gate === 'final_acceptance' && idle;
 
   return (
     <main className="page">
@@ -241,7 +251,14 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
 
         <div className="run-head__side">
           <div className="run-head__actions">
-            {job.data !== null && job.data !== undefined ? <span className="job">{job.data.kind}…</span> : null}
+            {job.data !== null && job.data !== undefined ? (
+              <span className="job">{job.data.kind === 'start' ? 'executing' : job.data.kind === 'review' ? 'reviewing' : job.data.kind === 'revise' ? 're-planning' : job.data.kind === 'plan' ? 'planning' : job.data.kind}…</span>
+            ) : null}
+            {showReview ? (
+              <button type="button" className="btn btn--primary" onClick={() => void finalReview()}>
+                Run the final review
+              </button>
+            ) : null}
             {gateOffered ? (
               <button type="button" className="btn btn--primary" onClick={() => openGate('decide')}>
                 Review the plan

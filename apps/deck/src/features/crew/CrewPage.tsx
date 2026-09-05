@@ -47,18 +47,21 @@ export function CrewPage({ projectId }: { projectId?: string }) {
         ) : (
           <div className="roster">
             {(health.data ?? []).map((runner) => {
-              const tone = !runner.installed ? 'bad' : !runner.executable ? 'bad' : runner.auth === 'ok' || runner.auth === 'verified' ? 'ok' : 'warn';
+              // `unknown` is what every CLI runner reports without `doctor --deep`: nothing
+              // was asked, so nothing is known. Said as that, not as a warning about the runner.
+              const unprobed = runner.auth === 'unknown';
+              const tone = !runner.installed ? 'bad' : !runner.executable ? 'bad' : unprobed ? 'idle' : runner.auth === 'ok' || runner.auth === 'verified' || runner.auth === 'configured' ? 'ok' : 'warn';
               return (
                 <div key={runner.id} className="panel runner-card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                     <span className="runner-card__id">{runner.id}</span>
-                    <Chip tone={tone}>{!runner.installed ? 'missing' : !runner.executable ? 'not executable' : words(runner.auth)}</Chip>
+                    <Chip tone={tone}>{!runner.installed ? 'missing' : !runner.executable ? 'not executable' : unprobed ? 'installed' : words(runner.auth)}</Chip>
                   </div>
                   <dl className="runner-card__facts">
                     <dt>version</dt>
                     <dd className="mono">{runner.version ?? '—'}</dd>
                     <dt>auth</dt>
-                    <dd>{words(runner.auth)}</dd>
+                    <dd>{unprobed ? <span className="faint">not probed · agent-flow doctor --deep asks the runner, and spends quota to do it</span> : words(runner.auth)}</dd>
                     {runner.detail === undefined ? null : (
                       <>
                         <dt>note</dt>

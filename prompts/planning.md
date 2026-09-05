@@ -100,6 +100,22 @@ rejected and you will be asked again, so it is cheaper to get them right now.
 5. **Acceptance criteria are non-empty** and specific enough to be checked.
 6. **Validation entries are ids from the list above**, not command lines. An
    unknown id fails the plan; so does anything that looks like a command.
+7. **Two tasks that do not depend on each other must not declare the same file.**
+   Independent tasks run at the same time and would fight over it. Make one depend
+   on the other, or split the file between them.
+
+## A task that is meant to change nothing
+
+After a task runs, the orchestrator compares the tree it produced with the tree it
+started from. An identical tree is treated as a task that **did nothing** and the task
+fails acceptance — unless the plan said, before the fact, that changing nothing was the
+point. That is what `expectsNoChange` is for.
+
+Set `"expectsNoChange": true` on a task whose correct outcome is an unchanged repository:
+a verification task, a check that something already holds, a task that only runs the
+existing tests. Leave it out, or `false`, for every task that adds, edits or removes a
+file. The difference between "correctly changed nothing" and "did nothing" is intent,
+and only the plan can carry intent.
 
 ## Classification
 
@@ -143,6 +159,7 @@ Return **only** a JSON object, no prose, no code fences:
       "dependencies": [],
       "requirements": ["FR-001"],
       "files": { "likely": ["src/path/to/file.ts"] },
+      "expectsNoChange": false,
       "flags": {
         "databaseChange": false,
         "crossModule": false,

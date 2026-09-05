@@ -170,6 +170,14 @@ export function describe(event: RunEvent): Sentence {
       return { title: `Revision ${String(num(d['revisionCount']) ?? '')} completed`.replace('  ', ' '), tone: 'ok' };
     case 'planning_refused':
       return { title: 'Planning refused', detail: clip(text(d['reason'])), tone: 'bad' };
+    case 'planning_repair_requested': {
+      const problems = Array.isArray(d['problems']) ? (d['problems'] as unknown[]).map(String) : [];
+      return {
+        title: `Plan refused by the checks · asking the planner again${num(d['repair']) === undefined ? '' : ` (${String(num(d['repair']))}/${String(num(d['maxRepairs']) ?? '?')})`}`,
+        detail: clip(problems[0]),
+        tone: 'warn',
+      };
+    }
     case 'degradation_detected':
       return { title: `Degraded · ${words(text(d['kind']))}`, detail: clip(text(d['reason'])), tone: 'warn' };
     case 'execution_lock_acquired':

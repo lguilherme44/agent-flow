@@ -322,6 +322,8 @@ Five transitions, each one a call to the use case the CLI uses.
 | **Revise** | `POST /runs/:id/revise` → `202` | Re-plans with an instruction. Invalidates any approval first. |
 | **Start** | `POST /runs/:id/start` → `202` | Executes the approved plan. |
 | **Retry** | `POST /runs/:id/tasks/:task/retry` | Puts one finished-badly task back in the queue. |
+| **Review** | `POST /runs/:id/review` → `202` | Verification, the two reviewers and the Definition of Done — `agent-flow review` as a job. Deck offers it exactly when the run is held at final acceptance. |
+| **New feature** | `POST /runs?projectId=` → `202` | `agent-flow feature "<description>"`. The run is created before the response, with its Git identity and the same preflight the CLI runs; planning proceeds as a job whose id the response carries. A preflight refusal — a dirty tree, an uninitialised project — answers `409` with the CLI's own sentence, and no run is created. |
 
 Which of them are offered depends on where the run is. A Start button on an unapproved
 plan is a button whose only outcome is a refusal, and offering it teaches people to
@@ -443,6 +445,8 @@ POST /api/v1/runs/:runId/approve                  { force? }
 POST /api/v1/runs/:runId/reject                   { reason? }
 POST /api/v1/runs/:runId/revise                   { instruction }    → 202
 POST /api/v1/runs/:runId/start                    { taskId? }        → 202
+POST /api/v1/runs/:runId/review                   { fix? }           → 202   verification, both reviewers, the Definition of Done
+POST /api/v1/runs                        ?projectId  { description, workflow?, skipReview?, noCache? } → 202   a new run, planned as a job
 POST /api/v1/runs/:runId/tasks/:taskId/retry      { force? }
 ```
 

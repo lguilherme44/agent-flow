@@ -4,10 +4,11 @@ import type { Clock } from '../ports/index.js';
 /**
  * Long actions, as background jobs (UI-27).
  *
- * Two of the write actions are not requests. Starting a run executes a plan; a
- * revision re-runs the planning pipeline. Both spawn runner processes and take
- * minutes, and an HTTP handler that awaited one would be holding a socket open
- * past every timeout between the browser and this process.
+ * Three of the write actions are not requests. Starting a run executes a plan; a
+ * revision re-runs the planning pipeline; a review runs verification and two
+ * reviewers. All three spawn runner processes and take minutes, and an HTTP
+ * handler that awaited one would be holding a socket open past every timeout
+ * between the browser and this process.
  *
  * So the adapter differs and the use case does not: `POST /runs/:id/start` calls
  * exactly the function `agent-flow run` calls, and answers 202 with a job id while
@@ -36,7 +37,7 @@ import type { Clock } from '../ports/index.js';
  * subsystem, not a flag. It is a real gap and it is documented as one.
  */
 
-export type JobKind = 'start' | 'revise';
+export type JobKind = 'plan' | 'start' | 'revise' | 'review';
 export type JobStatus = 'running' | 'completed' | 'failed';
 
 export interface ActionJob {

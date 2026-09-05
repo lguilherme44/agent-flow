@@ -7,14 +7,17 @@ import { runStatusTone, words } from '../../lib/tone';
 import { useNow } from '../../lib/use-now';
 import { Chip, Empty, Meter, Skeleton } from '../../components/ui';
 import { href, navigate, onLinkClick } from '../../app/router';
+import { NewFeatureDialog } from '../deck/NewFeatureDialog';
 
 /** History. Filters are local: narrowing the list costs no round trip. */
 export function RunsPage({ projectId }: { projectId?: string }) {
   const runs = useResource<RunSummaryView[]>(keys.runs(projectId), () => api.runs(projectId), { refreshMs: 30_000 });
   const projects = useResource(keys.projects(), api.projects);
+  const workspace = useResource(keys.workspace(), api.workspace);
   const now = useNow(true, 15_000);
   const [needle, setNeedle] = useState('');
   const [statuses, setStatuses] = useState<Set<string>>(new Set());
+  const [creating, setCreating] = useState(false);
 
   const names = useMemo(() => new Map((projects.data ?? []).map((project) => [project.id, project.name])), [projects.data]);
   const present = useMemo(() => [...new Set((runs.data ?? []).map((run) => run.status))], [runs.data]);
@@ -46,6 +49,9 @@ export function RunsPage({ projectId }: { projectId?: string }) {
           <p className="page-head__sub">Newest first. Every row is one project's run; ids restart per project per year.</p>
         </div>
         <div className="filters">
+          <button type="button" className="btn btn--primary" onClick={() => setCreating(true)} disabled={(projects.data?.length ?? 0) === 0}>
+            New feature
+          </button>
           <input className="input" placeholder="Filter by id, feature, project…" value={needle} onChange={(event) => setNeedle(event.target.value)} aria-label="Filter runs" />
           {present.map((status) => (
             <button key={status} type="button" className="toggle" aria-pressed={statuses.has(status)} onClick={() => toggle(status)}>
@@ -60,12 +66,20 @@ export function RunsPage({ projectId }: { projectId?: string }) {
         </div>
       </div>
 
+      <NewFeatureDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        projects={projects.data ?? []}
+        rows={workspace.data?.projects ?? []}
+        initialProjectId={projectId}
+      />
+
       {runs.error !== undefined ? (
         <Empty error>Runs could not be read.</Empty>
       ) : runs.loading ? (
         <Skeleton rows={5} />
       ) : visible.length === 0 ? (
-        <Empty hint={needle === '' && statuses.size === 0 ? 'Start one with `agent-flow feature "…"`.' : 'Loosen the filter.'}>
+        <Empty hint={needle === '' && statuses.size === 0 ? 'Start one with the New feature button, or with `agent-flow feature "…"`.' : 'Loosen the filter.'}>
           No runs match.
         </Empty>
       ) : (

@@ -126,6 +126,7 @@ const MARKERS: Readonly<Record<string, MarkerKind>> = {
   recovery_started: 'recovery',
   recovery_step_completed: 'recovery',
   failure_context_built: 'recovery',
+  planning_repair_requested: 'recovery',
   recovery_exhausted: 'exhausted',
   finding_raised: 'finding',
   quality_gate_evaluated: 'gate',

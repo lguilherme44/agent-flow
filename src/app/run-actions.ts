@@ -5,9 +5,14 @@ import {
   type Plan,
   type CorrectiveOriginStage,
   type ReviewResult,
+  type RunStage,
   type RunState,
   type TaskState,
+  type WorkflowClass,
 } from '../contracts/index.js';
+import { PlanningRefusal, type PipelineOptions } from './planning-pipeline.js';
+import { StageFailure } from './stage-runner.js';
+import { PromptError } from './prompt-loader.js';
 import type { TaskBlockReason } from '../contracts/state.schema.js';
 import {
   FORCIBLE_REFUSALS,
@@ -35,8 +40,12 @@ import { StateStore } from './state-store.js';
 import { watchLifecycle } from './run-lifecycle.js';
 import type { Host } from '../ports/index.js';
 import {
+  checkPlanningPreflight,
   checkWorktreePreconditions,
+  composeRunIdentity,
   observePlanningBaseDrift,
+  renderPlanningRefusal,
+  resolveRunGitIdentity,
   worktreeRefusalAction,
   type PlanningBaseMoment,
   type WorktreeRefusalCode,
@@ -149,6 +158,17 @@ export type ActionErrorCode =
   | 'not_paused'
   | 'invalid_input'
   | 'ceremony_budget_exceeded'
+  /**
+   * Planning could not start, or stopped, for a reason the CLI already had a sentence for.
+   *
+   * `planning_refused` is a preflight or a repository refusal — nothing ran, and the action
+   * names what to change. `stage_failed` is a stage that ran and did not finish; the action
+   * is the resume line, because the stages before it are kept. Both exist so a planning job
+   * can end with what happened and what to do, rather than with a stack trace the job
+   * machinery flattens into `no_run`.
+   */
+  | 'planning_refused'
+  | 'stage_failed'
   // MVP 2 §6.3. Every one of these names a repository state a user changes with
   // one command, and none of them is forcible: there is no `--force` for a moved
   // planning base or a dirty tree, and adding one would be adding a flag whose
@@ -1622,6 +1642,181 @@ async function replan(
     ...(result.review === undefined ? {} : { reviewVerdict: result.review.verdict }),
     approvalCleared,
   });
+}
+
+// ---------------------------------------------------------------------------
+// feature: a new run, planned
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a run with its Git identity, in that order and only that order.
+ *
+ * The decision comes first and can refuse: a run born `worktree` in a repository that
+ * cannot supply a base is refused **at creation**, before discovery, planning and a plan
+ * review have been paid for (§6.1). Only once it is settled does `createRun` allocate an
+ * id and write all three fields in the same write that creates the run — so there is no
+ * moment at which a run exists with half an identity.
+ *
+ * Here rather than in the CLI, where it was written, because the dashboard creates runs
+ * now too and two copies of "what a run is born with" is how the two stop agreeing.
+ */
+export async function createRunWithIdentity(
+  context: ExecutionContext,
+  description: string,
+): Promise<RunState> {
+  const deps = {
+    workspaces: context.workspaces,
+    fs: context.fs,
+    host: context.host,
+    config: context.config,
+    projectDir: context.projectDir,
+  };
+
+  const preflight = await checkPlanningPreflight(deps);
+  if (!preflight.satisfied) {
+    // Rendered by the module that owns the codes, so `bug` and every future verb say the
+    // same thing — and so the sentence stays true. It used to blame worktree mode for
+    // every refusal, including refusals that have nothing to do with it and refusals a
+    // sequential run can now reach (AR-01).
+    const rendered = renderPlanningRefusal(preflight);
+    throw new PlanningRefusal(rendered.code, rendered.message, rendered.action, rendered.kind);
+  }
+
+  const identity = await resolveRunGitIdentity(deps);
+  if (!identity.ok) {
+    throw new PlanningRefusal(
+      identity.refusal.code,
+      `Worktree mode was requested and this repository cannot support it ` +
+        `(${identity.refusal.code}): ${identity.refusal.detail}`,
+      worktreeRefusalAction(identity.refusal.code),
+    );
+  }
+
+  return context.store.createRun(description, (runId) =>
+    composeRunIdentity(runId, identity.value),
+  );
+}
+
+export interface CreateFeatureRunResult {
+  readonly runId: string;
+}
+
+/**
+ * The first half of `agent-flow feature`: the run exists, and nothing has been spent.
+ *
+ * Split from planning so an adapter that cannot wait — the dashboard — can hand the run
+ * id back at once and let planning proceed as a job. The refusals here are the
+ * preflight's: an uninitialised project, a dirty tree, a repository worktree mode cannot
+ * use. Each is the sentence the CLI already prints, and no run is created over one.
+ */
+export async function createFeatureRun(
+  deps: RunActionDeps,
+  description: string,
+): Promise<ActionOutcome<CreateFeatureRunResult>> {
+  const trimmed = description.trim();
+  if (trimmed.length === 0) {
+    return failed({
+      code: 'invalid_input',
+      message: 'A feature needs a description.',
+      action: 'Say what the feature should do. A sentence is enough; a paragraph is better.',
+    });
+  }
+
+  const context = await buildExecutionContext(deps);
+  try {
+    const run = await createRunWithIdentity(context, trimmed);
+    return done({ runId: run.runId });
+  } catch (error) {
+    if (error instanceof PlanningRefusal) return failed(planningRefused(error));
+    throw error;
+  }
+}
+
+export interface PlanFeatureOptions {
+  readonly workflow?: WorkflowClass;
+  readonly skipReview?: boolean;
+  readonly noCache?: boolean;
+  /** Resume an existing run from a stage, keeping the artifacts before it. */
+  readonly from?: RunStage;
+  readonly onProgress?: PipelineOptions['onProgress'];
+}
+
+export interface PlanFeatureResult {
+  readonly runId: string;
+  readonly taskCount: number;
+  readonly stagesRun: readonly RunStage[];
+  readonly reviewVerdict?: string;
+}
+
+/**
+ * The second half: discovery → impact → SDD → plan → review, on a run that exists.
+ *
+ * The same pipeline `revise` builds, from the same helper. What this adds is the
+ * translation a second adapter needs: a `PlanningRefusal` or a `StageFailure` thrown
+ * mid-pipeline becomes an `ActionError` with a code, a sentence and the resume line, so a
+ * job ends with what happened and what to do. The CLI keeps rendering the thrown errors
+ * itself, because it can say more — the hint per runner code, the failure class — than a
+ * wire shape carries.
+ */
+export async function planFeature(
+  deps: RunActionDeps,
+  runId: string,
+  description: string,
+  options: PlanFeatureOptions = {},
+): Promise<ActionOutcome<PlanFeatureResult>> {
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+  if (state === null) return failed(noSuchRun(runId));
+
+  const pipeline = buildPlanningPipeline(context);
+  try {
+    const result = await pipeline.run(runId, description, {
+      ...(options.noCache === true ? { noCache: true } : {}),
+      ...(options.from === undefined ? {} : { from: options.from }),
+      ...(options.skipReview === true ? { skipReview: true } : {}),
+      ...(options.workflow === undefined ? {} : { workflow: options.workflow }),
+      ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+    });
+
+    return done({
+      runId,
+      taskCount: result.plan.tasks.length,
+      stagesRun: result.stagesRun,
+      ...(result.review === undefined ? {} : { reviewVerdict: result.review.verdict }),
+    });
+  } catch (error) {
+    if (error instanceof PlanningRefusal) return failed(planningRefused(error));
+    if (error instanceof PromptError) {
+      // Nothing was sent to a runner: the installation's prompts and this build disagree.
+      // A configuration refusal, in the CLI's own words, rather than a stack trace.
+      return failed({
+        code: 'planning_refused',
+        message: error.message,
+        action: 'The installed prompts do not match this build. Reinstall agent-flow, or run `agent-flow doctor`.',
+        detail: { kind: 'configuration' },
+      });
+    }
+    if (error instanceof StageFailure) {
+      return failed({
+        code: 'stage_failed',
+        message: `Stage "${error.stage}" failed: ${error.failureClass} (${error.errorCode}). ${error.message}`,
+        action:
+          `The stages before ${error.stage} are kept. Resume with: ` +
+          `agent-flow feature "<same description>" --from ${error.stage}`,
+        detail: { stage: error.stage, errorCode: error.errorCode, failureClass: error.failureClass },
+      });
+    }
+    throw error;
+  }
+}
+
+function planningRefused(error: PlanningRefusal): ActionError {
+  return {
+    code: 'planning_refused',
+    message: error.message,
+    action: error.action,
+    detail: { refusal: error.code, kind: error.kind },
+  };
 }
 
 // ---------------------------------------------------------------------------

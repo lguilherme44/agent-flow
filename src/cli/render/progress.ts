@@ -45,6 +45,15 @@ export function writeProgress(label: string, status: ProgressStatus, verbose = f
     return;
   }
 
+  // A second planner call is news a person must not mistake for the first. The checks
+  // refused the plan and the pipeline is asking again with the problems attached; said
+  // on its own line, so the terminal reads as what happened rather than as a stall.
+  if (status === 'repairing') {
+    const prefix = interactive() && !verbose ? '\r' : '';
+    process.stdout.write(`${prefix}  ↻ ${label} (the checks refused the plan; asking the planner to fix it)\n`);
+    return;
+  }
+
   const mark = status === 'completed' ? '✓' : status === 'cached' ? '·' : status === 'failed' ? '✗' : '→';
   const suffix = status === 'cached' ? ' (cached)' : '';
 

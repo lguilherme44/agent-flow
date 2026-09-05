@@ -171,6 +171,14 @@ export const api = {
     ),
   retry: (a: RunAddress, taskId: string, force: boolean) =>
     postJson<ActionResultView>(`/runs/${a.runId}/tasks/${taskId}/retry`, { force }, scoped(a)),
+  review: (a: RunAddress, fix = false) =>
+    postJson<ActionJobView>(`/runs/${a.runId}/review`, { fix }, scoped(a)),
+  /**
+   * A new feature: the run is created at once and planning proceeds as a job. The job
+   * carries the new run's id, which is where the page goes next.
+   */
+  plan: (projectId: string, body: { description: string; workflow?: string; skipReview?: boolean; noCache?: boolean }) =>
+    postJson<ActionJobView>('/runs', body, { projectId }),
 };
 
 /** Cache keys are the URLs, so invalidation can reason about paths. */

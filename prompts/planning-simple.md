@@ -31,6 +31,11 @@ If nothing fits, use an empty list `[]`.
 - **1 task is completely valid and encouraged** if the feature is self-contained.
 - Do NOT artificially decompose a task just to manufacture concurrency.
 - Maximum task count: 3 tasks.
+- Two tasks that do not depend on each other must not declare the same file: they
+  would run at the same time and fight over it.
+- A task whose correct outcome is an **unchanged** repository — a verification, a check
+  that something already holds — must declare `"expectsNoChange": true`. Otherwise an
+  empty diff is treated as a task that did nothing, and it fails acceptance.
 
 ## Output
 
@@ -50,6 +55,7 @@ Return **only** a valid JSON object matching the Plan schema, no prose, no markd
       "requirements": ["FR-001"],
       "validation": ["test"],
       "validationExpectation": "pass",
+      "expectsNoChange": false,
       "acceptanceCriteria": [
         "First verifiable criterion",
         "Second verifiable criterion"

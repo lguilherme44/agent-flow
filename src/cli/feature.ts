@@ -12,7 +12,7 @@ import {
 import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
-import { revise } from '../app/run-actions.js';
+import { createRunWithIdentity, revise } from '../app/run-actions.js';
 import {
   chooseInstructionSource,
   readInstruction,
@@ -24,14 +24,6 @@ import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { writeProgress } from './render/progress.js';
-import {
-  composeRunIdentity,
-  resolveRunGitIdentity,
-  checkPlanningPreflight,
-  renderPlanningRefusal,
-  worktreeRefusalAction,
-} from '../app/run-git-identity.js';
-import { PlanningRefusal } from '../app/planning-pipeline.js';
 import type { GlobalOptions } from './index.js';
 
 export interface FeatureOptions {
@@ -356,49 +348,5 @@ export function nextStepAfterPlanning(verdict: 'PASS' | 'FAIL' | undefined): str
   ].join('\n');
 }
 
-/**
- * Creates a run with its Git identity, in that order and only that order.
- *
- * The decision comes first and can refuse: a run born `worktree` in a
- * repository that cannot supply a base is refused **at creation**, before
- * discovery, planning and a plan review have been paid for (§6.1). Only once it
- * is settled does `createRun` allocate an id and write all three fields in the
- * same write that creates the run — so there is no moment at which a run exists
- * with half an identity.
- */
-async function createRunWithIdentity(
-  context: Awaited<ReturnType<typeof buildExecutionContext>>,
-  description: string,
-) {
-  const deps = {
-    workspaces: context.workspaces,
-    fs: context.fs,
-    host: context.host,
-    config: context.config,
-    projectDir: context.projectDir,
-  };
-
-  const preflight = await checkPlanningPreflight(deps);
-  if (!preflight.satisfied) {
-    // Rendered by the module that owns the codes, so `bug` and every future verb say the
-    // same thing — and so the sentence stays true. It used to blame worktree mode for
-    // every refusal, including refusals that have nothing to do with it and refusals a
-    // sequential run can now reach (AR-01).
-    const rendered = renderPlanningRefusal(preflight);
-    throw new PlanningRefusal(rendered.code, rendered.message, rendered.action, rendered.kind);
-  }
-
-  const identity = await resolveRunGitIdentity(deps);
-  if (!identity.ok) {
-    throw new PlanningRefusal(
-      identity.refusal.code,
-      `Worktree mode was requested and this repository cannot support it ` +
-        `(${identity.refusal.code}): ${identity.refusal.detail}`,
-      worktreeRefusalAction(identity.refusal.code),
-    );
-  }
-
-  return context.store.createRun(description, (runId) =>
-    composeRunIdentity(runId, identity.value),
-  );
-}
+// `createRunWithIdentity` lives in `app/run-actions.ts` now: the dashboard creates runs
+// too, and what a run is born with has to be decided in one place.

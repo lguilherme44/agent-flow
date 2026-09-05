@@ -390,6 +390,78 @@ describe('plan validation', () => {
 
     await expect(pipeline.run(run.runId, 'x')).rejects.toThrow(/cycle/i);
   });
+
+  /**
+   * Two independent tasks declaring one file — the refusal five of the seven planning
+   * failures on a real machine were, and the one the prompt promised would be "asked again".
+   */
+  const contending = {
+    feature: 'recurring-bookings',
+    tasks: goodPlan.tasks.map((task) => ({
+      ...task,
+      dependencies: [],
+      files: { likely: ['src/shared.ts'] },
+    })),
+  };
+
+  it('hands a refused plan back to the planner once, with the checks’ own words attached', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushText('# Architecture');
+    runner.pushText('# Impact');
+    runner.pushText(SDD_TEXT);
+    runner.pushJson(contending);
+    runner.pushJson(goodPlan);
+    runner.pushJson(PASSING_REVIEW);
+
+    const progress: string[] = [];
+    const result = await pipeline.run(run.runId, 'Add recurring bookings', {
+      onProgress: (stage, status) => progress.push(`${stage}:${status}`),
+    });
+
+    // The second answer is the plan the run proceeds with.
+    expect(result.plan.tasks.map((task) => task.dependencies)).toEqual([[], ['TASK-001']]);
+    expect(result.stagesRun).toContain('plan-review');
+
+    // The planner was asked twice, and the second time it was told exactly what was wrong,
+    // beneath the request it was given the first time.
+    const planner = runner.calls.map((call) => call.prompt).filter((prompt) => prompt.includes('Add recurring bookings'));
+    const repair = planner.find((prompt) => prompt.includes('refused by the mechanical checks'));
+    expect(repair).toBeDefined();
+    expect(repair).toContain('both declare src/shared.ts');
+    expect(repair).toContain('change nothing else');
+
+    // Recorded: one refusal, one repair, and a progress line a person can tell from a start.
+    const events = await store.readEvents(run.runId);
+    expect(events.filter((e) => e.type === 'stage_failed' && e.detail['stage'] === 'planning')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'planning_repair_requested')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'planning_repair_requested')?.detail).toMatchObject({ repair: 1, maxRepairs: 1 });
+    expect(progress.filter((line) => line === 'planning:started')).toHaveLength(1);
+    expect(progress).toContain('planning:repairing');
+    expect(progress).toContain('planning:completed');
+  });
+
+  it('asks a person after exactly one repair, and says which attempt was refused', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushText('# Architecture');
+    runner.pushText('# Impact');
+    runner.pushText(SDD_TEXT);
+    runner.always({ ok: true, text: JSON.stringify(contending), json: contending, durationMs: 1 });
+
+    const raised = await pipeline.run(run.runId, 'x').catch((error: unknown) => error);
+
+    expect(raised).toBeInstanceOf(StageFailure);
+    expect((raised as StageFailure).failureClass).toBe('plan_rejected_by_checks');
+    expect((raised as Error).message).toMatch(/contend for it/);
+
+    const refusals = (await store.readEvents(run.runId)).filter(
+      (e) => e.type === 'stage_failed' && e.detail['stage'] === 'planning',
+    );
+    expect(refusals).toHaveLength(2);
+    expect(refusals[0]?.detail['repair']).toBeUndefined();
+    expect(refusals[1]?.detail).toMatchObject({ repair: 1 });
+    // The planner answered twice and no more: the bound holds.
+    expect(runner.calls.filter((call) => call.prompt.includes('Rules the plan must satisfy'))).toHaveLength(2);
+  });
 });
 
 describe('SDD structural validation', () => {

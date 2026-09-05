@@ -5,8 +5,17 @@ Levantado durante o uso real do Agent Flow para construir um editor de canvas do
 8 GB). O relatório com a evidência de cada item está em
 [`~/wk/flowcanvas/docs/agent-flow-feedback.md`](../flowcanvas/docs/agent-flow-feedback.md).
 
-Cinco achados já foram corrigidos (`08c66c2`, `034ee4a`, `1e263a8`, `6b8abff`). O que segue
-é o que continua aberto, verificado contra o código de hoje.
+Cinco achados foram corrigidos na primeira rodada (`08c66c2`, `034ee4a`, `1e263a8`, `6b8abff`);
+`5246077` e `df7ea8f` fecharam 1.1, 1.2, 2.1, 2.2, 2.3, 3.1 e 3.2 — cada seção abaixo diz
+quando fechou. Em 04/09 entrou o que nenhum item aqui pedia e o log de todas as runs cobrava:
+**o planner nunca era perguntado de novo** quando as checagens recusavam o plano. Sete
+recusas em 29 runs, cinco delas o mesmo fato mecânico (duas tasks independentes declarando o
+mesmo arquivo), e a run que bateu nele duas vezes terminou em `approve --force`. O prompt
+prometia *"you will be asked again"*; agora o pipeline pergunta, uma vez, com os problemas
+anexados (`planning-pipeline.ts`, `planUntilChecksPass`, evento `planning_repair_requested`).
+Junto: os três prompts de planejamento passaram a explicar `expectsNoChange`, que a aceitação
+exigia e o planner nunca tinha ouvido falar; e `agent-flow review` virou job do servidor, para
+o último passo deixar de ser um comando que sete runs esperaram alguém digitar.
 
 ---
 
@@ -32,6 +41,8 @@ distinguir trabalho lento de processo morto.
 
 ### 1.1 · `run` só anuncia a task com `--verbose` — BLOQUEANTE
 
+**Fechado em `5246077`.** `run.ts` anuncia a task ao iniciar e o desfecho ao terminar, pelo mesmo `writeProgress` do `feature`.
+
 `src/cli/run.ts:41`
 
 ```ts
@@ -47,6 +58,8 @@ usá-lo aqui. `→` ao iniciar; em TTY a linha final sobrescreve, em log ficam a
 
 ### 1.2 · `doctor` instala o projeto inteiro em silêncio
 
+**Fechado em `5246077`.** O probe anuncia `→ probing install (…)` antes de rodar.
+
 `src/cli/doctor.ts:274`
 
 O probe de checkout limpo roda o comando de install do projeto. Num projeto Node real são
@@ -61,6 +74,8 @@ resultado depois. O probe é bom e documentado; só não se apresenta.
 
 ### 2.1 · "Its findings are above" — e não estão
 
+**Fechado em `5246077`.** A mensagem aponta para `agent-flow status`.
+
 `src/cli/feature.ts:384`
 
 Os findings existem e `agent-flow status` os mostra, completos e por severidade. Só a
@@ -74,6 +89,8 @@ workflow `standard` tem dois). Quem acredita no "above" gasta uma tentativa às 
 
 ### 2.2 · `status` culpa o review por uma falha que não foi dele
 
+**Fechado em `5246077`.** `status` distingue plano reprovado (→ `revise`) de run encerrada por falha técnica (→ `--from <stage>`).
+
 `src/cli/status.ts:400`
 
 Depois de uma run morrer em `planning` por erro de runner, o status respondeu *"The review
@@ -84,6 +101,8 @@ encerrada após falha técnica (→ `--from <stage>`, que preserva os artefatos 
 ciclo de revisão).
 
 ### 2.3 · A recuperação existe e não é oferecida onde a falha acontece
+
+**Fechado em `5246077`** para `status`. O `retry-stage` simétrico segue como ideia, não como pendência.
 
 `agent-flow feature --from <stage>` retoma preservando tudo o que veio antes, e o núcleo
 suporta bem (`planning-pipeline.ts`, com `skipUntil` e status `cached`). Nada no caminho da
@@ -101,6 +120,8 @@ para execução.
 
 ### 3.1 · `malformed_runner_output` para saída perfeitamente formada
 
+**Fechado em `5246077`.** `plan_rejected_by_checks` existe e é o que o pipeline emite quando as checagens recusam um plano bem formado.
+
 `src/core/failure-classification.ts:185`
 
 Uma run falhou assim com JSON válido, satisfazendo o `PlanSchema` inteiro e descrevendo seis
@@ -113,6 +134,8 @@ regra de plano. É o único caso em que `revise` é a ferramenta certa, e hoje e
 indistinguível de um runner que devolveu lixo.
 
 ### 3.2 · A mesma stage aparece concluída e falhada
+
+**Fechado em `df7ea8f`.** `stage_output_received` é o runner respondendo; `stage_completed` é a resposta aceita. O Deck lê os dois.
 
 `src/app/stage-runner.ts:576`
 

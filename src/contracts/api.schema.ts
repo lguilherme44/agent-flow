@@ -3,13 +3,14 @@ import type { ForgeCheck, ForgeFailure } from './forge.schema.js';
 import type { QualityGateResult, ReviewFinding } from './review.schema.js';
 import type { ReasoningLevel } from './common.schema.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
-import type {
-  Degradation,
-  PipelineStage,
-  PipelineStatus,
-  RunEvent,
-  RunStatus,
-  WorkflowClass,
+import {
+  WorkflowClassSchema,
+  type Degradation,
+  type PipelineStage,
+  type PipelineStatus,
+  type RunEvent,
+  type RunStatus,
+  type WorkflowClass,
 } from './state.schema.js';
 import type { TaskState } from './task.schema.js';
 import type { RunProjection } from './projection.js';
@@ -137,6 +138,40 @@ export const StartRequestSchema = z.object({
 export const RetryRequestSchema = z.object({
   /** Retries a BLOCKED task, or one past its attempt limit. Deliberate either way. */
   force: z.boolean().default(false),
+});
+
+/**
+ * `agent-flow review`, from the browser (Deck).
+ *
+ * The last step of every run was a command a person had to remember to type: seven runs
+ * on the machine this was written on finished every task and then sat at "run
+ * `agent-flow review`" for days. Same use case, second adapter — a job, like `start`,
+ * because verification and two reviewers take minutes.
+ */
+export const ReviewRequestSchema = z.object({
+  /** Turn the findings into corrective tasks and review the corrected plan, as `--fix` does. */
+  fix: z.boolean().default(false),
+});
+
+/**
+ * `agent-flow feature "<description>"`, from the browser (Deck).
+ *
+ * A new run, planned. The description is free text a person wrote — the same trust class
+ * as a revision instruction, and handled the same way: it is never interpreted as a
+ * command, and it reaches the planner as the feature request the CLI would have passed.
+ * Everything else here is a flag the CLI already has. There is no `from`: resuming names
+ * an existing run, and that is a different request from starting one.
+ *
+ * The project is named in the query, as every read is; a run id does not exist yet.
+ */
+export const PlanRequestSchema = z.object({
+  description: z.string().trim().min(1).max(8_000),
+  /** Override the workflow class the classifier would pick, as `--workflow` does. */
+  workflow: WorkflowClassSchema.optional(),
+  /** Stop after planning, without the automated review, as `--skip-review` does. */
+  skipReview: z.boolean().default(false),
+  /** Ignore the cached repository map, as `--no-cache` does. */
+  noCache: z.boolean().default(false),
 });
 
 export const JobParamsSchema = z.object({

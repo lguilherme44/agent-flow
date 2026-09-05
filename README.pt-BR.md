@@ -344,8 +344,9 @@ agent-flow ui ~/wk
 `ui` abre o **Deck**: o que precisa de uma pessoa em todos os projetos, uma raia por
 projeto, e uma página de run construída em volta de um *gravador* — arraste o playhead para
 trás pelo log de auditoria e o grafo, a task e o feed mostram o que era verdade naquele
-instante. O dashboard anterior fica a uma flag de distância, `agent-flow ui --classic`, e lê
-a mesma API.
+instante. Uma feature também nasce pela tela — **New feature** passa pelo mesmo use case que
+`agent-flow feature` — e o review final é um botão na run que está esperando por ele. O
+dashboard anterior fica a uma flag de distância, `agent-flow ui --classic`, e lê a mesma API.
 
 Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela produz:
 [`docs/example-walkthrough.md`](docs/example-walkthrough.md) (em inglês).

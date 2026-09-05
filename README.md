@@ -378,8 +378,10 @@ agent-flow ui ~/wk
 
 `ui` opens **Deck**: what needs a person across every project, one lane per project, and
 a run page built around a *recorder* — drag the playhead back through the audit log and the
-graph, the task and the feed show what was true at that instant. The previous dashboard is
-one flag away, `agent-flow ui --classic`, and reads the same API.
+graph, the task and the feed show what was true at that instant. A feature can be started
+from the page too — **New feature** goes through the same use case `agent-flow feature`
+does — and the final review is one button on the run that is waiting for it. The previous
+dashboard is one flag away, `agent-flow ui --classic`, and reads the same API.
 
 Walked through with a real four-task feature, a DAG and the artifacts it produces:
 [`docs/example-walkthrough.md`](docs/example-walkthrough.md).

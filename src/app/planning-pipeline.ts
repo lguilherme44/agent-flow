@@ -44,6 +44,36 @@ export const PLANNING_STAGES: readonly RunStage[] = [
   'plan-review',
 ];
 
+/**
+ * How many times a plan the checks refused is handed back to the planner before a person
+ * is asked.
+ *
+ * One, and bounded on purpose: the checks are arithmetic over the plan — a file two
+ * independent tasks both declare, a requirement no task covers — and a planner that cannot
+ * fix an arithmetic report in one more call is not going to fix it in five. The second
+ * refusal is a person's to read.
+ */
+export const MAX_PLAN_CHECK_REPAIRS = 1;
+
+/**
+ * The feature request with the checks' report attached, for the planner's second call.
+ *
+ * The same shape `revise` uses to carry a person's instruction, because it is the same
+ * act: somebody read the refusal and asked for the plan again with these words. Here the
+ * somebody is the pipeline, and the words are the checks' own.
+ */
+export function withCheckProblems(featureRequest: string, problems: readonly string[]): string {
+  return [
+    featureRequest.trim(),
+    '',
+    '---',
+    '',
+    'Your previous plan was refused by the mechanical checks below. Return the whole plan',
+    'again with exactly these problems fixed, and change nothing else:',
+    ...problems.map((problem) => `- ${problem}`),
+  ].join('\n');
+}
+
 export interface PlanningPipelineOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
@@ -123,7 +153,7 @@ export interface PipelineOptions {
   readonly workflow?: WorkflowClass;
   readonly onProgress?: (
     stage: RunStage,
-    status: 'started' | 'completed' | 'cached' | 'stale',
+    status: 'started' | 'completed' | 'cached' | 'stale' | 'repairing',
   ) => void;
 }
 
@@ -186,34 +216,19 @@ export class PlanningPipeline {
 
       // ---- TRIVIAL workflow branch (1 model call)
       if (workflow === 'trivial') {
-        options.onProgress?.('planning', 'started');
-        const result = await this.options.stageRunner.run(PLANNING_TRIVIAL_STAGE, runId, {
+        const { plan } = await this.planUntilChecksPass({
+          runId,
+          stage: PLANNING_TRIVIAL_STAGE,
           featureRequest,
-          projectConfig,
-          validationCommands: this.renderValidationCommands(),
-          agentsMd,
+          vars: { projectConfig, validationCommands: this.renderValidationCommands(), agentsMd },
+          sddText: '',
+          ceremonyProblems: (candidate) =>
+            candidate.tasks.length > 1
+              ? [`TRIVIAL workflow ceremony budget allows at most 1 task (got ${String(candidate.tasks.length)}).`]
+              : [],
+          refusal: 'The plan violates TRIVIAL ceremony budget/checks:',
+          onProgress: options.onProgress,
         });
-
-        const plan = PlanSchema.parse(result.data);
-        const problems = checkPlan(plan, '', buildValidationRegistry(this.options.config.project));
-        if (plan.tasks.length > 1) {
-          problems.push(`TRIVIAL workflow ceremony budget allows at most 1 task (got ${plan.tasks.length}).`);
-        }
-
-        if (problems.length > 0) {
-          await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
-          throw new StageFailure(
-            'planning',
-            'invalid_output',
-            `The plan violates TRIVIAL ceremony budget/checks:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
-            undefined,
-            result.execution,
-            // Parsed and schema-valid; turned down by a plan rule. Saying
-            // `malformed_runner_output` here sends the reader looking at the
-            // contract instead of at the plan.
-            { failureClass: 'plan_rejected_by_checks' },
-          );
-        }
 
         stagesRun.push('planning');
         options.onProgress?.('planning', 'completed');
@@ -223,36 +238,20 @@ export class PlanningPipeline {
 
       // ---- SIMPLE workflow branch (2 model calls: short plan + plan review)
       if (workflow === 'simple') {
-        options.onProgress?.('planning', 'started');
-        const result = await this.options.stageRunner.run(PLANNING_SIMPLE_STAGE, runId, {
+        const { plan, result } = await this.planUntilChecksPass({
+          runId,
+          stage: PLANNING_SIMPLE_STAGE,
           featureRequest,
-          projectConfig,
-          validationCommands: this.renderValidationCommands(),
-          agentsMd,
+          vars: { projectConfig, validationCommands: this.renderValidationCommands(), agentsMd },
+          sddText: '',
+          ceremonyProblems: (candidate) =>
+            candidate.tasks.length > 3
+              ? [`SIMPLE workflow ceremony budget allows at most 3 tasks (got ${String(candidate.tasks.length)}).`]
+              : [],
+          refusal: 'The plan violates SIMPLE ceremony budget/checks:',
+          onProgress: options.onProgress,
         });
-
-        const plan = PlanSchema.parse(result.data);
         const plannerRunner = result.execution.runner;
-
-        const problems = checkPlan(plan, '', buildValidationRegistry(this.options.config.project));
-        if (plan.tasks.length > 3) {
-          problems.push(`SIMPLE workflow ceremony budget allows at most 3 tasks (got ${plan.tasks.length}).`);
-        }
-
-        if (problems.length > 0) {
-          await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
-          throw new StageFailure(
-            'planning',
-            'invalid_output',
-            `The plan violates SIMPLE ceremony budget/checks:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
-            undefined,
-            result.execution,
-            // Parsed and schema-valid; turned down by a plan rule. Saying
-            // `malformed_runner_output` here sends the reader looking at the
-            // contract instead of at the plan.
-            { failureClass: 'plan_rejected_by_checks' },
-          );
-        }
 
         stagesRun.push('planning');
         options.onProgress?.('planning', 'completed');
@@ -338,31 +337,17 @@ export class PlanningPipeline {
       await this.assertReady(runId, 'planning');
 
       // ---- Planning.
-      options.onProgress?.('planning', 'started');
-      const result = await this.options.stageRunner.run(PLANNING_STAGE, runId, {
+      const { plan, result } = await this.planUntilChecksPass({
+        runId,
+        stage: PLANNING_STAGE,
         featureRequest,
-        sdd,
-        architectureImpact,
-        projectConfig,
-        validationCommands: this.renderValidationCommands(),
+        vars: { sdd, architectureImpact, projectConfig, validationCommands: this.renderValidationCommands() },
+        sddText: sdd,
+        ceremonyProblems: () => [],
+        refusal: 'The plan does not satisfy the SDD:',
+        onProgress: options.onProgress,
       });
-
-      const plan = PlanSchema.parse(result.data);
       const plannerRunner = result.execution.runner;
-
-      const problems = checkPlan(plan, sdd, buildValidationRegistry(this.options.config.project));
-      if (problems.length > 0) {
-        await store.appendEvent(runId, 'stage_failed', { stage: 'planning', problems });
-        throw new StageFailure(
-          'planning',
-          'invalid_output',
-          `The plan does not satisfy the SDD:\n${problems.map((p) => `  - ${p}`).join('\n')}`,
-          undefined,
-          result.execution,
-          // See the two ceremony checks above: valid output, rejected plan.
-          { failureClass: 'plan_rejected_by_checks' },
-        );
-      }
 
       stagesRun.push('planning');
       options.onProgress?.('planning', 'completed');
@@ -432,6 +417,84 @@ export class PlanningPipeline {
   }
 
   /** Shared with the corrective loop, so both plans are judged the same way. */
+  /**
+   * Asks the planner, checks the plan, and — once — asks again with the problems attached.
+   *
+   * The planning prompt has promised this since it was written: *"a plan that violates
+   * them is rejected and you will be asked again."* Nothing asked again. A refused plan
+   * ended the pipeline, and the only ways forward were `revise`, which spends one of the
+   * run's two revision cycles on a sentence the checks had already written, or `--from
+   * planning`, which re-plans blind. Measured over every run on the machine this was
+   * written on: seven planning refusals, five of them the same mechanical fact — two
+   * independent tasks declaring one file — and the run that hit it twice in a row ended
+   * in `approve --force`.
+   *
+   * The plan is never edited here. The planner is handed the report and produces a whole
+   * new plan, which is exactly what a person typing `revise` would have done with the same
+   * words — minus the revision cycle it would have cost them. Bounded by
+   * {@link MAX_PLAN_CHECK_REPAIRS}, recorded as `planning_repair_requested`, and announced
+   * as its own progress line, so a repair is never mistaken for a first attempt.
+   *
+   * Every refused attempt still writes `stage_failed` with its problems, as before; the
+   * repaired attempt adds `repair` to its own refusal so the two are distinguishable.
+   */
+  private async planUntilChecksPass(input: {
+    readonly runId: string;
+    readonly stage: typeof PLANNING_STAGE | typeof PLANNING_SIMPLE_STAGE | typeof PLANNING_TRIVIAL_STAGE;
+    readonly featureRequest: string;
+    readonly vars: Record<string, string>;
+    /** Empty for the workflows that dispense with an SDD. */
+    readonly sddText: string;
+    /** Ceremony rules that live beside `checkPlan`: budgets a workflow class imposes. */
+    readonly ceremonyProblems: (plan: Plan) => string[];
+    /** The first line of the refusal a person reads. */
+    readonly refusal: string;
+    readonly onProgress: PipelineOptions['onProgress'];
+  }): Promise<{ plan: Plan; result: Awaited<ReturnType<StageRunner['run']>> }> {
+    const { store } = this.options;
+    const registry = buildValidationRegistry(this.options.config.project);
+    let request = input.featureRequest;
+
+    for (let repair = 0; ; repair += 1) {
+      input.onProgress?.('planning', repair === 0 ? 'started' : 'repairing');
+      const result = await this.options.stageRunner.run(input.stage, input.runId, {
+        ...input.vars,
+        featureRequest: request,
+      });
+
+      const plan = PlanSchema.parse(result.data);
+      const problems = [...checkPlan(plan, input.sddText, registry), ...input.ceremonyProblems(plan)];
+      if (problems.length === 0) return { plan, result };
+
+      await store.appendEvent(input.runId, 'stage_failed', {
+        stage: 'planning',
+        problems,
+        ...(repair === 0 ? {} : { repair }),
+      });
+
+      if (repair >= MAX_PLAN_CHECK_REPAIRS) {
+        throw new StageFailure(
+          'planning',
+          'invalid_output',
+          `${input.refusal}\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+          undefined,
+          result.execution,
+          // Parsed and schema-valid; turned down by a plan rule. Saying
+          // `malformed_runner_output` here sends the reader looking at the
+          // contract instead of at the plan.
+          { failureClass: 'plan_rejected_by_checks' },
+        );
+      }
+
+      await store.appendEvent(input.runId, 'planning_repair_requested', {
+        problems,
+        repair: repair + 1,
+        maxRepairs: MAX_PLAN_CHECK_REPAIRS,
+      });
+      request = withCheckProblems(input.featureRequest, problems);
+    }
+  }
+
   private planReview(): PlanReviewService {
     return new PlanReviewService({
       store: this.options.store,

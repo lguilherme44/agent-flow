@@ -1636,6 +1636,133 @@ describe('UI-27 — the write API', () => {
     });
   });
 
+  describe('feature', () => {
+    it('creates the run at once, and plans it as a job whose id the 202 carries', async () => {
+      const { server, fs } = await serve();
+      // Sequential mode for the fixture: the fake process runner answers every git
+      // question with `1.0.0`, which worktree mode would rightly refuse as a base.
+      fs.seed('/home/.agent-flow/config.yaml', 'git:\n  useWorktrees: false\n');
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: '/api/v1/runs',
+        payload: { description: 'Add cancellation of a single occurrence' },
+      });
+
+      expect(response.statusCode).toBe(202);
+      const job = response.json<ActionJobView>();
+      expect(job.kind).toBe('plan');
+      expect(job.runId).toMatch(/^AF-\d{4}-\d{3}$/);
+
+      // The run exists before planning has spent anything, under the description given.
+      const detail = await server.app.inject(`/api/v1/runs/${job.runId}`);
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json<RunDetailView>().feature).toBe('Add cancellation of a single occurrence');
+
+      // Whatever planning did, it says so through the job — with a code and a sentence,
+      // never a stack trace flattened into `no_run`. Against this fixture's minimal prompts
+      // the pipeline refuses before a runner is called (the seeded `discovery` prompt
+      // declares a variable the pipeline does not pass), and that refusal is the proof: it
+      // arrived as `planning_refused` with the prompt loader's own sentence.
+      const settled = await settleJob(server, job.id);
+      expect(settled.status).toBe('failed');
+      expect(settled.error).toMatchObject({ error: 'planning_refused' });
+      expect(settled.error?.message).toMatch(/Prompt/);
+      expect(settled.error?.action).toBeTruthy();
+    });
+
+    it('refuses a blank description before writing anything', async () => {
+      const { server } = await serve();
+      const before = (await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>().length;
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: '/api/v1/runs',
+        payload: { description: '   ' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect((await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>()).toHaveLength(before);
+    });
+
+    it('names the project the way every read does, and knows none it was not pointed at', async () => {
+      const { server } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: '/api/v1/runs?projectId=elsewhere',
+        payload: { description: 'x' },
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('answers a preflight refusal with the CLI’s own sentence, and creates no run', async () => {
+      const { server, fs } = await serve();
+      // Worktree mode on (the default), against a repository the fake git cannot describe:
+      // the same refusal `agent-flow feature` prints, before anything is spent.
+      fs.seed('/home/.agent-flow/config.yaml', 'git:\n  useWorktrees: true\n');
+      const before = (await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>().length;
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: '/api/v1/runs',
+        payload: { description: 'Add cancellation' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json<ActionErrorView>().error).toBe('planning_refused');
+      expect(response.json<ActionErrorView>().action).toBeTruthy();
+      expect((await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>()).toHaveLength(before);
+    });
+  });
+
+  describe('review', () => {
+    it('is a job, like start: 202 with a kind of review, and the outcome through the job', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/review`,
+        payload: {},
+      });
+
+      // Verification and two reviewers take minutes. A handler that awaited them would
+      // hold a socket past every timeout between the browser and this process.
+      expect(response.statusCode).toBe(202);
+      const started = response.json<ActionJobView>();
+      expect(started).toMatchObject({ kind: 'review', runId: run.runId });
+
+      // The fixture run is at the gate with nothing implemented, so the use case refuses —
+      // and the refusal arrives as the job's ending, never as a 4xx on the request. Same
+      // shape as `start`: 202 means "asked".
+      const job = await settleJob(server, started.id);
+      expect(['completed', 'failed']).toContain(job.status);
+      if (job.status === 'failed') {
+        expect(job.error?.message).toBeTruthy();
+      }
+    });
+
+    it('refuses a malformed body before starting anything', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/review`,
+        payload: { fix: 'yes' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect((await server.app.inject(`/api/v1/runs/${run.runId}/job`)).json()).toBeNull();
+    });
+  });
+
   describe('start and revise', () => {
     it('answers 202 with a job rather than holding the socket open', async () => {
       const { server, run } = await serve();

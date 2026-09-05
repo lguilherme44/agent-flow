@@ -217,8 +217,10 @@ describe('Adaptive Workflow Integration', () => {
     const processRunner = new FakeProcessRunner().always({ exitCode: 1 });
     const git = testGitCommand(processRunner);
 
-    // Over-orchestrated planner response (4 tasks for a simple theme request)
-    runner.pushJson({
+    // Over-orchestrated planner response (4 tasks for a simple theme request). The pipeline
+    // hands a refused plan back to the planner once, so the planner has to insist for the
+    // guardrail to be what the run finally fails on.
+    const overOrchestrated = {
       feature: 'Add dark mode toggle',
       tasks: [
         {
@@ -270,7 +272,9 @@ describe('Adaptive Workflow Integration', () => {
           acceptanceCriteria: ['Done'],
         },
       ],
-    });
+    };
+    runner.pushJson(overOrchestrated);
+    runner.pushJson(overOrchestrated);
 
     const stageRunner = new StageRunner({
       fs,

@@ -29,6 +29,9 @@ If nothing fits, use an empty list `[]`.
 
 - For TRIVIAL tasks, create **exactly 1 task** (Maximum task count: 1).
 - Do NOT decompose into multiple tasks.
+- If the task's correct outcome is an **unchanged** repository — a verification, a check
+  that something already holds — declare `"expectsNoChange": true`. Otherwise an empty
+  diff is treated as a task that did nothing, and it fails acceptance.
 
 ## Output
 
@@ -48,6 +51,7 @@ Return **only** a valid JSON object matching the Plan schema, no prose, no markd
       "requirements": ["FR-001"],
       "validation": [],
       "validationExpectation": "pass",
+      "expectsNoChange": false,
       "acceptanceCriteria": [
         "First verifiable criterion"
       ]

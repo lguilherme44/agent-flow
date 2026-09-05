@@ -247,14 +247,14 @@ function JobIndicator(props: { job: ActionJobView }): JSX.Element {
     <Tooltip
       content={
         <span>
-          {job.kind === 'start' ? 'Executing the plan' : 'Re-planning'} since{' '}
+          {job.kind === 'start' ? 'Executing the plan' : job.kind === 'review' ? 'Reviewing the result' : job.kind === 'plan' ? 'Planning' : 'Re-planning'} since{' '}
           {formatWhen(job.startedAt)}. Progress appears as the run records it.
         </span>
       }
     >
       <span className="flex h-7 items-center gap-1.5 rounded-sm border border-primary-border bg-primary-soft px-2.5 text-body-lg text-text">
         <Loader2 className="h-3.5 w-3.5 animate-spin text-primary-bright" aria-hidden />
-        {job.kind === 'start' ? 'Running…' : 'Re-planning…'}
+        {job.kind === 'start' ? 'Running…' : job.kind === 'review' ? 'Reviewing…' : job.kind === 'plan' ? 'Planning…' : 'Re-planning…'}
       </span>
     </Tooltip>
   );

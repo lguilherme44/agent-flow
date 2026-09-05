@@ -7,6 +7,7 @@ import { deliveryTone, priorityTone, runtimeTone, words } from '../../lib/tone';
 import { useNow } from '../../lib/use-now';
 import { Chip, Empty, Meter, Pri, Skeleton, Tape } from '../../components/ui';
 import { href, onLinkClick } from '../../app/router';
+import { NewFeatureDialog } from './NewFeatureDialog';
 
 /** Runtime statuses after which a project is not moving. */
 const STILL = new Set(['complete', 'failed', 'cancelled']);
@@ -28,6 +29,7 @@ export function DeckPage() {
   const projects = useResource(keys.projects(), api.projects, { refreshMs: 60_000 });
   const now = useNow(true, 15_000);
   const [unfolded, setUnfolded] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const rows = workspace.data?.projects ?? [];
   const byId = useMemo(() => new Map((projects.data ?? []).map((project) => [project.id, project])), [projects.data]);
@@ -92,6 +94,9 @@ export function DeckPage() {
           </p>
         </div>
         <div className="deck-summary" aria-label="Workspace summary">
+          <button type="button" className="btn btn--primary" onClick={() => setCreating(true)} disabled={(projects.data?.length ?? 0) === 0} style={{ alignSelf: 'center' }}>
+            New feature
+          </button>
           <div className="stat">
             <span className="stat__value" data-tone={moving.length > 0 ? 'live' : undefined}>
               {moving.length}
@@ -216,6 +221,8 @@ export function DeckPage() {
           </div>
         )}
       </section>
+
+      <NewFeatureDialog open={creating} onClose={() => setCreating(false)} projects={projects.data ?? []} rows={rows} />
     </main>
   );
 }
