@@ -5,6 +5,10 @@ import { resolveTaskConcurrency } from '../core/concurrency.js';
 import type { EffectiveConfig } from '../contracts/index.js';
 import type { FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
+import type { ProjectRegistry } from './project-registry.js';
+import { createConfigEditor, type ConfigEditor } from '../app/config-editor.js';
+import { YamlConfigSourceCodec } from '../adapters/config/yaml-config-source-codec.js';
+import { SchemaConfigSemanticValidator } from '../adapters/config/semantic-validator.js';
 
 /**
  * The effective configuration, sectioned as §85 asks (UI-26).
@@ -33,6 +37,27 @@ import type { RegisteredProject } from './project-registry.js';
 export interface ConfigReaderOptions {
   readonly fs: FileSystem;
   readonly globalConfigPath: string;
+}
+
+/**
+ * Composition root for the writable configuration Module.
+ *
+ * Keeping project lookup here makes the HTTP adapter incapable of converting a
+ * client-controlled string into a path. The CLI composes the same Module with a
+ * single current-project resolver.
+ */
+export function createServerConfigEditor(options: {
+  readonly fs: FileSystem;
+  readonly globalConfigPath: string;
+  readonly registry: ProjectRegistry;
+}): ConfigEditor {
+  return createConfigEditor({
+    fs: options.fs,
+    codec: new YamlConfigSourceCodec(),
+    semanticValidator: new SchemaConfigSemanticValidator(),
+    globalConfigPath: options.globalConfigPath,
+    resolveProjectDir: (projectId) => options.registry.get(projectId)?.path,
+  });
 }
 
 export class ConfigReader {

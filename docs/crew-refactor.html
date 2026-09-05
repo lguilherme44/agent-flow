@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew — refactor</title>
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#0a0b0e; --bg-1:#0f1116; --bg-2:#151821; --bg-3:#1b1f2a;
+  --line:#20242f; --line-2:#2b3040;
+  --ink:#ece9e1; --ink-2:#a8acb7; --ink-3:#6f7484; --ink-4:#454a59;
+  --ok:#4fd18b; --ok-dim:rgba(79,209,139,.16);
+  --live:#5fb2ff; --live-dim:rgba(95,178,255,.16);
+  --warn:#f6b74a; --warn-dim:rgba(246,183,74,.16);
+  --bad:#ff6767; --bad-dim:rgba(255,103,103,.16);
+  --idle:#7d8294; --idle-dim:rgba(125,130,148,.14);
+  --font-ui:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:'JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  --fs-0:11px; --fs-1:12px; --fs-2:13px; --fs-3:15px; --fs-4:18px; --fs-5:24px; --fs-6:30px;
+  --r-1:3px; --r-2:6px; --r-3:10px;
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:24px; --s-6:32px; --s-7:48px;
+  --ease:cubic-bezier(.2,.7,.2,1);
+}
+*,*::before,*::after{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-ui);
+  font-size:var(--fs-2); line-height:1.5; -webkit-font-smoothing:antialiased;
+  background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.045) 1px,transparent 1.2px);
+  background-size:24px 24px; background-position:12px 12px;
+}
+code,.mono,pre{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.wrap{max-width:1140px; margin:0 auto; padding:var(--s-6) var(--s-5) var(--s-7)}
+.eyebrow{font-family:var(--font-mono); font-size:var(--fs-0); letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); font-weight:500}
+h1{font-size:var(--fs-6); line-height:1.15; margin:var(--s-2) 0 var(--s-3); letter-spacing:-.02em}
+h2{font-size:var(--fs-4); margin:var(--s-7) 0 var(--s-3); letter-spacing:-.01em; scroll-margin-top:var(--s-5)}
+h3{font-size:var(--fs-3); margin:var(--s-5) 0 var(--s-2)}
+p{margin:0 0 var(--s-3); max-width:74ch; color:var(--ink-2)}
+p strong,li strong{color:var(--ink); font-weight:600}
+a{color:var(--warn)}
+hr{border:0; border-top:1px solid var(--line); margin:var(--s-6) 0}
+.lede{font-size:var(--fs-3); color:var(--ink); max-width:70ch}
+
+table{width:100%; border-collapse:collapse; font-size:var(--fs-1); margin:var(--s-3) 0 var(--s-4)}
+th{text-align:left; font-family:var(--font-mono); font-size:var(--fs-0); letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:500; padding:0 var(--s-3) var(--s-2); border-bottom:1px solid var(--line)}
+td{padding:var(--s-2) var(--s-3); border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink-2)}
+td:first-child{color:var(--ink)}
+tbody tr:hover td{background:rgba(255,255,255,.014)}
+
+ol,ul{margin:0 0 var(--s-4); padding-left:var(--s-5); max-width:78ch; color:var(--ink-2)}
+li{margin-bottom:var(--s-2)}
+li::marker{color:var(--ink-4); font-family:var(--font-mono); font-size:var(--fs-0)}
+
+.tag{display:inline-flex; align-items:center; gap:6px; height:19px; padding:0 7px; border-radius:var(--r-1); font-family:var(--font-mono); font-size:var(--fs-0); letter-spacing:.04em; background:var(--idle-dim); color:var(--idle); white-space:nowrap}
+.tag--ok{background:var(--ok-dim); color:var(--ok)}
+.tag--bad{background:var(--bad-dim); color:var(--bad)}
+.tag--warn{background:var(--warn-dim); color:var(--warn)}
+.tag--live{background:var(--live-dim); color:var(--live)}
+.tag .dot{width:5px; height:5px; border-radius:50%; background:currentColor}
+.path{font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-3)}
+
+.grid-2{display:grid; grid-template-columns:1fr 1fr; gap:var(--s-3)}
+@media (max-width:820px){.grid-2{grid-template-columns:1fr}}
+
+.card{border:1px solid var(--line); border-radius:var(--r-3); background:var(--bg-1); padding:var(--s-4)}
+.card h4{margin:0 0 var(--s-2); font-size:var(--fs-2)}
+.card p{margin:0; font-size:var(--fs-1)}
+.card--bad{border-color:rgba(255,103,103,.28)}
+.card--ok{border-color:rgba(79,209,139,.26)}
+
+.kpi{display:grid; grid-template-columns:repeat(4,1fr); gap:var(--s-3); margin:var(--s-4) 0 var(--s-5)}
+@media (max-width:820px){.kpi{grid-template-columns:repeat(2,1fr)}}
+.kpi div{border:1px solid var(--line); border-left:2px solid var(--line-2); border-radius:var(--r-2); background:var(--bg-1); padding:var(--s-3)}
+.kpi b{display:block; font-family:var(--font-mono); font-size:var(--fs-5); font-weight:500; letter-spacing:-.02em; line-height:1.1}
+.kpi span{display:block; margin-top:var(--s-1); font-size:var(--fs-0); color:var(--ink-3); letter-spacing:.04em; text-transform:uppercase; font-family:var(--font-mono)}
+.kpi .bad{color:var(--bad)} .kpi .warn{color:var(--warn)} .kpi .ok{color:var(--ok)}
+
+/* ── protótipo ─────────────────────────────────────────────── */
+.proto{border:1px solid var(--line-2); border-radius:var(--r-3); overflow:hidden; background:var(--bg); margin:var(--s-4) 0 var(--s-3); box-shadow:0 24px 60px -30px rgba(0,0,0,.9)}
+.proto__chrome{display:flex; align-items:center; gap:var(--s-3); height:38px; padding:0 var(--s-3); background:var(--bg-2); border-bottom:1px solid var(--line)}
+.proto__dots{display:flex; gap:6px}
+.proto__dots i{width:9px; height:9px; border-radius:50%; background:var(--line-2)}
+.proto__url{font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-3)}
+.proto__body{padding:var(--s-5)}
+
+.ph{display:flex; align-items:flex-end; justify-content:space-between; gap:var(--s-4); margin-bottom:var(--s-4)}
+.ph h5{margin:var(--s-1) 0 4px; font-size:var(--fs-5); font-weight:500; letter-spacing:-.02em; font-family:var(--font-mono)}
+.ph p{margin:0; font-size:var(--fs-1); color:var(--ink-3)}
+
+.tabs{display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:var(--s-4)}
+.tabs button{appearance:none; background:none; border:0; border-bottom:2px solid transparent; color:var(--ink-3); font:inherit; font-size:var(--fs-1); padding:var(--s-2) var(--s-3); cursor:pointer; margin-bottom:-1px}
+.tabs button[aria-selected=true]{color:var(--ink); border-bottom-color:var(--warn)}
+.tabs button:hover{color:var(--ink)}
+
+.scope{display:flex; gap:var(--s-2); flex-wrap:wrap; margin-bottom:var(--s-4)}
+.scope button{flex:1 1 260px; text-align:left; appearance:none; cursor:pointer; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--r-2); padding:var(--s-3); color:var(--ink-2); font:inherit; transition:border-color 120ms var(--ease), background 120ms var(--ease)}
+.scope button:hover{border-color:var(--line-2)}
+.scope button[aria-pressed=true]{border-color:var(--warn); background:linear-gradient(180deg,rgba(246,183,74,.07),transparent); color:var(--ink)}
+.scope b{display:block; font-size:var(--fs-2); font-weight:600; margin-bottom:3px}
+.scope small{font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-3)}
+
+.sec{margin-bottom:var(--s-5)}
+.sec__head{display:flex; align-items:baseline; justify-content:space-between; gap:var(--s-3); margin-bottom:var(--s-3); padding-bottom:var(--s-2); border-bottom:1px solid var(--line)}
+.sec__head h6{margin:0; font-family:var(--font-mono); font-size:var(--fs-0); letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); font-weight:500}
+.sec__head span{font-size:var(--fs-0); color:var(--ink-4); font-family:var(--font-mono)}
+
+.runners{display:grid; grid-template-columns:repeat(auto-fill,minmax(198px,1fr)); gap:var(--s-3)}
+.runner{border:1px solid var(--line); border-radius:var(--r-2); background:var(--bg-1); padding:var(--s-3); display:flex; flex-direction:column; gap:var(--s-2)}
+.runner[data-off=true]{opacity:.58}
+.runner__top{display:flex; align-items:center; justify-content:space-between; gap:var(--s-2)}
+.runner__id{font-family:var(--font-mono); font-size:var(--fs-2); color:var(--ink)}
+.runner__type{font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-3)}
+.runner__caps{display:flex; flex-wrap:wrap; gap:4px}
+.runner__foot{display:flex; align-items:center; justify-content:space-between; margin-top:auto; padding-top:var(--s-2); border-top:1px solid var(--line); font-size:var(--fs-0); color:var(--ink-3); font-family:var(--font-mono)}
+.runner--add{border-style:dashed; align-items:center; justify-content:center; color:var(--ink-3); cursor:pointer; min-height:132px; font-size:var(--fs-1); gap:var(--s-1); text-align:center}
+.runner--add:hover{border-color:var(--warn); color:var(--warn)}
+
+.sw{position:relative; width:30px; height:17px; border-radius:9px; background:var(--bg-3); border:1px solid var(--line-2); cursor:pointer; flex:none; transition:background 140ms var(--ease), border-color 140ms var(--ease)}
+.sw::after{content:''; position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:50%; background:var(--ink-3); transition:transform 140ms var(--ease), background 140ms var(--ease)}
+.sw[aria-checked=true]{background:var(--ok-dim); border-color:rgba(79,209,139,.5)}
+.sw[aria-checked=true]::after{transform:translateX(13px); background:var(--ok)}
+
+.bulk{display:flex; align-items:center; gap:var(--s-2); flex-wrap:wrap; margin-bottom:var(--s-3); font-size:var(--fs-1); color:var(--ink-3)}
+.routing{width:100%; border-collapse:collapse; font-size:var(--fs-1)}
+.routing th{padding:0 var(--s-2) var(--s-2)}
+.routing td{padding:var(--s-2); vertical-align:middle; border-bottom:1px solid var(--line)}
+.routing tr[data-err=true] td{background:rgba(255,103,103,.05)}
+.role{font-family:var(--font-mono); color:var(--ink); font-size:var(--fs-1)}
+.role small{display:block; font-family:var(--font-ui); color:var(--ink-3); font-size:var(--fs-0); margin-top:2px}
+.resolves{font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-2)}
+.resolves em{font-style:normal; color:var(--ink-4)}
+
+select,input[type=text],input[type=number]{
+  appearance:none; background:var(--bg-2); border:1px solid var(--line-2); border-radius:var(--r-1);
+  color:var(--ink); font:inherit; font-size:var(--fs-1); padding:4px 8px; height:27px; width:100%; min-width:0;
+}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%); background-position:calc(100% - 13px) 11px,calc(100% - 8px) 11px; background-size:5px 5px,5px 5px; background-repeat:no-repeat; padding-right:24px}
+select:focus,input:focus{outline:none; border-color:var(--warn)}
+select option[disabled]{color:var(--ink-4)}
+input::placeholder{color:var(--ink-4)}
+.field-mono{font-family:var(--font-mono)}
+
+.btn{display:inline-flex; align-items:center; gap:var(--s-2); height:27px; padding:0 var(--s-3); border:1px solid var(--line-2); border-radius:var(--r-2); background:var(--bg-2); color:var(--ink); font:inherit; font-size:var(--fs-1); font-weight:500; cursor:pointer; white-space:nowrap}
+.btn:hover:not(:disabled){background:var(--bg-3); border-color:var(--ink-4)}
+.btn:disabled{opacity:.4; cursor:not-allowed}
+.btn--primary{background:var(--warn); border-color:var(--warn); color:#241a05}
+.btn--primary:hover:not(:disabled){background:#ffc766; border-color:#ffc766}
+.btn--ghost{background:none; border-color:transparent; color:var(--ink-3)}
+.btn--ghost:hover{color:var(--ink); background:var(--bg-2)}
+
+.changebar{position:sticky; bottom:0; margin:var(--s-4) calc(var(--s-5) * -1) calc(var(--s-5) * -1); padding:var(--s-3) var(--s-5); background:rgba(15,17,22,.97); border-top:1px solid var(--line-2); backdrop-filter:blur(8px)}
+.changebar__row{display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap}
+.changebar__count{font-size:var(--fs-1); color:var(--ink)}
+.changebar__count b{font-family:var(--font-mono); font-weight:500}
+.changebar__spacer{flex:1}
+.diff{margin-top:var(--s-3); border:1px solid var(--line); border-radius:var(--r-2); background:var(--bg); padding:var(--s-3); font-family:var(--font-mono); font-size:var(--fs-0); line-height:1.75; color:var(--ink-2); overflow-x:auto}
+.diff .del{color:var(--bad)} .diff .add{color:var(--ok)} .diff .cli{color:var(--ink-4)}
+.hidden{display:none !important}
+
+.adv__search{display:flex; gap:var(--s-2); align-items:center; margin-bottom:var(--s-3)}
+.adv__search input{max-width:320px}
+.advrow{display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:var(--s-3); align-items:center; padding:var(--s-2) 0; border-bottom:1px solid var(--line)}
+.advrow__label b{display:block; font-size:var(--fs-1); color:var(--ink); font-weight:500}
+.advrow__label span{font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-4)}
+.chips{display:flex; gap:4px; flex-wrap:wrap; align-items:center; background:var(--bg-2); border:1px solid var(--line-2); border-radius:var(--r-1); padding:3px 5px; min-height:27px}
+.chips i{font-style:normal; font-family:var(--font-mono); font-size:var(--fs-0); background:var(--bg-3); border-radius:var(--r-1); padding:1px 5px; color:var(--ink-2)}
+
+.callout{border-left:2px solid var(--warn); background:linear-gradient(90deg,rgba(246,183,74,.06),transparent 70%); padding:var(--s-3) var(--s-4); border-radius:0 var(--r-2) var(--r-2) 0; margin:var(--s-4) 0}
+.callout p:last-child{margin-bottom:0}
+.callout--bad{border-color:var(--bad); background:linear-gradient(90deg,rgba(255,103,103,.06),transparent 70%)}
+.callout--ok{border-color:var(--ok); background:linear-gradient(90deg,rgba(79,209,139,.06),transparent 70%)}
+
+@media (max-width:640px){.ph{flex-direction:column; align-items:stretch} .ph h5{font-size:20px}}
+.table-scroll{overflow-x:auto}
+@media (max-width:820px){.table-scroll table{min-width:640px}}
+
+.foot{margin-top:var(--s-7); padding-top:var(--s-4); border-top:1px solid var(--line); font-family:var(--font-mono); font-size:var(--fs-0); color:var(--ink-4); display:flex; justify-content:space-between; gap:var(--s-3); flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <span class="eyebrow">Deck · Crew · proposta de refactor</span>
+  <h1>A tela edita um arquivo.<br>Precisa gerenciar um time.</h1>
+  <p class="lede">O backend do editor está sólido e fica. O que muda é a camada que o usuário vê: sair do <em>property grid</em> do YAML e entrar em duas entidades — <strong>runners</strong> (os agentes que você tem) e <strong>roles</strong> (os postos que eles ocupam). Tudo que não é crew sai da frente.</p>
+
+  <div class="kpi">
+    <div><b class="bad">126</b><span>campos na tela hoje</span></div>
+    <div><b class="bad">16</b><span>acordeões</span></div>
+    <div><b class="ok">2</b><span>seções respondem à pergunta</span></div>
+    <div><b class="warn">1</b><span>tipo de input p/ 7 valueTypes</span></div>
+  </div>
+
+  <h2>1 · O que a tela responde, e o que você perguntou</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th style="width:34%">A pergunta real</th><th style="width:33%">Onde ela mora hoje</th><th style="width:33%">Onde passa a morar</th></tr></thead>
+    <tbody>
+      <tr><td>Quais agentes eu tenho e quais funcionam?</td><td>Card <code>Runner health</code> no rodapé, sem ligação com a config. <code>codex</code> nem aparece — está <code>enabled:false</code></td><td>Seção <strong>Runners</strong>: um card por agente, com health, toggle e capacidades</td></tr>
+      <tr><td>Quem escreve o código deste projeto?</td><td>Acordeão <code>Routing · 36 fields</code>, colapsado, campo <code>roles.executors.normal.runner</code> como texto livre</td><td>Tabela <strong>Routing</strong> editável — uma linha por role, select de runners reais</td></tr>
+      <tr><td>Qual modelo cada um usa?</td><td>Mesmo acordeão, campo <code>.model</code>, sem saber o default do runner</td><td>Coluna <strong>Model</strong> com o default do runner como placeholder</td></tr>
+      <tr><td>Isto vale só aqui ou pra tudo?</td><td>Dois botões que mostram os mesmos campos; a diferença aparece em cinza 11px sob cada input</td><td>Escopo com caminho do arquivo, contagem de overrides e origem por linha</td></tr>
+      <tr><td>Quero usar <em>meu</em> agente</td><td><code>Dynamic configuration</code> → escolher path → digitar identifier → digitar valor. 5×</td><td><strong>Add runner</strong>: escolhe o tipo, preenche o que aquele tipo exige</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>2 · Os oito defeitos, com endereço</h2>
+  <ol>
+    <li><strong>Um <code>&lt;input type=text&gt;</code> para tudo.</strong> <span class="path">CrewPage.tsx:135</span> — o contrato entrega <code>valueType</code> ('boolean' | 'integer' | 'enum' | 'reasoning_level' | 'string_list'…) e a UI descarta. Boolean vira digitar a palavra <code>true</code>; enum vira texto livre; a validação só chega depois do round-trip.</li>
+    <li><strong>O par role × runner está em dois lugares, e o legível é o read-only.</strong> A tabela <em>Resolved routing</em> mostra exatamente o que interessa e não deixa mexer; a edição mora em 36 campos com nome pontilhado.</li>
+    <li><strong><code>RoleRouteView</code> é rico e a UI usa 3 de 9 campos.</strong> <span class="path">api.schema.ts:682</span> — <code>prompts</code>, <code>requiresReadOnly</code>, <code>requiresNativeStructuredOutput</code>, <code>fallback</code>, <code>fallbackAbsent</code>, <code>reasoningClamped</code> chegam prontos e são jogados fora. É a informação que faria o select saber o que oferecer.</li>
+    <li><strong>A lista de roles está hardcoded no frontend.</strong> <span class="path">crew-config.ts:4</span> <code>ROLE_PATHS</code> duplica <code>ALL_WORKFLOW_ROLES</code> (<span class="path">config.schema.ts:509</span>). Role novo no backend nasce invisível no botão de template.</li>
+    <li><strong>O template "local-only" é a sua máquina virando feature.</strong> <span class="path">crew-config.ts:96</span> cria um runner chamado <code>moe</code> com <code>contextWindow: 49152</code> e aponta os 9 roles pra ele. Nenhum outro usuário tem "moe".</li>
+    <li><strong>Escopo de projeto mostra campos que o projeto não pode sobrescrever.</strong> <span class="path">resolver.ts:8</span> — só 7 chaves top-level são overridable e 5 são próprias do projeto. O resto deveria sumir, não ficar cinza com "Global only" em letra miúda.</li>
+    <li><strong>O efeito é repetido 126 vezes e não é lido nenhuma.</strong> "next execution context" sob cada campo é ruído; ele só importa no momento de salvar, agregado.</li>
+    <li><strong>"Herdar" em português no meio de uma UI em inglês.</strong> <span class="path">CrewPage.tsx:135</span> — pequeno, mas é o sinal de que ninguém leu a tela como usuário.</li>
+  </ol>
+
+  <div class="callout callout--ok">
+    <p><strong>O que fica intacto.</strong> <code>src/app/config-editor.ts</code>, a fila de escrita por path, a revisão <code>sha256</code> com 409 em conflito, o catálogo como allowlist de escrita, o codec YAML que preserva chaves desconhecidas e o fato de UI e CLI passarem pelo mesmo use case. Isso é bom trabalho e não se toca — a proposta é toda de apresentação, mais dois furos de contrato listados na seção 5.</p>
+  </div>
+
+  <h2>3 · O protótipo</h2>
+  <p>Ele funciona: troque runners, ligue e desligue agentes, veja a barra de mudanças montar o diff e o comando de CLI equivalente. Os estados difíceis estão plantados — <code>codex</code> desligado, <code>local</code> que não pode escrever, um role que já está inválido.</p>
+
+  <div class="proto">
+    <div class="proto__chrome">
+      <div class="proto__dots"><i></i><i></i><i></i></div>
+      <span class="proto__url">localhost:4173 / crew</span>
+    </div>
+    <div class="proto__body">
+
+      <div class="ph">
+        <div>
+          <span class="eyebrow">Crew</span>
+          <h5>agent-flow</h5>
+          <p id="ph-sub">9 roles · 3 runners disponíveis · 1 rota inválida</p>
+        </div>
+        <div style="min-width:180px">
+          <label class="eyebrow" for="p-project" style="display:block; margin-bottom:4px">Project</label>
+          <select id="p-project"><option>agent-flow</option><option>beahub</option><option>crm-core</option></select>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="crew">Crew</button>
+        <button role="tab" aria-selected="false" data-tab="adv">Advanced</button>
+      </div>
+
+      <div id="tab-crew">
+        <div class="scope">
+          <button aria-pressed="true" data-scope="global"><b>Global</b><small>~/.agent-flow/config.yaml · vale para todo projeto</small></button>
+          <button aria-pressed="false" data-scope="project"><b>Este projeto · 3 overrides</b><small>agent-flow/.agent-flow/config.yaml · commitado no repo</small></button>
+        </div>
+
+        <div class="sec">
+          <div class="sec__head"><h6>Runners</h6><span id="runners-count">3 de 4 ligados</span></div>
+          <div class="runners" id="runners"></div>
+        </div>
+
+        <div class="sec">
+          <div class="sec__head"><h6>Routing</h6><span>quem ocupa cada posto</span></div>
+          <div class="bulk">
+            <span>Atribuir todos os roles a</span>
+            <select id="bulk" style="width:150px"></select>
+            <button class="btn" id="bulk-apply">Aplicar</button>
+            <span style="color:var(--ink-4)">·</span>
+            <button class="btn btn--ghost" id="bulk-reviewers">Só os revisores →</button>
+          </div>
+          <div class="table-scroll"><table class="routing">
+            <thead><tr>
+              <th style="width:23%">Role</th><th style="width:11%">Precisa</th><th style="width:16%">Runner</th>
+              <th style="width:16%">Model</th><th style="width:13%">Effort</th><th style="width:21%">Resolve para</th>
+            </tr></thead>
+            <tbody id="roles"></tbody>
+          </table></div>
+        </div>
+
+      </div>
+
+      <div id="tab-adv" class="hidden">
+        <div class="adv__search">
+          <input type="text" id="adv-q" placeholder="Buscar por caminho ou nome…" class="field-mono">
+          <label style="display:flex; align-items:center; gap:6px; font-size:var(--fs-1); color:var(--ink-3); white-space:nowrap">
+            <span class="sw" id="adv-inherited" role="switch" aria-checked="false" tabindex="0"></span> mostrar herdados
+          </label>
+          <span class="changebar__spacer"></span>
+          <span style="font-size:var(--fs-0); color:var(--ink-4); font-family:var(--font-mono)" id="adv-count"></span>
+        </div>
+        <div id="adv-rows"></div>
+        <p style="margin-top:var(--s-4); font-size:var(--fs-1); color:var(--ink-4)">Mesmos 126 campos do editor atual — com o controle certo por <code>valueType</code>, o default como placeholder, a origem por linha e os herdados escondidos por padrão.</p>
+      </div>
+
+      <div class="changebar" id="changebar">
+        <div class="changebar__row">
+          <span class="changebar__count" id="cb-count">Nenhuma alteração pendente</span>
+          <span class="tag hidden" id="cb-effect"><span class="dot"></span>vale a partir do próximo run</span>
+          <span class="changebar__spacer"></span>
+          <button class="btn btn--ghost" id="cb-toggle" disabled>Ver diff</button>
+          <button class="btn" id="cb-discard" disabled>Descartar</button>
+          <button class="btn btn--primary" id="cb-save" disabled>Salvar</button>
+        </div>
+        <div class="diff hidden" id="cb-diff"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <h2>4 · As oito decisões de design</h2>
+  <div class="grid-2">
+    <div class="card"><h4>1. A tela tem uma tarefa, não um esquema</h4><p>Crew responde "quem faz o quê com qual modelo". Recovery, forge, collaboration, review, git — 100 campos — vão para <em>Advanced</em>. Não somem; saem do caminho.</p></div>
+    <div class="card"><h4>2. Runner é um card, não seis campos</h4><p>Identidade, tipo, saúde, modelo e capacidades num objeto só. <code>Add runner</code> pergunta o <strong>tipo primeiro</strong>, porque o tipo decide quais campos existem: CLI pede <code>command</code>; endpoint pede <code>baseUrl</code> e <code>apiKeyEnv</code>.</p></div>
+    <div class="card"><h4>3. O select só oferece o que resolve</h4><p><code>requiresReadOnly</code> e <code>requiresNativeStructuredOutput</code> já vêm no contrato. Um runner sem escrita aparece desabilitado no executor, com o motivo — em vez de virar erro depois do save.</p></div>
+    <div class="card"><h4>4. "Resolve para" fica ao lado do que você escolheu</h4><p>Configurado e resolvido na mesma linha. Clamp de effort, fallback e rota quebrada aparecem onde a decisão é tomada, não numa tabela no rodapé.</p></div>
+    <div class="card"><h4>5. Herança é visível e reversível</h4><p>Cada valor no escopo de projeto diz de onde veio (<code>default</code> / <code>global</code> / <code>aqui</code>) e oferece <em>override</em> ou <em>reset</em>. O que o projeto não pode sobrescrever não é renderizado.</p></div>
+    <div class="card"><h4>6. Salvar é um ato, não 126 atos</h4><p>Barra fixa com contagem, efeito agregado, diff real do YAML e o comando de CLI equivalente — a paridade que o rodapé já promete, agora visível e copiável.</p></div>
+    <div class="card"><h4>7. Zero conteúdo pessoal no produto</h4><p>Fora o template <code>moe</code>. Entra <code>Add runner</code> alimentado pelos tipos que o registry suporta — e presets viram um YAML que o usuário importa, não um botão hardcoded.</p></div>
+    <div class="card"><h4>8. Caminho pontilhado é metadado</h4><p><code>roles.planner.runner</code> deixa de ser o label e vira legenda mono copiável — porque é o que se digita no CLI, não o que se lê na tela.</p></div>
+  </div>
+
+  <h2>5 · O que muda no código</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th style="width:32%">Arquivo</th><th style="width:14%">Ação</th><th>O quê</th></tr></thead>
+    <tbody>
+      <tr><td class="path">apps/deck/…/crew/CrewPage.tsx</td><td><span class="tag tag--warn">quebrar</span></td><td>165 linhas fazendo 6 trabalhos. Vira <code>CrewPage</code> (composição) + <code>RunnerGrid</code> + <code>RoutingTable</code> + <code>ChangeBar</code> + <code>AdvancedFields</code></td></tr>
+      <tr><td class="path">…/crew/RunnerCard.tsx</td><td><span class="tag tag--ok">novo</span></td><td>Card do runner: health, toggle, model, capacidades, contagem de roles que dependem dele</td></tr>
+      <tr><td class="path">…/crew/RoutingRow.tsx</td><td><span class="tag tag--ok">novo</span></td><td>Uma linha = um role. Selects derivados de <code>RoleRouteView</code>, coluna resolvida ao lado</td></tr>
+      <tr><td class="path">…/crew/FieldControl.tsx</td><td><span class="tag tag--ok">novo</span></td><td>Um controle por <code>valueType</code>. É o único lugar que decide switch × number × select × chips</td></tr>
+      <tr><td class="path">…/crew/crew-config.ts</td><td><span class="tag tag--bad">podar</span></td><td>Fora <code>ROLE_PATHS</code> e <code>buildLocalOnlyOperations</code>. Ficam <code>sectionFields</code>, <code>operationFor*</code>, <code>blockedRunnerDependencies</code></td></tr>
+      <tr><td class="path">src/contracts/api.schema.ts</td><td><span class="tag tag--ok"><span class="dot"></span>feito</span></td><td><code>ConfigEditorFieldView.options?: string[]</code> — preenchido a partir de <code>REASONING_ORDER</code>, <code>FORGE_PROVIDERS</code>, <code>QUALITY_CATEGORIES</code> e <code>UTILITY_MODEL_ADAPTERS</code>, nunca restatado no catálogo</td></tr>
+      <tr><td class="path">src/server/server.ts</td><td><span class="tag tag--ok"><span class="dot"></span>feito</span></td><td><code>GET /api/v1/runner-types</code> → <code>{ type, fields, capabilities }</code>, montado por <code>describeRunnerTypes</code> a partir do próprio <code>FACTORIES</code>. Adapter novo aparece no formulário sozinho</td></tr>
+      <tr><td class="path">src/app/config-editor.ts</td><td><span class="tag">intacto</span></td><td>Nada. É a parte que está certa</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout">
+    <p><strong>A dependência que destrava tudo é o <code>/runner-types</code>.</strong> Sem ele, "Add runner" volta a ser uma lista hardcoded no frontend — o mesmo defeito do template <code>moe</code>, com outra roupa. Com ele, adicionar um adapter novo no registry faz o formulário aparecer sozinho, que é a condição para outra pessoa usar o agent-flow com os agentes dela.</p>
+  </div>
+
+  <h2>6 · Ordem de entrega</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th style="width:8%">Fatia</th><th style="width:38%">Entrega</th><th style="width:22%">Prova</th><th>Vale sozinha?</th></tr></thead>
+    <tbody>
+      <tr><td><b>1</b> <span class="tag tag--ok"><span class="dot"></span>entregue</span></td><td><code>FieldControl</code> tipado + esconder herdados + origem por linha</td><td>8 unit por <code>valueType</code> · 5 e2e contra o servidor real · switch medido em pixel</td><td>Sim — mata a classe de erro de digitação em 126 campos</td></tr>
+      <tr><td><b>2</b> <span class="tag tag--ok"><span class="dot"></span>entregue</span></td><td>Tabela Routing editável a partir de <code>RoleRouteView</code> — o contrato ganhou <code>configKeys</code> e <code>requiresWorkingDirectory</code></td><td>e2e: trocou <code>executor.normal</code>, gravou o YAML, a coluna resolvida mudou · overflow mobile medido</td><td>Sim — é a sua pergunta original respondida</td></tr>
+      <tr><td><b>3</b> <span class="tag tag--ok"><span class="dot"></span>entregue</span></td><td><code>GET /api/v1/runner-types</code> + grid de cards + Add runner. O template <code>moe</code> foi removido</td><td>Contract test do endpoint · e2e declarando um <code>openai-compatible</code> contra o servidor real</td><td>Sim — é o que abre para outros usuários</td></tr>
+      <tr><td><b>4</b> <span class="tag tag--ok"><span class="dot"></span>entregue</span></td><td>Change bar única com diff, efeito agregado e CLI equivalente. Abas Crew/Advanced, escopo com caminho do arquivo e "assign every role" entraram junto</td><td>e2e <strong>executa</strong> o comando impresso pelo CLI real e compara o YAML · 409 em conflito</td><td>Sim — fecha o ciclo de confiança</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout callout--bad">
+    <p><strong>O que eu não faria.</strong> Não reescrever o <code>config-editor</code>, não trocar YAML por outro formato, não inventar "perfis de crew" antes de as duas telas existirem, e não deixar o Advanced fora do escopo: sem ele, os 100 campos que saem do Crew ficariam sem casa e a feature regride.</p>
+  </div>
+
+  <div class="foot">
+    <span>docs/crew-refactor.html · agent-flow</span>
+    <span>protótipo interativo — nenhum dado real é lido ou gravado</span>
+  </div>
+</div>
+
+<script>
+const RUNNERS = {
+  claude: { type:'claude-code-cli', enabled:true, health:'ok', healthLabel:'authenticated', model:'', modelDefault:'sonnet-5 (CLI)', writes:true, structured:'native', efforts:['low','medium','high','very_high'] },
+  agy:    { type:'agy-cli',        enabled:true, health:'ok', healthLabel:'authenticated', model:'gemini-3.1-pro', modelDefault:'gemini-3.1-pro', writes:true, structured:'native', efforts:['low','high'] },
+  codex:  { type:'codex-cli',      enabled:false, health:'idle', healthLabel:'not installed', model:'', modelDefault:'gpt-5-codex', writes:true, structured:'native', efforts:['low','medium','high'] },
+  local:  { type:'openai-compatible', enabled:true, health:'warn', healthLabel:'reachable', model:'moe', modelDefault:'moe', writes:false, structured:'emulated', efforts:['low','medium','high'] },
+};
+const ROLES = [
+  { id:'architect',        what:'lê o repositório e propõe a arquitetura', writes:false },
+  { id:'sdd',              what:'escreve spec, design e tasks',            writes:false },
+  { id:'planner',          what:'quebra a feature em tarefas',            writes:false },
+  { id:'planReviewer',     what:'revisa o plano antes da aprovação',      writes:false },
+  { id:'executors.trivial',what:'implementa tarefas triviais',            writes:true  },
+  { id:'executors.normal', what:'implementa a maior parte do código',     writes:true  },
+  { id:'executors.complex',what:'implementa as tarefas difíceis',         writes:true  },
+  { id:'verification',     what:'roda os gates e julga o resultado',      writes:false },
+  { id:'finalReviewer',    what:'revisão final antes de publicar',        writes:false },
+];
+const BASE = {
+  'architect':{r:'claude',m:'',e:'high'}, 'sdd':{r:'claude',m:'',e:'high'},
+  'planner':{r:'claude',m:'',e:'high'},   'planReviewer':{r:'claude',m:'',e:'high'},
+  'executors.trivial':{r:'agy',m:'',e:'low'}, 'executors.normal':{r:'local',m:'',e:'medium'},
+  'executors.complex':{r:'agy',m:'',e:'high'}, 'verification':{r:'claude',m:'',e:'medium'},
+  'finalReviewer':{r:'claude',m:'',e:'very_high'},
+};
+const ADV = [
+  { path:'parallelism.maxTasks', label:'Tarefas em paralelo', type:'integer', value:2, def:1, origin:'global' },
+  { path:'git.useWorktrees', label:'Uma worktree por tarefa', type:'boolean', value:false, def:false, origin:'default' },
+  { path:'approval.requiredBeforeImplementation', label:'Exigir aprovação antes de implementar', type:'boolean', value:true, def:true, origin:'default' },
+  { path:'retry.maxAttempts', label:'Tentativas por tarefa', type:'integer', value:2, def:2, origin:'default' },
+  { path:'recovery.enabled', label:'Recuperação autônoma', type:'boolean', value:true, def:true, origin:'default' },
+  { path:'recovery.maxAutonomousModelCalls', label:'Teto de chamadas sem humano', type:'integer', value:24, def:24, origin:'default' },
+  { path:'fallback.on', label:'Gatilhos de fallback', type:'string_list', value:['quota_exceeded','auth_required','runner_unavailable'], def:[], origin:'global' },
+  { path:'forge.provider', label:'Provedor de forge', type:'enum', value:'github', def:'none', options:['none','github'], origin:'global' },
+  { path:'utilityModel.adapter', label:'Adapter do utility model', type:'enum', value:'openai', def:'openai', options:['openai'], origin:'default' },
+  { path:'ui.workspaceDepth', label:'Profundidade do scan de workspace', type:'integer', value:2, def:2, origin:'default' },
+];
+const EFFORTS = ['low','medium','high','very_high'];
+const state = { roles: structuredClone(BASE), runners: structuredClone(RUNNERS), scope:'global', showInherited:false };
+const $ = (s) => document.querySelector(s);
+const enabledRunners = () => Object.entries(state.runners).filter(([,r]) => r.enabled).map(([id]) => id);
+
+function clampEffort(runnerId, effort){
+  const r = state.runners[runnerId]; if (!r) return effort;
+  return r.efforts.includes(effort) ? effort : [...r.efforts].pop();
+}
+function resolveRow(role){
+  const cfg = state.roles[role.id]; const runner = state.runners[cfg.r];
+  if (!runner || !runner.enabled) return { bad:true, text:`runner '${cfg.r}' desligado` };
+  if (role.writes && !runner.writes) return { bad:true, text:`${cfg.r} não escreve arquivos` };
+  const eff = clampEffort(cfg.r, cfg.e);
+  const model = cfg.m || runner.model || runner.modelDefault;
+  return { bad:false, clamped: eff !== cfg.e, text:`${cfg.r} · ${model}`, eff };
+}
+function renderRunners(){
+  const host = $('#runners'); host.innerHTML = '';
+  for (const [id, r] of Object.entries(state.runners)){
+    const used = ROLES.filter((role) => state.roles[role.id].r === id).length;
+    const el = document.createElement('div');
+    el.className = 'runner'; el.dataset.off = String(!r.enabled);
+    el.innerHTML = `
+      <div class="runner__top">
+        <div><div class="runner__id">${id}</div><div class="runner__type">${r.type}</div></div>
+        <span class="sw" role="switch" tabindex="0" aria-checked="${r.enabled}" data-runner="${id}" aria-label="ligar ${id}"></span>
+      </div>
+      <div class="runner__caps">
+        <span class="tag tag--${r.health === 'ok' ? 'ok' : r.health === 'warn' ? 'warn' : 'idle'}"><span class="dot"></span>${r.healthLabel}</span>
+        <span class="tag">${r.writes ? 'escreve' : 'só leitura'}</span>
+        <span class="tag">${r.structured}</span>
+      </div>
+      <div class="runner__foot"><span>${r.model || r.modelDefault}</span><span>${used} role${used === 1 ? '' : 's'}</span></div>`;
+    host.appendChild(el);
+  }
+  const add = document.createElement('div');
+  add.className = 'runner runner--add';
+  add.innerHTML = `<b style="font-size:18px; line-height:1">+</b><span>Adicionar runner</span><span style="font-size:11px; color:var(--ink-4)">4 tipos suportados</span>`;
+  add.onclick = () => alert('Passo 1: escolher o tipo (claude-code-cli · codex-cli · agy-cli · openai-compatible).\nO tipo define os campos — CLI pede command; endpoint pede baseUrl e apiKeyEnv.\n\nA lista vem de GET /api/v1/runner-types, nunca do frontend.');
+  host.appendChild(add);
+  const on = enabledRunners().length;
+  $('#runners-count').textContent = `${on} de ${Object.keys(state.runners).length} ligados`;
+  host.querySelectorAll('[data-runner]').forEach((sw) => {
+    const toggle = () => { const id = sw.dataset.runner; state.runners[id].enabled = !state.runners[id].enabled; renderAll(); };
+    sw.onclick = toggle;
+    sw.onkeydown = (e) => { if (e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); toggle(); } };
+  });
+}
+function renderRoles(){
+  const host = $('#roles'); host.innerHTML = '';
+  for (const role of ROLES){
+    const cfg = state.roles[role.id]; const res = resolveRow(role);
+    const tr = document.createElement('tr'); tr.dataset.err = String(res.bad);
+    const options = Object.entries(state.runners).map(([id, r]) => {
+      const off = !r.enabled; const cannot = role.writes && !r.writes;
+      const label = off ? `${id} — desligado` : cannot ? `${id} — não escreve` : id;
+      return `<option value="${id}" ${off || cannot ? 'disabled' : ''} ${cfg.r === id ? 'selected' : ''}>${label}</option>`;
+    }).join('');
+    const efforts = EFFORTS.map((e) => `<option ${cfg.e === e ? 'selected' : ''}>${e}</option>`).join('');
+    tr.innerHTML = `
+      <td><span class="role">${role.id}<small>${role.what}</small></span></td>
+      <td><span class="tag ${role.writes ? 'tag--warn' : ''}">${role.writes ? 'escreve' : 'só lê'}</span></td>
+      <td><select data-role="${role.id}" data-k="r">${options}</select></td>
+      <td><input type="text" class="field-mono" data-role="${role.id}" data-k="m" value="${cfg.m}" placeholder="${state.runners[cfg.r] ? (state.runners[cfg.r].model || state.runners[cfg.r].modelDefault) : '—'}"></td>
+      <td><select data-role="${role.id}" data-k="e">${efforts}</select></td>
+      <td class="resolves">${res.bad
+        ? `<span style="color:var(--bad)">✕ ${res.text}</span>`
+        : `${res.text}${res.clamped ? `<br><em>effort ${cfg.e} → ${res.eff} (limite do runner)</em>` : ''}`}</td>`;
+    host.appendChild(tr);
+  }
+  host.querySelectorAll('[data-role]').forEach((el) => {
+    el.onchange = () => { state.roles[el.dataset.role][el.dataset.k] = el.value; renderAll(); };
+  });
+  const invalid = ROLES.filter((r) => resolveRow(r).bad).length;
+  $('#ph-sub').textContent = `9 roles · ${enabledRunners().length} runners disponíveis · ${invalid === 0 ? 'todas as rotas resolvem' : `${invalid} rota${invalid === 1 ? '' : 's'} inválida${invalid === 1 ? '' : 's'}`}`;
+}
+function diffLines(){
+  const out = [];
+  for (const role of ROLES){
+    const b = BASE[role.id]; const c = state.roles[role.id];
+    for (const [k, key] of [['r','runner'],['m','model'],['e','effort']]){
+      if (b[k] === c[k]) continue;
+      out.push({ path:`roles.${role.id}.${key}`, before:b[k] || '(herdado)', after:c[k] || '(herdado)' });
+    }
+  }
+  for (const [id, r] of Object.entries(state.runners)){
+    if (r.enabled !== RUNNERS[id].enabled) out.push({ path:`runners.${id}.enabled`, before:String(RUNNERS[id].enabled), after:String(r.enabled) });
+  }
+  return out;
+}
+function renderChangeBar(){
+  const lines = diffLines(); const n = lines.length;
+  $('#cb-count').innerHTML = n === 0 ? 'Nenhuma alteração pendente' : `<b>${n}</b> alteraç${n === 1 ? 'ão' : 'ões'} pendente${n === 1 ? '' : 's'}`;
+  $('#cb-effect').classList.toggle('hidden', n === 0);
+  ['#cb-toggle','#cb-discard','#cb-save'].forEach((s) => { $(s).disabled = n === 0; });
+  if (n === 0){ $('#cb-diff').classList.add('hidden'); $('#cb-toggle').textContent = 'Ver diff'; }
+  $('#cb-diff').innerHTML = lines.map((l) =>
+    `<div><span class="del">- ${l.path}: ${l.before}</span><br><span class="add">+ ${l.path}: ${l.after}</span><br><span class="cli">  $ agent-flow config set ${l.path} ${l.after.replace('(herdado)','--unset')}</span></div>`
+  ).join('<div style="height:8px"></div>');
+}
+function renderAdvanced(){
+  const q = $('#adv-q').value.trim().toLowerCase();
+  const host = $('#adv-rows'); host.innerHTML = '';
+  const rows = ADV.filter((f) => (state.showInherited || f.origin !== 'default') &&
+    (q === '' || f.path.toLowerCase().includes(q) || f.label.toLowerCase().includes(q)));
+  for (const f of rows){
+    const div = document.createElement('div'); div.className = 'advrow';
+    let control = '';
+    if (f.type === 'boolean') control = `<div style="display:flex; justify-content:flex-end"><span class="sw" role="switch" aria-checked="${f.value}" tabindex="0"></span></div>`;
+    else if (f.type === 'integer') control = `<input type="number" value="${f.value}" placeholder="${f.def}">`;
+    else if (f.type === 'enum') control = `<select>${f.options.map((o) => `<option ${o === f.value ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
+    else if (f.type === 'string_list') control = `<div class="chips">${f.value.map((v) => `<i>${v}</i>`).join('')}<i style="color:var(--ink-4)">+</i></div>`;
+    div.innerHTML = `<div class="advrow__label"><b>${f.label}</b><span>${f.path} · ${f.origin === 'default' ? 'herdado do default' : f.origin === 'global' ? 'definido no global' : 'definido aqui'}</span></div>${control}`;
+    host.appendChild(div);
+  }
+  $('#adv-count').textContent = `${rows.length} de ${ADV.length} campos`;
+  host.querySelectorAll('.sw').forEach((sw) => {
+    const t = () => sw.setAttribute('aria-checked', sw.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+    sw.onclick = t; sw.onkeydown = (e) => { if (e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); t(); } };
+  });
+}
+function renderBulk(){
+  const sel = $('#bulk');
+  sel.innerHTML = enabledRunners().map((id) => `<option value="${id}">${id}</option>`).join('');
+}
+function renderAll(){ renderRunners(); renderRoles(); renderBulk(); renderChangeBar(); }
+
+$('#bulk-apply').onclick = () => {
+  const id = $('#bulk').value;
+  for (const role of ROLES){ if (!role.writes || state.runners[id].writes) state.roles[role.id].r = id; }
+  renderAll();
+};
+$('#bulk-reviewers').onclick = () => {
+  for (const id of ['planReviewer','finalReviewer','verification']) state.roles[id].r = 'local';
+  renderAll();
+};
+$('#cb-discard').onclick = () => { state.roles = structuredClone(BASE); state.runners = structuredClone(RUNNERS); renderAll(); };
+$('#cb-toggle').onclick = () => {
+  const d = $('#cb-diff'); d.classList.toggle('hidden');
+  $('#cb-toggle').textContent = d.classList.contains('hidden') ? 'Ver diff' : 'Esconder diff';
+};
+$('#cb-save').onclick = () => {
+  $('#cb-count').innerHTML = `<span style="color:var(--ok)">Salvo em ~/.agent-flow/config.yaml · revisão sha256:8050…</span>`;
+  Object.assign(BASE, structuredClone(state.roles));
+  for (const [id, r] of Object.entries(state.runners)) RUNNERS[id].enabled = r.enabled;
+  setTimeout(renderAll, 1400);
+};
+document.querySelectorAll('[data-scope]').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('[data-scope]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    state.scope = b.dataset.scope;
+  };
+});
+document.querySelectorAll('[data-tab]').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('[data-tab]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    $('#tab-crew').classList.toggle('hidden', b.dataset.tab !== 'crew');
+    $('#tab-adv').classList.toggle('hidden', b.dataset.tab !== 'adv');
+    if (b.dataset.tab === 'adv') renderAdvanced();
+  };
+});
+$('#adv-q').oninput = renderAdvanced;
+$('#adv-inherited').onclick = () => {
+  state.showInherited = !state.showInherited;
+  $('#adv-inherited').setAttribute('aria-checked', String(state.showInherited));
+  renderAdvanced();
+};
+renderAll();
+</script>
+</body>
+</html>

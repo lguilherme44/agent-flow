@@ -10,6 +10,20 @@ export type {
 } from './agent-runner.js';
 export type { ProcessRunner, ProcessSpawnOptions, ProcessResult } from './process-runner.js';
 export type { FileSystem } from './file-system.js';
+export type {
+  ConfigPath,
+  ConfigSourceCodec,
+  ConfigSourceDocument,
+  ConfigSourceCodecErrorCode,
+} from './config-source-codec.js';
+export { ConfigSourceCodecError } from './config-source-codec.js';
+export type {
+  ConfigDiagnostic,
+  ConfigDiagnosticSeverity,
+  ConfigSemanticValidationInput,
+  ConfigSemanticValidationResult,
+  ConfigSemanticValidator,
+} from './config-semantic-validator.js';
 export type { Clock } from './clock.js';
 export type { Logger, LogLevel } from './logger.js';
 export type { Host } from './host.js';

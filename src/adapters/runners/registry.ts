@@ -6,6 +6,7 @@ import {
 } from '../../contracts/index.js';
 import type {
   AgentRunner,
+  RunnerCapabilities,
   RunnerCapabilityEntry,
   RunnerHealth,
 } from '../../ports/agent-runner.js';
@@ -127,6 +128,80 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
     });
   },
 };
+
+/**
+ * One configuration key a runner type reads, and whether the type works without it.
+ *
+ * Declared beside the factories because that is where the requirement already lives — the
+ * `openai-compatible` factory refuses a runner with no `baseUrl` and says so in the error.
+ * Two places would eventually disagree, and the one an editor reads would be the wrong one.
+ */
+export interface RunnerTypeField {
+  readonly name: 'command' | 'args' | 'baseUrl' | 'apiKeyEnv' | 'model' | 'contextWindow';
+  readonly required: boolean;
+  /** Names an environment variable rather than holding a value (§7.1). */
+  readonly secretEnv?: true;
+}
+
+export interface RunnerTypeDescription {
+  readonly type: string;
+  readonly fields: readonly RunnerTypeField[];
+  /**
+   * What this type can do before a model is chosen — the CLI's own surface (AD-30).
+   *
+   * Read by *asking an instance*, because the adapter is the only thing that knows, and a
+   * table restating it here would be a second answer that ages separately. No model is
+   * passed: a narrowing that depends on the pair belongs to the pair, and this question is
+   * asked while somebody is still choosing the type.
+   */
+  readonly capabilities: RunnerCapabilities;
+}
+
+const CLI_FIELDS: readonly RunnerTypeField[] = [
+  { name: 'command', required: false },
+  { name: 'args', required: false },
+  { name: 'model', required: false },
+];
+
+const TYPE_FIELDS: Readonly<Record<string, readonly RunnerTypeField[]>> = {
+  'claude-code-cli': CLI_FIELDS,
+  'codex-cli': CLI_FIELDS,
+  'agy-cli': CLI_FIELDS,
+  'openai-compatible': [
+    { name: 'baseUrl', required: true },
+    { name: 'apiKeyEnv', required: false, secretEnv: true },
+    { name: 'model', required: false },
+    { name: 'contextWindow', required: false },
+  ],
+};
+
+/**
+ * Every runner type this installation supports, for a screen that offers them.
+ *
+ * The alternative was a list in the browser, which is how the local-only template shipped
+ * one operator's runner name as a product feature. Adding an adapter is still one entry in
+ * `FACTORIES` and one file; the editor picks it up from here.
+ *
+ * Each type is instantiated once, with the minimum its factory accepts, purely to read the
+ * capabilities it declares. Nothing is spawned and nothing is reached: construction stores
+ * dependencies, and `capabilities()` answers from the adapter's own declaration.
+ */
+export function describeRunnerTypes(deps: RegistryDependencies): RunnerTypeDescription[] {
+  return Object.keys(FACTORIES).sort().flatMap((type): RunnerTypeDescription[] => {
+    const factory = FACTORIES[type];
+    if (factory === undefined) return [];
+    const fields = TYPE_FIELDS[type] ?? [];
+    const probe: RunnerConfig = {
+      type,
+      enabled: true,
+      args: [],
+      // Satisfies the one factory that refuses a runner without an endpoint. Never
+      // called: only `capabilities()` is read from this instance.
+      ...(fields.some(({ name }) => name === 'baseUrl') ? { baseUrl: 'http://127.0.0.1/v1' } : {}),
+    };
+    return [{ type, fields, capabilities: factory(type, probe, deps, []).capabilities() }];
+  });
+}
 
 export interface RunnerRegistry {
   ids(): string[];

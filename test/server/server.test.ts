@@ -28,6 +28,7 @@ import type {
   RunEventLogView,
   RunSummaryView,
   RunnerHealthView,
+  RunnerTypeView,
   RunnerView,
   StageViewResponse,
   TaskDetailView,
@@ -560,6 +561,37 @@ describe('UI-04 — the run read API', () => {
     expect(runners.length).toBeGreaterThan(0);
     expect(runners[0]).toHaveProperty('provider');
     expect(body).not.toMatch(/auth|token|key|secret/i);
+  });
+
+  it('publishes every runner type the installation supports, with what declaring one takes', async () => {
+    const { server } = await serve();
+
+    const types = (await server.app.inject('/api/v1/runner-types')).json<RunnerTypeView[]>();
+
+    // Every adapter the registry can build, so an editor offering these offers all of
+    // them — the failure this replaces was a list of runner names living in a browser.
+    expect(types.map(({ type }) => type)).toEqual([
+      'agy-cli', 'claude-code-cli', 'codex-cli', 'openai-compatible',
+    ]);
+
+    const endpoint = types.find(({ type }) => type === 'openai-compatible');
+    expect(endpoint?.fields).toContainEqual({ name: 'baseUrl', required: true });
+    expect(endpoint?.fields).toContainEqual({ name: 'apiKeyEnv', required: false, secretEnv: true });
+    // It has no working directory and cannot write, which is why the resolver refuses it
+    // for the executors. A screen that offers it needs to be able to say so.
+    expect(endpoint?.capabilities.supportsWorkingDirectory).toBe(false);
+
+    const cli = types.find(({ type }) => type === 'claude-code-cli');
+    expect(cli?.capabilities.supportsWorkingDirectory).toBe(true);
+    expect(cli?.capabilities.supportedReasoningLevels.length).toBeGreaterThan(0);
+
+    // A field is a name and a requirement, never a value: `apiKeyEnv` is described, and
+    // the variable it would name is not read here at all. The probe endpoint the
+    // description is built with must not escape either.
+    expect(JSON.stringify(types)).not.toContain('127.0.0.1');
+    for (const field of types.flatMap(({ fields }) => fields)) {
+      expect(Object.keys(field).filter((key) => !['name', 'required', 'secretEnv'].includes(key))).toEqual([]);
+    }
   });
 
   it('reports runner health without probing', async () => {

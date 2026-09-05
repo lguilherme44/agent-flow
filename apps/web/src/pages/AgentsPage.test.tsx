@@ -21,8 +21,10 @@ import { AgentsPage } from './AgentsPage';
 const AGENTS: RoleRouteView[] = [
   {
     role: 'architect',
+    configKeys: ['roles', 'architect'],
     prompts: ['discovery', 'architecture-impact'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: false,
     configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
     resolved: {
@@ -42,8 +44,10 @@ const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'sdd',
+    configKeys: ['roles', 'sdd'],
     prompts: ['sdd'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: false,
     configured: {
       runner: 'claude',
@@ -64,8 +68,10 @@ const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'planner',
+    configKeys: ['roles', 'planner'],
     prompts: ['planning'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: true,
     configured: { runner: 'nowhere', reasoning: 'high', timeoutSeconds: 900 },
     error: {
@@ -77,8 +83,10 @@ const AGENTS: RoleRouteView[] = [
   ...(['planReviewer', 'executor.trivial', 'executor.normal', 'executor.complex', 'verification', 'finalReviewer'].map(
     (role): RoleRouteView => ({
       role,
+      configKeys: role.startsWith('executor.') ? ['roles', 'executors', role.split('.')[1] ?? ''] : ['roles', role],
       prompts: role.startsWith('executor.') ? ['implementation'] : [role],
       requiresReadOnly: !role.startsWith('executor.'),
+      requiresWorkingDirectory: role.startsWith('executor.'),
       requiresNativeStructuredOutput: false,
       configured: { runner: 'codex', reasoning: 'medium', timeoutSeconds: 900 },
       resolved: {

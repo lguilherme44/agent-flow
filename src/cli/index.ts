@@ -11,6 +11,7 @@ import {
   runConfigGetCommand,
   runConfigSetCommand,
   runConfigListCommand,
+  runConfigUnsetCommand,
 } from './config.js';
 import { runStatusCommand } from './status.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
@@ -113,6 +114,16 @@ export async function main(argv: string[]): Promise<number> {
     .action(async (key: string, value: string, options: { global?: boolean }, command: Command) => {
       exitCode = await runConfigSetCommand(key, value, options, globalOptions(command));
     });
+
+  for (const name of ['unset', 'inherit'] as const) {
+    configCmd
+      .command(`${name} <key>`)
+      .description('Remove an explicit value so it inherits from the higher-precedence source')
+      .option('--global', 'remove from global configuration file')
+      .action(async (key: string, options: { global?: boolean }, command: Command) => {
+        exitCode = await runConfigUnsetCommand(key, options, globalOptions(command));
+      });
+  }
 
   configCmd
     .command('list')

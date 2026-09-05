@@ -506,4 +506,26 @@ export function roleConfigOf(roles: RolesConfig, role: WorkflowRole): RoleConfig
   }
 }
 
+/**
+ * Where a logical role's route lives in a configuration source.
+ *
+ * The workflow says `executor.trivial`; the file says `roles.executors.trivial`. That
+ * translation exists once, in `roleConfigOf` above, and an editor needs the other half
+ * of it — the path to write to. Deriving it in a browser would be a second copy of a
+ * rule that only looks obvious until `executors` is renamed, so it is published here and
+ * tied to `roleConfigOf` by test.
+ */
+export function roleConfigKeys(role: WorkflowRole): readonly string[] {
+  switch (role) {
+    case 'executor.trivial':
+      return ['roles', 'executors', 'trivial'];
+    case 'executor.normal':
+      return ['roles', 'executors', 'normal'];
+    case 'executor.complex':
+      return ['roles', 'executors', 'complex'];
+    default:
+      return ['roles', role];
+  }
+}
+
 export const ALL_WORKFLOW_ROLES: readonly WorkflowRole[] = WORKFLOW_ROLES;

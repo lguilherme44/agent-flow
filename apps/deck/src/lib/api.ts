@@ -9,11 +9,16 @@ import type {
   RunDetailView,
   RunEventLogView,
   RunSummaryView,
+  ConfigView,
   RunnerHealthView,
+  RunnerTypeView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
   WorkspaceView,
+  ConfigEditorView,
+  ConfigValidationView,
+  ConfigEditorScope,
 } from '@contracts/index.js';
 
 /**
@@ -75,7 +80,7 @@ export function url(path: string, query: Query = {}): string {
   return `${API_BASE}${path}${search === '' ? '' : `?${search}`}`;
 }
 
-async function parse<T>(response: Response): Promise<T> {
+async function parse<T>(response: Response, acceptedErrorStatuses: readonly number[] = []): Promise<T> {
   const text = await response.text();
   let body: unknown = undefined;
   if (text !== '') {
@@ -86,7 +91,7 @@ async function parse<T>(response: Response): Promise<T> {
     }
   }
 
-  if (!response.ok) {
+  if (!response.ok && !acceptedErrorStatuses.includes(response.status)) {
     const refusal = (body ?? {}) as {
       error?: string;
       message?: string;
@@ -94,11 +99,12 @@ async function parse<T>(response: Response): Promise<T> {
       forcible?: boolean;
       detail?: Record<string, unknown>;
     };
+    const detail = refusal.detail ?? (typeof body === 'object' && body !== null ? body as Record<string, unknown> : undefined);
     throw new ApiError(response.status, refusal.message ?? `${String(response.status)} from the server`, {
       ...(refusal.error === undefined ? {} : { code: refusal.error }),
       ...(refusal.action === undefined ? {} : { action: refusal.action }),
       ...(refusal.forcible === undefined ? {} : { forcible: refusal.forcible }),
-      ...(refusal.detail === undefined ? {} : { detail: refusal.detail }),
+      ...(detail === undefined ? {} : { detail }),
     });
   }
 
@@ -122,6 +128,30 @@ export async function postJson<T>(path: string, body: unknown, query: Query = {}
   });
   return parse<T>(response);
 }
+
+export async function patchJson<T>(path: string, body: unknown, query: Query = {}): Promise<T> {
+  const response = await fetch(url(path, query), {
+    method: 'PATCH',
+    headers: { accept: 'application/json', 'content-type': 'application/json', [CLIENT_HEADER]: 'deck' },
+    body: JSON.stringify(body ?? {}),
+  });
+  return parse<T>(response);
+}
+
+export type ConfigEditorOperation =
+  | { readonly kind: 'set'; readonly path: readonly (string | number)[]; readonly value: unknown }
+  | { readonly kind: 'unset'; readonly path: readonly (string | number)[] };
+
+export interface ConfigAppliedView {
+  readonly status: 'applied';
+  readonly view: ConfigEditorView;
+  readonly changes: ConfigValidationView['changes'];
+}
+
+const configQuery = (scope: ConfigEditorScope, projectId?: string): Query => ({
+  scope,
+  ...(scope === 'project' ? { projectId } : {}),
+});
 
 /** A run is always addressed with its project: run ids restart per project per year. */
 export interface RunAddress {
@@ -152,6 +182,22 @@ export const api = {
     getJson<RoleRouteView[]>('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>
     getJson<RunnerHealthView[]>('/runners/health', projectId === undefined ? {} : { projectId }),
+  /** Which adapters this installation supports. A property of the machine, not a project. */
+  runnerTypes: () => getJson<RunnerTypeView[]>('/runner-types', {}),
+  /** Read-only, and read here for one thing: which files the two scopes actually are. */
+  config: (projectId?: string) => getJson<ConfigView>('/config', projectId === undefined ? {} : { projectId }),
+  configEditor: (scope: ConfigEditorScope, projectId?: string) =>
+    getJson<ConfigEditorView>('/config/editor', configQuery(scope, projectId)),
+  validateConfig: async (scope: ConfigEditorScope, projectId: string | undefined, operations: readonly ConfigEditorOperation[]) => {
+    const response = await fetch(url('/config/editor/validate', configQuery(scope, projectId)), {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', [CLIENT_HEADER]: 'deck' },
+      body: JSON.stringify({ operations }),
+    });
+    return parse<ConfigValidationView>(response, [422]);
+  },
+  applyConfig: (scope: ConfigEditorScope, projectId: string | undefined, expectedRevision: string, operations: readonly ConfigEditorOperation[]) =>
+    patchJson<ConfigAppliedView>('/config/editor', { expectedRevision, operations }, configQuery(scope, projectId)),
 
   approve: (a: RunAddress, force: boolean) =>
     postJson<ActionResultView>(`/runs/${a.runId}/approve`, { force }, scoped(a)),
@@ -198,4 +244,7 @@ export const keys = {
   agents: (projectId?: string) => url('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>
     url('/runners/health', projectId === undefined ? {} : { projectId }),
+  runnerTypes: () => url('/runner-types', {}),
+  config: (projectId?: string) => url('/config', projectId === undefined ? {} : { projectId }),
+  configEditor: (scope: ConfigEditorScope, projectId?: string) => url('/config/editor', configQuery(scope, projectId)),
 };
