@@ -52,3 +52,4 @@ apps/web/dist.hidden-by-packaging-smoke/
 
 # Local design mockups
 ui/
+apps/deck/dist.hidden-by-packaging-smoke/

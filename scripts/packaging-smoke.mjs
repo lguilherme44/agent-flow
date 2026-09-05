@@ -35,6 +35,7 @@ import {
 const REQUIRED = [
   'package.json',
   'dist/bin/agent-flow.js',
+  'apps/deck/dist/index.html',
   'apps/web/dist/index.html',
   'prompts/discovery.md',
   'prompts/architecture-impact.md',
@@ -63,6 +64,7 @@ const FORBIDDEN = [
   /^apps\/web\/src\//,
   /^apps\/web\/e2e\//,
   /^apps\/web\/visual\//,
+  /^apps\/deck\/src\//,
   /^coverage\//,
   /^\.agent-flow\//,
   /^\.github\//,
@@ -106,11 +108,15 @@ async function main() {
       // The dashboard's entry point and every asset it names. An `index.html`
       // pointing at a hashed bundle that was not packaged is a blank page with a 404
       // in the console, and it is the single most likely packaging mistake.
-      const html = files.filter((path) => path === 'apps/web/dist/index.html');
-      check(html.length === 1, 'ships exactly one dashboard entry point');
+      // Two bundles, one entry point each: Deck, which `ui` opens, and the previous
+      // dashboard behind `--classic`.
+      for (const bundle of ['deck', 'web']) {
+        const html = files.filter((path) => path === `apps/${bundle}/dist/index.html`);
+        check(html.length === 1, `ships exactly one entry point for apps/${bundle}`);
 
-      const assets = files.filter((path) => path.startsWith('apps/web/dist/assets/'));
-      check(assets.length > 0, `ships ${String(assets.length)} dashboard assets`);
+        const assets = files.filter((path) => path.startsWith(`apps/${bundle}/dist/assets/`));
+        check(assets.length > 0, `ships ${String(assets.length)} assets for apps/${bundle}`);
+      }
 
       const { prefix, bin } = await installTarball(tarball);
 

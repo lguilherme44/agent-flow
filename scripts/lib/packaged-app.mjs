@@ -25,8 +25,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = resolve(HERE, '../..');
 /** The same deterministic runner the Playwright E2E uses. One test double. */
 export const FAKE_CLI = join(REPO, 'apps/web/e2e/support/fake-agent-cli.mjs');
-const CHECKOUT_WEB_DIST = join(REPO, 'apps/web/dist');
-const HIDDEN_WEB_DIST = join(REPO, 'apps/web/dist.hidden-by-packaging-smoke');
+/** Both dashboard bundles the checkout can hold; either would resolve by coincidence. */
+const CHECKOUT_BUNDLES = ['apps/deck/dist', 'apps/web/dist'].map((dir) => ({
+  live: join(REPO, dir),
+  hidden: join(REPO, `${dir}.hidden-by-packaging-smoke`),
+  rebuild: dir.includes('/deck/') ? 'npm run build:deck' : 'npm run build:web',
+}));
 
 export function step(message) {
   process.stdout.write(`\n── ${message}\n`);
@@ -126,22 +130,22 @@ export async function installTarball(tarball) {
  * confusing thing to find.
  */
 export async function withoutCheckoutBundle(body) {
-  const hid = existsSync(CHECKOUT_WEB_DIST);
-  if (hid) renameSync(CHECKOUT_WEB_DIST, HIDDEN_WEB_DIST);
+  const hidden = CHECKOUT_BUNDLES.filter((bundle) => existsSync(bundle.live));
+  for (const bundle of hidden) renameSync(bundle.live, bundle.hidden);
 
   try {
     return await body();
   } finally {
-    if (hid) {
+    for (const bundle of hidden) {
       try {
-        if (existsSync(HIDDEN_WEB_DIST)) {
-          if (existsSync(CHECKOUT_WEB_DIST)) await rm(CHECKOUT_WEB_DIST, { recursive: true });
-          renameSync(HIDDEN_WEB_DIST, CHECKOUT_WEB_DIST);
+        if (existsSync(bundle.hidden)) {
+          if (existsSync(bundle.live)) await rm(bundle.live, { recursive: true });
+          renameSync(bundle.hidden, bundle.live);
         }
       } catch (error) {
         process.stderr.write(
-          `\n⚠ could not restore ${CHECKOUT_WEB_DIST}: ${String(error)}\n` +
-            `  It is a build artifact — run \`npm run build:web\` to recreate it.\n`,
+          `\n⚠ could not restore ${bundle.live}: ${String(error)}\n` +
+            `  It is a build artifact — run \`${bundle.rebuild}\` to recreate it.\n`,
         );
       }
     }

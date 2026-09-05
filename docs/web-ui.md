@@ -3,10 +3,40 @@
 ```bash
 agent-flow ui              # this project
 agent-flow ui ~/wk         # every initialised repository under ~/wk
+agent-flow ui --classic    # the previous dashboard, same server, same API
 ```
 
 Serves `http://127.0.0.1:4782`. Loopback, no authentication, no cloud — see
 [`security.md`](security.md) for what that does and does not protect.
+
+## Two bundles, one API
+
+`ui` opens **Deck** (`apps/deck`). The previous dashboard (`apps/web`) is still built,
+still packaged and still served behind `--classic`; nothing anybody bookmarked stops
+working, and Deck understands the old `/runs/<run>?project=<id>` links. The server does not
+know which one it is serving — both read the endpoints listed at the end of this page, and
+both write through the same five use cases.
+
+Deck has four screens and one idea:
+
+| Route | |
+|---|---|
+| `/` | **The deck.** What needs a person, across every project, in the server's order — priority, then age — folded to six rows. Then one lane per project: runtime, the pipeline as ten cells, tasks, attention, seats, forge, last activity. |
+| `/p/<project>/runs/<run>` | **The recorder.** The run as a strip of time: the clock, the ten stages drawn to true duration, the run's own marks, one lane per task with a bar per attempt. Drag the playhead and the graph, the task panel and the log show what the audit trail said was true at that instant; let go at the right edge and the server's answer takes over. `?task=` and `?at=` ride in the address, so a moment in a run is a link. |
+| `/runs` | History, filtered locally. |
+| `/crew` | What each of the nine roles would run, and whether the runners can. |
+
+**The recorder decides nothing.** It reads `GET /runs/:id/events` — the audit log, in bulk
+— and folds it into bars and marks in `apps/deck/src/lib/replay.ts`. Every bar is a line of
+the log with its `at` read off; a task's outcome is the word `task_finished` wrote,
+verbatim, and an attempt whose end the log never recorded is drawn hatched as `unknown`
+rather than guessed. The present is never the fold's to answer: `/tasks`, `/stages` and
+`/control` are, and the page reads them whenever the playhead is live. Four rules in
+`test/architecture.test.ts` (`DECK-A01` … `A04`) keep it that way, and every rule that held
+the previous dashboard to the same standard now scans both bundles.
+
+Deck is built from scratch: its own tokens, six tones, two typefaces, no component library.
+`apps/deck/DESIGN.md` says why each choice was made.
 
 The dashboard is a *view and a set of state transitions*, not a second copy of the
 workflow. Every read comes from the server; every write calls the same use case
@@ -390,6 +420,7 @@ GET /api/v1/runs/:runId/dag
 GET /api/v1/runs/:runId/tasks/:taskId
 GET /api/v1/runs/:runId/artifacts
 GET /api/v1/runs/:runId/artifacts/:artifact
+GET /api/v1/runs/:runId/events                    the audit log in bulk, oldest first, capped and saying so
 GET /api/v1/runs/:runId/telemetry
 GET /api/v1/runs/:runId/collaboration
 GET /api/v1/runs/:runId/approval

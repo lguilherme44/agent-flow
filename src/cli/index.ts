@@ -270,6 +270,7 @@ export async function main(argv: string[]): Promise<number> {
     .option('--host <host>', `address to bind (default ${DEFAULT_UI_HOST})`)
     .option('--no-open', 'do not open a browser')
     .option('--depth <n>', 'how deep to look for projects (default: ui.workspaceDepth, or 2)')
+    .option('--classic', 'serve the previous dashboard instead of Deck')
     .action(async (root: string | undefined, options: UiOptions, command: Command) => {
       exitCode = await runUiCommand(root, options, globalOptions(command));
     });

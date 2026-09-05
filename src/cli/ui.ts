@@ -29,6 +29,22 @@ export interface UiOptions {
   readonly host?: string;
   readonly open?: boolean;
   readonly depth?: string;
+  /** Serve the previous dashboard (`apps/web`) instead of Deck. */
+  readonly classic?: boolean;
+}
+
+/**
+ * Which dashboard bundle is on the wire.
+ *
+ * Two, deliberately, for one release: Deck is the surface `agent-flow ui` opens, and the
+ * previous dashboard stays one flag away so nothing anybody bookmarked stops working the
+ * day Deck lands. Both read the same API; the server does not know which one it serves.
+ */
+export type DashboardFlavour = 'deck' | 'classic';
+
+export interface ResolvedWebDir {
+  readonly path: string;
+  readonly flavour: DashboardFlavour;
 }
 
 /**
@@ -107,7 +123,8 @@ export async function runUiCommand(
 
     const registry = registryOf(discovered.projects);
 
-    const webDir = resolveWebDir();
+    const web = resolveWebDir(options.classic === true ? 'classic' : 'deck');
+    const webDir = web?.path;
     const server = await buildServer({
       fs,
       clock,
@@ -153,14 +170,26 @@ export async function runUiCommand(
       );
     }
 
-    if (webDir === undefined) {
+    if (web === undefined) {
       // Said plainly rather than served as a blank page: the API is up and the
       // dashboard has not been built.
       lines.push(
-        'The dashboard bundle is not built, so only the API is being served.',
-        'Build it with: npm run build:web',
+        'No dashboard bundle is built, so only the API is being served.',
+        'Build one with: npm run build:deck   (or npm run build:web for the previous dashboard)',
         '',
       );
+    } else if (options.classic === true && web.flavour === 'classic') {
+      lines.push('Dashboard: the previous one, as asked. Drop --classic for Deck.', '');
+    } else if (web.flavour === 'classic') {
+      // Asked for Deck, got the fallback. Named, so nobody wonders why the page
+      // looks the way it did last week.
+      lines.push(
+        'Dashboard: the previous one — the Deck bundle is not built.',
+        'Build it with: npm run build:deck',
+        '',
+      );
+    } else {
+      lines.push('Dashboard: Deck. The previous dashboard is one flag away: --classic', '');
     }
 
     if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
@@ -296,12 +325,24 @@ export async function resolveAllowedHosts(options: {
  * running from a published package — the same problem `resolvePromptsDir`
  * already solves, and solved the same way rather than by guessing at runtime.
  */
-export function resolveWebDir(): string | undefined {
+export function resolveWebDir(preferred: DashboardFlavour = 'deck'): ResolvedWebDir | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
 
-  for (const candidate of ['../../apps/web/dist', '../../../apps/web/dist', '../web']) {
-    const path = resolve(join(here, candidate));
-    if (existsSync(join(path, 'index.html'))) return path;
+  const candidates: Record<DashboardFlavour, readonly string[]> = {
+    deck: ['../../apps/deck/dist', '../../../apps/deck/dist', '../deck'],
+    classic: ['../../apps/web/dist', '../../../apps/web/dist', '../web'],
+  };
+
+  // The one asked for first; the other as a fallback, never silently — the caller
+  // prints which one it got. A person who typed `--classic` and has no classic
+  // bundle still gets a dashboard rather than a blank origin.
+  const order: DashboardFlavour[] = preferred === 'deck' ? ['deck', 'classic'] : ['classic', 'deck'];
+
+  for (const flavour of order) {
+    for (const candidate of candidates[flavour]) {
+      const path = resolve(join(here, candidate));
+      if (existsSync(join(path, 'index.html'))) return { path, flavour };
+    }
   }
 
   return undefined;

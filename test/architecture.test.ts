@@ -32,6 +32,20 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
+/**
+ * Both dashboards.
+ *
+ * Deck (`apps/deck`) is what `agent-flow ui` opens; the previous dashboard (`apps/web`)
+ * stays behind `--classic`. Every rule about what the browser may decide is a rule about
+ * *a browser*, so each applies to both — a second bundle that were free to rank, lane or
+ * judge would be the M8 defect with a different directory name.
+ */
+const BROWSER_SRC = ['apps/web/src', 'apps/deck/src'] as const;
+
+function browserFiles(): string[] {
+  return BROWSER_SRC.flatMap((dir) => sourceFiles(dir));
+}
+
 function read(file: string): { path: string; text: string } {
   return { path: relative(ROOT, file), text: readFileSync(file, 'utf8') };
 }
@@ -4071,7 +4085,7 @@ describe('the runner that runs is the one the member declares (§8, I-42)', () =
  * decided staleness there, which §59 forbids by name. A rule is what stops it coming back.
  */
 describe('the browser renders verdicts and never reaches them (§47, §48, §52)', () => {
-  const WEB = sourceFiles('apps/web/src').map(read);
+  const WEB = browserFiles().map(read);
 
   it('reimplements no decision the core owns', () => {
     // The functions that answer "may this proceed", "does this block", "is this stale".
@@ -4148,7 +4162,7 @@ describe('the browser renders verdicts and never reaches them (§47, §48, §52)
  * it easy.
  */
 describe('the control plane projects, and the browser renders (M8-A01 … A18)', () => {
-  const WEB = sourceFiles('apps/web/src').map(read);
+  const WEB = browserFiles().map(read);
   const PROJECTIONS = ['src/core/attention.ts', 'src/core/board.ts'];
 
   /**
@@ -4163,7 +4177,7 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
    * a rule about what production code decides is the same distinction the reachability
    * rule already draws.
    */
-  const DECIDES_A_TONE = 'apps/web/src/lib/status.ts';
+  const DECIDES_A_TONE = new Set(['apps/web/src/lib/status.ts', 'apps/deck/src/lib/tone.ts']);
   const isTest = (path: string): boolean => /\.test\.tsx?$/.test(path);
 
   it('M8-A02 — no lane decision exists under apps/web', () => {
@@ -4184,7 +4198,7 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
       // A `case 'review_required':` in the browser is a task state machine, whatever it
       // returns. Rendering reads `card.lane`, which is a string the server chose.
       if (
-        path !== DECIDES_A_TONE &&
+        !DECIDES_A_TONE.has(path) &&
         !isTest(path) &&
         /case\s+'(?:review_required|interrupted|awaiting_integration)'/.test(literals)
       ) {
@@ -4196,7 +4210,7 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
   });
 
   it('M8-A03 — exactly one task-to-lane projection exists', () => {
-    const definers = [...sourceFiles('src'), ...sourceFiles('apps/web/src')]
+    const definers = [...sourceFiles('src'), ...browserFiles()]
       .map(read)
       .filter(({ text }) => /export function boardLane\b/.test(codeOnly(text)))
       .map(({ path }) => path);
@@ -4226,7 +4240,7 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
   });
 
   it('M8-A05 — exactly one attention projection exists', () => {
-    const definers = [...sourceFiles('src'), ...sourceFiles('apps/web/src')]
+    const definers = [...sourceFiles('src'), ...browserFiles()]
       .map(read)
       .filter(({ text }) => /export function projectAttention\b/.test(codeOnly(text)))
       .map(({ path }) => path);
@@ -4300,7 +4314,7 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
     // the walker makes this test fail rather than making the suite quietly narrower.
     expect(codeOnly(read(planted[0] as string).text)).toMatch(/function decideQuality\b/);
     // The fixture is outside every scanned tree, so the real rules never see it.
-    expect(sourceFiles('apps/web/src').map((file) => relative(ROOT, file))).not.toContain(
+    expect(browserFiles().map((file) => relative(ROOT, file))).not.toContain(
       'test/fixtures/browser-scan/planted.tsx',
     );
   });
@@ -4353,7 +4367,7 @@ describe('no provider name decides a model question in the browser (Issue #21)',
     // decides is the same distinction.
     const offenders: string[] = [];
 
-    for (const file of sourceFiles('apps/web/src')) {
+    for (const file of browserFiles()) {
       const { path, text } = read(file);
       if (isTest(path)) continue;
 
@@ -4402,7 +4416,7 @@ describe('no provider name decides a model question in the browser (Issue #21)',
     const contract = codeOnly(read(join(ROOT, 'src/contracts/model-identity.ts')).text);
     expect(contract).toMatch(/export function modelIdentity\b/);
 
-    const definers = sourceFiles('apps/web/src')
+    const definers = browserFiles()
       .map(read)
       .filter(({ text }) => /(?:function|const)\s+modelIdentity\b/.test(codeOnly(text)))
       .map(({ path }) => path);
@@ -4577,12 +4591,56 @@ describe('the forge is a destination, never an authority (M7-A01 … A15)', () =
   });
 
   it('M7-A12 — the browser derives no delivery status', () => {
-    const web = sourceFiles('apps/web/src').map(read);
+    const web = browserFiles().map(read);
     const offenders = web
       .filter(({ text }) => /(?:function|const)\s+projectDelivery\b/.test(codeOnly(text)))
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
+  });
+
+  /**
+   * Deck — the recorder draws the log and decides nothing.
+   *
+   * Deck's one novelty is a playhead: drag it back and the screen shows what the audit log
+   * said was true at that instant. That fold lives in `apps/deck/src/lib/replay.ts`, and the
+   * rules below are what keep it a *rendering* of the log rather than a second run engine.
+   */
+  it('DECK-A01 — the replay fold is pure: no React, no network, no cache', () => {
+    const specifiers = importSpecifiers(read(join(ROOT, 'apps/deck/src/lib/replay.ts')).text);
+    const forbidden = specifiers.filter(
+      (specifier) => /^react/.test(specifier) || /\/(?:api|store|live)$/.test(specifier),
+    );
+    expect(forbidden).toEqual([]);
+    // It reads the contract and the clock helpers, and nothing else.
+    expect(specifiers.every((specifier) => specifier.startsWith('@contracts/') || specifier === './time')).toBe(true);
+  });
+
+  it('DECK-A02 — the fold carries task outcomes verbatim and never enumerates them', () => {
+    // A `TaskState` import would let the fold narrow a status the log wrote into a state the
+    // browser recognises, and drop the ones it does not. `outcome: string` is the contract.
+    // `codeOnly`: the module's own comment names the type to say why it is not used, and
+    // prose is not a decision.
+    const fold = codeOnly(read(join(ROOT, 'apps/deck/src/lib/replay.ts')).text);
+    expect(fold).not.toMatch(/\bTaskState\b/);
+    expect(fold).toMatch(/readonly outcome: string;/);
+  });
+
+  it('DECK-A03 — the cache has no write API: the browser asks again, it never remembers', () => {
+    const store = codeOnly(read(join(ROOT, 'apps/deck/src/lib/store.ts')).text);
+    expect(store).not.toMatch(/export function (?:set|mutate|write|put)[A-Za-z]*\(/);
+    expect(store).toMatch(/export function invalidate\(/);
+  });
+
+  it('DECK-A04 — one tone file, and every task-state literal the deck branches on is in it', () => {
+    // The M8-A02 exemption for Deck is `lib/tone.ts`; this pins that the exemption is used
+    // for what it is for. A second file switching on `'completed'` is a second palette.
+    const definers = sourceFiles('apps/deck/src')
+      .map(read)
+      .filter(({ path }) => !/\.test\.tsx?$/.test(path))
+      .filter(({ text }) => /case\s+'completed'/.test(withoutComments(text)))
+      .map(({ path }) => path);
+    expect(definers).toEqual(['apps/deck/src/lib/tone.ts']);
   });
 
   it('M7-A13 — there is one delivery projection', () => {

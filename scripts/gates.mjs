@@ -150,6 +150,14 @@ export const GATES = [
     why: 'The dashboard is a separate workspace with its own compiler settings. It was absent from CI’s check job until M8, so a type error in browser code only surfaced when somebody ran `agent-flow ui`.',
   },
   {
+    id: 'typecheck:deck',
+    lane: 'node',
+    policy: 'required-local',
+    recurrence: 'per-change',
+    command: 'npm run typecheck:deck',
+    why: 'Deck is its own workspace with its own compiler settings, held to the server’s contracts through `@contracts`.',
+  },
+  {
     id: 'typecheck:e2e',
     lane: 'node',
     policy: 'required-local',
@@ -182,6 +190,14 @@ export const GATES = [
     why: 'The dashboard’s components, in jsdom.',
   },
   {
+    id: 'test:deck',
+    lane: 'node',
+    policy: 'required-local',
+    recurrence: 'per-change',
+    command: 'npm run test:deck',
+    why: 'Deck’s pure modules — the replay fold, the time scale, the router — and its components, in jsdom.',
+  },
+  {
     id: 'build',
     lane: 'node',
     policy: 'required-local',
@@ -195,7 +211,15 @@ export const GATES = [
     policy: 'required-local',
     recurrence: 'per-change',
     command: 'npm run build:web',
-    why: 'The dashboard ships as a bundle, and the server serves that bundle.',
+    why: 'The previous dashboard ships as a bundle behind --classic, and the server serves that bundle.',
+  },
+  {
+    id: 'build:deck',
+    lane: 'node',
+    policy: 'required-local',
+    recurrence: 'per-change',
+    command: 'npm run build:deck',
+    why: 'Deck is what `agent-flow ui` opens. It ships as a bundle, and the server serves that bundle.',
   },
 
   // ── browser ────────────────────────────────────────────────────────────────────
@@ -227,7 +251,7 @@ export const GATES = [
     policy: 'required-local',
     recurrence: 'per-change',
     command: 'npm run test:packaging',
-    needs: ['build', 'build:web'],
+    needs: ['build', 'build:web', 'build:deck'],
     why: 'The one gate that was red for a whole milestone. It answers a question no suite inside the checkout can: does the *tarball* work, with the source tree hidden.',
   },
   {
@@ -236,7 +260,7 @@ export const GATES = [
     policy: 'required-release',
     recurrence: 'per-release',
     command: 'npm run test:packaging:browser',
-    needs: ['build', 'build:web'],
+    needs: ['build', 'build:web', 'build:deck'],
     why: 'The same tarball, driven by a browser that knows nothing about this codebase. Local rather than CI on purpose — gsd-browser is a pinned native binary with no published checksum, and CI already has a deterministic browser gate.',
   },
 

@@ -4,6 +4,7 @@ import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import { buildServer, type RunningServer } from '../../src/server/server.js';
+import { MAX_EVENT_LOG_LINES } from '../../src/server/run-reader.js';
 import { registryOf } from '../../src/server/project-registry.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { ContextTelemetryRecorder } from '../../src/app/context-telemetry-recorder.js';
@@ -24,6 +25,7 @@ import type {
   RoleRouteView,
   RunDagView,
   RunDetailView,
+  RunEventLogView,
   RunSummaryView,
   RunnerHealthView,
   RunnerView,
@@ -362,6 +364,52 @@ describe('UI-04 — the run read API', () => {
 
     expect(tasks.map((task) => task.id)).toEqual(['TASK-001', 'FIX-001']);
     expect(tasks[0]?.state).toBe('completed');
+  });
+
+  it('hands over the audit log as written, oldest first, stamped with its project', async () => {
+    const { server, run } = await serve();
+
+    const response = await server.app.inject(`/api/v1/runs/${run.runId}/events`);
+    expect(response.statusCode).toBe(200);
+
+    const log = response.json<RunEventLogView>();
+    expect(log.runId).toBe(run.runId);
+    expect(log.projectId).toBe('demo');
+    expect(log.truncated).toBe(false);
+    expect(log.total).toBe(log.events.length);
+    // `createRun` writes the first line; `serve()` appends the discovery completion.
+    expect(log.events.map((event) => event.type)).toEqual(['run_created', 'stage_completed']);
+    // The detail crosses intact — it is the same object the SSE bridge already spreads.
+    expect(log.events[1]?.detail).toMatchObject({ stage: 'discovery', runner: 'claude' });
+  });
+
+  it('answers 404 for the audit log of a run that does not exist', async () => {
+    const { server } = await serve();
+
+    const response = await server.app.inject('/api/v1/runs/AF-2026-999/events');
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('keeps the newest audit lines when the log outgrows the cap, and says so', async () => {
+    const { server, run, store } = await serve();
+
+    // Two already exist; the cap is generous, so the test pushes past it deliberately
+    // rather than lowering it — the constant is the product's, not the test's.
+    for (let index = 0; index < MAX_EVENT_LOG_LINES; index += 1) {
+      await store.appendEvent(run.runId, 'stage_context_measured', { index });
+    }
+
+    const log = (
+      await server.app.inject(`/api/v1/runs/${run.runId}/events`)
+    ).json<RunEventLogView>();
+
+    expect(log.truncated).toBe(true);
+    expect(log.total).toBe(MAX_EVENT_LOG_LINES + 2);
+    expect(log.events).toHaveLength(MAX_EVENT_LOG_LINES);
+    // The origin was cut, not the present.
+    expect(log.events[0]?.type).not.toBe('run_created');
+    expect(log.events.at(-1)?.detail).toMatchObject({ index: MAX_EVENT_LOG_LINES - 1 });
   });
 
   it('shows a corrective task as corrective rather than as covering a requirement', async () => {

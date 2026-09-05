@@ -1,0 +1,90 @@
+/*
+ * Deck's vocabulary. One dark, warm ground; six tones; two typefaces.
+ *
+ * Every colour a component uses is one of these names. The six tones are the only way a
+ * status reaches a pixel, and `lib/tone.ts` is the only place a status becomes a tone.
+ */
+:root {
+  color-scheme: dark;
+
+  --bg: #0a0b0e;
+  --bg-1: #0f1116;
+  --bg-2: #151821;
+  --bg-3: #1b1f2a;
+  --line: #20242f;
+  --line-2: #2b3040;
+
+  --ink: #ece9e1;
+  --ink-2: #a8acb7;
+  --ink-3: #6f7484;
+  --ink-4: #454a59;
+
+  --ok: #4fd18b;
+  --ok-dim: rgba(79, 209, 139, 0.16);
+  --live: #5fb2ff;
+  --live-dim: rgba(95, 178, 255, 0.16);
+  --warn: #f6b74a;
+  --warn-dim: rgba(246, 183, 74, 0.16);
+  --bad: #ff6767;
+  --bad-dim: rgba(255, 103, 103, 0.16);
+  --idle: #7d8294;
+  --idle-dim: rgba(125, 130, 148, 0.14);
+  --ghost: #3e4351;
+  --ghost-dim: rgba(62, 67, 81, 0.22);
+
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --fs-0: 11px;
+  --fs-1: 12px;
+  --fs-2: 13px;
+  --fs-3: 15px;
+  --fs-4: 18px;
+  --fs-5: 24px;
+  --fs-6: 32px;
+
+  --r-1: 3px;
+  --r-2: 6px;
+  --r-3: 10px;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  --topbar: 48px;
+
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--warn);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --t-fast: 120ms;
+  --t-med: 220ms;
+}
+
+/* Tone → colour, once. A component sets `data-tone` and reads these. */
+[data-tone='ok'] {
+  --tone: var(--ok);
+  --tone-dim: var(--ok-dim);
+}
+[data-tone='live'] {
+  --tone: var(--live);
+  --tone-dim: var(--live-dim);
+}
+[data-tone='warn'] {
+  --tone: var(--warn);
+  --tone-dim: var(--warn-dim);
+}
+[data-tone='bad'] {
+  --tone: var(--bad);
+  --tone-dim: var(--bad-dim);
+}
+[data-tone='idle'] {
+  --tone: var(--idle);
+  --tone-dim: var(--idle-dim);
+}
+[data-tone='ghost'] {
+  --tone: var(--ghost);
+  --tone-dim: var(--ghost-dim);
+}

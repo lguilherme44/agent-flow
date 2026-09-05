@@ -11,6 +11,7 @@ import {
   FailedAttemptSchema,
   TaskAttemptResultSchema,
   type RunDetailView,
+  type RunEventLogView,
   type RunProjection,
   type RunRefView,
   type RunStatus,
@@ -49,6 +50,16 @@ import type { RegisteredProject } from './project-registry.js';
 
 /** How much artifact text the API will hand over in one response. */
 export const MAX_ARTIFACT_BYTES = 512 * 1024;
+
+/**
+ * How many audit lines `/events` hands over at once.
+ *
+ * Generous on purpose: the largest real log measured while this was written held 211
+ * lines, and a run that reaches five thousand is a run somebody should be looking at in
+ * full. The cap exists so a pathological file cannot make one request hold the server,
+ * and its effect is reported rather than silent (`RunEventLogView.truncated`).
+ */
+export const MAX_EVENT_LOG_LINES = 5_000;
 
 /** Statuses a run does not leave on its own. What "last run" means (§81). */
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
@@ -414,6 +425,31 @@ export class RunReader {
    */
   async events(project: RegisteredProject, runId: string): Promise<RunEvent[]> {
     return this.storeFor(project).readEventsBestEffort(runId);
+  }
+
+  /**
+   * The audit log for the browser, bounded and stamped with whose it is (Deck).
+   *
+   * `null` for a run that does not exist, so the route answers 404 rather than an empty
+   * log — an empty log is a real thing a run can have for the first second of its life,
+   * and the two must not read the same.
+   *
+   * Keeps the newest lines when the cap bites, and says so: see `RunEventLogView`.
+   */
+  async eventLog(project: RegisteredProject, runId: string): Promise<RunEventLogView | null> {
+    const state = await this.loadState(project, runId);
+    if (state === null) return null;
+
+    const all = await this.events(project, runId);
+    const truncated = all.length > MAX_EVENT_LOG_LINES;
+
+    return {
+      runId,
+      projectId: project.id,
+      events: truncated ? all.slice(all.length - MAX_EVENT_LOG_LINES) : all,
+      total: all.length,
+      truncated,
+    };
   }
 
   async stages(project: RegisteredProject, runId: string): Promise<StageViewResponse[] | null> {

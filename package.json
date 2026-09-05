@@ -13,6 +13,7 @@
   "files": [
     "dist",
     "prompts",
+    "apps/deck/dist",
     "apps/web/dist"
   ],
   "scripts": {
@@ -22,7 +23,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src test bin apps/web/src",
+    "lint": "eslint src test bin apps/web/src apps/deck/src",
     "gate:node": "node scripts/gate.mjs node",
     "gate:browser": "node scripts/gate.mjs browser",
     "gate:visual": "node scripts/gate.mjs visual",
@@ -32,6 +33,10 @@
     "verify": "node scripts/gate.mjs verify",
     "verify:release": "node scripts/gate.mjs verify --release",
     "check": "node scripts/gate.mjs node",
+    "build:deck": "npm run build --workspace @agent-flow/deck",
+    "dev:deck": "npm run dev --workspace @agent-flow/deck",
+    "test:deck": "npm run test --workspace @agent-flow/deck",
+    "typecheck:deck": "npm run typecheck --workspace @agent-flow/deck",
     "build:web": "npm run build --workspace @agent-flow/web",
     "dev:web": "npm run dev --workspace @agent-flow/web",
     "test:web": "npm run test --workspace @agent-flow/web",

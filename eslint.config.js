@@ -45,7 +45,7 @@ export default tseslint.config(
     // rather than not linted at all: unused variables, unreachable code and bad
     // imports are worth catching in fifteen new files, and `tsc --noEmit` in the
     // web build covers what needs types.
-    files: ['apps/web/**/*.{ts,tsx}'],
+    files: ['apps/web/**/*.{ts,tsx}', 'apps/deck/**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: { projectService: false, project: false },
     },
@@ -60,6 +60,8 @@ export default tseslint.config(
       'node_modules/**',
       'apps/web/dist/**',
       'apps/web/node_modules/**',
+      'apps/deck/dist/**',
+      'apps/deck/node_modules/**',
     ],
   },
 );

@@ -332,7 +332,7 @@ agent-flow approve       # o gate — vinculado a este plano, não ao próximo
 agent-flow run
 agent-flow review
 
-agent-flow ui            # o dashboard local em 127.0.0.1:4782
+agent-flow ui            # Deck, o dashboard local, em 127.0.0.1:4782
 ```
 
 Um dashboard sobre vários repositórios:
@@ -340,6 +340,12 @@ Um dashboard sobre vários repositórios:
 ```bash
 agent-flow ui ~/wk
 ```
+
+`ui` abre o **Deck**: o que precisa de uma pessoa em todos os projetos, uma raia por
+projeto, e uma página de run construída em volta de um *gravador* — arraste o playhead para
+trás pelo log de auditoria e o grafo, a task e o feed mostram o que era verdade naquele
+instante. O dashboard anterior fica a uma flag de distância, `agent-flow ui --classic`, e lê
+a mesma API.
 
 Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela produz:
 [`docs/example-walkthrough.md`](docs/example-walkthrough.md) (em inglês).
@@ -356,7 +362,7 @@ Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela p
 | `reject` · `revise "<instrução>"` | Encerra um run, ou replaneja com orientação. |
 | `run` · `task TASK-004` · `retry TASK-004` | Executa o plano aprovado. |
 | `review` | Roda a validação, inspeciona o código e o julga contra o SDD. No modo worktree os três leem a integration tree, sob o lock do run. `--fix` transforma os findings em tasks e revisa o plano corrigido. |
-| `ui [root]` | Serve o dashboard local em `127.0.0.1:4782`. Com um diretório, serve todo repositório inicializado abaixo dele como workspace. Veja [`docs/web-ui.md`](docs/web-ui.md). |
+| `ui [root]` | Serve o Deck em `127.0.0.1:4782`. Com um diretório, serve todo repositório inicializado abaixo dele como workspace. `--classic` serve o dashboard anterior. Veja [`docs/web-ui.md`](docs/web-ui.md). |
 | `clean` | Remove estado de runs antigos, e o namespace Git que vem junto: os worktrees e as refs de attempt deste run, nunca nada de terceiros. Mantém os cinco runs mais recentes, e nunca o ativo sem `--force`. Uma integration branch que não foi mergeada em lugar nenhum é **mantida e reportada** — `--branches` é a única flag que apaga trabalho. |
 
 `--dry-run` mostra o roteamento sem invocar nada, e imprime a concorrência pedida e a
@@ -945,12 +951,14 @@ Os documentos abaixo estão em inglês.
 ```bash
 npm install
 npm run build          # o bundle da CLI
-npm run build:web      # o bundle do dashboard
+npm run build:deck     # o Deck, o dashboard que o `ui` abre
+npm run build:web      # o dashboard anterior, atrás de `ui --classic`
 
 npm run verify         # todos os gates que este repositório exige localmente
 npm run check          # só a lane node — e ela diz o que NÃO rodou
 
-npm run dev:web        # dashboard contra um `agent-flow ui` rodando
+npm run dev:deck       # Deck contra um `agent-flow ui` rodando, em :4784
+npm run dev:web        # o dashboard anterior contra o mesmo servidor, em :4783
 ```
 
 Depois do build, a CLI roda do próprio checkout como `node dist/bin/agent-flow.js`, ou

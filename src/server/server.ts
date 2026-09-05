@@ -469,6 +469,21 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return content === null ? notFound(reply, 'no such artifact') : content;
   });
 
+  /**
+   * The audit trail, in bulk (Deck).
+   *
+   * The stream at `/events` carries what happens *next*; this carries what already
+   * happened, for a reader who wants to scrub back through it. Same lines, same
+   * `detail`, same trust boundary — a projection of nothing, a copy of the file.
+   */
+  app.get('/api/v1/runs/:runId/events', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const log = await reader.eventLog(scope.project, scope.runId);
+    return log === null ? notFound(reply, 'no such run') : log;
+  });
+
   app.get('/api/v1/runs/:runId/telemetry', async (request, reply) => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;

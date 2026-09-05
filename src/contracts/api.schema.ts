@@ -7,6 +7,7 @@ import type {
   Degradation,
   PipelineStage,
   PipelineStatus,
+  RunEvent,
   RunStatus,
   WorkflowClass,
 } from './state.schema.js';
@@ -533,6 +534,32 @@ export interface RunDagView {
     readonly message: string;
     readonly cycle?: string[];
   };
+}
+
+/**
+ * The run's audit log, as it was written (Deck: the recorder).
+ *
+ * **A copy of the trail, not a projection over it.** Every other view in this file folds
+ * `events.jsonl` into an answer — a stage status, a lane, a priority. This one hands the
+ * lines over so a surface can draw *when* each fact became true and let a person scrub back
+ * to it. Nothing the browser draws from this is authoritative: the moment it asks "what is
+ * the state now" it asks `/tasks` and `/stages`, which are the server's answer.
+ *
+ * The same lines already cross this boundary one at a time, spread into the SSE payload
+ * (`event-bridge.ts`); this is the batch form for a reader who arrived after they happened.
+ *
+ * Bounded, and the bound is reported. A log that outgrows it keeps its **newest** lines —
+ * the present is what an operator is usually asking about — and `truncated` says the
+ * origin was cut, so a timeline whose first tick is not `run_created` can say why.
+ */
+export interface RunEventLogView {
+  readonly runId: string;
+  readonly projectId: string;
+  /** Oldest first, as the file is. */
+  readonly events: RunEvent[];
+  /** How many lines the file holds, whether or not they all fit. */
+  readonly total: number;
+  readonly truncated: boolean;
 }
 
 export interface ArtifactView {

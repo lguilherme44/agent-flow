@@ -367,7 +367,7 @@ agent-flow approve       # the gate — bound to this plan, not the next one
 agent-flow run
 agent-flow review
 
-agent-flow ui            # the local dashboard on 127.0.0.1:4782
+agent-flow ui            # Deck, the local dashboard, on 127.0.0.1:4782
 ```
 
 One dashboard over several repositories:
@@ -375,6 +375,11 @@ One dashboard over several repositories:
 ```bash
 agent-flow ui ~/wk
 ```
+
+`ui` opens **Deck**: what needs a person across every project, one lane per project, and
+a run page built around a *recorder* — drag the playhead back through the audit log and the
+graph, the task and the feed show what was true at that instant. The previous dashboard is
+one flag away, `agent-flow ui --classic`, and reads the same API.
 
 Walked through with a real four-task feature, a DAG and the artifacts it produces:
 [`docs/example-walkthrough.md`](docs/example-walkthrough.md).
@@ -391,7 +396,7 @@ Walked through with a real four-task feature, a DAG and the artifacts it produce
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
 | `review` | Run validation, inspect the code, judge it against the SDD. In worktree mode all three read the integration tree, under the run lock. `--fix` turns findings into tasks and reviews the corrected plan. |
-| `ui [root]` | Serve the local dashboard on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. See [`docs/web-ui.md`](docs/web-ui.md). |
+| `ui [root]` | Serve Deck on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. `--classic` serves the previous dashboard instead. See [`docs/web-ui.md`](docs/web-ui.md). |
 | `clean` | Remove old run state, and the Git namespace that goes with it: this run's worktrees and attempt refs, never anything foreign. Keeps the five most recent runs, and never the active one without `--force`. An integration branch that is merged nowhere is **kept and reported** — `--branches` is the only flag that deletes work. |
 
 `--dry-run` shows the routing without invoking anything, and prints requested versus
@@ -972,12 +977,14 @@ Full roadmap, including what MVP 1 established and what is deliberately out of s
 ```bash
 npm install
 npm run build          # the CLI bundle
-npm run build:web      # the dashboard bundle
+npm run build:deck     # Deck, the dashboard `ui` opens
+npm run build:web      # the previous dashboard, behind `ui --classic`
 
 npm run verify         # every gate this repository requires locally
 npm run check          # the node lane only — and it says what it did not run
 
-npm run dev:web        # dashboard against a running `agent-flow ui`
+npm run dev:deck       # Deck against a running `agent-flow ui`, on :4784
+npm run dev:web        # the previous dashboard against the same server, on :4783
 ```
 
 Once built, the CLI runs from the checkout as `node dist/bin/agent-flow.js`, or
