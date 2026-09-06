@@ -48,7 +48,7 @@ const SDD_STAGE: StageDefinition = {
   artifact: 'sdd',
 };
 
-async function harness(options: { runner?: FakeAgentRunner; prompt?: string } = {}) {
+async function harness(options: { runner?: FakeAgentRunner; prompt?: string; recordPrompts?: boolean } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const runner = options.runner ?? new FakeAgentRunner('claude');
@@ -66,7 +66,9 @@ async function harness(options: { runner?: FakeAgentRunner; prompt?: string } = 
     fs,
     clock,
     store,
-    config,
+    config: options.recordPrompts === true
+      ? { ...config, execution: { ...config.execution, recordPrompts: true } }
+      : config,
     capabilities: CAPABILITIES,
     promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
     getRunner: () => runner,
@@ -103,6 +105,23 @@ describe('running a stage', () => {
     await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
 
     expect(await fs.readFile(runPaths(PROJECT, run.runId).sdd)).toBe('# SDD body');
+  });
+
+  it('keeps the prompt out of the log unless the operator asked for it (§95)', async () => {
+    // A prompt is a copy of whatever the stage was given — repository content, a plan, a
+    // failure packet. Recording one by default would leave that lying in the run directory.
+    const quiet = await harness();
+    quiet.runner.pushText('ok');
+    await quiet.stageRunner.run(SDD_STAGE, quiet.run.runId, { featureRequest: 'recurring bookings' });
+    expect(await quiet.fs.readFile(runPaths(PROJECT, quiet.run.runId).log('sdd'))).not.toContain('recurring bookings');
+
+    const recording = await harness({ recordPrompts: true });
+    recording.runner.pushText('ok');
+    await recording.stageRunner.run(SDD_STAGE, recording.run.runId, { featureRequest: 'recurring bookings' });
+    const log = await recording.fs.readFile(runPaths(PROJECT, recording.run.runId).log('sdd'));
+    // The input the agent acted on, which no other record holds.
+    expect(log).toContain('--- prompt (redacted) ---');
+    expect(log).toContain('recurring bookings');
   });
 
   it('writes a per-stage log', async () => {

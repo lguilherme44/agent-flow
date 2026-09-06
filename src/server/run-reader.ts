@@ -17,6 +17,8 @@ import {
   type RunStatus,
   type RunSummaryView,
   type RunState,
+  type PipelineStage,
+  type StageLogView,
   type StageViewResponse,
   type Task,
   type TaskDetailView,
@@ -60,6 +62,25 @@ export const MAX_ARTIFACT_BYTES = 512 * 1024;
  * and its effect is reported rather than silent (`RunEventLogView.truncated`).
  */
 export const MAX_EVENT_LOG_LINES = 5_000;
+
+/**
+ * How much of one stage's log a browser may pull.
+ *
+ * Larger than the event cap because this is a deliberate read of one stage rather than the
+ * whole run's tape, and the reason to open it is usually a failure whose runner output is
+ * the long part. Bounded all the same: a runner that looped can write megabytes, and a
+ * dashboard is not a pager.
+ */
+export const MAX_STAGE_LOG_LINES = 20_000;
+
+/**
+ * The stages whose log belongs to a task, not to the stage.
+ *
+ * Both run once per task and write one file each — `implementation-TASK-001-attempt-1`,
+ * `code-review-TASK-001-1` — which the task view already serves. Naming them keeps the
+ * stage log from answering "empty" about a stage that produced plenty.
+ */
+const PER_TASK_STAGES: ReadonlySet<string> = new Set(['implementation', 'code-review']);
 
 /** Statuses a run does not leave on its own. What "last run" means (§81). */
 const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
@@ -968,6 +989,33 @@ export class RunReader {
    * asking the filesystem is the answer that cannot disagree with what is on disk. Bounded
    * by `MAX_SUPPORTED_ATTEMPT`, and it stops at the first gap.
    */
+  /**
+   * One stage's log, from the file the stage runner wrote (§95).
+   *
+   * The whole output, not the two-kilobyte excerpt the `stage_failed` event carries. It
+   * was already redacted before it was written — `StageRunner` redacts once, ahead of both
+   * persistence paths — so this reads bytes that are safe to serve and does no second
+   * opinion about that.
+   */
+  async stageLog(project: RegisteredProject, runId: string, stage: PipelineStage): Promise<StageLogView | undefined> {
+    if (await this.loadState(project, runId) === null) return undefined;
+
+    if (PER_TASK_STAGES.has(stage)) {
+      return { stage, lines: [], present: false, total: 0, truncated: false, perTask: true };
+    }
+
+    const path = runPaths(project.path, runId).log(stage);
+    if (!(await this.options.fs.exists(path))) {
+      return { stage, lines: [], present: false, total: 0, truncated: false };
+    }
+
+    const all = linesOf(await this.options.fs.readFile(path));
+    // The newest lines, as the event log does: what a stage was doing when it stopped is
+    // the half somebody opening this is asking about.
+    const lines = all.length > MAX_STAGE_LOG_LINES ? all.slice(-MAX_STAGE_LOG_LINES) : all;
+    return { stage, lines, present: true, total: all.length, truncated: lines.length < all.length };
+  }
+
   private async readAttemptLogs(
     project: RegisteredProject,
     runId: string,

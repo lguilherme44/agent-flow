@@ -488,6 +488,26 @@ export class StageRunner {
         `reasoning=${resolved.reasoning} startedAt=${startedAt}`,
     ];
 
+    /**
+     * The input, when the operator asked for it (§95, `execution.recordPrompts`).
+     *
+     * Every other line in this file describes what came *back*. An agent that did
+     * something inexplicable was told something, and without this the thing it was told
+     * is unrecoverable — the prompt is assembled from a dozen sources and never kept.
+     *
+     * Redacted with the same context and the same function as the runner's output, so
+     * there is no path by which a credential reaches the log through the input that does
+     * not through the output. Off by default: a prompt is a copy of whatever the stage
+     * was given, and copies of repository content are not free to leave lying around.
+     */
+    if (config.execution.recordPrompts) {
+      logLines.push(
+        '--- prompt (redacted) ---',
+        redactEvidence(promptText, this.redactionContext(options)),
+        '--- end prompt ---',
+      );
+    }
+
     // **`repair`, not `attempt` (AR §4.4).** This counts re-prompts for a
     // well-formed answer inside one invocation of this stage; an *attempt* is one
     // agent invocation for one task in one prepared workspace, and the task's own

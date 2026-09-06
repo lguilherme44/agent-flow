@@ -29,6 +29,7 @@ import type {
   RunSummaryView,
   RunnerHealthView,
   RunnerModelsView,
+  StageLogView,
   RunnerTypeView,
   RunnerView,
   StageViewResponse,
@@ -593,6 +594,29 @@ describe('UI-04 — the run read API', () => {
     for (const field of types.flatMap(({ fields }) => fields)) {
       expect(Object.keys(field).filter((key) => !['name', 'required', 'secretEnv'].includes(key))).toEqual([]);
     }
+  });
+
+  it("serves a stage's whole log, and refuses a stage name that is not one", async () => {
+    const { server, fs, run } = await serve();
+    fs.seed(
+      `/repo/.agent-flow/runs/${run.runId}/logs/planning.log`,
+      'stage=planning role=planner\n--- runner output (redacted) ---\nthe plan\n--- end runner output ---\n',
+    );
+
+    const log = (await server.app.inject(`/api/v1/runs/${run.runId}/stages/planning/log?projectId=demo`)).json<StageLogView>();
+    expect(log.present).toBe(true);
+    // The whole file, not the two kilobytes the `stage_failed` event carries.
+    expect(log.lines).toContain('the plan');
+    expect(log.truncated).toBe(false);
+
+    // The stage name becomes a filename, so the enum is the whole defence.
+    const traversal = await server.app.inject(`/api/v1/runs/${run.runId}/stages/..%2F..%2Fetc%2Fpasswd/log?projectId=demo`);
+    expect(traversal.statusCode).toBe(400);
+
+    // `implementation` writes one log per task, which the task view serves.
+    const perTask = (await server.app.inject(`/api/v1/runs/${run.runId}/stages/implementation/log?projectId=demo`)).json<StageLogView>();
+    expect(perTask.perTask).toBe(true);
+    expect(perTask.present).toBe(false);
   });
 
   it('reports what each runner says it can be pointed at, and an empty list is an answer', async () => {

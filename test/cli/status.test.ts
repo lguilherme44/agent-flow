@@ -95,6 +95,7 @@ describe('the headline comes from the runtime projection, not the persisted stat
   const projection = (patch: Partial<RunProjection> = {}): RunProjection => ({
     status: 'planning',
     resumable: true,
+  paused: false,
     reviewFreshness: 'current',
     progress: { workflow: { done: 4, total: 7 }, implementation: { done: 0, total: 0 } },
     ...patch,

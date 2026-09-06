@@ -16,6 +16,7 @@ import {
   ReviewRequestSchema,
   ReviseRequestSchema,
   RunParamsSchema,
+  StageLogParamsSchema,
   StartRequestSchema,
   TaskParamsSchema,
   roleConfigKeys,
@@ -328,6 +329,24 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const stages = await reader.stages(scope.project, scope.runId);
     return stages === null ? notFound(reply, 'no such run') : stages;
+  });
+
+  /**
+   * One stage's own log (§95).
+   *
+   * The stage name is parsed against the pipeline enum before it becomes a filename, so
+   * there is no request shape that addresses a file outside this run's `logs/`. The bytes
+   * were redacted where they were captured; nothing here re-reads a runner.
+   */
+  app.get('/api/v1/runs/:runId/stages/:stage/log', async (request, reply) => {
+    const params = StageLogParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return badRequest(reply, 'unknown pipeline stage');
+
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const log = await reader.stageLog(project, params.data.runId, params.data.stage);
+    return log === undefined ? notFound(reply, 'no such run') : log;
   });
 
   app.get('/api/v1/runs/:runId/tasks', async (request, reply) => {

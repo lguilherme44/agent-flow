@@ -86,6 +86,7 @@ const SNAPSHOT: ControlSnapshotView = {
     runtime: {
       status: 'awaiting_human_approval',
       resumable: false,
+      paused: false,
       progress: { workflow: { done: 4, total: 7 }, implementation: { done: 0, total: 5 } },
       reviewFreshness: 'absent',
     },

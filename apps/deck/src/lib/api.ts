@@ -10,9 +10,11 @@ import type {
   RunEventLogView,
   RunSummaryView,
   ConfigView,
+  PipelineStage,
   RunnerHealthView,
   RunnerModelsView,
   RunnerTypeView,
+  StageLogView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
@@ -176,6 +178,9 @@ export const api = {
   dag: (a: RunAddress) => getJson<RunDagView>(`/runs/${a.runId}/dag`, scoped(a)),
   control: (a: RunAddress) => getJson<ControlSnapshotView>(`/runs/${a.runId}/control`, scoped(a)),
   eventLog: (a: RunAddress) => getJson<RunEventLogView>(`/runs/${a.runId}/events`, scoped(a)),
+  /** One stage's own log — the runner's whole output, not the excerpt an event carries. */
+  stageLog: (a: RunAddress, stage: PipelineStage) =>
+    getJson<StageLogView>(`/runs/${a.runId}/stages/${stage}/log`, scoped(a)),
   approval: (a: RunAddress) => getJson<ApprovalGateView>(`/runs/${a.runId}/approval`, scoped(a)),
   job: (a: RunAddress) => getJson<ActionJobView | null>(`/runs/${a.runId}/job`, scoped(a)),
 
@@ -219,6 +224,16 @@ export const api = {
       taskId === undefined ? {} : { taskId },
       scoped(a),
     ),
+  /**
+   * Stop starting new work, keep what is in flight (PRI-15).
+   *
+   * The three below have existed in the core and on the server since pause landed and had
+   * no button anywhere: the CLI could stop a run and the browser watching it could not.
+   */
+  pause: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/pause`, {}, scoped(a)),
+  resume: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/resume`, {}, scoped(a)),
+  /** Terminal, by an operator's decision. Evidence and branches stay on disk (PRI-14). */
+  cancel: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/cancel`, {}, scoped(a)),
   retry: (a: RunAddress, taskId: string, force: boolean) =>
     postJson<ActionResultView>(`/runs/${a.runId}/tasks/${taskId}/retry`, { force }, scoped(a)),
   review: (a: RunAddress, fix = false) =>
@@ -243,6 +258,7 @@ export const keys = {
   dag: (a: RunAddress) => url(`/runs/${a.runId}/dag`, scoped(a)),
   control: (a: RunAddress) => url(`/runs/${a.runId}/control`, scoped(a)),
   eventLog: (a: RunAddress) => url(`/runs/${a.runId}/events`, scoped(a)),
+  stageLog: (a: RunAddress, stage: string) => url(`/runs/${a.runId}/stages/${stage}/log`, scoped(a)),
   approval: (a: RunAddress) => url(`/runs/${a.runId}/approval`, scoped(a)),
   job: (a: RunAddress) => url(`/runs/${a.runId}/job`, scoped(a)),
   agents: (projectId?: string) => url('/agents', projectId === undefined ? {} : { projectId }),

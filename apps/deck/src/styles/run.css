@@ -831,3 +831,58 @@ input[type='checkbox'] {
   color: var(--ink);
   border-bottom-color: var(--warn);
 }
+
+/* Two logs in one panel: the tape of facts, and what a runner said inside a stage. */
+.panel__tabs {
+  display: flex;
+  gap: var(--s-2);
+}
+.panel__tabs button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.panel__tabs button[aria-selected='true'] {
+  color: var(--ink-2);
+}
+.panel__tabs button:hover {
+  color: var(--ink);
+}
+
+.stage-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  height: 100%;
+  min-height: 0;
+  padding: var(--s-3);
+}
+.stage-log__pick select {
+  width: auto;
+  min-width: 180px;
+}
+.stage-log__cut {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-0);
+}
+.stage-log__body {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--s-3);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: var(--fs-0);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

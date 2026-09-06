@@ -36,6 +36,7 @@ const run = (overrides: Partial<RunDetailView> = {}): RunDetailView => ({
   runtime: {
     status: 'implementing',
     resumable: true,
+    paused: false,
     progress: { workflow: { done: 3, total: 6 }, implementation: { done: 0, total: 9 } },
     reviewFreshness: 'current',
   },
@@ -193,6 +194,7 @@ describe('RunHeader', () => {
             runtime: {
               status: 'blocked_on_human',
               resumable: false,
+              paused: false,
               gate: {
                 gate: 'final_acceptance',
                 action: 'Run `agent-flow review`, then accept and merge',
@@ -257,6 +259,7 @@ describe('RunHeader', () => {
             runtime: {
               status: 'complete',
               resumable: false,
+              paused: false,
               progress: { workflow: { done: 7, total: 7 }, implementation: { done: 9, total: 9 } },
               reviewFreshness: 'current',
             },
@@ -337,6 +340,7 @@ describe('RunHeader', () => {
             runtime: {
               status: 'auto_recovery_exhausted',
               resumable: false,
+              paused: false,
               progress: { workflow: { done: 4, total: 7 }, implementation: { done: 3, total: 9 } },
               reviewFreshness: 'current',
               escalation: {
@@ -377,6 +381,7 @@ describe('RunHeader', () => {
             runtime: {
               status: 'verifying',
               resumable: false,
+              paused: false,
               progress: {
                 workflow: { done: 4, total: 7 },
                 implementation: { done: 6, total: 6 },

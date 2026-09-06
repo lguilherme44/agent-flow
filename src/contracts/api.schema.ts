@@ -5,6 +5,7 @@ import type { ReasoningLevel } from './common.schema.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
 import {
   WorkflowClassSchema,
+  PipelineStageSchema,
   type Degradation,
   type PipelineStage,
   type PipelineStatus,
@@ -57,6 +58,18 @@ export const RunParamsSchema = z.object({ runId: RunIdParamSchema });
 export const TaskParamsSchema = z.object({
   runId: RunIdParamSchema,
   taskId: TaskIdParamSchema,
+});
+
+/**
+ * A stage is named from a closed set, never spelled by the caller.
+ *
+ * The name becomes a filename under the run's `logs/`, so this enum is the whole defence
+ * against traversal — the same shape `ArtifactParamsSchema` and `PromptNameSchema` use,
+ * and for the same reason: a client that can choose a path can choose any path.
+ */
+export const StageLogParamsSchema = z.object({
+  runId: RunIdParamSchema,
+  stage: PipelineStageSchema,
 });
 
 export const ArtifactParamsSchema = z.object({
@@ -391,6 +404,30 @@ export interface StageViewResponse {
   readonly reasoning?: ReasoningLevel;
   readonly attempts?: number;
   readonly errorCode?: string;
+}
+
+/**
+ * One stage's own log, as it was written (§95).
+ *
+ * The full runner output, already redacted at the point it was captured — the file the
+ * `stage_failed` event carries two kilobytes of. Those two kilobytes were all a browser
+ * could reach: enough to see that something failed, rarely enough to see why, and the
+ * remedy was a terminal and a path nobody remembers.
+ *
+ * `perTask` is not an error. `implementation` and `code-review` run once per task and
+ * write one log each, which the task view already serves; saying so is better than an
+ * empty array that reads as "nothing happened".
+ */
+export interface StageLogView {
+  readonly stage: PipelineStage;
+  /** Oldest first, terminal escapes stripped. Empty when the stage wrote none. */
+  readonly lines: string[];
+  readonly present: boolean;
+  /** How many lines the file holds, whether or not they all fit. */
+  readonly total: number;
+  readonly truncated: boolean;
+  /** Set for the stages whose logs belong to a task rather than to the stage. */
+  readonly perTask?: true;
 }
 
 export interface TaskSummaryView {

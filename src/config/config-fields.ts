@@ -62,7 +62,7 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   field('recovery.enabled', 'boolean'),
   ...['maxEnvironmentRepairs', 'maxIdenticalFailures', 'maxModelCallsPerTask', 'maxCorrectiveRounds', 'maxCorrectivePlanRepairs', 'maxVerificationCycles', 'maxAutonomousModelCalls', 'maxPacketBytes', 'maxRawExcerptBytes', 'maxDiffStatLines'].map((key) => field(`recovery.${key}`, 'integer')),
   field('git.useWorktrees', 'boolean', GLOBAL, 'next_run'), field('approval.requiredBeforeImplementation', 'boolean'),
-  field('execution.passEnv', 'string_list'), field('ui.workspaceDepth', 'integer', GLOBAL, 'server_restart'), field('ui.allowedHosts', 'string_list', GLOBAL, 'server_restart'),
+  field('execution.passEnv', 'string_list'), field('execution.recordPrompts', 'boolean'), field('ui.workspaceDepth', 'integer', GLOBAL, 'server_restart'), field('ui.allowedHosts', 'string_list', GLOBAL, 'server_restart'),
   field('utilityModel.enabled', 'boolean'), enumField('utilityModel.adapter', UTILITY_MODEL_ADAPTERS),
   ...['baseUrl', 'model', 'apiKeyEnv'].map((key) => field(`utilityModel.${key}`, 'string')),
   ...['contextWindow', 'targetInputTokens', 'maxOutputTokens'].map((key) => field(`utilityModel.${key}`, 'integer')), field('utilityModel.timeoutSeconds', 'number'),

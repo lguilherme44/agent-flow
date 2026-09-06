@@ -213,6 +213,20 @@ export const GlobalConfigSchema = z.object({
   execution: z
     .object({
       passEnv: z.array(z.string().trim().min(1).max(256)).default([]),
+      /**
+       * Whether a stage's prompt is written into its log (§95).
+       *
+       * **Off, and off is the honest default.** A prompt carries whatever the stage was
+       * given — repository content, a plan, a failure context packet — so recording one
+       * turns the run directory into a second copy of material that was only ever meant
+       * to be sent once. It goes through the same redaction the runner's output does,
+       * which removes credentials and not confidences.
+       *
+       * On, it answers the one question the logs cannot: an agent that did something
+       * inexplicable was *told* something, and without this the input it acted on is
+       * unrecoverable. That is worth a switch and not worth a default.
+       */
+      recordPrompts: z.boolean().default(false),
     })
     .prefault({}),
   /**

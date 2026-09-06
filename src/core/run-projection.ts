@@ -136,7 +136,11 @@ export function projectRun(input: ProjectionInput): RunProjection {
   const reviewFreshness = projectReviewFreshness(input);
   const resumable = isResumable(input);
 
-  const base = { resumable, progress, reviewFreshness };
+  // A finished run cannot be paused, whatever a stale request on it says.
+  const paused = state.pauseRequestedAt !== undefined
+    && state.status !== 'completed' && state.status !== 'failed' && state.status !== 'cancelled';
+
+  const base = { resumable, paused, progress, reviewFreshness };
 
   if (state.status === 'completed') return { ...base, status: 'complete' };
   if (state.status === 'failed') return { ...base, status: 'failed' };

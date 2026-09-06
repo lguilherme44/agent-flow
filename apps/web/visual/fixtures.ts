@@ -144,6 +144,7 @@ export const RUN: RunDetailView = {
   runtime: {
     status: 'implementing',
     resumable: true,
+    paused: false,
     progress: {
       workflow: { done: 3, total: 6 },
       implementation: { done: 3, total: 9 },
@@ -1621,6 +1622,7 @@ const GATED_RUN: RunDetailView = {
     ...RUN.runtime,
     status: 'awaiting_human_approval',
     resumable: false,
+    paused: false,
     gate: {
       gate: 'approval',
       action: 'Review the plan and run `agent-flow approve`',
