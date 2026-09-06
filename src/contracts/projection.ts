@@ -69,7 +69,7 @@ export interface ProgressAxes {
 
 export interface RuntimeGate {
   /** Which gate holds the run. */
-  readonly gate: 'approval' | 'task_review' | 'agent_blocked' | 'final_acceptance';
+  readonly gate: 'approval' | 'task_review' | 'agent_blocked' | 'task_failed' | 'final_acceptance';
   /** The one action that clears it (AR §3.6). Never "inspect logs". */
   readonly action: string;
   /** The tasks involved, when the gate is about tasks. */

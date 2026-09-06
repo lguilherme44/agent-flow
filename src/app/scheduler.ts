@@ -572,9 +572,16 @@ export class Scheduler {
         states[outcome.task] = 'failed';
 
         if (haltedBy === undefined) {
+          // **The paths, not only the sentence** (PRI-23). `changes` has always been
+          // collected and written to the event, and the one line a person actually reads
+          // dropped it: "the install command changed files that are tracked or not ignored"
+          // sends somebody hunting, while `package-lock.json` ends the hunt. A live run
+          // halted exactly there, after planning had already been paid for.
+          const named =
+            outcome.changes.length === 0 ? '' : `: ${outcome.changes.join(', ')}`;
           haltedBy =
             `${outcome.task} never started: workspace preparation failed ` +
-            `at the ${outcome.phase} check — ${outcome.detail}`;
+            `at the ${outcome.phase} check — ${outcome.detail}${named}`;
         }
       }
 

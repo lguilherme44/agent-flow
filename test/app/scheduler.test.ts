@@ -1081,6 +1081,11 @@ describe('workspace preparation, per dispatched attempt (M2-04 §8)', () => {
     // reading "not all tasks completed" with nothing to act on.
     expect(outcome.haltedBy).toContain('TASK-001');
     expect(outcome.haltedBy).toContain('setup');
+    // **And the path** (PRI-23). This assertion checked the *event* carried it and let the
+    // sentence a person reads drop it — which is what a live run hit: "the install command
+    // changed files that are tracked or not ignored", no filename, after planning had
+    // already been paid for. The fixture below was already this exact file.
+    expect(outcome.haltedBy).toContain('package-lock.json');
 
     const failure = (await store.readEvents(run.runId)).find(
       (event) => event.type === 'task_workspace_preparation_failed',
