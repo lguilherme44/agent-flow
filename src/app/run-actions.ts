@@ -789,7 +789,7 @@ export async function retryTask(
   deps: RunActionDeps,
   runId: string,
   taskId: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; expectNoChange?: boolean } = {},
 ): Promise<ActionOutcome<RetryResult>> {
   // Locked too, and briefly. Requeuing a task while the scheduler is executing it
   // would have the two fighting over the same entry in `state.json` — the retry
@@ -804,7 +804,7 @@ async function requeue(
   deps: RunActionDeps,
   runId: string,
   taskId: string,
-  options: { force?: boolean },
+  options: { force?: boolean; expectNoChange?: boolean },
 ): Promise<ActionOutcome<RetryResult>> {
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
@@ -890,6 +890,14 @@ async function requeue(
   // unattended streak, so the recovery loop gets one fresh budget per intervention and
   // no more — every continuation past the bound costs a deliberate human act.
 
+  // PRI-20. The declaration is made *here*, at the moment a person decides to run the task
+  // again, because that is when they have the evidence in front of them: the escalation
+  // that stopped the run says the tree was identical to its base, and this is the answer
+  // "yes, and that was correct". Recorded on the state rather than written into the plan —
+  // approval is granted to a specific plan and `approvedPlanHash` enforces it, so editing
+  // the plan to add a field would invalidate a gate somebody already passed.
+  const declaredAt = options.expectNoChange === true ? context.clock.now() : undefined;
+
   await context.store.updateRun(runId, (current) => ({
     ...current,
     tasks: current.tasks.map((task) =>
@@ -901,6 +909,11 @@ async function requeue(
             // A person acted, so the unattended streak restarts here. `attempts` is left
             // alone: it is evidence, and evidence that moves is not evidence.
             attemptsBeforeHumanRetry: task.attempts,
+            // Sticky once set. A declaration of intent does not expire because the task
+            // ran again, and clearing it on every retry would make the operator repeat it
+            // for each attempt — which is how a safeguard becomes a formality people
+            // learn to type without reading.
+            ...(declaredAt === undefined ? {} : { noChangeDeclaredAt: declaredAt }),
           }
         : task,
     ),
@@ -908,7 +921,18 @@ async function requeue(
   await context.store.appendEvent(runId, 'task_requeued', {
     task: taskId,
     forced: options.force === true,
+    ...(declaredAt === undefined ? {} : { expectsNoChange: true }),
   });
+
+  // Its own event, because it is its own fact. A requeue and a declaration of intent are
+  // different acts, and an audit that could only read the second out of a flag on the
+  // first would lose it the day somebody declares without retrying.
+  if (declaredAt !== undefined) {
+    await context.store.appendEvent(runId, 'task_no_change_declared', {
+      task: taskId,
+      declaredAt,
+    });
+  }
 
   // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
   // stay spent; the count of calls made *with no intervening human action* is by definition

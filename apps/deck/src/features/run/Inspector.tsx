@@ -31,11 +31,11 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
   const then = past?.tasks.get(taskId);
   const data = detail.data;
 
-  const retry = async (force: boolean): Promise<void> => {
+  const retry = async (force: boolean, expectNoChange = false): Promise<void> => {
     setBusy(true);
     setRefusal(undefined);
     try {
-      await api.retry(address, taskId, force);
+      await api.retry(address, taskId, force, expectNoChange);
       invalidate((key) => key.includes(`/runs/${address.runId}`));
     } catch (error) {
       if (error instanceof ApiError) setRefusal(error);
@@ -43,6 +43,18 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
       setBusy(false);
     }
   };
+
+  /**
+   * Whether this task died because its diff was empty (PRI-20).
+   *
+   * Read off the newest attempt rather than the task state, because the class is what the
+   * attempt artifact recorded and the state keeps only the last outcome. When it is this,
+   * an ordinary retry runs the same work to the same empty tree and fails identically —
+   * two runs in the evidence set spent every attempt that way and ended somewhere a person
+   * could only cancel. The second button is the only thing that changes the outcome.
+   */
+  const emptyDiff =
+    data?.attemptHistory?.[data.attemptHistory.length - 1]?.failureClass === 'acceptance_evidence_missing';
 
   const logs = data?.attemptLogs !== undefined && data.attemptLogs.length > 0 ? data.attemptLogs : undefined;
   const shown = logs === undefined ? data?.log ?? [] : (logs.find((entry) => entry.attempt === attemptShown) ?? logs[logs.length - 1])?.lines ?? [];
@@ -119,15 +131,28 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
             </div>
           )}
 
-          {attention === undefined ? null : (
+          {attention === undefined && !emptyDiff ? null : (
             <div style={{ marginTop: 16, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              {attention.action.kind === 'retry' ? (
+              {attention?.action.kind === 'retry' ? (
                 <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void retry(false)}>
                   {attention.action.label}
                 </button>
               ) : null}
+              {emptyDiff ? (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() => void retry(false, true)}
+                  title="Records that this task is meant to change nothing, then queues it again."
+                >
+                  It changes nothing — accept that
+                </button>
+              ) : null}
               <span className="faint" style={{ fontSize: 12 }}>
-                {attention.priority} · {attention.what}
+                {attention === undefined
+                  ? 'the validated tree was identical to its base'
+                  : `${attention.priority} · ${attention.what}`}
               </span>
             </div>
           )}

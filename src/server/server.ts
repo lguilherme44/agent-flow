@@ -980,6 +980,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const outcome = await retryTask(depsFor(project), params.data.runId, params.data.taskId, {
       force: body.data.force,
+      expectNoChange: body.data.expectNoChange,
     });
 
     if (!outcome.ok) return rejectAction(reply, outcome.error);

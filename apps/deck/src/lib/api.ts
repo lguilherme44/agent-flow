@@ -234,8 +234,12 @@ export const api = {
   resume: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/resume`, {}, scoped(a)),
   /** Terminal, by an operator's decision. Evidence and branches stay on disk (PRI-14). */
   cancel: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/cancel`, {}, scoped(a)),
-  retry: (a: RunAddress, taskId: string, force: boolean) =>
-    postJson<ActionResultView>(`/runs/${a.runId}/tasks/${taskId}/retry`, { force }, scoped(a)),
+  retry: (a: RunAddress, taskId: string, force: boolean, expectNoChange = false) =>
+    postJson<ActionResultView>(
+      `/runs/${a.runId}/tasks/${taskId}/retry`,
+      { force, expectNoChange },
+      scoped(a),
+    ),
   review: (a: RunAddress, fix = false) =>
     postJson<ActionJobView>(`/runs/${a.runId}/review`, { fix }, scoped(a)),
   /**

@@ -185,6 +185,15 @@ export const StartRequestSchema = z.object({
 export const RetryRequestSchema = z.object({
   /** Retries a BLOCKED task, or one past its attempt limit. Deliberate either way. */
   force: z.boolean().default(false),
+  /**
+   * This task is meant to change nothing; accept an empty diff (PRI-20).
+   *
+   * Same use case, second adapter, as `--expect-no-change` on `agent-flow retry`. It has
+   * to exist here too: the operator most likely to hit `acceptance_evidence_missing` is
+   * the one watching the run in the browser, and a net reachable only from a terminal is
+   * a net for half the people who need it.
+   */
+  expectNoChange: z.boolean().default(false),
 });
 
 /**

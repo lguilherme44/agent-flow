@@ -7,6 +7,35 @@
 > **Goal:** run the whole pipeline the way a person would, and write down every question
 > the record cannot answer.
 
+## Status — all nine closed
+
+| # | Finding | Closed by |
+|---|---|---|
+| 1 | The operator's `~/.claude/settings.json` reaches every agent | `execution.isolateRunnerSettings` → `--safe-mode` (PRI-18) |
+| 2 | Cost, tokens and model returned and discarded | `AgentRunUsage` on the port, filled by two adapters, surfaced by `agent-flow status` (PRI-19) |
+| 3 | `agy` barred from 6 of 9 roles | one criterion applied to all three CLI adapters (PRI-18) |
+| 4 | A forgotten `expectsNoChange` kills a run | `retry --expect-no-change`, and a button on the Deck (PRI-20) |
+| 5 | No elapsed time on stage transitions | `cli/render/progress.ts` |
+| 6 | `doctor` says `OK` with auth unverified | `renderVerdict` in `cli/doctor.ts` |
+| 7 | Prompt growth measured and never surfaced | `renderPlanningProgress` reads `stage_context_measured` |
+| 8 | `agy` wrote `.atl/` into the repo under test | `--disable-slash-commands` on write stages (PRI-18) |
+| 9 | Failure evidence shows the tail of the output | `verdictLine` in `core/recovery-policy.ts` |
+
+Two of the fixes came out differently from what this report proposed, and both times a live
+CLI is why:
+
+- **`--system-prompt` was the wrong instrument for #1.** It replaces the CLI's built-in
+  prompt, which is where its own tool conventions live. `--safe-mode` drops the operator's
+  customisations and keeps them.
+- **#8's flag cancels read-only mode.** `agy --mode plan --disable-slash-commands` warns
+  that plan mode has no effect. So the flag is passed on write stages only — where the
+  measured leak was — and read-only stages keep their containment.
+
+The record below is left exactly as it was written, including the wrong proposal. A report
+edited to agree with what was eventually built is a report nobody can learn from.
+
+---
+
 ## The seven findings, shortest first
 
 | # | Finding | Why it costs you | Fix |

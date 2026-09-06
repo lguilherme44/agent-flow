@@ -223,7 +223,15 @@ export async function main(argv: string[]): Promise<number> {
     .description('Queue a task again after it failed')
     .argument('<taskId>', 'for example TASK-004')
     .option('--force', 'retry a BLOCKED task, or exceed the attempt limit')
-    .action(async (taskId: string, options: { force?: boolean }, command: Command) => {
+    // PRI-20. The net for a plan that forgot `expectsNoChange`: a verification task with a
+    // legitimately empty diff otherwise burns every attempt and ends in a run a person can
+    // only cancel. Declared here rather than by editing the plan, which approval is bound to.
+    .option('--expect-no-change', 'this task is meant to change nothing; accept an empty diff')
+    .action(async (
+      taskId: string,
+      options: { force?: boolean; expectNoChange?: boolean },
+      command: Command,
+    ) => {
       exitCode = await runRetryCommand(taskId, options, globalOptions(command));
     });
 
