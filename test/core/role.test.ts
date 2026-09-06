@@ -112,6 +112,45 @@ describe('configuration errors surface at resolution, not at run time (R-05)', (
     }
   });
 
+  /**
+   * The same case as above, in the state the product actually reaches (PRI-26).
+   *
+   * The test above hands `codex` a capability entry. `buildRegistry` never does — it skips
+   * a disabled runner entirely, so the map has no key for it. The guard used to read
+   * `!runnerConfig || !runnerCapabilities`, which meant the real state took the
+   * `unknown_runner` branch and the `runner_disabled` branch below it was unreachable from
+   * anywhere but a test that had constructed a state the registry cannot produce.
+   *
+   * What reached the screen, six times at once, was self-contradictory:
+   *
+   *     Role "architect" is configured to use runner "claude", which is not
+   *     registered. Known runners: claude, codex, agy
+   *
+   * Not registered, and there it is in the list — "known" was read off the declared
+   * runners and "registered" off the enabled ones. The one fact the operator needed, that
+   * a toggle was off, was the one the sentence did not carry.
+   */
+  it('says a disabled runner is turned off, not that it is unknown', () => {
+    const broken = config({
+      roles: { ...config().roles, sdd: { runner: 'codex', effort: 'high', timeoutSeconds: 900 } },
+    });
+
+    try {
+      // No `codex` key: exactly what `buildRegistry` leaves behind for a disabled runner.
+      resolveRole('sdd', broken, capabilities);
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect((error as RoleResolutionError).kind).toBe('runner_disabled');
+      const message = (error as Error).message;
+      expect(message).toContain('turned off');
+      expect(message).toContain('runners.codex.enabled');
+      // The sentence that made the screen unreadable: never say unknown about a runner
+      // the same message is about to list.
+      expect(message).not.toContain('not declared');
+      expect(message).not.toContain('no registered adapter');
+    }
+  });
+
   it('rejects a runner that cannot run non-interactively', () => {
     // Without this the orchestrator would hang on a prompt no one can answer.
     const caps: RunnerCapabilitiesMap = {

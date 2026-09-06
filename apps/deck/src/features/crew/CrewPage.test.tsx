@@ -15,6 +15,8 @@ const editor = (scope: 'global' | 'project', projectId?: string): ConfigEditorVi
     { path: ['runners', 'moe', 'type'], explicitValue: 'codex-cli', effectiveValue: 'codex-cli', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
     { path: ['runners', 'moe', 'enabled'], explicitValue: true, effectiveValue: true, origin: scope, editable: true, effect: 'next_execution_context', valueType: 'boolean' },
     { path: ['runners', 'endpoint', 'type'], explicitValue: 'openai-compatible', effectiveValue: 'openai-compatible', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
+    { path: ['runners', 'gem', 'type'], explicitValue: 'agy-cli', effectiveValue: 'agy-cli', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
+    { path: ['runners', 'gem', 'enabled'], explicitValue: true, effectiveValue: true, origin: scope, editable: true, effect: 'next_execution_context', valueType: 'boolean' },
     { path: ['roles', 'architect', 'runner'], explicitValue: 'moe', effectiveValue: 'moe', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
     { path: ['roles', 'architect', 'model'], explicitValue: undefined, effectiveValue: undefined, origin: 'default', editable: true, effect: 'next_execution_context', valueType: 'string' },
     { path: ['roles', 'architect', 'effort'], explicitValue: 'high', effectiveValue: 'high', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'reasoning_level', options: ['low', 'medium', 'high', 'very_high'] },
@@ -55,6 +57,14 @@ const runnerTypes: RunnerTypeView[] = [
     type: 'openai-compatible',
     fields: [{ name: 'baseUrl', required: true }, { name: 'apiKeyEnv', required: false, secretEnv: true }],
     capabilities: { supportedReasoningLevels: ['low', 'high'], supportsReadOnly: true, supportsWorkingDirectory: false, structuredOutputStrategy: 'native' },
+  },
+  {
+    // The other half of the matrix, and its absence is why the bulk bar shipped a sentence
+    // that named the wrong reason for a year: every fixture here could read-only, so the
+    // read-only refusal had no test and the hard-coded text was never contradicted.
+    type: 'agy-cli',
+    fields: [{ name: 'command', required: false }, { name: 'model', required: false }],
+    capabilities: { supportedReasoningLevels: ['low', 'medium', 'high'], supportsReadOnly: false, supportsWorkingDirectory: true, structuredOutputStrategy: 'prompted' },
   },
 ];
 
@@ -190,6 +200,32 @@ describe('CrewPage configuration workflow', () => {
     });
   });
 
+  /**
+   * The refusal names the check that actually failed (PRI-26).
+   *
+   * The sentence under the bulk bar hard-coded one of the two reasons — "has no working
+   * directory, so it cannot serve a role that writes" — whichever check had failed. Against
+   * a runner with no read-only mode that is wrong twice over: the failing check is the
+   * other one, and this is precisely the runner that *can* write. An operator pointed the
+   * whole crew at `agy`, watched six posts get skipped, and read the opposite of the truth.
+   */
+  it('names the read-only refusal as a read-only refusal', async () => {
+    render(<CrewPage />);
+    const pick = await screen.findByLabelText('Assign every role to');
+
+    fireEvent.change(pick, { target: { value: 'gem' } });
+
+    // `architect` needs read-only, which this runner has not; `executor.trivial` writes.
+    expect(screen.getByRole('button', { name: 'Apply to 1 role' })).toBeEnabled();
+    // The whole sentence, because `no read-only mode` also appears as a tag on the runner
+    // card — and a query that matched either would pass on the card alone, which is the
+    // element that was already right.
+    expect(
+      screen.getByText(/gem has no read-only mode, so it cannot serve a role that must not write/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/no working directory/)).not.toBeInTheDocument();
+  });
+
   it('assigns every role at once, and leaves out the ones the runner cannot serve', async () => {
     render(<CrewPage />);
     const pick = await screen.findByLabelText('Assign every role to');
@@ -199,7 +235,7 @@ describe('CrewPage configuration workflow', () => {
     expect(screen.getByRole('button', { name: 'Apply to 2 roles' })).toBeEnabled();
 
     // An endpoint has no working directory. The resolver refuses it for a role that
-    // writes, so the button offers the roles it can actually take and says why.
+    // opens files, so the button offers the roles it can actually take and says why.
     fireEvent.change(pick, { target: { value: 'endpoint' } });
     expect(screen.getByRole('button', { name: 'Apply to 1 role' })).toBeEnabled();
     expect(screen.getByText(/no working directory/)).toBeInTheDocument();

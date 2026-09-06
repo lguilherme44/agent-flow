@@ -246,22 +246,48 @@ export function resolveRole(
   // the abstract.
   const runnerCapabilities = capabilitiesOf(capabilities, runnerId, model);
 
-  if (!runnerConfig || !runnerCapabilities) {
+  if (!runnerConfig) {
     const known = Object.keys(config.runners).join(', ') || '(none)';
     throw new RoleResolutionError(
       'unknown_runner',
       role,
-      `Role "${role}" is configured to use runner "${runnerId}", which is not registered.\n` +
-        `  Known runners: ${known}`,
+      `Role "${role}" is configured to use runner "${runnerId}", which is not declared.\n` +
+        `  Declared runners: ${known}`,
     );
   }
 
+  /**
+   * **Checked before the capability map, and the order is the whole fix (PRI-26).**
+   *
+   * `buildRegistry` skips a disabled runner, so it contributes no capabilities — and the
+   * guard above used to read `!runnerConfig || !runnerCapabilities`, which meant a runner
+   * that was *declared and turned off* took the `unknown_runner` branch and this one was
+   * unreachable. The message that reached the screen was self-contradictory:
+   *
+   *     Role "architect" is configured to use runner "claude", which is not
+   *     registered. Known runners: claude, codex, agy
+   *
+   * Not registered, and there it is in the list — because "known" was read off the
+   * declared runners and "registered" off the enabled ones. Six roles said that at once,
+   * and the one thing the operator needed to know, that a toggle was off, was the one
+   * thing it did not say.
+   */
   if (!runnerConfig.enabled) {
     throw new RoleResolutionError(
       'runner_disabled',
       role,
-      `Role "${role}" uses runner "${runnerId}", which is disabled in configuration.\n` +
+      `Role "${role}" uses runner "${runnerId}", which is declared but turned off.\n` +
         `  Enable it under runners.${runnerId}.enabled, or point the role at another runner.`,
+    );
+  }
+
+  if (!runnerCapabilities) {
+    const known = Object.keys(config.runners).join(', ') || '(none)';
+    throw new RoleResolutionError(
+      'unknown_runner',
+      role,
+      `Role "${role}" is configured to use runner "${runnerId}", which is enabled but ` +
+        `has no registered adapter.\n  Declared runners: ${known}`,
     );
   }
 

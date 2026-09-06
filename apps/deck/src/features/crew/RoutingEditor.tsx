@@ -55,9 +55,14 @@ export function RoutingEditor({ view, roles, types, models, operations, onChange
  * Every post at once, skipping the ones this runner cannot hold.
  *
  * "Point the whole crew at claude" was a nine-row edit, and it is the first thing anybody
- * does with a second provider installed. A runner with no working directory cannot take
- * the executors — the resolver refuses it — so those rows are left alone and counted
- * rather than written and rejected on save.
+ * does with a second provider installed. Some rows a given runner cannot take — the
+ * resolver refuses them — so they are left alone and counted rather than written and
+ * rejected on save.
+ *
+ * **The count was right and the sentence explaining it was wrong.** It named one of the
+ * two possible reasons regardless of which check failed, so pointing everything at `agy`
+ * skipped the six read-only posts and blamed a missing working directory — the opposite of
+ * the truth, since `agy` is the runner that writes. The reason is derived per role now.
  */
 function AssignAll({ view, roles, types, runners, operations, onOperations }: {
   readonly view: ConfigEditorView;
@@ -69,8 +74,11 @@ function AssignAll({ view, roles, types, runners, operations, onOperations }: {
 }) {
   const [pick, setPick] = useState('');
   const capabilities = runnerCapabilities(view.fields, types, pick);
-  const eligible = roles.filter((role) => canServe(role, capabilities));
+  const eligible = roles.filter((role) => refusalFor(role, capabilities) === undefined);
   const skipped = roles.length - eligible.length;
+  // Every distinct reason, in the order the checks run. A runner can fail both — an
+  // inference endpoint has neither — and naming one of two is how the wrong one gets named.
+  const reasons = [...new Set(roles.flatMap((role) => refusalFor(role, capabilities) ?? []))];
   const assign = (): void => {
     if (pick === '' || eligible.length === 0) return;
     const paths = new Set(eligible.map((role) => pathLabel([...role.configKeys, 'runner'])));
@@ -90,7 +98,10 @@ function AssignAll({ view, roles, types, runners, operations, onOperations }: {
         Apply to {eligible.length} role{eligible.length === 1 ? '' : 's'}
       </button>
       {pick !== '' && skipped > 0
-        ? <small>{skipped} left as {skipped === 1 ? 'it is' : 'they are'}: {pick} has no working directory, so it cannot serve a role that writes.</small>
+        ? <small>
+            {skipped} left as {skipped === 1 ? 'it is' : 'they are'}: {pick}{' '}
+            {reasons.map((reason) => REFUSAL_TEXT[reason]).join('; and it ')}.
+          </small>
         : null}
     </div>
   );
@@ -104,11 +115,30 @@ function runnerCapabilities(fields: readonly ConfigEditorFieldView[], types: rea
 }
 
 /** A role a runner cannot serve is one the resolver would refuse (§3, core/role). */
-function canServe(role: RoleRouteView, capabilities: RunnerTypeView['capabilities'] | undefined): boolean {
-  if (capabilities === undefined) return true;
-  if (role.requiresWorkingDirectory && !capabilities.supportsWorkingDirectory) return false;
-  return !(role.requiresReadOnly && !capabilities.supportsReadOnly);
+/**
+ * Why this runner cannot hold this post, or nothing.
+ *
+ * Returns the *reason* rather than a boolean, because the sentence under the bulk bar used
+ * to hard-code one of the two — "has no working directory, so it cannot serve a role that
+ * writes" — whichever check had actually failed. Against `agy` that is wrong twice over:
+ * the failing check is read-only, and `agy` is precisely the runner that *can* write. An
+ * operator read it, believed the opposite of the truth, and had no way to tell.
+ */
+function refusalFor(
+  role: RoleRouteView,
+  capabilities: RunnerTypeView['capabilities'] | undefined,
+): 'no working directory' | 'no read-only mode' | undefined {
+  if (capabilities === undefined) return undefined;
+  if (role.requiresWorkingDirectory && !capabilities.supportsWorkingDirectory) return 'no working directory';
+  if (role.requiresReadOnly && !capabilities.supportsReadOnly) return 'no read-only mode';
+  return undefined;
 }
+
+/** What each reason means for the posts it blocks, in the words the row headings use. */
+const REFUSAL_TEXT: Readonly<Record<'no working directory' | 'no read-only mode', string>> = {
+  'no working directory': 'has no working directory, so it cannot serve a role that opens files',
+  'no read-only mode': 'has no read-only mode, so it cannot serve a role that must not write',
+};
 
 function RoutingRow({ role, view, runners, models, operations, onChange }: {
   readonly role: RoleRouteView;
