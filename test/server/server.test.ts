@@ -28,6 +28,9 @@ import type {
   RunEventLogView,
   RunSummaryView,
   RunnerHealthView,
+  RunnerModelsView,
+  StageLogView,
+  RunnerTypeView,
   RunnerView,
   StageViewResponse,
   TaskDetailView,
@@ -560,6 +563,74 @@ describe('UI-04 — the run read API', () => {
     expect(runners.length).toBeGreaterThan(0);
     expect(runners[0]).toHaveProperty('provider');
     expect(body).not.toMatch(/auth|token|key|secret/i);
+  });
+
+  it('publishes every runner type the installation supports, with what declaring one takes', async () => {
+    const { server } = await serve();
+
+    const types = (await server.app.inject('/api/v1/runner-types')).json<RunnerTypeView[]>();
+
+    // Every adapter the registry can build, so an editor offering these offers all of
+    // them — the failure this replaces was a list of runner names living in a browser.
+    expect(types.map(({ type }) => type)).toEqual([
+      'agy-cli', 'claude-code-cli', 'codex-cli', 'openai-compatible',
+    ]);
+
+    const endpoint = types.find(({ type }) => type === 'openai-compatible');
+    expect(endpoint?.fields).toContainEqual({ name: 'baseUrl', required: true });
+    expect(endpoint?.fields).toContainEqual({ name: 'apiKeyEnv', required: false, secretEnv: true });
+    // It has no working directory and cannot write, which is why the resolver refuses it
+    // for the executors. A screen that offers it needs to be able to say so.
+    expect(endpoint?.capabilities.supportsWorkingDirectory).toBe(false);
+
+    const cli = types.find(({ type }) => type === 'claude-code-cli');
+    expect(cli?.capabilities.supportsWorkingDirectory).toBe(true);
+    expect(cli?.capabilities.supportedReasoningLevels.length).toBeGreaterThan(0);
+
+    // A field is a name and a requirement, never a value: `apiKeyEnv` is described, and
+    // the variable it would name is not read here at all. The probe endpoint the
+    // description is built with must not escape either.
+    expect(JSON.stringify(types)).not.toContain('127.0.0.1');
+    for (const field of types.flatMap(({ fields }) => fields)) {
+      expect(Object.keys(field).filter((key) => !['name', 'required', 'secretEnv'].includes(key))).toEqual([]);
+    }
+  });
+
+  it("serves a stage's whole log, and refuses a stage name that is not one", async () => {
+    const { server, fs, run } = await serve();
+    fs.seed(
+      `/repo/.agent-flow/runs/${run.runId}/logs/planning.log`,
+      'stage=planning role=planner\n--- runner output (redacted) ---\nthe plan\n--- end runner output ---\n',
+    );
+
+    const log = (await server.app.inject(`/api/v1/runs/${run.runId}/stages/planning/log?projectId=demo`)).json<StageLogView>();
+    expect(log.present).toBe(true);
+    // The whole file, not the two kilobytes the `stage_failed` event carries.
+    expect(log.lines).toContain('the plan');
+    expect(log.truncated).toBe(false);
+
+    // The stage name becomes a filename, so the enum is the whole defence.
+    const traversal = await server.app.inject(`/api/v1/runs/${run.runId}/stages/..%2F..%2Fetc%2Fpasswd/log?projectId=demo`);
+    expect(traversal.statusCode).toBe(400);
+
+    // `implementation` writes one log per task, which the task view serves.
+    const perTask = (await server.app.inject(`/api/v1/runs/${run.runId}/stages/implementation/log?projectId=demo`)).json<StageLogView>();
+    expect(perTask.perTask).toBe(true);
+    expect(perTask.present).toBe(false);
+  });
+
+  it('reports what each runner says it can be pointed at, and an empty list is an answer', async () => {
+    const { server } = await serve();
+
+    const models = (await server.app.inject('/api/v1/runners/models?projectId=demo')).json<RunnerModelsView[]>();
+
+    // One entry per enabled runner, whether or not it can enumerate: a CLI that cannot is
+    // a fact about that CLI, and the editor needs to tell it apart from a failed request.
+    expect(models.length).toBeGreaterThan(0);
+    for (const entry of models) {
+      expect(entry).toHaveProperty('id');
+      expect(Array.isArray(entry.models)).toBe(true);
+    }
   });
 
   it('reports runner health without probing', async () => {

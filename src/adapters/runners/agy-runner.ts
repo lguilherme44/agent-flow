@@ -1,5 +1,5 @@
 import type { ReasoningLevel } from '../../contracts/common.schema.js';
-import type { AgentRunInput, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
+import type { AgentRunInput, AgentRunUsage, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
 import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
 
@@ -70,6 +70,19 @@ interface AgyEnvelope {
   is_error?: boolean;
   status_code?: number | null;
   structured_output?: unknown;
+  /** Token accounting, as measured from `agy 1.1.27`. No cost and no model in it. */
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    thinking_tokens?: number;
+    cache_read_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+/** A number the envelope actually carried, or nothing. Never a zero this file invented. */
+function count(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function asEnvelope(value: unknown): AgyEnvelope | undefined {
@@ -96,8 +109,49 @@ export class AgyRunner extends BaseRunner {
   capabilities(model?: string): RunnerCapabilities {
     return {
       supportedReasoningLevels: reasoningLevelsFor(model),
-      // Strict containment is not guaranteed by standalone CLI flags (writes to ~/.gemini/antigravity-cli occurred during probe),
-      // so supportsReadOnly is explicitly declared false per security baseline requirements.
+      /**
+       * `false`, and the reason is not the one this comment used to give.
+       *
+       * It said "writes to `~/.gemini/antigravity-cli` occurred during probe" — a criterion
+       * applied to this adapter and to no other, when `claude` writes `~/.claude` and
+       * `codex` writes `~/.codex` on every run and both declare `true`. PRI-18 flipped this
+       * to `true` on exactly that reasoning, and a live end-to-end run proved the flip
+       * wrong within one stage.
+       *
+       * **`--mode plan` is a planning *workflow*, not a containment mode, and it does not
+       * return the answer.** The discovery stage completed in 31s having produced 2,709
+       * output tokens, and `result.text` was empty. Reproduced directly:
+       *
+       * ```
+       * $ agy --output-format json --effort high --mode plan --add-dir <dir>
+       *   "Write a short markdown document …"
+       * → {"status":"SUCCESS",
+       *    "response":"I have created the implementation plan in
+       *                [repository_architecture_plan.md](file:///…/.gemini/antigravity-cli/
+       *                brain/<uuid>/repository_architecture_plan.md)",
+       *    "usage":{"output_tokens":3689,…}}
+       * ```
+       *
+       * The document is written to a file outside the workspace and the envelope carries a
+       * sentence about it. A stage handed that gets a pointer, or nothing.
+       *
+       * **And the other two modes do not contain writes.** Measured against a real file:
+       *
+       * | invocation | answers inline | leaves the repo alone |
+       * |---|---|---|
+       * | `--mode accept-edits` | ✅ | ❌ overwrote `target.txt` |
+       * | `--mode accept-edits --sandbox` | ✅ | ❌ overwrote `target.txt` |
+       * | `--mode plan` | ❌ | — |
+       *
+       * So this CLI has **no mode that both answers inline and refuses to modify the
+       * repository under test**, which is what a read-only stage needs. The old value was
+       * right for the wrong reason; this is the right reason.
+       *
+       * What has not changed is that the criterion must be *one* criterion. `claude`'s
+       * `--permission-mode plan` and `codex`'s `-s read-only` are genuine containment modes
+       * that still return their answer; this CLI's `plan` is a different concept wearing
+       * the same word.
+       */
       supportsReadOnly: false,
       supportsNonInteractive: true,
       supportsWorkingDirectory: true,
@@ -146,6 +200,111 @@ export class AgyRunner extends BaseRunner {
       auth: 'unknown',
       version: result.stdout.trim().split('\n')[0] ?? undefined,
     };
+  }
+
+  /**
+   * What `agy models` enumerates, verbatim (AD-13).
+   *
+   * The same command `docs/runner-capabilities.md` used to measure the effective effort
+   * per family, read here for a different question: which ids a person may point a role
+   * at. The format is `<id>\t<label>`, and only lines carrying that tab are ids: the
+   * command opens with `Fetching available models...`, which has no tab and is progress
+   * rather than data. Splitting on whitespace instead offered `Fetching` as a model —
+   * caught by running the real CLI, not by a fixture written from the shape it should
+   * have had.
+   *
+   * A CLI that is absent or refuses contributes nothing rather than an error: this feeds
+   * a suggestion list, and a screen with no suggestions is the screen we already have.
+   */
+  async listModels(): Promise<readonly string[]> {
+    const result = await this.processRunner.run({
+      command: this.command,
+      args: ['models'],
+      cwd: process.cwd(),
+      timeoutSeconds: 15,
+    });
+
+    if (result.spawnFailed || result.exitCode !== 0) return [];
+
+    return result.stdout
+      .split('\n')
+      .flatMap((line) => {
+        const [id] = line.split('\t');
+        return line.includes('\t') && id !== undefined && id.trim() !== '' ? [id.trim()] : [];
+      });
+  }
+
+  /**
+   * `--disable-slash-commands` — on write stages only, and the exception was measured
+   * (PRI-18).
+   *
+   * "Disable slash command and skill expansion in print mode", from `agy --help` on 1.1.27.
+   * Skill expansion is not a hypothetical here: in the live dogfood this runner invoked one
+   * of the operator's own skills mid-task and left `.atl/skill-registry.md` and a 56 KB
+   * cache **inside the repository under test**, untracked, in the tree the run was judging.
+   *
+   * **The flag cancels plan mode.** Running the real CLI to capture its usage envelope
+   * produced this on stderr, reproducibly, and only for this pair:
+   *
+   * ```
+   * $ agy --output-format json --effort low --mode plan --disable-slash-commands
+   * warning: --mode plan has no effect while slash command expansion is disabled.
+   * ```
+   *
+   * `--mode accept-edits --disable-slash-commands` warns about nothing, and `--mode plan`
+   * alone warns about nothing.
+   *
+   * The read-only branch below is therefore kept even though {@link AgyRunner.capabilities}
+   * now declares `supportsReadOnly: false`, which means the resolver refuses this runner for
+   * every read-only role and the branch cannot be reached through configuration. An adapter
+   * that behaved correctly only because of what a layer above it happens to allow is an
+   * adapter that breaks the day that layer changes.
+   *
+   * A person who wants the personalisation gone from read-only stages too can turn the
+   * skill off in their own `agy` configuration. This product will not disarm the sandbox to
+   * do it for them.
+   *
+   * **Taken on the CLI's word about skills, unlike the other two adapters' flags.** Those
+   * were each verified by observing a behaviour change on the same prompt — a language that
+   * stopped leaking, a hook count that fell from 30 to 0. This one could not be: this
+   * machine's `agy` carries no persona or language setting, so there was nothing to measure
+   * the flag against, and the `.atl/` write has not been re-run with it on. What *is*
+   * measured is that the flag takes effect at all, which is the plan-mode warning above.
+   */
+  protected override isolationArgs(input: AgentRunInput): readonly string[] {
+    return input.permissions === 'read-only' ? [] : ['--disable-slash-commands'];
+  }
+
+  /**
+   * The accounting this CLI returns on every response (PRI-19).
+   *
+   * Measured, not assumed. The envelope from `agy 1.1.27`, captured by running it:
+   *
+   * ```json
+   * {"status":"SUCCESS","response":"ok\n","duration_seconds":1.8,"num_turns":1,
+   *  "usage":{"input_tokens":20735,"output_tokens":1,"thinking_tokens":0,
+   *           "cache_read_tokens":0,"total_tokens":20736}}
+   * ```
+   *
+   * **No cost and no model, so neither is reported.** This CLI does not price its calls and
+   * does not name the model that answered — inventing either would be worse than the gap,
+   * and a reader of `AgentRunUsage` is told to treat an absent field as unmeasured. The
+   * model for an agy stage therefore still comes from the configuration when one was
+   * pinned, which is the honest limit of what this provider says.
+   */
+  protected override parseUsage(_result: ProcessResult, parsed: unknown): AgentRunUsage | undefined {
+    const usage = asEnvelope(parsed)?.usage;
+    if (usage === undefined) return undefined;
+
+    const measured: AgentRunUsage = {
+      ...(count(usage.input_tokens) === undefined ? {} : { inputTokens: count(usage.input_tokens) }),
+      ...(count(usage.output_tokens) === undefined ? {} : { outputTokens: count(usage.output_tokens) }),
+      ...(count(usage.cache_read_tokens) === undefined
+        ? {}
+        : { cacheReadTokens: count(usage.cache_read_tokens) }),
+    };
+
+    return Object.keys(measured).length === 0 ? undefined : measured;
   }
 
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {

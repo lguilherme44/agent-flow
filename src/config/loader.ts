@@ -8,8 +8,8 @@ import {
   type EffectiveConfig,
 } from '../contracts/index.js';
 import type { FileSystem } from '../ports/index.js';
-import { deepMerge } from './merger.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from './defaults.js';
+import { PROJECT_OVERRIDABLE_KEYS, resolveConfigSources } from './resolver.js';
 
 /**
  * A configuration problem, phrased for the person who has to fix it.
@@ -31,29 +31,10 @@ export interface LoadConfigOptions {
 /**
  * Global-level keys a project is allowed to override (§38).
  *
- * Exported because the Settings page reports *where* each effective value came
- * from, and "can a project override this" is half that answer. A second copy of
- * this list would be a copy that can disagree with the merge it describes.
+ * Compatibility alias. The resolver owns the list so runtime, editor and origin
+ * reporting cannot drift into separate precedence rules.
  */
-export const OVERRIDABLE_KEYS = [
-  'roles',
-  'runners',
-  'fallback',
-  'parallelism',
-  'retry',
-  'git',
-  'approval',
-  // AR §6. Beside `retry` because it is the same kind of fact: how far *this
-  // repository's* tasks may recover before a person is asked. Unlike `ui` and
-  // `utilityModel`, none of these budgets can make the machine read anything new —
-  // they only ever bound work agent-flow was already going to do.
-  //
-  // Listed now rather than when a milestone first reads one, because a key absent from
-  // this list is silently *dropped* from a project file rather than rejected. A
-  // repository that wrote `recovery: { maxCorrectiveRounds: 0 }` and got the default
-  // would be a run doing exactly what it was told not to.
-  'recovery',
-] as const;
+export const OVERRIDABLE_KEYS = PROJECT_OVERRIDABLE_KEYS;
 
 /** `.agent-flow/config.yaml` under the project — the only versioned artifact. */
 export function projectConfigPath(projectDir: string): string {
@@ -101,16 +82,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<EffectiveC
   const projectPath = projectConfigPath(projectDir);
   const projectRaw = await readYaml(fs, projectPath);
 
-  let merged = deepMerge(defaults, globalRaw ?? {});
-
-  const OVERRIDABLE = OVERRIDABLE_KEYS;
-  if (projectRaw) {
-    const overrides: Record<string, unknown> = {};
-    for (const key of OVERRIDABLE) {
-      if (key in projectRaw) overrides[key] = projectRaw[key];
-    }
-    merged = deepMerge(merged, overrides);
-  }
+  const merged = resolveConfigSources({ defaults, global: globalRaw, project: projectRaw }).effectiveGlobal;
 
   const global = parseOrThrow(GlobalConfigSchema, merged, globalConfigPath);
 

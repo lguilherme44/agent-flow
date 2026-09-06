@@ -24,6 +24,39 @@ function interactive(): boolean {
 }
 
 /**
+ * When each announced unit started, so its finish can say how long it took.
+ *
+ * Keyed by label because units overlap: with `parallelism.maxTasks` above one, several
+ * tasks are open at once and a single timestamp would attribute one task's duration to
+ * whichever finished first.
+ *
+ * Cleared on finish. A label that is never finished leaks one number, which is the right
+ * trade against a module that would otherwise need a lifecycle.
+ */
+const startedAt = new Map<string, number>();
+
+/**
+ * A duration a person reads at a glance, not a number they convert.
+ *
+ * Seconds under a minute, `m` and `s` above it. Nothing shorter than a second is worth
+ * printing here: the unit being timed is a model call.
+ */
+export function formatElapsed(milliseconds: number): string {
+  const total = Math.max(0, Math.round(milliseconds / 1000));
+  if (total < 60) return `${String(total)}s`;
+  const minutes = Math.floor(total / 60);
+  return `${String(minutes)}m${String(total % 60).padStart(2, '0')}s`;
+}
+
+/** How long this label has been open, and forgets it. Absent when nothing announced it. */
+function elapsedFor(label: string): string {
+  const started = startedAt.get(label);
+  if (started === undefined) return '';
+  startedAt.delete(label);
+  return `  ${formatElapsed(Date.now() - started)}`;
+}
+
+/**
  * Writes one progress line.
  *
  * `label` is the stage or task id. `verbose` only widens what is shown — it never
@@ -41,6 +74,7 @@ export function writeProgress(label: string, status: ProgressStatus, verbose = f
   }
 
   if (status === 'started') {
+    startedAt.set(label, Date.now());
     process.stdout.write(`  → ${label}${interactive() ? '' : '\n'}`);
     return;
   }
@@ -61,7 +95,11 @@ export function writeProgress(label: string, status: ProgressStatus, verbose = f
   // plus its marker, so a shorter line cannot leave the tail of a longer one
   // behind it.
   const prefix = interactive() && !verbose ? '\r' : '';
-  process.stdout.write(`${prefix}  ${mark} ${label}${suffix}`.padEnd(34) + '\n');
+  // The duration lands after the pad, so a column of them lines up regardless of label
+  // length. A stage that took two minutes and one that hung look identical without it —
+  // measured on a live run where `discovery` printed `→` and then `✓`, 116 seconds apart,
+  // with nothing in between and no number on either line.
+  process.stdout.write(`${prefix}  ${mark} ${label}${suffix}`.padEnd(34) + elapsedFor(label) + '\n');
 }
 
 /**
@@ -74,5 +112,5 @@ export function writeProgress(label: string, status: ProgressStatus, verbose = f
 export function writeTaskOutcome(taskId: string, status: string, verbose = false): void {
   const mark = status === 'completed' ? '✓' : '✗';
   const prefix = interactive() && !verbose ? '\r' : '';
-  process.stdout.write(`${prefix}  ${mark} ${taskId} (${status})`.padEnd(40) + '\n');
+  process.stdout.write(`${prefix}  ${mark} ${taskId} (${status})`.padEnd(40) + elapsedFor(taskId) + '\n');
 }

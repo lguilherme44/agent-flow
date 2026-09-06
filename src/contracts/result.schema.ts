@@ -6,6 +6,7 @@ import {
   IsoTimestampSchema,
   ReasoningLevelSchema,
   RunIdSchema,
+  RunUsageSchema,
   RunnerErrorCodeSchema,
   WorkflowRoleSchema,
 } from './common.schema.js';
@@ -59,6 +60,14 @@ export const TaskResultSchema = z.object({
   fallback: z
     .object({ from: z.string().min(1), errorCode: RunnerErrorCodeSchema })
     .optional(),
+  /**
+   * What this attempt spent, when the runner reported it (PRI-19).
+   *
+   * Distinct from `model` above, which is what the configuration *asked for*. This is the
+   * runner's own account, and on a run that pins no model — the arrangement AD-13
+   * recommends — `usage.model` is the only place the answer exists at all.
+   */
+  usage: RunUsageSchema.optional(),
 
   startedAt: IsoTimestampSchema,
   finishedAt: IsoTimestampSchema,
@@ -136,16 +145,32 @@ export type TaskResult = z.infer<typeof TaskResultSchema>;
 /**
  * One unit of work that ran, with what it actually cost in time and effort.
  *
- * Local operational telemetry (§57), and emphatically **not** billing: there are
- * no monetary values here and none may be added. Nothing in the workflow reads
- * it, and nothing may — `state.json` remains the source of truth and
- * `events.jsonl` the audit trail. A telemetry entry is a *projection* of those
- * two, reconstructible from them at any time, which is why it can never drift
- * from them or be repaired independently of them.
+ * Local operational telemetry (§57). Nothing in the workflow reads it, and nothing may —
+ * `state.json` remains the source of truth and `events.jsonl` the audit trail. A telemetry
+ * entry is a *projection* of those two, reconstructible from them at any time, which is
+ * why it can never drift from them or be repaired independently of them.
  *
- * The provenance fields record what executed, not what was configured. Under a
- * fallback the two differ, and that difference is most of what the numbers are
- * for.
+ * The provenance fields record what executed, not what was configured. Under a fallback
+ * the two differ, and that difference is most of what the numbers are for.
+ *
+ * ## The money rule, narrowed rather than dropped (PRI-19)
+ *
+ * This said "there are no monetary values here and none may be added", and the reason
+ * given was that presenting a cost would imply agent-flow knows what the user is billed.
+ * That reason is exactly right about a figure **this codebase computes**, and it stays
+ * absolute: no price table, no tokens-times-a-rate, ever. A number agent-flow derived is a
+ * number agent-flow is accountable for, and it has no basis to be.
+ *
+ * It was too wide about a figure **the provider itself reports**. `total_cost_usd` arrives
+ * in the envelope of every Claude Code response, and dropping it left an orchestrator whose
+ * whole job is spending model calls unable to answer what a run cost — while the answer sat
+ * in a field it had already parsed.
+ *
+ * So the rule is now: **a monetary value may appear only when a runner reported it, and it
+ * must be presented as that runner's figure rather than as a bill.** It is not one: a
+ * subscriber pays a flat fee and the provider's number is an API-rate equivalent. Whatever
+ * renders it says so — see `cli/render/spend.ts`, which refuses to print a total without
+ * that sentence beside it.
  */
 export const TelemetryEntrySchema = z.object({
   runId: RunIdSchema,
@@ -170,5 +195,14 @@ export const TelemetryEntrySchema = z.object({
   /** Total invocations including the first. One means nothing was retried. */
   attempts: z.number().int().min(1).default(1),
   errorCode: RunnerErrorCodeSchema.optional(),
+  /**
+   * What this entry spent, when the runner reported it (PRI-19).
+   *
+   * The `model` above answers "what was configured" and is absent whenever nobody pinned
+   * one — which AD-13 recommends, and which therefore left `byModel` empty on precisely
+   * the runs set up correctly. `usage.model` answers "what actually replied", so the
+   * collectors below prefer the configured value and fall back to this one.
+   */
+  usage: RunUsageSchema.optional(),
 });
 export type TelemetryEntry = z.infer<typeof TelemetryEntrySchema>;

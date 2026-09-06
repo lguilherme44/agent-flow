@@ -5,6 +5,7 @@ import type { ReasoningLevel } from './common.schema.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
 import {
   WorkflowClassSchema,
+  PipelineStageSchema,
   type Degradation,
   type PipelineStage,
   type PipelineStatus,
@@ -59,6 +60,18 @@ export const TaskParamsSchema = z.object({
   taskId: TaskIdParamSchema,
 });
 
+/**
+ * A stage is named from a closed set, never spelled by the caller.
+ *
+ * The name becomes a filename under the run's `logs/`, so this enum is the whole defence
+ * against traversal — the same shape `ArtifactParamsSchema` and `PromptNameSchema` use,
+ * and for the same reason: a client that can choose a path can choose any path.
+ */
+export const StageLogParamsSchema = z.object({
+  runId: RunIdParamSchema,
+  stage: PipelineStageSchema,
+});
+
 export const ArtifactParamsSchema = z.object({
   runId: RunIdParamSchema,
   artifact: z.enum([
@@ -89,6 +102,40 @@ export const PromptParamsSchema = z.object({ prompt: PromptNameSchema });
 
 /** Every read endpoint is scoped to one project. */
 export const ProjectQuerySchema = z.object({ projectId: ProjectIdSchema.optional() });
+
+/** A configuration source is named by scope and registry id, never by path. */
+export const ConfigEditorQuerySchema = z
+  .object({
+    scope: z.enum(['global', 'project']),
+    projectId: ProjectIdSchema.optional(),
+  })
+  .strict()
+  .superRefine((target, context) => {
+    if (target.scope === 'project' && target.projectId === undefined) {
+      context.addIssue({ code: 'custom', path: ['projectId'], message: 'project scope requires projectId' });
+    }
+    if (target.scope === 'global' && target.projectId !== undefined) {
+      context.addIssue({ code: 'custom', path: ['projectId'], message: 'global scope does not accept projectId' });
+    }
+  });
+
+export const ConfigPathSchema = z
+  .array(z.union([z.string().min(1).max(128), z.number().int().nonnegative()]))
+  .min(1)
+  .max(16);
+
+export const ConfigEditOperationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('set'), path: ConfigPathSchema, value: z.unknown() }).strict(),
+  z.object({ kind: z.literal('unset'), path: ConfigPathSchema }).strict(),
+]);
+
+export const ConfigValidateRequestSchema = z
+  .object({ operations: z.array(ConfigEditOperationSchema).min(1).max(100) })
+  .strict();
+
+export const ConfigApplyRequestSchema = ConfigValidateRequestSchema.extend({
+  expectedRevision: z.string().regex(/^sha256:(?:missing|[a-f0-9]{64})$/),
+}).strict();
 
 // ---------------------------------------------------------------------------
 // Write requests (§86, UI-27)
@@ -138,6 +185,15 @@ export const StartRequestSchema = z.object({
 export const RetryRequestSchema = z.object({
   /** Retries a BLOCKED task, or one past its attempt limit. Deliberate either way. */
   force: z.boolean().default(false),
+  /**
+   * This task is meant to change nothing; accept an empty diff (PRI-20).
+   *
+   * Same use case, second adapter, as `--expect-no-change` on `agent-flow retry`. It has
+   * to exist here too: the operator most likely to hit `acceptance_evidence_missing` is
+   * the one watching the run in the browser, and a net reachable only from a terminal is
+   * a net for half the people who need it.
+   */
+  expectNoChange: z.boolean().default(false),
 });
 
 /**
@@ -357,6 +413,30 @@ export interface StageViewResponse {
   readonly reasoning?: ReasoningLevel;
   readonly attempts?: number;
   readonly errorCode?: string;
+}
+
+/**
+ * One stage's own log, as it was written (§95).
+ *
+ * The full runner output, already redacted at the point it was captured — the file the
+ * `stage_failed` event carries two kilobytes of. Those two kilobytes were all a browser
+ * could reach: enough to see that something failed, rarely enough to see why, and the
+ * remedy was a terminal and a path nobody remembers.
+ *
+ * `perTask` is not an error. `implementation` and `code-review` run once per task and
+ * write one log each, which the task view already serves; saying so is better than an
+ * empty array that reads as "nothing happened".
+ */
+export interface StageLogView {
+  readonly stage: PipelineStage;
+  /** Oldest first, terminal escapes stripped. Empty when the stage wrote none. */
+  readonly lines: string[];
+  readonly present: boolean;
+  /** How many lines the file holds, whether or not they all fit. */
+  readonly total: number;
+  readonly truncated: boolean;
+  /** Set for the stages whose logs belong to a task rather than to the stage. */
+  readonly perTask?: true;
 }
 
 export interface TaskSummaryView {
@@ -618,6 +698,48 @@ export interface RunnerView {
   readonly structuredOutput: string;
 }
 
+/**
+ * A runner type this installation supports, and what declaring one takes (§7).
+ *
+ * The list the editor offers when somebody adds their own agent. Sent by the server
+ * because the server is where adapters are registered: a browser holding its own copy
+ * would ship one machine's runners as everybody's, which is exactly what the local-only
+ * template did.
+ */
+export interface RunnerTypeView {
+  readonly type: string;
+  /** Which keys this type reads, and which it cannot work without. */
+  readonly fields: readonly {
+    readonly name: string;
+    readonly required: boolean;
+    /** Holds the *name* of an environment variable, never a value (§7.1). */
+    readonly secretEnv?: true;
+  }[];
+  /** The CLI's own surface, before a model narrows it. */
+  readonly capabilities: {
+    readonly supportedReasoningLevels: readonly ReasoningLevel[];
+    readonly supportsReadOnly: boolean;
+    readonly supportsWorkingDirectory: boolean;
+    readonly structuredOutputStrategy: 'native' | 'prompted';
+  };
+}
+
+/**
+ * The models a runner reports it can be pointed at (AD-13).
+ *
+ * Asked of the provider — `agy models`, an OpenAI-compatible `GET /models` — never held
+ * as a table in this repository, where it would be provider knowledge above the adapter
+ * boundary and would rot besides. `models` is empty for a runner that cannot enumerate,
+ * which is a fact about that CLI and not an error.
+ *
+ * A **suggestion**, never a constraint: a model released this morning has to stay
+ * typeable this morning, so nothing downstream may treat this as the set of valid values.
+ */
+export interface RunnerModelsView {
+  readonly id: string;
+  readonly models: readonly string[];
+}
+
 export interface RunnerHealthView {
   readonly id: string;
   readonly installed: boolean;
@@ -647,9 +769,19 @@ export interface RoutedAgentView {
  */
 export interface RoleRouteView {
   readonly role: string;
+  /**
+   * Where this role's route lives in a configuration source.
+   *
+   * `executor.trivial` is written `roles.executors.trivial`, and an editor that
+   * reconstructed that from the role name would be keeping a private copy of a rule
+   * `roleConfigOf` already owns. Sent so the browser can address the value it edits.
+   */
+  readonly configKeys: readonly string[];
   /** The prompts this role runs, and therefore what its runner must support. */
   readonly prompts: string[];
   readonly requiresReadOnly: boolean;
+  /** True when the role writes: it needs a runner with a working directory. */
+  readonly requiresWorkingDirectory: boolean;
   readonly requiresNativeStructuredOutput: boolean;
   readonly configured: {
     readonly runner: string;
@@ -923,6 +1055,70 @@ export interface ConfigView {
    * it (§95).
    */
   readonly configError?: string;
+}
+
+export type ConfigEditorScope = 'global' | 'project';
+export type ConfigEditorPath = readonly (string | number)[];
+
+export interface ConfigEditorFieldView {
+  readonly path: ConfigEditorPath;
+  readonly explicitValue: unknown;
+  readonly effectiveValue: unknown;
+  readonly origin?: 'default' | 'global' | 'project';
+  readonly editable: boolean;
+  readonly reason?: 'global_only';
+  readonly effect: 'server_restart' | 'next_run' | 'next_execution_context';
+  readonly valueType: 'string' | 'boolean' | 'integer' | 'number' | 'string_list' | 'reasoning_level' | 'enum';
+  /**
+   * What a closed field accepts, in the schema's order.
+   *
+   * Present for `enum` and `reasoning_level`, absent for every open type. Without it a
+   * browser knows a field is closed and still has to render free text, which turns a
+   * typo into a round-trip and a diagnostic instead of a value it could never have
+   * picked (§95).
+   */
+  readonly options?: readonly string[];
+}
+
+export interface ConfigEditorDynamicFieldView {
+  readonly path: readonly string[];
+  readonly editable: boolean;
+  readonly reason?: 'global_only';
+  readonly effect: ConfigEditorFieldView['effect'];
+  readonly valueType: ConfigEditorFieldView['valueType'];
+  readonly options?: readonly string[];
+}
+
+export interface ConfigEditorView {
+  readonly target: { readonly scope: ConfigEditorScope; readonly projectId?: string };
+  readonly revision: string;
+  readonly exists: boolean;
+  readonly fields: readonly ConfigEditorFieldView[];
+  readonly dynamicFields: readonly ConfigEditorDynamicFieldView[];
+  /** Names are safe for diagnostics; values of unknown nodes never cross the API. */
+  readonly unknownKeys: readonly string[];
+}
+
+export interface ConfigEditorDiagnosticView {
+  readonly severity: 'error' | 'warning';
+  readonly code: string;
+  readonly path: ConfigEditorPath;
+  readonly message: string;
+  readonly action?: string;
+}
+
+export interface ConfigEditorChangeView {
+  readonly path: ConfigEditorPath;
+  readonly before: unknown;
+  readonly after: unknown;
+  readonly effect: ConfigEditorFieldView['effect'];
+}
+
+export interface ConfigValidationView {
+  readonly valid: boolean;
+  readonly revision: string;
+  readonly diagnostics: readonly ConfigEditorDiagnosticView[];
+  readonly changes: readonly ConfigEditorChangeView[];
 }
 
 /** The SSE envelope of §87. */

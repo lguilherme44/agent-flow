@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { AgyRunner } from '../../src/adapters/runners/agy-runner.js';
+import { ClaudeCodeRunner } from '../../src/adapters/runners/claude-code-runner.js';
+import { CodexRunner } from '../../src/adapters/runners/codex-runner.js';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import type { AgentRunInput } from '../../src/ports/index.js';
 
 function makeRunner(proc = new FakeProcessRunner()) {
@@ -107,7 +110,33 @@ describe('AgyRunner capabilities', () => {
     });
   });
 
-  it('declares supportsReadOnly false per security baseline probe requirements', () => {
+  /**
+   * One criterion, applied to every CLI adapter — and this runner genuinely fails it.
+   *
+   * PRI-18 flipped this adapter to `true`, reasoning that its `false` rested on writes to
+   * `~/.gemini` while `claude` and `codex` write `~/.claude` and `~/.codex` and declare
+   * `true`. The reasoning about the *criterion* was right and the conclusion was wrong: a
+   * live end-to-end run failed one stage later, and the measurement is recorded in
+   * {@link AgyRunner.capabilities}.
+   *
+   * `--mode plan` is a planning workflow rather than a containment mode. It writes its
+   * answer to a file under `~/.gemini/antigravity-cli/brain/` and returns a sentence
+   * pointing at it, so a stage handed that gets a pointer or nothing — the discovery stage
+   * produced 2,709 output tokens and an empty `text`. `--mode accept-edits`, with or
+   * without `--sandbox`, answers inline and overwrote a real file in the working directory.
+   *
+   * The assertion stays about the *set*, because nothing asserting the three together is
+   * why the original divergence lasted. What differs now is stated rather than implied.
+   */
+  it('answers supportsReadOnly on the same criterion as every other CLI adapter', () => {
+    const proc = new FakeProcessRunner();
+    const claude = new ClaudeCodeRunner({ id: 'claude', processRunner: proc });
+    const codex = new CodexRunner({ id: 'codex', processRunner: proc, fs: new InMemoryFileSystem() });
+
+    // The two whose read-only mode both contains writes and returns the answer.
+    expect(claude.capabilities().supportsReadOnly).toBe(true);
+    expect(codex.capabilities().supportsReadOnly).toBe(true);
+    // And the one that has no such mode. Measured, not assumed — see the doc comment.
     expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(false);
   });
 
@@ -115,6 +144,36 @@ describe('AgyRunner capabilities', () => {
     const caps = makeRunner().runner.capabilities();
     expect(caps.supportsNonInteractive).toBe(true);
     expect(caps.supportsWorkingDirectory).toBe(true);
+  });
+});
+
+describe('AgyRunner model enumeration (AD-13)', () => {
+  it('reads the ids `agy models` prints, and drops the human labels beside them', async () => {
+    // Copied from `agy models` 1.1.25, progress line and all — the first version of this
+    // fixture was written from the shape the output should have had, and agreed with a
+    // parser that offered `Fetching` as a model.
+    const proc = new FakeProcessRunner().push({
+      stdout: [
+        'Fetching available models...',
+        'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+        'gemini-3.1-pro-low\tGemini 3.1 Pro (Low)',
+        'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+        '',
+      ].join('\n'),
+      exitCode: 0,
+    });
+    const { runner } = makeRunner(proc);
+
+    expect(await runner.listModels?.()).toEqual([
+      'gemini-3.8-flash-high', 'gemini-3.1-pro-low', 'claude-sonnet-4-6',
+    ]);
+    expect(proc.calls[0]?.args).toEqual(['models']);
+  });
+
+  it('offers nothing when the CLI is absent or refuses, rather than failing', async () => {
+    // This feeds a suggestion list. A screen with no suggestions is the screen we had.
+    expect(await makeRunner(new FakeProcessRunner().push({ spawnFailed: true })).runner.listModels?.()).toEqual([]);
+    expect(await makeRunner(new FakeProcessRunner().push({ exitCode: 1, stderr: 'unknown command' })).runner.listModels?.()).toEqual([]);
   });
 });
 

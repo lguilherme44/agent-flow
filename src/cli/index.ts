@@ -11,6 +11,7 @@ import {
   runConfigGetCommand,
   runConfigSetCommand,
   runConfigListCommand,
+  runConfigUnsetCommand,
 } from './config.js';
 import { runStatusCommand } from './status.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
@@ -114,6 +115,16 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runConfigSetCommand(key, value, options, globalOptions(command));
     });
 
+  for (const name of ['unset', 'inherit'] as const) {
+    configCmd
+      .command(`${name} <key>`)
+      .description('Remove an explicit value so it inherits from the higher-precedence source')
+      .option('--global', 'remove from global configuration file')
+      .action(async (key: string, options: { global?: boolean }, command: Command) => {
+        exitCode = await runConfigUnsetCommand(key, options, globalOptions(command));
+      });
+  }
+
   configCmd
     .command('list')
     .description('List effective or global configuration')
@@ -212,7 +223,15 @@ export async function main(argv: string[]): Promise<number> {
     .description('Queue a task again after it failed')
     .argument('<taskId>', 'for example TASK-004')
     .option('--force', 'retry a BLOCKED task, or exceed the attempt limit')
-    .action(async (taskId: string, options: { force?: boolean }, command: Command) => {
+    // PRI-20. The net for a plan that forgot `expectsNoChange`: a verification task with a
+    // legitimately empty diff otherwise burns every attempt and ends in a run a person can
+    // only cancel. Declared here rather than by editing the plan, which approval is bound to.
+    .option('--expect-no-change', 'this task is meant to change nothing; accept an empty diff')
+    .action(async (
+      taskId: string,
+      options: { force?: boolean; expectNoChange?: boolean },
+      command: Command,
+    ) => {
       exitCode = await runRetryCommand(taskId, options, globalOptions(command));
     });
 

@@ -248,6 +248,27 @@ export class OpenAiRunner implements AgentRunner {
     }
   }
 
+  /**
+   * What the endpoint serves, from the endpoint (AD-13).
+   *
+   * `GET /models` is the one part of the OpenAI shape that is genuinely standard, and
+   * `healthCheck` above already reads it — for a *version* string, which flattened the
+   * list into prose. This returns the ids as ids, for a control that offers them.
+   *
+   * A server that will not answer contributes nothing. An editor that suggests nothing is
+   * an editor with a plain text box, which is the state this improves on and never worse.
+   */
+  async listModels(): Promise<readonly string[]> {
+    try {
+      const response = await this.send(this.modelsUrl, undefined, HEALTH_TIMEOUT_SECONDS);
+      if (!response.ok) return [];
+      const body = (await response.json()) as { data?: readonly { id?: unknown }[] };
+      return (body.data ?? []).map(({ id }) => id).filter((id): id is string => typeof id === 'string' && id !== '');
+    } catch {
+      return [];
+    }
+  }
+
   private async send(
     url: string,
     body: Record<string, unknown> | undefined,

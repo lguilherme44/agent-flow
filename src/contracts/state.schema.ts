@@ -225,6 +225,31 @@ export const TaskProgressSchema = z.object({
   failureClass: FailureClassSchema.optional(),
   lastFailureAt: IsoTimestampSchema.optional(),
   blockReason: BlockReasonSchema.optional(),
+  /**
+   * When a person declared this task legitimately unchanged, after the plan was written
+   * (PRI-20).
+   *
+   * `expectsNoChange` on the plan's task is the same claim made by the *planner*, before
+   * the fact, and it is the right place for it: the difference between "correctly changed
+   * nothing" and "did nothing" is intent, and intent belongs in the plan. The planner does
+   * reach for it — a live run set it unprompted on exactly the task that warranted it.
+   *
+   * **What was missing is a net for when it forgets.** Two runs died on
+   * `acceptance_evidence_missing` because a verification task legitimately produced an
+   * empty diff and nothing in the plan said so. That cost two full attempts of model time
+   * and ended in a run a person could only cancel: there was no way, from any surface, to
+   * make the declaration after the plan existed.
+   *
+   * **Recorded here rather than by editing `plan.json`, and the distinction is the point.**
+   * Approval is granted to a specific plan and `approvedPlanHash` enforces it, so mutating
+   * the plan to add one field would invalidate a gate a person had already passed — and
+   * would quietly rewrite what they approved. This is a second, attributable fact: the
+   * planner said one thing, a person said another, and both are on the record.
+   *
+   * A timestamp rather than a boolean, for the same reason `lastFailureAt` is one: *when*
+   * somebody intervened is half of what an audit trail is for, and `true` cannot say it.
+   */
+  noChangeDeclaredAt: IsoTimestampSchema.optional(),
 });
 export type TaskProgress = z.infer<typeof TaskProgressSchema>;
 

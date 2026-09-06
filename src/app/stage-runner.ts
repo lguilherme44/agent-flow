@@ -5,6 +5,7 @@ import {
   type FailureClass,
   type GlobalConfig,
   type ReasoningLevel,
+  type RunUsage,
   type RunStage,
   type RunnerErrorCode,
   type Task,
@@ -119,6 +120,16 @@ export interface StageExecution {
   readonly reasoning: ReasoningLevel;
   readonly reasoningClamped: boolean;
   readonly fallback?: { readonly from: string; readonly errorCode: RunnerErrorCode };
+  /**
+   * What the runner said this call spent (PRI-19).
+   *
+   * Beside `model` and not merged into it, because the two answer different questions:
+   * that one is what the configuration asked for, this one is what the provider says
+   * actually answered. A run that pins no model — the arrangement AD-13 recommends — has
+   * `model` absent and `usage.model` populated, which is the case that made every such
+   * run unattributable before this field existed.
+   */
+  readonly usage?: RunUsage;
 }
 
 export interface StageResult {
@@ -488,6 +499,26 @@ export class StageRunner {
         `reasoning=${resolved.reasoning} startedAt=${startedAt}`,
     ];
 
+    /**
+     * The input, when the operator asked for it (§95, `execution.recordPrompts`).
+     *
+     * Every other line in this file describes what came *back*. An agent that did
+     * something inexplicable was told something, and without this the thing it was told
+     * is unrecoverable — the prompt is assembled from a dozen sources and never kept.
+     *
+     * Redacted with the same context and the same function as the runner's output, so
+     * there is no path by which a credential reaches the log through the input that does
+     * not through the output. Off by default: a prompt is a copy of whatever the stage
+     * was given, and copies of repository content are not free to leave lying around.
+     */
+    if (config.execution.recordPrompts) {
+      logLines.push(
+        '--- prompt (redacted) ---',
+        redactEvidence(promptText, this.redactionContext(options)),
+        '--- end prompt ---',
+      );
+    }
+
     // **`repair`, not `attempt` (AR §4.4).** This counts re-prompts for a
     // well-formed answer inside one invocation of this stage; an *attempt* is one
     // agent invocation for one task in one prepared workspace, and the task's own
@@ -517,7 +548,7 @@ export class StageRunner {
           : { outputSchema: toJsonSchema(stage.outputSchema) }),
       });
 
-      lastExecution = executionOf(result.provenance, resolved);
+      lastExecution = executionOf(result.provenance, resolved, result.usage);
 
       if (!result.ok) {
         // Infrastructure failures are not retried here: re-running immediately
@@ -599,6 +630,33 @@ export class StageRunner {
       const problems = this.validate(stage, result.text, result.json);
       if (problems.length === 0) {
         await this.persist(runId, stage, result.text);
+
+        /**
+         * What the runner said, on the path where it worked (§95).
+         *
+         * The failure path has written this block since the day somebody had to open a
+         * vendor's own log directory to find out what an agent said. The success path
+         * wrote two lines — `repair=1 ok durationMs=…` — for what a live run measured as
+         * six minutes of model work. With `execution.recordPrompts` on, that log then held
+         * the question and not the answer, which is the same asymmetry inverted.
+         *
+         * A stage with an artifact gets a pointer instead of a copy. Its answer is already
+         * on disk under a name, and two copies of one document is how a reader ends up
+         * comparing them.
+         *
+         * Redacted with the same context and the same function as everywhere else, so no
+         * credential reaches a log through this door that would not through the others.
+         */
+        logLines.push(
+          ...(stage.artifact === undefined
+            ? [
+                '--- runner output (redacted) ---',
+                redactEvidence(result.text, this.redactionContext(options)),
+                '--- end runner output ---',
+              ]
+            : [`answer written to artifact "${stage.artifact}"`]),
+        );
+
         await this.writeLog(runId, stage, logLines);
 
         const execution = lastExecution;
@@ -666,6 +724,32 @@ export class StageRunner {
   private validate(stage: StageDefinition, text: string, json: unknown): string[] {
     const problems: string[] = [];
 
+    /**
+     * An empty answer is a failed stage, not a successful one (PRI-22).
+     *
+     * A live run found this the expensive way. `discovery` completed in 31 seconds having
+     * produced 2,709 output tokens — the accounting says so — and returned an empty string.
+     * No schema, no structural check, so `problems` was empty and the stage was recorded
+     * `stage_completed`. The failure surfaced two stages later as
+     * `Prompt "architecture-impact" is missing required variables: architecture`, which
+     * names the wrong stage, the wrong file and the wrong problem.
+     *
+     * Checked before the schema so the message says what actually happened. A schema-bearing
+     * stage would otherwise report "expected a JSON object, got unparseable output", which
+     * is true of an empty string and describes a malformed answer rather than an absent one.
+     *
+     * `json` is consulted because a runner can return a parsed object with empty raw text,
+     * and an answer that satisfies the contract is an answer whatever the text looks like.
+     */
+    if (text.trim() === '' && json === undefined) {
+      problems.push(
+        'the runner returned an empty answer; nothing was written and no later stage can use it',
+      );
+      // Returned rather than accumulated: every check below describes the *shape* of an
+      // answer, and there is none to describe.
+      return problems;
+    }
+
     if (stage.outputSchema !== undefined) {
       const candidate = json ?? safeJson(text);
       if (candidate === undefined) {
@@ -731,6 +815,10 @@ export function executionDetail(execution: StageExecution): Record<string, unkno
     reasoning: execution.reasoning,
     reasoningClamped: execution.reasoningClamped,
     ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
+    // What it spent, when the runner said (PRI-19). Emitted on `stage_completed` and
+    // `stage_failed` alike, through this one function, so the event log can total a run's
+    // cost without a reader knowing which event it is looking at.
+    ...(execution.usage === undefined ? {} : { usage: execution.usage }),
   };
 }
 
@@ -764,13 +852,23 @@ function safeJson(text: string): unknown {
 function executionOf(
   provenance: RunProvenance | undefined,
   resolved: ResolvedAgentConfig,
+  /**
+   * What the runner reported spending, when it reported anything (PRI-19).
+   *
+   * Separate from `provenance` because they come from different places and only one of
+   * them is a substitution: usage is present on an ordinary call and provenance is not.
+   */
+  usage?: RunUsage,
 ): StageExecution {
+  const spent = usage === undefined ? {} : { usage };
+
   if (provenance === undefined) {
     return {
       runner: resolved.runner,
       ...(resolved.model === undefined ? {} : { model: resolved.model }),
       reasoning: resolved.reasoning,
       reasoningClamped: resolved.reasoningClamped,
+      ...spent,
     };
   }
 
@@ -783,5 +881,6 @@ function executionOf(
       from: provenance.substitutedFor.runner,
       errorCode: provenance.substitutedFor.errorCode,
     },
+    ...spent,
   };
 }

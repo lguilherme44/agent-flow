@@ -32,6 +32,8 @@ const FAKE_CLI = join(HERE, 'fake-agent-cli.mjs');
 export type ImplOutcome = 'completed' | 'blocked' | 'failed';
 
 export interface WorldOptions {
+  /** Which shipped dashboard the real UI server should expose. */
+  readonly dashboard?: 'classic' | 'deck';
   /** Directory names under the temp root. Each becomes an Agent Flow project. */
   readonly projects?: readonly string[];
   /** Serve the temp root as a workspace rather than a single project. */
@@ -358,6 +360,7 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     // is the whole claim of this milestone.
     const fakeEnv: Record<string, string> = {
       AF_FAKE_LOG: fakeLog,
+      SECRET_API_TOKEN: 'resolved-super-secret',
       ...(options.worktrees === true
         ? { AF_FAKE_WRITE: options.collidingTasks === true ? 'shared' : '1' }
         : {}),
@@ -422,7 +425,13 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     }
 
     const served = options.workspace === true ? root : (projectDirs[first] as string);
-    const { child, url } = await startServer(globalConfigPath, served, root, fakeEnv);
+    const { child, url } = await startServer(
+      globalConfigPath,
+      served,
+      root,
+      fakeEnv,
+      options.dashboard ?? 'classic',
+    );
 
     return new World(
       root,
@@ -485,12 +494,23 @@ async function startServer(
   served: string,
   cwd: string,
   fakeEnv: Readonly<Record<string, string>>,
+  dashboard: 'classic' | 'deck',
 ): Promise<{ child: ChildProcess; url: string }> {
   const port = await freePort();
 
   const child = spawn(
     process.execPath,
-    [CLI, '--config', globalConfigPath, 'ui', served, '--port', String(port), '--no-open'],
+    [
+      CLI,
+      '--config',
+      globalConfigPath,
+      'ui',
+      served,
+      '--port',
+      String(port),
+      '--no-open',
+      ...(dashboard === 'classic' ? ['--classic'] : []),
+    ],
     {
       cwd,
       env: { ...process.env, ...fakeEnv },
@@ -535,6 +555,7 @@ runners:
     type: claude-code-cli
     enabled: true
     command: ${FAKE_CLI}
+    apiKeyEnv: SECRET_API_TOKEN
   codex:
     type: codex-cli
     enabled: true
@@ -558,6 +579,8 @@ fallback:
   enabled: false
 ui:
   workspaceDepth: 2
+unknownFixture:
+  privateValue: unknown-secret-value
 `;
 }
 

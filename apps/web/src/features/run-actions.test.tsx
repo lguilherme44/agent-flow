@@ -39,6 +39,7 @@ const RUN: RunDetailView = {
   runtime: {
     status: 'awaiting_human_approval',
     resumable: false,
+    paused: false,
     progress: { workflow: { done: 1, total: 6 }, implementation: { done: 0, total: 9 } },
     reviewFreshness: 'current',
   },

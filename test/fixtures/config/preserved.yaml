@@ -1,0 +1,11 @@
+# operator note
+runners:
+  moe:
+    type: codex-cli
+    enabled: true
+
+plugin:
+  privateToken: do-not-disclose
+
+parallelism:
+  maxTasks: 1

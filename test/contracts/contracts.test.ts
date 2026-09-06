@@ -4,6 +4,9 @@ import {
   REASONING_ORDER,
   WorkflowRoleSchema,
   WORKFLOW_ROLES,
+  ALL_WORKFLOW_ROLES,
+  roleConfigOf,
+  roleConfigKeys,
   RunnerConfigSchema,
   RoleConfigSchema,
   GlobalConfigSchema,
@@ -62,6 +65,35 @@ describe('WorkflowRole (§3)', () => {
 
   it('rejects unknown roles', () => {
     expect(WorkflowRoleSchema.safeParse('executor.gigantic').success).toBe(false);
+  });
+
+  it('publishes a config path that reaches exactly what roleConfigOf reads', () => {
+    const roles = GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' } },
+      roles: {
+        architect: { runner: 'claude', effort: 'high' },
+        sdd: { runner: 'claude', effort: 'high' },
+        planner: { runner: 'claude', effort: 'high' },
+        planReviewer: { runner: 'claude', effort: 'high' },
+        executors: {
+          trivial: { runner: 'claude', effort: 'low' },
+          normal: { runner: 'claude', effort: 'medium' },
+          complex: { runner: 'claude', effort: 'high' },
+        },
+        verification: { runner: 'claude', effort: 'medium' },
+        finalReviewer: { runner: 'claude', effort: 'very_high' },
+      },
+    }).roles;
+
+    // Two translations of one rule — `executor.trivial` is `roles.executors.trivial` —
+    // and this is what stops them drifting apart in opposite directions.
+    for (const role of ALL_WORKFLOW_ROLES) {
+      const path = roleConfigKeys(role);
+      expect(path[0]).toBe('roles');
+      let node: unknown = { roles };
+      for (const segment of path) node = (node as Record<string, unknown>)[segment];
+      expect(node).toBe(roleConfigOf(roles, role));
+    }
   });
 });
 

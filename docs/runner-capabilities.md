@@ -42,6 +42,146 @@ probed would clamp work for no evidence, and claiming a wider one is the defect 
 
 ---
 
+## A third question: what does this CLI load that the run did not ask for?
+
+**Added by PRI-18, after a live run answered it the hard way.** The SDD came back in
+Portuguese, under a persona, for a repository whose prompts and code are English. Neither
+came from any of the eleven prompts this product ships. They came from
+`~/.claude/settings.json` on the machine that ran it. On the same run a second CLI expanded
+one of the operator's own skills mid-task and left `.atl/skill-registry.md` and a 56 KB
+cache untracked **inside the repository under test**.
+
+Three costs, in the order they should worry you: a persona competing with the prompt an
+engineering stage was given; a run whose artifacts depend on whose laptop it ran on; and a
+personal instruction — "never write tests", "always use tabs" — obeyed by an agent whose job
+this product defines.
+
+`execution.isolateRunnerSettings` is the switch, **on by default**, and each adapter
+translates it into its own CLI's flag:
+
+| Runner | Flags | Version | Measured effect | Not covered |
+|---|---|---|---|---|
+| `claude-code-cli` | `--setting-sources ''` **and** `--safe-mode` | 2.1.263 | ✅ the operator's `language` no longer reaches the agent — verified by running both | — |
+| `codex-cli` | `--ignore-user-config` | 0.149.0 | ✅ hook invocations drop from 30 to 0 on the same prompt | **skills still load** — they live outside `config.toml` and 0.149.0 has no per-invocation flag for them |
+| `agy-cli` | `--disable-slash-commands` | 1.1.27 | ⚠️ declared by `--help`, not independently verified — this CLI showed no personalisation to measure against | plan-mode stages, deliberately — see below |
+
+### What the measurements changed
+
+**`--safe-mode` alone does not close the leak that produced the finding.** This adapter
+briefly shipped it alone, preferring it to the report's own `--setting-sources` proposal.
+Same prompt, `claude 2.1.263`, on a machine whose `~/.claude/settings.json` sets
+`language: Portugues`:
+
+```
+… --disallowedTools Write Edit NotebookEdit --safe-mode
+  → "Uma lista ligada é uma estrutura de dados linear …"
+
+… --disallowedTools Write Edit NotebookEdit --setting-sources '' --safe-mode
+  → "A linked list is a linear data structure …"
+```
+
+So both are passed and neither is redundant: `--setting-sources ''` covers the settings
+file (`language`, `outputStyle`), `--safe-mode` covers `CLAUDE.md`, skills, plugins, hooks,
+MCP servers, custom commands and agents. The same run settles the ordering question — these
+land after the variadic `--disallowedTools`, and an option token terminates it.
+
+**Codex's flag is real, and the first two things checked were not evidence of it.** `model:`
+and `approval:` in the session header are identical with and without the flag — and
+identical again with `CODEX_HOME` pointed at an empty directory, which is what proves they
+were defaults rather than leaks. The observable that does discriminate is the hook count on
+stderr: **30 with, 0 without**. The skills warning appears in both, so skills survive.
+
+### The candidates that were rejected
+
+`--system-prompt` instead of `--append-system-prompt` was the live-dogfood report's other
+proposal and it is wrong. `--system-prompt` **replaces** the CLI's built-in prompt, which is
+where its own tool conventions live. Removing them to remove a persona costs far more than
+it saves, and the persona arrived through settings.
+
+`--restricted` (Claude Code) also drops the user's settings files, and removes Bash and the
+other code-running tools with them. An implementation stage needs those.
+
+### The measured conflict: agy's isolation flag cancels its read-only mode
+
+Found by running the real CLI to capture its usage envelope, not by reading `--help`:
+
+```
+$ agy --output-format json --effort low --mode plan --disable-slash-commands
+warning: --mode plan has no effect while slash command expansion is disabled.
+
+$ agy --output-format json --effort low --mode accept-edits --disable-slash-commands
+(no warning)
+
+$ agy --output-format json --effort low --mode plan
+(no warning)
+```
+
+Reproducible, and specific to that pair. So on a **read-only** stage the two flags trade the
+containment that makes `supportsReadOnly` true for the isolation — a strictly worse bargain,
+and one that would have made the declaration below a lie. Read-only stages therefore keep
+`--mode plan` and go without the flag; write stages get it, and a write stage is where the
+measured leak happened.
+
+### The scope this does not cover
+
+**By design.** A workspace's own `AGENTS.md` still reaches the Codex agent, and a file inside
+the repository under test is that repository's convention, which the work should respect.
+What this closes is the **operator's machine** reaching the agent.
+`project_doc_max_bytes` exists as a config key in Codex 0.149.0 and what a value of `0` does
+there has not been measured, so it is not passed.
+
+**Not by design — open gaps, named so nobody has to rediscover them.**
+
+- **Codex skills still load.** They live in `$CODEX_HOME/vendor_imports/skills` and the
+  plugin cache rather than in `config.toml`, `--ignore-user-config` does not reach them, and
+  `codex exec --help` on 0.149.0 offers no flag that does.
+- **AGY's flag is taken on the CLI's word.** `--help` says it disables skill expansion, and
+  the `--mode plan` warning proves the flag does *something* — but this machine's `agy`
+  carries no persona or language setting, so there was no leak to measure it against. The
+  `.atl/` write that produced finding #8 has not been re-run with the flag on.
+
+---
+
+## What each runner reports about what it spent
+
+**Added by PRI-19.** These numbers arrive in the envelope of every response and four
+adapters parsed them and threw them away — the only mention of `usage` in the whole set was
+a regex looking for the words "usage limit". An orchestrator whose job is spending model
+calls could not say what a run cost or which model wrote it.
+
+| Runner | Model | Tokens | Cache | Cost |
+|---|---|---|---|---|
+| `claude-code-cli` | `modelUsage[].canonicalModel` | `usage.input_tokens`, `output_tokens` | `cache_read_input_tokens`, `cache_creation_input_tokens` | `total_cost_usd` |
+| `agy-cli` | — | `usage.input_tokens`, `output_tokens` | `usage.cache_read_tokens` | — |
+| `codex-cli` | — | — | — | — |
+| `openai-compatible` | — | — | — | — |
+
+Measured, from `agy 1.1.27`:
+
+```json
+{"status":"SUCCESS","response":"ok\n","duration_seconds":1.8,"num_turns":1,
+ "usage":{"input_tokens":20735,"output_tokens":1,"thinking_tokens":0,
+          "cache_read_tokens":0,"total_tokens":20736}}
+```
+
+An em dash above means the CLI does not report it, and the adapter therefore reports
+nothing rather than a zero: a reader cannot tell a fabricated zero from a free call. Codex
+is empty because its answer arrives in a file and its stdout interleaves hook output, colour
+codes and a token counter — scraping a number out of that stream would be a guess wearing
+the costume of a measurement.
+
+**`modelUsage.canonicalModel` is the row that matters most.** AD-13 says not to pin a model,
+and the execution record carried one only when the configuration did — so on the arrangement
+this product recommends, every run was unattributable. The provider's own account of which
+model answered closes that with no table of model names above the adapter boundary.
+
+**On the money.** §57 forbids agent-flow computing a price and that stands absolutely: no
+rate table, no tokens-times-a-rate. What PRI-19 narrowed is the case where the provider
+itself reported one. It is presented as that runner's figure and never as a bill — a
+subscriber pays a flat fee and `total_cost_usd` is an API-rate equivalent.
+
+---
+
 ## `openai-compatible`, against a real server
 
 **Probed:** 2026-08-30 · macOS (darwin 25.6.0), Node v24.13.0
@@ -362,7 +502,7 @@ field above, so a 401 or 429 is recognised structurally rather than by phrasing.
 | Model selection | ✅ | `--model <id>`, ids from `agy models` |
 | Reasoning level | ⚠️ **CLI accepts three; a model may offer fewer** | see the table below — encoded in the adapter since AR-01 |
 | Structured output | ⚠️ `prompted` | `--json-schema` exists; enforcement in headless mode needs permission configuration the adapter does not assume |
-| Read-only mode | ❌ **declared false** | `--mode plan` exists, but the probe observed writes to `~/.gemini/antigravity-cli/`, so strict containment is not guaranteed by flags alone |
+| Read-only mode | ❌ **declared false** | This CLI has no mode that both answers inline and refuses to modify the repository. Measured — see *the criterion, applied once* below |
 | Working directory | ✅ | `--add-dir <path>` |
 | Non-interactive **file edits** | ✅ | `--mode accept-edits` |
 | Non-interactive **command execution** | ❌ **not granted** | the dogfood's own failure — see below |
@@ -377,10 +517,55 @@ agy --output-format json
     --add-dir <workingDirectory>
     [--add-dir <path> ...]
     [--json-schema <json>]
+    [--disable-slash-commands]        # write stages only (PRI-18)
 ```
 
 Prompt on stdin, as with the other two runners. `--dangerously-skip-permissions` exists and
 is **never** passed: it removes the containment AD-14 assigns to the runner.
+
+### The criterion, applied once — and this runner fails it (PRI-18, corrected)
+
+The old justification was "writes to `~/.gemini/antigravity-cli/ occurred during probe`" — a
+criterion applied to this adapter and to no other, when `claude` writes `~/.claude` and
+`codex` writes `~/.codex` on every run and both declare `true`. PRI-18 flipped this to
+`true` on that reasoning. **A live end-to-end run proved the flip wrong within one stage,
+and it is back to `false` for a reason that holds.**
+
+**The criterion, stated once: can this CLI be put in a mode that both returns its answer and
+refuses to modify the repository under test?** `--permission-mode plan` does it at Claude
+Code, `-s read-only` does it at Codex. Nothing here does.
+
+`--mode plan` is a planning **workflow**, not a containment mode. It writes its answer to a
+file outside the workspace and returns a sentence pointing at it:
+
+```
+$ agy --output-format json --effort high --mode plan --add-dir <dir>
+  "Write a short markdown document …"
+→ {"status":"SUCCESS",
+   "response":"I have created the implementation plan in
+               [repository_architecture_plan.md](file:///…/.gemini/antigravity-cli/
+               brain/<uuid>/repository_architecture_plan.md)",
+   "usage":{"output_tokens":3689,…}}
+```
+
+In the live run the same mode returned an **empty** response for a discovery stage that had
+produced 2,709 output tokens. Neither is an answer a stage can use.
+
+And the other two invocations do not contain writes. Measured against a real file:
+
+| invocation | answers inline | leaves the repo alone |
+|---|---|---|
+| `--mode accept-edits` | ✅ | ❌ overwrote `target.txt` |
+| `--mode accept-edits --sandbox` | ✅ | ❌ overwrote `target.txt` |
+| `--mode plan` | ❌ | — |
+
+The cost is real and is now a known limitation rather than a defect: this runner serves the
+executor roles and cannot be the second provider a cross-provider plan review needs.
+
+The measured write into a repository under test came from an **implementation** task, which
+is allowed to write, through skill expansion from the operator's home directory. That is
+closed by `--disable-slash-commands`, and caught in the first place by
+`assertScopeContainment`.
 
 ### Reasoning level — CLI surface
 

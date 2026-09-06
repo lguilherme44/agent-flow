@@ -9,11 +9,19 @@ import type {
   RunDetailView,
   RunEventLogView,
   RunSummaryView,
+  ConfigView,
+  PipelineStage,
   RunnerHealthView,
+  RunnerModelsView,
+  RunnerTypeView,
+  StageLogView,
   StageViewResponse,
   TaskDetailView,
   TaskSummaryView,
   WorkspaceView,
+  ConfigEditorView,
+  ConfigValidationView,
+  ConfigEditorScope,
 } from '@contracts/index.js';
 
 /**
@@ -75,7 +83,7 @@ export function url(path: string, query: Query = {}): string {
   return `${API_BASE}${path}${search === '' ? '' : `?${search}`}`;
 }
 
-async function parse<T>(response: Response): Promise<T> {
+async function parse<T>(response: Response, acceptedErrorStatuses: readonly number[] = []): Promise<T> {
   const text = await response.text();
   let body: unknown = undefined;
   if (text !== '') {
@@ -86,7 +94,7 @@ async function parse<T>(response: Response): Promise<T> {
     }
   }
 
-  if (!response.ok) {
+  if (!response.ok && !acceptedErrorStatuses.includes(response.status)) {
     const refusal = (body ?? {}) as {
       error?: string;
       message?: string;
@@ -94,11 +102,12 @@ async function parse<T>(response: Response): Promise<T> {
       forcible?: boolean;
       detail?: Record<string, unknown>;
     };
+    const detail = refusal.detail ?? (typeof body === 'object' && body !== null ? body as Record<string, unknown> : undefined);
     throw new ApiError(response.status, refusal.message ?? `${String(response.status)} from the server`, {
       ...(refusal.error === undefined ? {} : { code: refusal.error }),
       ...(refusal.action === undefined ? {} : { action: refusal.action }),
       ...(refusal.forcible === undefined ? {} : { forcible: refusal.forcible }),
-      ...(refusal.detail === undefined ? {} : { detail: refusal.detail }),
+      ...(detail === undefined ? {} : { detail }),
     });
   }
 
@@ -123,6 +132,30 @@ export async function postJson<T>(path: string, body: unknown, query: Query = {}
   return parse<T>(response);
 }
 
+export async function patchJson<T>(path: string, body: unknown, query: Query = {}): Promise<T> {
+  const response = await fetch(url(path, query), {
+    method: 'PATCH',
+    headers: { accept: 'application/json', 'content-type': 'application/json', [CLIENT_HEADER]: 'deck' },
+    body: JSON.stringify(body ?? {}),
+  });
+  return parse<T>(response);
+}
+
+export type ConfigEditorOperation =
+  | { readonly kind: 'set'; readonly path: readonly (string | number)[]; readonly value: unknown }
+  | { readonly kind: 'unset'; readonly path: readonly (string | number)[] };
+
+export interface ConfigAppliedView {
+  readonly status: 'applied';
+  readonly view: ConfigEditorView;
+  readonly changes: ConfigValidationView['changes'];
+}
+
+const configQuery = (scope: ConfigEditorScope, projectId?: string): Query => ({
+  scope,
+  ...(scope === 'project' ? { projectId } : {}),
+});
+
 /** A run is always addressed with its project: run ids restart per project per year. */
 export interface RunAddress {
   readonly projectId: string;
@@ -145,6 +178,9 @@ export const api = {
   dag: (a: RunAddress) => getJson<RunDagView>(`/runs/${a.runId}/dag`, scoped(a)),
   control: (a: RunAddress) => getJson<ControlSnapshotView>(`/runs/${a.runId}/control`, scoped(a)),
   eventLog: (a: RunAddress) => getJson<RunEventLogView>(`/runs/${a.runId}/events`, scoped(a)),
+  /** One stage's own log — the runner's whole output, not the excerpt an event carries. */
+  stageLog: (a: RunAddress, stage: PipelineStage) =>
+    getJson<StageLogView>(`/runs/${a.runId}/stages/${stage}/log`, scoped(a)),
   approval: (a: RunAddress) => getJson<ApprovalGateView>(`/runs/${a.runId}/approval`, scoped(a)),
   job: (a: RunAddress) => getJson<ActionJobView | null>(`/runs/${a.runId}/job`, scoped(a)),
 
@@ -152,6 +188,25 @@ export const api = {
     getJson<RoleRouteView[]>('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>
     getJson<RunnerHealthView[]>('/runners/health', projectId === undefined ? {} : { projectId }),
+  /** What each runner reports it can be pointed at. Costs a spawn, so it is its own call. */
+  runnerModels: (projectId?: string) =>
+    getJson<RunnerModelsView[]>('/runners/models', projectId === undefined ? {} : { projectId }),
+  /** Which adapters this installation supports. A property of the machine, not a project. */
+  runnerTypes: () => getJson<RunnerTypeView[]>('/runner-types', {}),
+  /** Read-only, and read here for one thing: which files the two scopes actually are. */
+  config: (projectId?: string) => getJson<ConfigView>('/config', projectId === undefined ? {} : { projectId }),
+  configEditor: (scope: ConfigEditorScope, projectId?: string) =>
+    getJson<ConfigEditorView>('/config/editor', configQuery(scope, projectId)),
+  validateConfig: async (scope: ConfigEditorScope, projectId: string | undefined, operations: readonly ConfigEditorOperation[]) => {
+    const response = await fetch(url('/config/editor/validate', configQuery(scope, projectId)), {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', [CLIENT_HEADER]: 'deck' },
+      body: JSON.stringify({ operations }),
+    });
+    return parse<ConfigValidationView>(response, [422]);
+  },
+  applyConfig: (scope: ConfigEditorScope, projectId: string | undefined, expectedRevision: string, operations: readonly ConfigEditorOperation[]) =>
+    patchJson<ConfigAppliedView>('/config/editor', { expectedRevision, operations }, configQuery(scope, projectId)),
 
   approve: (a: RunAddress, force: boolean) =>
     postJson<ActionResultView>(`/runs/${a.runId}/approve`, { force }, scoped(a)),
@@ -169,8 +224,22 @@ export const api = {
       taskId === undefined ? {} : { taskId },
       scoped(a),
     ),
-  retry: (a: RunAddress, taskId: string, force: boolean) =>
-    postJson<ActionResultView>(`/runs/${a.runId}/tasks/${taskId}/retry`, { force }, scoped(a)),
+  /**
+   * Stop starting new work, keep what is in flight (PRI-15).
+   *
+   * The three below have existed in the core and on the server since pause landed and had
+   * no button anywhere: the CLI could stop a run and the browser watching it could not.
+   */
+  pause: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/pause`, {}, scoped(a)),
+  resume: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/resume`, {}, scoped(a)),
+  /** Terminal, by an operator's decision. Evidence and branches stay on disk (PRI-14). */
+  cancel: (a: RunAddress) => postJson<ActionResultView>(`/runs/${a.runId}/cancel`, {}, scoped(a)),
+  retry: (a: RunAddress, taskId: string, force: boolean, expectNoChange = false) =>
+    postJson<ActionResultView>(
+      `/runs/${a.runId}/tasks/${taskId}/retry`,
+      { force, expectNoChange },
+      scoped(a),
+    ),
   review: (a: RunAddress, fix = false) =>
     postJson<ActionJobView>(`/runs/${a.runId}/review`, { fix }, scoped(a)),
   /**
@@ -193,9 +262,14 @@ export const keys = {
   dag: (a: RunAddress) => url(`/runs/${a.runId}/dag`, scoped(a)),
   control: (a: RunAddress) => url(`/runs/${a.runId}/control`, scoped(a)),
   eventLog: (a: RunAddress) => url(`/runs/${a.runId}/events`, scoped(a)),
+  stageLog: (a: RunAddress, stage: string) => url(`/runs/${a.runId}/stages/${stage}/log`, scoped(a)),
   approval: (a: RunAddress) => url(`/runs/${a.runId}/approval`, scoped(a)),
   job: (a: RunAddress) => url(`/runs/${a.runId}/job`, scoped(a)),
   agents: (projectId?: string) => url('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>
     url('/runners/health', projectId === undefined ? {} : { projectId }),
+  runnerTypes: () => url('/runner-types', {}),
+  runnerModels: (projectId?: string) => url('/runners/models', projectId === undefined ? {} : { projectId }),
+  config: (projectId?: string) => url('/config', projectId === undefined ? {} : { projectId }),
+  configEditor: (scope: ConfigEditorScope, projectId?: string) => url('/config/editor', configQuery(scope, projectId)),
 };

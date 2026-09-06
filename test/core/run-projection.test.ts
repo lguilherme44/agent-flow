@@ -412,6 +412,53 @@ describe('runtime status overrides a persisted status that has moved on', () => 
     expect(projection.gate?.action).toMatch(/blocking/);
   });
 
+  /**
+   * A dependency block is not an agent's unanswered question (PRI-24).
+   *
+   * A live run halted with two tasks failed and two blocked on them, and the gate said
+   * `Answer what TASK-002, TASK-004 reported as blocking` — for tasks at `attempts: 0`
+   * that had reported nothing, while the two that actually stopped went unmentioned. The
+   * one line a person acts on pointed away from the problem.
+   */
+  it('points at the failure, not at the tasks waiting on it', () => {
+    const projection = projectRun({
+      state: state({
+        tasks: [
+          task('TASK-001', 'failed'),
+          task('TASK-002', 'blocked', { blockReason: 'dependency' }),
+        ],
+      }),
+      nodes: [
+        { id: 'TASK-001', dependencies: [] },
+        { id: 'TASK-002', dependencies: ['TASK-001'] },
+      ],
+    });
+
+    expect(projection.gate?.gate).toBe('task_failed');
+    expect(projection.gate?.action).toContain('TASK-001');
+    // Named as waiting, not as owing an answer.
+    expect(projection.gate?.action).toContain('TASK-002 are waiting on it');
+    expect(projection.gate?.action).not.toMatch(/reported as blocking/);
+    expect(projection.gate?.tasks).toEqual(['TASK-001']);
+  });
+
+  it("still lets an agent's own question win over a failure beside it", () => {
+    // A failure has `retry` waiting for it; an unanswered question needs a person and
+    // nothing else can clear it. Order matters, so it is asserted rather than assumed.
+    const projection = projectRun({
+      state: state({
+        tasks: [task('TASK-001', 'failed'), task('TASK-002', 'blocked', { blockReason: 'agent' })],
+      }),
+      nodes: [
+        { id: 'TASK-001', dependencies: [] },
+        { id: 'TASK-002', dependencies: [] },
+      ],
+    });
+
+    expect(projection.gate?.gate).toBe('agent_blocked');
+    expect(projection.gate?.tasks).toEqual(['TASK-002']);
+  });
+
   it('reports terminal states from the persisted status', () => {
     expect(projectRun({ state: state({ status: 'completed' }) }).status).toBe('complete');
     expect(projectRun({ state: state({ status: 'failed' }) }).status).toBe('failed');

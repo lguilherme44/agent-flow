@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { resumeHint, writeStageProgress } from '../../src/cli/feature.js';
 import { renderPlanningProgress } from '../../src/cli/status.js';
+import { formatElapsed, writeProgress } from '../../src/cli/render/progress.js';
 
 /**
  * The three defects a real run exposed, all of them about the same thing: from
@@ -185,5 +186,79 @@ describe('a stale cache is a note, not a second start', () => {
       restore();
     }
     expect(captured.join('')).toContain('stale');
+  });
+});
+
+
+describe('a finished unit says how long it took (§95)', () => {
+  it('times each label separately, so overlapping tasks do not borrow each other\'s clock', () => {
+    // Measured on a live run: `→ discovery` and `✓ discovery` printed 116 seconds apart,
+    // with no number on either line. A slow stage and a hung one read the same.
+    vi.useFakeTimers();
+    const lines: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      lines.push(String(chunk));
+      return true;
+    });
+
+    try {
+      writeProgress('TASK-001', 'started');
+      vi.advanceTimersByTime(4_000);
+      writeProgress('TASK-002', 'started');
+      vi.advanceTimersByTime(112_000);
+      // TASK-001 has been open 116s, TASK-002 only 112s.
+      writeProgress('TASK-001', 'completed');
+      writeProgress('TASK-002', 'failed');
+    } finally {
+      write.mockRestore();
+      vi.useRealTimers();
+    }
+
+    expect(lines.find((line) => line.includes('✓ TASK-001'))).toMatch(/1m56s/);
+    expect(lines.find((line) => line.includes('✗ TASK-002'))).toMatch(/1m52s/);
+  });
+
+  it('reads seconds under a minute and minutes above it', () => {
+    expect(formatElapsed(0)).toBe('0s');
+    expect(formatElapsed(59_400)).toBe('59s');
+    expect(formatElapsed(116_500)).toBe('1m57s');
+    expect(formatElapsed(3_600_000)).toBe('60m00s');
+  });
+
+  it('says nothing when the unit was never announced, rather than timing from zero', () => {
+    const lines: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    try {
+      writeProgress('never-started', 'completed');
+    } finally {
+      write.mockRestore();
+    }
+    expect(lines[0]?.trimEnd()).toMatch(/✓ never-started$/);
+  });
+});
+
+
+describe('the prompt size reaches a screen (§95, AR-09)', () => {
+  it('shows what each finished stage was given, and stays quiet about the ones it cannot', () => {
+    // Measured live: 3.9 KB at discovery, 57.4 KB at plan-review — fifteen-fold across
+    // five stages, recorded on every run and visible only to somebody parsing
+    // `events.jsonl`. The 80% window warning that would otherwise catch this is inert:
+    // it needs a `contextWindow` that no runner declares.
+    const lines = renderPlanningProgress(
+      ['discovery', 'sdd'],
+      'planning',
+      'running',
+      ['planning'],
+      [],
+      new Map([['discovery', 4041], ['sdd', 30515]]),
+    );
+
+    expect(lines.find((line) => line.includes('Discovery'))).toContain('3.9 KB in');
+    expect(lines.find((line) => line.includes('SDD'))).toContain('29.8 KB in');
+    // Nothing measured for a stage that has not finished, and nothing invented for it.
+    expect(lines.find((line) => line.includes('Task Planning'))).not.toContain('KB');
   });
 });

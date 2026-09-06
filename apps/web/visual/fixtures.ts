@@ -144,6 +144,7 @@ export const RUN: RunDetailView = {
   runtime: {
     status: 'implementing',
     resumable: true,
+    paused: false,
     progress: {
       workflow: { done: 3, total: 6 },
       implementation: { done: 3, total: 9 },
@@ -542,8 +543,10 @@ export const RUNS: RunSummaryView[] = [
 export const AGENTS: RoleRouteView[] = [
   {
     role: 'architect',
+    configKeys: ['roles', 'architect'],
     prompts: ['discovery', 'architecture-impact'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: false,
     configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
     resolved: {
@@ -563,8 +566,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'sdd',
+    configKeys: ['roles', 'sdd'],
     prompts: ['sdd'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: false,
     configured: {
       runner: 'claude',
@@ -583,8 +588,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'planner',
+    configKeys: ['roles', 'planner'],
     prompts: ['planning'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: true,
     configured: { runner: 'codex', model: 'GPT-5.6 Sol', reasoning: 'high', timeoutSeconds: 900 },
     resolved: {
@@ -604,8 +611,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'planReviewer',
+    configKeys: ['roles', 'planReviewer'],
     prompts: ['plan-review'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: false,
     configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
     resolved: {
@@ -619,8 +628,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'executor.trivial',
+    configKeys: ['roles', 'executors', 'trivial'],
     prompts: ['implementation'],
     requiresReadOnly: false,
+    requiresWorkingDirectory: true,
     requiresNativeStructuredOutput: false,
     configured: {
       runner: 'codex',
@@ -639,8 +650,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'executor.normal',
+    configKeys: ['roles', 'executors', 'normal'],
     prompts: ['implementation'],
     requiresReadOnly: false,
+    requiresWorkingDirectory: true,
     requiresNativeStructuredOutput: false,
     configured: {
       runner: 'codex',
@@ -659,8 +672,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'executor.complex',
+    configKeys: ['roles', 'executors', 'complex'],
     prompts: ['implementation'],
     requiresReadOnly: false,
+    requiresWorkingDirectory: true,
     requiresNativeStructuredOutput: false,
     configured: { runner: 'codex', model: 'GPT-5.6 Sol', reasoning: 'high', timeoutSeconds: 1_800 },
     resolved: {
@@ -674,8 +689,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'verification',
+    configKeys: ['roles', 'verification'],
     prompts: ['verification'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: true,
     configured: { runner: 'nowhere', reasoning: 'high', timeoutSeconds: 900 },
     error: {
@@ -687,8 +704,10 @@ export const AGENTS: RoleRouteView[] = [
   },
   {
     role: 'finalReviewer',
+    configKeys: ['roles', 'finalReviewer'],
     prompts: ['final-review'],
     requiresReadOnly: true,
+    requiresWorkingDirectory: false,
     requiresNativeStructuredOutput: false,
     configured: { runner: 'claude', model: 'Claude Opus', reasoning: 'high', timeoutSeconds: 900 },
     resolved: {
@@ -1603,6 +1622,7 @@ const GATED_RUN: RunDetailView = {
     ...RUN.runtime,
     status: 'awaiting_human_approval',
     resumable: false,
+    paused: false,
     gate: {
       gate: 'approval',
       action: 'Review the plan and run `agent-flow approve`',

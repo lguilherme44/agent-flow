@@ -52,6 +52,7 @@ const task = (
 const runtime = (status: RunProjection['status'] = 'implementing'): RunProjection => ({
   status,
   resumable: true,
+  paused: false,
   progress: { workflow: { done: 5, total: 7 }, implementation: { done: 1, total: 3 } },
   reviewFreshness: 'absent',
 });

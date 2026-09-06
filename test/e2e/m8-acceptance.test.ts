@@ -135,6 +135,7 @@ async function snapshot(
 const runtime = (overrides: Partial<RunProjection> = {}): RunProjection => ({
   status: 'implementing',
   resumable: true,
+  paused: false,
   progress: { workflow: { done: 5, total: 7 }, implementation: { done: 1, total: 3 } },
   reviewFreshness: 'absent',
   ...overrides,

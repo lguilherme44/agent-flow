@@ -42,12 +42,23 @@ export function assertObservableChange(input: {
   readonly baseTree?: string;
   readonly validatedTree?: string;
   readonly expectsNoChange?: boolean;
+  /**
+   * A person declared it after the plan was written (PRI-20).
+   *
+   * A separate input from `expectsNoChange` rather than the same one pre-combined,
+   * because the two have different authors and this function is where the decision is
+   * made. The planner's claim is made before the fact and the operator's after it; both
+   * are declarations of intent, neither is inferred, and a caller that flattened them
+   * would lose the only distinction worth keeping.
+   */
+  readonly declaredUnchangedByOperator?: boolean;
 }): AcceptanceAssertion {
   if (input.baseTree === undefined || input.validatedTree === undefined) {
     return SATISFIED;
   }
   if (input.baseTree !== input.validatedTree) return SATISFIED;
   if (input.expectsNoChange === true) return SATISFIED;
+  if (input.declaredUnchangedByOperator === true) return SATISFIED;
 
   return {
     satisfied: false,
@@ -55,7 +66,7 @@ export function assertObservableChange(input: {
     detail:
       `the validated tree is identical to the base tree (${short(input.baseTree)}), so this ` +
       `task produced no observable change; declare expectsNoChange: true in the plan if that ` +
-      `is what it was meant to do`,
+      `is what it was meant to do, or retry it with --expect-no-change to say so now`,
   };
 }
 

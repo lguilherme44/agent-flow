@@ -213,6 +213,47 @@ export const GlobalConfigSchema = z.object({
   execution: z
     .object({
       passEnv: z.array(z.string().trim().min(1).max(256)).default([]),
+      /**
+       * Whether a stage's prompt is written into its log (§95).
+       *
+       * **Off, and off is the honest default.** A prompt carries whatever the stage was
+       * given — repository content, a plan, a failure context packet — so recording one
+       * turns the run directory into a second copy of material that was only ever meant
+       * to be sent once. It goes through the same redaction the runner's output does,
+       * which removes credentials and not confidences.
+       *
+       * On, it answers the one question the logs cannot: an agent that did something
+       * inexplicable was *told* something, and without this the input it acted on is
+       * unrecoverable. That is worth a switch and not worth a default.
+       */
+      recordPrompts: z.boolean().default(false),
+      /**
+       * Whether a spawned CLI is cut off from the operator's own customisations (PRI-18).
+       *
+       * **On, and on is the only defensible default.** In a live dogfood the SDD came back
+       * in Portuguese, under a persona, for a repository whose prompts and code are
+       * English — neither came from any of the eleven prompts this product ships. They
+       * came from `~/.claude/settings.json` on the machine that ran it. A second runner
+       * expanded a skill from the same home directory and left 56 KB of untracked files
+       * inside the repository it was judging.
+       *
+       * That is three failures in one: a persona competing with the prompt an engineering
+       * stage was given, a run whose artifacts depend on whose laptop it ran on, and a
+       * personal instruction — "never write tests", "always use tabs" — obeyed by an agent
+       * whose job this product defines. This repository already closed the same leak by
+       * another route, when the orchestrator was reading `AGENTS.md` out of the workspace
+       * and pasting it into the prompt.
+       *
+       * Each adapter translates this into its own CLI's flag, because only the adapter
+       * knows one exists (AD-13). A runner whose CLI offers nothing contributes nothing
+       * rather than pretending: the switch is a request, and `docs/runner-capabilities.md`
+       * records what each one actually honours.
+       *
+       * `false` restores the previous behaviour exactly, for the operator who wants their
+       * MCP servers or their project's `CLAUDE.md` to reach the agent. It is a deliberate
+       * trade of reproducibility for reach, and it should be made deliberately.
+       */
+      isolateRunnerSettings: z.boolean().default(true),
     })
     .prefault({}),
   /**
@@ -503,6 +544,28 @@ export function roleConfigOf(roles: RolesConfig, role: WorkflowRole): RoleConfig
       return roles.executors.complex;
     default:
       return roles[role];
+  }
+}
+
+/**
+ * Where a logical role's route lives in a configuration source.
+ *
+ * The workflow says `executor.trivial`; the file says `roles.executors.trivial`. That
+ * translation exists once, in `roleConfigOf` above, and an editor needs the other half
+ * of it — the path to write to. Deriving it in a browser would be a second copy of a
+ * rule that only looks obvious until `executors` is renamed, so it is published here and
+ * tied to `roleConfigOf` by test.
+ */
+export function roleConfigKeys(role: WorkflowRole): readonly string[] {
+  switch (role) {
+    case 'executor.trivial':
+      return ['roles', 'executors', 'trivial'];
+    case 'executor.normal':
+      return ['roles', 'executors', 'normal'];
+    case 'executor.complex':
+      return ['roles', 'executors', 'complex'];
+    default:
+      return ['roles', role];
   }
 }
 

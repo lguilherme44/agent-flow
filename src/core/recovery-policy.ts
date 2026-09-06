@@ -1,4 +1,4 @@
-import { redactAndTruncateTail } from './evidence-redaction.js';
+import { redactAndTruncate } from './evidence-redaction.js';
 import type {
   FailureClass,
   RecoveryDisposition,
@@ -366,8 +366,13 @@ export function escalationEvidence(result: TaskResult): string[] {
       // relied upon — validation output is captured raw, and a test that prints an
       // environment variable would otherwise put it in an escalation the dashboard shows.
       const stream = command.stderr.trim() === '' ? command.stdout : command.stderr;
-      const tail = redactAndTruncateTail(stream, ESCALATION_LINE_BYTES).text.trim();
-      return tail === '' ? head : `${head}: ${lastLine(tail)}`;
+      // Chosen from the whole stream, then redacted — not the other way round. Truncating
+      // to the tail first and reading its last line is two decisions that compound into
+      // the worst possible answer: measured on a real run, `npm run test` produced 147
+      // lines whose verdict (`fail 7`) was on line 19 and whose last line was `}`.
+      const line = verdictLine(stream);
+      const shown = redactAndTruncate(line, ESCALATION_LINE_BYTES).text.trim();
+      return shown === '' ? head : `${head}: ${shown}`;
     });
 
   if (failing.length > 0) return failing;
@@ -378,10 +383,35 @@ export function escalationEvidence(result: TaskResult): string[] {
   return result.errorCode === undefined ? [] : [`runner reported ${result.errorCode}`];
 }
 
-function lastLine(text: string): string {
-  const lines = text.split('\n').filter((line) => line.trim() !== '');
-  return lines[lines.length - 1]?.trim() ?? '';
+/**
+ * The one line of a failing command's output worth putting on a screen.
+ *
+ * **The verdict is near the top and the noise is at the bottom**, for every tool that
+ * reports a failure in a block: a test runner prints its count and then the stack, a
+ * compiler prints the error and then the frame. Reading from the end reliably returns
+ * punctuation — `}` closing an assertion object, in the run this was measured on.
+ *
+ * So: the first line carrying a failure signal, searched over the whole stream. When
+ * nothing matches — a command that failed quietly, a tool with its own vocabulary — the
+ * last line with content is still better than the last line, which may be a bracket.
+ */
+function verdictLine(text: string): string {
+  const lines = text.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  const signal = lines.find((line) => FAILURE_SIGNAL.test(line));
+  if (signal !== undefined) return signal;
+  // Structural leftovers only: a closing bracket is not a diagnosis.
+  const substantive = lines.filter((line) => /[\p{L}\p{N}]/u.test(line));
+  return substantive[substantive.length - 1] ?? '';
 }
+
+/**
+ * What "this failed" looks like across the tools a validation command tends to be.
+ *
+ * Deliberately not a list of tools: the vocabulary is shared, and a table keyed by
+ * `npm`/`pytest`/`cargo` would be a maintenance surface that is wrong for whatever the
+ * next repository uses.
+ */
+const FAILURE_SIGNAL = /\b(fail(ed|ing|ures?)?|error|assert(ion)?|expected|panic|refused|cannot|unable)\b|✖|✗|✕|✘/i;
 
 const MAX_ESCALATION_EVIDENCE = 5;
 /** One line each. An escalation is read, not paged through — the log is where the rest is. */

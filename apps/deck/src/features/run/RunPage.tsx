@@ -12,6 +12,8 @@ import { Recorder } from './Recorder';
 import { Graph } from './Graph';
 import { Inspector } from './Inspector';
 import { Feed } from './Feed';
+import { StageLog } from './StageLog';
+import { ConfirmCancel } from './ConfirmCancel';
 import { GateDialog } from './GateDialog';
 
 /** Runtime statuses after which nothing moves, and the recorder's right edge stands still. */
@@ -116,6 +118,23 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   };
 
   const start = (): Promise<void> => ask(() => api.start(address), 'Asked. Execution runs as a job; progress arrives on the recorder.');
+  const pause = (): Promise<void> =>
+    ask(() => api.pause(address), 'Paused. A task already in flight finishes; nothing further starts.');
+  const resume = (): Promise<void> => ask(() => api.resume(address), 'Resumed. Execution continues as a job.');
+  /**
+   * Terminal, and asked twice on purpose.
+   *
+   * Every other action on this page can be undone by doing the opposite. This one cannot,
+   * and it sits beside buttons that can — so it is the one that stops and asks. The
+   * evidence, the integration branch and the worktrees survive, which is what the
+   * confirmation says rather than "are you sure".
+   */
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [logTab, setLogTab] = useState<'events' | 'stage'>('events');
+  const cancelRun = (): Promise<void> => {
+    setConfirmCancel(false);
+    return ask(() => api.cancel(address), 'Cancelled. Evidence, the integration branch and the worktrees are all still on disk.');
+  };
   // The last step, from the page a person is already on. Verification, the two reviewers
   // and the Definition of Done run as a job; the run's status moves when they are done.
   const finalReview = (): Promise<void> =>
@@ -173,6 +192,9 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   // Offered exactly when the server says the run is held at final acceptance — never as a
   // button whose only outcome is a refusal.
   const showReview = rt?.gate?.gate === 'final_acceptance' && idle;
+  // Offered while the run can still do something, which is the only state in which either
+  // is anything but a refusal. A paused run is still unfinished: it can be cancelled.
+  const unfinished = rt !== undefined && !FINISHED.has(rt.status);
 
   return (
     <main className="page">
@@ -201,6 +223,11 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
           <h1 className="run-head__id">
             <span>{runId}</span>
             {rt === undefined ? null : <Chip tone={runtimeTone(rt.status)}>{words(rt.status)}</Chip>}
+            {rt?.paused === true ? (
+              <Chip tone="warn" plain title="An operator asked for no new work. A task already in flight finishes.">
+                paused
+              </Chip>
+            ) : null}
             {detail !== undefined && detail.revisionCount !== undefined && detail.revisionCount > 0 ? (
               <Chip tone="idle" plain>
                 revision {detail.revisionCount}
@@ -272,6 +299,21 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
             {showStart ? (
               <button type="button" className="btn btn--primary" onClick={() => void start()}>
                 {detail !== undefined && detail.completedTasks > 0 ? 'Resume' : 'Start execution'}
+              </button>
+            ) : null}
+            {rt?.paused === true ? (
+              <button type="button" className="btn btn--primary" onClick={() => void resume()}>
+                Resume the run
+              </button>
+            ) : null}
+            {unfinished && rt.paused !== true ? (
+              <button type="button" className="btn" onClick={() => void pause()}>
+                Pause
+              </button>
+            ) : null}
+            {unfinished ? (
+              <button type="button" className="btn btn--danger" onClick={() => setConfirmCancel(true)}>
+                Cancel run
               </button>
             ) : null}
             <a className="btn btn--ghost" href={href({ name: 'runs', projectId })} onClick={onLinkClick}>
@@ -393,21 +435,31 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
 
         <section className="panel" aria-labelledby="feed-h">
           <div className="panel__head">
-            <span id="feed-h" className="eyebrow">
-              Log
-            </span>
+            {/*
+              Two logs, and they answer different questions: the tape of facts this run
+              recorded, and what a runner actually said inside one stage. The event feed
+              carries two kilobytes of the second on a failure and none of it otherwise.
+            */}
+            <div className="panel__tabs" role="tablist" aria-labelledby="feed-h">
+              <span id="feed-h" className="visually-hidden">Log</span>
+              <button type="button" role="tab" aria-selected={logTab === 'events'} onClick={() => setLogTab('events')}>Events</button>
+              <button type="button" role="tab" aria-selected={logTab === 'stage'} onClick={() => setLogTab('stage')}>Stage output</button>
+            </div>
             <span className="section__count">
-              {log.data === undefined ? '' : `${String(log.data.total)} lines`}
-              {log.data?.truncated ? ' · origin cut' : ''}
+              {logTab === 'stage' ? '' : log.data === undefined ? '' : `${String(log.data.total)} lines`}
+              {logTab === 'stage' ? '' : log.data?.truncated ? ' · origin cut' : ''}
             </span>
           </div>
           <div className="panel__body">
-            <Feed timeline={timeline ?? buildTimeline([], now)} t={t} live={live} onJump={onJump} selected={selected} />
+            {logTab === 'events'
+              ? <Feed timeline={timeline ?? buildTimeline([], now)} t={t} live={live} onJump={onJump} selected={selected} />
+              : <StageLog address={address} />}
           </div>
         </section>
       </div>
 
       <GateDialog address={address} gate={gate.data} open={gateOpen} onClose={() => setGateOpen(false)} initialTab={gateTab} />
+      <ConfirmCancel runId={runId} open={confirmCancel} onDismiss={() => setConfirmCancel(false)} onConfirm={() => void cancelRun()} />
     </main>
   );
 }

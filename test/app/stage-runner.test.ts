@@ -48,7 +48,7 @@ const SDD_STAGE: StageDefinition = {
   artifact: 'sdd',
 };
 
-async function harness(options: { runner?: FakeAgentRunner; prompt?: string } = {}) {
+async function harness(options: { runner?: FakeAgentRunner; prompt?: string; recordPrompts?: boolean } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const runner = options.runner ?? new FakeAgentRunner('claude');
@@ -66,7 +66,9 @@ async function harness(options: { runner?: FakeAgentRunner; prompt?: string } = 
     fs,
     clock,
     store,
-    config,
+    config: options.recordPrompts === true
+      ? { ...config, execution: { ...config.execution, recordPrompts: true } }
+      : config,
     capabilities: CAPABILITIES,
     promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
     getRunner: () => runner,
@@ -105,6 +107,87 @@ describe('running a stage', () => {
     expect(await fs.readFile(runPaths(PROJECT, run.runId).sdd)).toBe('# SDD body');
   });
 
+  it('keeps the prompt out of the log unless the operator asked for it (§95)', async () => {
+    // A prompt is a copy of whatever the stage was given — repository content, a plan, a
+    // failure packet. Recording one by default would leave that lying in the run directory.
+    const quiet = await harness();
+    quiet.runner.pushText('ok');
+    await quiet.stageRunner.run(SDD_STAGE, quiet.run.runId, { featureRequest: 'recurring bookings' });
+    expect(await quiet.fs.readFile(runPaths(PROJECT, quiet.run.runId).log('sdd'))).not.toContain('recurring bookings');
+
+    const recording = await harness({ recordPrompts: true });
+    recording.runner.pushText('ok');
+    await recording.stageRunner.run(SDD_STAGE, recording.run.runId, { featureRequest: 'recurring bookings' });
+    const log = await recording.fs.readFile(runPaths(PROJECT, recording.run.runId).log('sdd'));
+    // The input the agent acted on, which no other record holds.
+    expect(log).toContain('--- prompt (redacted) ---');
+    expect(log).toContain('recurring bookings');
+  });
+
+  /**
+   * A stage that answers nothing has failed (PRI-22).
+   *
+   * Found by a live run, which is the only way it could have been: `discovery` completed in
+   * 31 seconds having produced 2,709 output tokens — the usage accounting says so — and
+   * returned an empty string. It has no schema and no structural check, so nothing objected
+   * and `stage_completed` was written. The failure surfaced two stages later as
+   * `Prompt "architecture-impact" is missing required variables: architecture`, naming the
+   * wrong stage, the wrong file and the wrong problem.
+   */
+  it('asks again when the answer is empty, instead of recording it as complete', async () => {
+    const runner = new FakeAgentRunner('claude');
+    runner.push({ ok: true, text: '   \n  ', durationMs: 1 });
+    runner.push({ ok: true, text: '# SDD body', durationMs: 1 });
+    const { stageRunner, run, store } = await harness({ runner });
+
+    const result = await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    // Repaired rather than refused: the same loop that handles a malformed answer now
+    // handles an absent one, and the re-prompt says which it was.
+    expect(result.text).toBe('# SDD body');
+    expect(result.repairs).toBe(2);
+    expect(runner.calls[1]?.prompt).toContain('empty answer');
+    expect((await store.readEvents(run.runId)).map((e) => e.type)).toContain('stage_completed');
+  });
+
+  it('fails the stage when every answer is empty', async () => {
+    const runner = new FakeAgentRunner('claude');
+    runner.always({ ok: true, text: '', durationMs: 1 });
+    const { stageRunner, run, store } = await harness({ runner });
+
+    await expect(stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' })).rejects.toThrow();
+
+    const types = (await store.readEvents(run.runId)).map((event) => event.type);
+    expect(types).toContain('stage_failed');
+    expect(types).not.toContain('stage_completed');
+  });
+
+  it('says the answer was empty rather than that it was malformed', async () => {
+    // A schema-bearing stage would otherwise report "expected a JSON object, got
+    // unparseable output", which is true of an empty string and describes the wrong defect:
+    // a malformed answer is a runner that tried, an absent one is a runner that did not.
+    const runner = new FakeAgentRunner('claude');
+    runner.always({ ok: true, text: '', durationMs: 1 });
+    const { stageRunner, run, fs } = await harness({ runner });
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' }).catch(() => undefined);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    expect(log).toContain('empty answer');
+  });
+
+  it('accepts an empty text when the runner parsed a structured answer', async () => {
+    // Raw text and the parsed object are two channels, and an answer that satisfies the
+    // contract is an answer whatever the text looks like.
+    const runner = new FakeAgentRunner('claude');
+    runner.push({ ok: true, text: '', json: { ok: true }, durationMs: 1 });
+    const { stageRunner, run } = await harness({ runner });
+
+    await expect(
+      stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' }),
+    ).resolves.toBeDefined();
+  });
+
   it('writes a per-stage log', async () => {
     const { stageRunner, run, fs } = await harness();
     await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
@@ -113,9 +196,48 @@ describe('running a stage', () => {
     expect(log).toContain('sdd');
   });
 
-  it('records telemetry without any monetary figure (§57)', async () => {
-    // Operational telemetry only. Presenting a cost would imply agent-flow
-    // knows what the user is billed, which it does not.
+  /**
+   * A stage that worked used to log two lines (§95, PRI-21).
+   *
+   * The failure path has written the runner's whole output since somebody had to open a
+   * vendor's log directory to find out what an agent said. The success path wrote
+   * `repair=1 ok durationMs=…` for what a live run measured as six minutes of model work —
+   * and once `execution.recordPrompts` shipped, the log held the question and not the
+   * answer, which is the same asymmetry pointing the other way.
+   */
+  it('says where a successful answer went when the stage has an artifact', async () => {
+    const { stageRunner, run, fs, runner } = await harness();
+    runner.pushText('# SDD body');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+
+    // A pointer rather than a copy: the answer is already on disk under a name, and two
+    // copies of one document is how a reader ends up comparing them.
+    expect(log).toContain('answer written to artifact "sdd"');
+    expect(log).not.toContain('--- runner output (redacted) ---');
+  });
+
+  it('writes the answer itself when no artifact would hold it', async () => {
+    const { stageRunner, run, fs, runner } = await harness();
+    runner.pushText('the whole answer, kept nowhere else');
+
+    await stageRunner.run(
+      { name: 'sdd', role: 'sdd', prompt: 'sdd', logName: 'sdd' },
+      run.runId,
+      { featureRequest: 'x' },
+    );
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+
+    expect(log).toContain('--- runner output (redacted) ---');
+    expect(log).toContain('the whole answer, kept nowhere else');
+  });
+
+  it('invents no monetary figure when the runner reported none (§57, PRI-19)', async () => {
+    // §57's prohibition, narrowed rather than dropped. What it forbids absolutely is a
+    // price *this codebase computes* — a table of per-token rates would make agent-flow
+    // accountable for a number it has no basis for. What PRI-19 allows is a price the
+    // provider itself returned, and this fake returns none, so nothing may appear.
     const { stageRunner, run, store } = await harness();
     await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
 
@@ -124,6 +246,7 @@ describe('running a stage', () => {
 
     expect(completed?.detail['runner']).toBe('claude');
     expect(completed?.detail['role']).toBe('sdd');
+    expect(completed?.detail['usage']).toBeUndefined();
     expect(JSON.stringify(completed)).not.toMatch(/cost|usd|price/i);
   });
 

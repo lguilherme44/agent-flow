@@ -1,0 +1,4 @@
+runner: &runner
+  type: codex-cli
+runners:
+  moe: *runner

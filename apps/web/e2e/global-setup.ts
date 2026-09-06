@@ -19,11 +19,13 @@ import { CLI, REPO_ROOT } from './support/world';
  */
 export default function globalSetup(): void {
   build('the CLI bundle', ['run', 'build']);
-  build('the dashboard bundle', ['run', 'build:web']);
+  build('the classic dashboard bundle', ['run', 'build:web']);
+  build('the Deck dashboard bundle', ['run', 'build:deck']);
 
   for (const [what, path] of [
     ['CLI', CLI],
     ['dashboard', join(REPO_ROOT, 'apps/web/dist/index.html')],
+    ['Deck dashboard', join(REPO_ROOT, 'apps/deck/dist/index.html')],
   ] as const) {
     if (!existsSync(path)) {
       throw new Error(`the ${what} build reported success but ${path} does not exist`);

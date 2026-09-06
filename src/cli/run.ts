@@ -111,7 +111,7 @@ export async function runRunCommand(
  */
 export async function runRetryCommand(
   taskId: string,
-  options: { force?: boolean },
+  options: { force?: boolean; expectNoChange?: boolean },
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
   try {
@@ -122,14 +122,23 @@ export async function runRetryCommand(
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const outcome = await retryTask(deps, runId, taskId, { force: options.force === true });
+    const outcome = await retryTask(deps, runId, taskId, {
+      force: options.force === true,
+      expectNoChange: options.expectNoChange === true,
+    });
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
       return exitCodeFor(outcome.error);
     }
 
-    process.stdout.write(`${taskId} is queued again.\n\nRun it with: agent-flow run\n`);
+    // Said back, because it is a claim the operator is now on the record for. A flag that
+    // silently changes what a gate will accept is a flag people stop noticing they passed.
+    const declared =
+      options.expectNoChange === true
+        ? `\nRecorded: ${taskId} is meant to change nothing, so an empty diff will be accepted.\n`
+        : '';
+    process.stdout.write(`${taskId} is queued again.\n${declared}\nRun it with: agent-flow run\n`);
     return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);

@@ -1,4 +1,4 @@
-import type { AgentRunInput, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
+import type { AgentRunInput, AgentRunUsage, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
 import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
@@ -31,6 +31,44 @@ interface ClaudeEnvelope {
   result?: string;
   structured_output?: unknown;
   api_error_status?: number | null;
+  /** Per-model accounting, keyed by the id the API answered with. */
+  modelUsage?: Record<string, { inputTokens?: number; outputTokens?: number; canonicalModel?: string }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  total_cost_usd?: number;
+}
+
+/** A number the envelope actually carried, or nothing. Never a zero this file invented. */
+function count(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * The model that wrote the answer, out of every model the call touched.
+ *
+ * `canonicalModel` rather than the record key: the key is whatever id the API answered
+ * with, and the canonical name is the one that stays comparable across a run. The key is
+ * the fallback for an envelope that omits it.
+ *
+ * Ranked by output tokens because a call served by a main model and a small sub-agent
+ * should be attributed to the one that produced the response, and ties keep the first
+ * entry so the answer does not depend on object iteration luck.
+ */
+function principalModel(
+  modelUsage: Record<string, { outputTokens?: number; canonicalModel?: string }> | undefined,
+): string | undefined {
+  const entries = Object.entries(modelUsage ?? {});
+  if (entries.length === 0) return undefined;
+
+  let best = entries[0];
+  for (const entry of entries.slice(1)) {
+    if ((count(entry[1].outputTokens) ?? 0) > (count(best?.[1].outputTokens) ?? 0)) best = entry;
+  }
+  return best?.[1].canonicalModel ?? best?.[0];
 }
 
 function asEnvelope(value: unknown): ClaudeEnvelope | undefined {
@@ -109,6 +147,60 @@ export class ClaudeCodeRunner extends BaseRunner {
     };
   }
 
+  /**
+   * The aliases this CLI accepts, not the model ids behind them (AD-13).
+   *
+   * Claude Code has no `models` subcommand to ask, so this is the one list here that is
+   * declared rather than enumerated — and it is declared as *aliases* on purpose. An
+   * alias like `opus` keeps meaning the current Opus as versions land; the dated id it
+   * resolves to today is exactly the kind of name AD-13 says rots. A person who wants a
+   * pinned id still types it: this is a suggestion list, and the field stays open.
+   */
+  async listModels(): Promise<readonly string[]> {
+    return ['opus', 'sonnet', 'haiku'];
+  }
+
+  /**
+   * Both flags, because one of them was measured to be insufficient (PRI-18).
+   *
+   * `--setting-sources ''` names which settings files load, and an empty list loads none.
+   * `--safe-mode` disables the customisation surface that is *not* a settings file:
+   * `CLAUDE.md`, skills, plugins, hooks, MCP servers, custom commands and agents, output
+   * styles — while auth, model selection, the built-in tools and permissions keep working.
+   *
+   * **`--safe-mode` alone does not close the leak that produced the finding, and this was
+   * checked rather than assumed.** Same prompt, `claude 2.1.263`, on a machine whose
+   * `~/.claude/settings.json` sets `language: Portugues`:
+   *
+   * ```
+   * … --disallowedTools Write Edit NotebookEdit --safe-mode
+   *   → "Uma lista ligada é uma estrutura de dados linear …"
+   *
+   * … --disallowedTools Write Edit NotebookEdit --setting-sources '' --safe-mode
+   *   → "A linked list is a linear data structure …"
+   * ```
+   *
+   * So the live-dogfood report was right about `--setting-sources` and this adapter was
+   * briefly wrong to prefer `--safe-mode` over it. Neither is redundant: the first covers
+   * `language` and `outputStyle`, the second covers `CLAUDE.md` and everything loaded
+   * beside it.
+   *
+   * The same run answers the ordering question. These land after `--disallowedTools`,
+   * which is variadic, and an option token terminates it — proven by the English answer
+   * above rather than by reading a parser's documentation.
+   *
+   * `--restricted` was a third candidate and goes too far: it removes Bash and the other
+   * code-running tools, which an implementation stage needs.
+   *
+   * **Not `--system-prompt` in place of `--append-system-prompt`.** The report proposed
+   * that too, and there it is wrong: `--system-prompt` replaces the CLI's built-in prompt,
+   * which is where its own tool conventions live. Removing them to remove a persona costs
+   * far more than it saves, and the persona arrives through settings.
+   */
+  protected override isolationArgs(): readonly string[] {
+    return ['--setting-sources', '', '--safe-mode'];
+  }
+
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
     const args = ['-p', '--output-format', 'json'];
 
@@ -149,6 +241,49 @@ export class ClaudeCodeRunner extends BaseRunner {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * The accounting this CLI returns on every response, and this adapter used to discard
+   * (PRI-19).
+   *
+   * `modelUsage` is the field that matters: it names the model that answered, which no
+   * other source can supply once AD-13's advice not to pin a model is followed. Where more
+   * than one model served one call — a sub-agent alongside the main one — the entry with
+   * the most output tokens is reported, because that is the one that wrote the answer; the
+   * token and cost totals below come from `usage` and `total_cost_usd`, which already
+   * cover every model in the call.
+   *
+   * Nothing is defaulted to zero. A field the envelope did not carry stays absent, so a
+   * reader can tell "this CLI did not say" from "this cost nothing".
+   */
+  protected override parseUsage(_result: ProcessResult, parsed: unknown): AgentRunUsage | undefined {
+    const envelope = asEnvelope(parsed);
+    if (envelope === undefined) return undefined;
+
+    const usage: AgentRunUsage = {
+      ...(principalModel(envelope.modelUsage) === undefined
+        ? {}
+        : { model: principalModel(envelope.modelUsage) }),
+      ...(count(envelope.usage?.input_tokens) === undefined
+        ? {}
+        : { inputTokens: count(envelope.usage?.input_tokens) }),
+      ...(count(envelope.usage?.output_tokens) === undefined
+        ? {}
+        : { outputTokens: count(envelope.usage?.output_tokens) }),
+      ...(count(envelope.usage?.cache_read_input_tokens) === undefined
+        ? {}
+        : { cacheReadTokens: count(envelope.usage?.cache_read_input_tokens) }),
+      ...(count(envelope.usage?.cache_creation_input_tokens) === undefined
+        ? {}
+        : { cacheWriteTokens: count(envelope.usage?.cache_creation_input_tokens) }),
+      ...(count(envelope.total_cost_usd) === undefined
+        ? {}
+        : { costUsd: count(envelope.total_cost_usd) }),
+    };
+
+    // An empty object would claim a measurement was taken. Nothing was.
+    return Object.keys(usage).length === 0 ? undefined : usage;
   }
 
   protected override isDefiniteSuccess(result: ProcessResult, parsed: unknown): boolean {

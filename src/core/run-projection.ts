@@ -136,7 +136,11 @@ export function projectRun(input: ProjectionInput): RunProjection {
   const reviewFreshness = projectReviewFreshness(input);
   const resumable = isResumable(input);
 
-  const base = { resumable, progress, reviewFreshness };
+  // A finished run cannot be paused, whatever a stale request on it says.
+  const paused = state.pauseRequestedAt !== undefined
+    && state.status !== 'completed' && state.status !== 'failed' && state.status !== 'cancelled';
+
+  const base = { resumable, paused, progress, reviewFreshness };
 
   if (state.status === 'completed') return { ...base, status: 'complete' };
   if (state.status === 'failed') return { ...base, status: 'failed' };
@@ -320,12 +324,50 @@ function projectGate(
     };
   }
 
-  const blocked = tasks.filter((task) => task.state === 'blocked').map((task) => task.id);
+  /**
+   * **`blockReason` decides, not the state** (PRI-24).
+   *
+   * `blocked` covers two different situations and the sentence below only fits one of
+   * them. An *agent* block is a question a person has to answer; a *dependency* block is a
+   * task that never ran because its predecessor failed, and it reported nothing at all.
+   *
+   * A live run said `Answer what TASK-002, TASK-004 reported as blocking` for two tasks at
+   * `attempts: 0`, while the tasks that actually failed went unmentioned — so the advice
+   * pointed away from the problem and at a question nobody had asked.
+   */
+  const blocked = tasks
+    .filter((task) => task.state === 'blocked' && task.blockReason !== 'dependency')
+    .map((task) => task.id);
   if (blocked.length > 0) {
     return {
       gate: 'agent_blocked',
       action: `Answer what ${blocked.join(', ')} reported as blocking, then requeue`,
       tasks: blocked,
+    };
+  }
+
+  /**
+   * The tasks that actually stopped, which had no branch at all (PRI-24).
+   *
+   * A failure with dependents fell through to the block above and was described as
+   * somebody else's unanswered question. A failure with none fell through everything and
+   * produced no gate, which reads as a run that is merely unfinished.
+   *
+   * Placed after the block so an agent's question still wins: that one needs a person and
+   * nothing else can clear it, while a failure has `retry` waiting for it.
+   */
+  const failed = tasks.filter((task) => task.state === 'failed').map((task) => task.id);
+  if (failed.length > 0) {
+    const dependents = tasks
+      .filter((task) => task.state === 'blocked' && task.blockReason === 'dependency')
+      .map((task) => task.id);
+    const waiting =
+      dependents.length === 0 ? '' : ` ${dependents.join(', ')} are waiting on it.`;
+    return {
+      gate: 'task_failed',
+      action:
+        `Fix what stopped ${failed.join(', ')}, then \`agent-flow retry\` it.${waiting}`,
+      tasks: failed,
     };
   }
 

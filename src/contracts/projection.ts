@@ -69,7 +69,7 @@ export interface ProgressAxes {
 
 export interface RuntimeGate {
   /** Which gate holds the run. */
-  readonly gate: 'approval' | 'task_review' | 'agent_blocked' | 'final_acceptance';
+  readonly gate: 'approval' | 'task_review' | 'agent_blocked' | 'task_failed' | 'final_acceptance';
   /** The one action that clears it (AR §3.6). Never "inspect logs". */
   readonly action: string;
   /** The tasks involved, when the gate is about tasks. */
@@ -109,6 +109,19 @@ export interface RunProjection {
    * "resumable".
    */
   readonly resumable: boolean;
+  /**
+   * Whether an operator asked for no new work (PRI-15).
+   *
+   * Orthogonal to `status`: a paused run still reads `implementing` while the task that
+   * was already in flight finishes, and that pair is the honest description — stopping is
+   * not instant and a screen that showed only one of the two would be wrong for as long as
+   * the last task ran.
+   *
+   * Distinct from `resumable`, which a pause also turns off. One says what the DAG holds,
+   * the other says what a person decided, and collapsing them makes "did my pause take"
+   * unanswerable — the question the pause exists to answer.
+   */
+  readonly paused: boolean;
   /** Present exactly when the status is `blocked_on_human`. */
   readonly gate?: RuntimeGate;
   readonly progress: ProgressAxes;

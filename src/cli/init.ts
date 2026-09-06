@@ -7,6 +7,15 @@ import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
 
 /** `agent-flow init` — prepare a repository. Never clobbers anything (§7.7). */
+/**
+ * Install commands that rewrite a lockfile rather than respect one.
+ *
+ * Only the forms `stack-detection.ts` actually emits, and only the ones whose behaviour
+ * has been observed. A pattern that guessed at other managers' flags would be the kind of
+ * unprobed claim `installCommand`'s own comment refuses to make.
+ */
+const DIRTIES_THE_TREE = /^(npm|pnpm|yarn) install\b/;
+
 export async function runInitCommand(
   options: { force?: boolean },
   globals: GlobalOptions,
@@ -86,6 +95,33 @@ export async function runInitCommand(
         '',
         `Warning: run ${active.runId} is active and its planningBase may no longer`,
         'match HEAD once you commit these files. This was recorded on the run.',
+      );
+    }
+
+    /**
+     * The wall this project will walk into on its first run, said before it does (PRI-25).
+     *
+     * `stack-detection.ts` already knows: it prefers `npm ci` precisely because
+     * `npm install` rewrites `package-lock.json`, which fails the post-setup cleanliness
+     * assertion and makes worktree mode refuse every task. It falls back to `npm install`
+     * when there is no lockfile to respect — correctly, since `npm ci` refuses without one.
+     *
+     * So a project with no committed lockfile is handed a command that is known to break
+     * it, and nothing said so. A live run found out the expensive way: planning completed,
+     * four tasks were dispatched, and every one was refused at the setup check — after the
+     * planning had been paid for.
+     *
+     * Named here rather than in `doctor` because `init` is where the command is chosen and
+     * because the remedy is one commit away while the operator is still in this directory.
+     */
+    const install = result.stack.commands.install;
+    if (install !== undefined && DIRTIES_THE_TREE.test(install)) {
+      lines.push(
+        '',
+        `Warning: \`${install}\` writes a lockfile this repository does not track yet.`,
+        'Every task will be refused at the setup check until it is committed — the tree',
+        'has to be identical before and after install, or an attempt cannot say what it',
+        'changed. Run it once and commit the lockfile before the first feature.',
       );
     }
 

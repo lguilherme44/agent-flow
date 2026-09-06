@@ -32,11 +32,17 @@ type ObservedChange = AttemptChange;
  * nothing cannot have left its scope, and reporting the second would describe a diff that
  * does not exist.
  */
-function assertAcceptance(task: Task, observed: ObservedChange): AcceptanceAssertion {
+function assertAcceptance(
+  task: Task,
+  observed: ObservedChange,
+  /** A person declared this task legitimately unchanged after the plan was written (PRI-20). */
+  declaredUnchangedByOperator: boolean,
+): AcceptanceAssertion {
   const effect = assertObservableChange({
     ...(observed.baseTree === undefined ? {} : { baseTree: observed.baseTree }),
     ...(observed.validatedTree === undefined ? {} : { validatedTree: observed.validatedTree }),
     ...(task.expectsNoChange === undefined ? {} : { expectsNoChange: task.expectsNoChange }),
+    declaredUnchangedByOperator,
   });
   if (!effect.satisfied) return effect;
 
@@ -492,7 +498,9 @@ export class TaskExecutor {
     // task through. A task already heading for review does not need a second reason, and
     // stacking them would replace the specific note with a less specific one.
     const acceptance =
-      judgement.state === 'completed' ? assertAcceptance(task, observed) : undefined;
+      judgement.state === 'completed'
+        ? assertAcceptance(task, observed, await this.declaredUnchanged(runId, task.id))
+        : undefined;
 
     const state = acceptance?.satisfied === false ? 'review_required' : judgement.state;
 
@@ -861,6 +869,26 @@ export class TaskExecutor {
     }
   }
 
+  /**
+   * Whether a person has declared this task legitimately unchanged (PRI-20).
+   *
+   * Read from the run state rather than from the plan, because the plan is what somebody
+   * approved and `approvedPlanHash` holds it to that. The declaration is a separate,
+   * later, attributable fact and lives beside the attempt counters that record the other
+   * human interventions.
+   *
+   * A state that cannot be read answers `false`: the assertion this feeds exists to refuse
+   * work that produced no evidence, and an unreadable file is not evidence of intent.
+   */
+  private async declaredUnchanged(runId: string, taskId: string): Promise<boolean> {
+    try {
+      const state = await this.options.store.loadRun(runId);
+      return state.tasks.find((entry) => entry.id === taskId)?.noChangeDeclaredAt !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
   private async finish(
     runId: string,
     result: unknown,
@@ -949,6 +977,9 @@ export class TaskExecutor {
       reasoning: result.reasoning,
       reasoningClamped: result.reasoningClamped,
       ...(result.fallback === undefined ? {} : { fallback: result.fallback }),
+      // Per attempt, which is the grain the question is asked at: "what did this cost"
+      // about a task that took three attempts is three numbers, not one (PRI-19).
+      ...(result.usage === undefined ? {} : { usage: result.usage }),
       startedAt: result.startedAt,
       finishedAt: result.finishedAt,
       filesChanged: result.filesChanged,
@@ -1176,13 +1207,15 @@ export function parseResultBlock(text: string): ParsedReport {
  */
 function provenanceOf(
   execution: StageExecution,
-): Pick<TaskResult, 'runner' | 'model' | 'reasoning' | 'reasoningClamped' | 'fallback'> {
+): Pick<TaskResult, 'runner' | 'model' | 'reasoning' | 'reasoningClamped' | 'fallback' | 'usage'> {
   return {
     runner: execution.runner,
     ...(execution.model === undefined ? {} : { model: execution.model }),
     reasoning: execution.reasoning,
     reasoningClamped: execution.reasoningClamped,
     ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
+    // What the call spent, on the record that says who made it (PRI-19).
+    ...(execution.usage === undefined ? {} : { usage: execution.usage }),
   };
 }
 

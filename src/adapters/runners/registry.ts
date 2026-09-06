@@ -6,6 +6,7 @@ import {
 } from '../../contracts/index.js';
 import type {
   AgentRunner,
+  RunnerCapabilities,
   RunnerCapabilityEntry,
   RunnerHealth,
 } from '../../ports/agent-runner.js';
@@ -37,10 +38,15 @@ export interface RegistryDependencies {
   readonly env?: (name: string) => string | undefined;
 }
 
-type RunnerFactory = (
-  id: string,
-  config: RunnerConfig,
-  deps: RegistryDependencies,
+/**
+ * What `execution` tells the adapters about the process they are about to spawn.
+ *
+ * One object rather than a growing list of positionals: this is the second such setting
+ * and the fourth argument was already easy to pass in the wrong order. Handed to the CLI
+ * adapters and to none of the others — `openai-compatible` spawns nothing, so a process
+ * policy would be a field it could only ignore.
+ */
+export interface RunnerSpawnPolicy {
   /**
    * `execution.passEnv` — extra names a spawned agent may inherit (PRI-17).
    *
@@ -48,11 +54,20 @@ type RunnerFactory = (
    * `buildRegistry` call sites and a fifth would be added without this line being
    * anywhere in view; the failure of forgetting it is silent, and its shape is an
    * operator whose declared variable simply never arrives.
-   *
-   * Handed to the CLI adapters and to none of the others: `openai-compatible` spawns
-   * nothing, so an environment policy would be a field it could only ignore.
    */
-  envPass: readonly string[],
+  readonly envPass: readonly string[];
+  /**
+   * `execution.isolateRunnerSettings` — whether the CLI is cut off from the operator's own
+   * customisations (PRI-18).
+   */
+  readonly isolateSettings: boolean;
+}
+
+type RunnerFactory = (
+  id: string,
+  config: RunnerConfig,
+  deps: RegistryDependencies,
+  policy: RunnerSpawnPolicy,
 ) => AgentRunner;
 
 /**
@@ -63,22 +78,24 @@ type RunnerFactory = (
  * and one adapter file — no workflow code, no stage, no prompt changes.
  */
 const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
-  'claude-code-cli': (id, config, deps, envPass) =>
+  'claude-code-cli': (id, config, deps, policy) =>
     new ClaudeCodeRunner({
       id,
       processRunner: deps.processRunner,
-      envPass,
+      envPass: policy.envPass,
+      isolateSettings: policy.isolateSettings,
       ...(config.command === undefined ? {} : { command: config.command }),
       // `RunnerConfig.args` (§7): the seam for what this schema does not model,
       // most concretely pointing a coding CLI at another inference endpoint.
       extraArgs: config.args,
     }),
 
-  'codex-cli': (id, config, deps, envPass) =>
+  'codex-cli': (id, config, deps, policy) =>
     new CodexRunner({
       id,
       processRunner: deps.processRunner,
-      envPass,
+      envPass: policy.envPass,
+      isolateSettings: policy.isolateSettings,
       // Needed because `--output-schema` takes a file path rather than a string.
       fs: deps.fs,
       ...(config.command === undefined ? {} : { command: config.command }),
@@ -87,11 +104,12 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       extraArgs: config.args,
     }),
 
-  'agy-cli': (id, config, deps, envPass) =>
+  'agy-cli': (id, config, deps, policy) =>
     new AgyRunner({
       id,
       processRunner: deps.processRunner,
-      envPass,
+      envPass: policy.envPass,
+      isolateSettings: policy.isolateSettings,
       ...(config.command === undefined ? {} : { command: config.command }),
       // `RunnerConfig.args` (§7): the seam for what this schema does not model,
       // most concretely pointing a coding CLI at another inference endpoint.
@@ -127,6 +145,81 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
     });
   },
 };
+
+/**
+ * One configuration key a runner type reads, and whether the type works without it.
+ *
+ * Declared beside the factories because that is where the requirement already lives — the
+ * `openai-compatible` factory refuses a runner with no `baseUrl` and says so in the error.
+ * Two places would eventually disagree, and the one an editor reads would be the wrong one.
+ */
+export interface RunnerTypeField {
+  readonly name: 'command' | 'args' | 'baseUrl' | 'apiKeyEnv' | 'model' | 'contextWindow';
+  readonly required: boolean;
+  /** Names an environment variable rather than holding a value (§7.1). */
+  readonly secretEnv?: true;
+}
+
+export interface RunnerTypeDescription {
+  readonly type: string;
+  readonly fields: readonly RunnerTypeField[];
+  /**
+   * What this type can do before a model is chosen — the CLI's own surface (AD-30).
+   *
+   * Read by *asking an instance*, because the adapter is the only thing that knows, and a
+   * table restating it here would be a second answer that ages separately. No model is
+   * passed: a narrowing that depends on the pair belongs to the pair, and this question is
+   * asked while somebody is still choosing the type.
+   */
+  readonly capabilities: RunnerCapabilities;
+}
+
+const CLI_FIELDS: readonly RunnerTypeField[] = [
+  { name: 'command', required: false },
+  { name: 'args', required: false },
+  { name: 'model', required: false },
+];
+
+const TYPE_FIELDS: Readonly<Record<string, readonly RunnerTypeField[]>> = {
+  'claude-code-cli': CLI_FIELDS,
+  'codex-cli': CLI_FIELDS,
+  'agy-cli': CLI_FIELDS,
+  'openai-compatible': [
+    { name: 'baseUrl', required: true },
+    { name: 'apiKeyEnv', required: false, secretEnv: true },
+    { name: 'model', required: false },
+    { name: 'contextWindow', required: false },
+  ],
+};
+
+/**
+ * Every runner type this installation supports, for a screen that offers them.
+ *
+ * The alternative was a list in the browser, which is how the local-only template shipped
+ * one operator's runner name as a product feature. Adding an adapter is still one entry in
+ * `FACTORIES` and one file; the editor picks it up from here.
+ *
+ * Each type is instantiated once, with the minimum its factory accepts, purely to read the
+ * capabilities it declares. Nothing is spawned and nothing is reached: construction stores
+ * dependencies, and `capabilities()` answers from the adapter's own declaration.
+ */
+export function describeRunnerTypes(deps: RegistryDependencies): RunnerTypeDescription[] {
+  return Object.keys(FACTORIES).sort().flatMap((type): RunnerTypeDescription[] => {
+    const factory = FACTORIES[type];
+    if (factory === undefined) return [];
+    const fields = TYPE_FIELDS[type] ?? [];
+    const probe: RunnerConfig = {
+      type,
+      enabled: true,
+      args: [],
+      // Satisfies the one factory that refuses a runner without an endpoint. Never
+      // called: only `capabilities()` is read from this instance.
+      ...(fields.some(({ name }) => name === 'baseUrl') ? { baseUrl: 'http://127.0.0.1/v1' } : {}),
+    };
+    const policy: RunnerSpawnPolicy = { envPass: [], isolateSettings: true };
+    return [{ type, fields, capabilities: factory(type, probe, deps, policy).capabilities() }];
+  });
+}
 
 export interface RunnerRegistry {
   ids(): string[];
@@ -181,7 +274,10 @@ export function buildRegistry(
       );
     }
 
-    runners.set(id, factory(id, runnerConfig, deps, config.execution.passEnv));
+    runners.set(id, factory(id, runnerConfig, deps, {
+      envPass: config.execution.passEnv,
+      isolateSettings: config.execution.isolateRunnerSettings,
+    }));
   }
 
   const get = (id: string): AgentRunner => {

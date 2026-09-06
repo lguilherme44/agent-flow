@@ -1,6 +1,9 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import {
   AnalyticsQuerySchema,
+  ConfigApplyRequestSchema,
+  ConfigEditorQuerySchema,
+  ConfigValidateRequestSchema,
   ApproveRequestSchema,
   ArtifactParamsSchema,
   EventsQuerySchema,
@@ -13,8 +16,10 @@ import {
   ReviewRequestSchema,
   ReviseRequestSchema,
   RunParamsSchema,
+  StageLogParamsSchema,
   StartRequestSchema,
   TaskParamsSchema,
+  roleConfigKeys,
   type ActionErrorView,
   type ActionJobView,
   type ActionResultView,
@@ -28,10 +33,14 @@ import {
   type RunSummaryView,
   type WorkspaceView,
   type RunnerHealthView,
+  type RunnerModelsView,
+  type RunnerTypeView,
   type RunnerView,
   type ServerEvent,
   type TelemetryEntry,
 } from '../contracts/index.js';
+import { ConfigEditorTargetError, type ConfigEditOperation, type ConfigEditView, type ConfigTarget } from '../app/config-editor.js';
+import { ConfigSourceCodecError } from '../ports/config-source-codec.js';
 import { StateStore } from '../app/state-store.js';
 import { PromptLoader } from '../app/prompt-loader.js';
 import { describeRoleRoutes } from '../app/role-routes.js';
@@ -54,7 +63,7 @@ import {
   type RunActionDeps,
 } from '../app/run-actions.js';
 import { loadConfig } from '../config/loader.js';
-import { buildRegistry } from '../adapters/runners/registry.js';
+import { buildRegistry, describeRunnerTypes } from '../adapters/runners/registry.js';
 import { referencedRunners } from '../core/health.js';
 import { capabilitiesOf } from '../core/role.js';
 import { collectTelemetry } from '../app/telemetry.js';
@@ -65,7 +74,7 @@ import { CollaborationReader } from './collaboration-reader.js';
 import { ControlReader } from './control-reader.js';
 import { PromptReader } from './prompt-reader.js';
 import { AnalyticsReader, DEFAULT_ANALYTICS_RUNS } from './analytics-reader.js';
-import { ConfigReader } from './config-reader.js';
+import { ConfigReader, createServerConfigEditor } from './config-reader.js';
 import { ActionJobs, type ActionJob, type JobKind, type JobResult } from './action-jobs.js';
 import { createEventBus, RunWatcher, type EventBus } from './event-bridge.js';
 import type { ProjectRegistry, RegisteredProject } from './project-registry.js';
@@ -226,6 +235,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     fs: options.fs,
     globalConfigPath: options.globalConfigPath,
   });
+  const configEditor = createServerConfigEditor({
+    fs: options.fs,
+    globalConfigPath: options.globalConfigPath,
+    registry: options.registry,
+  });
 
   const watcher = new RunWatcher({
     fs: options.fs,
@@ -315,6 +329,24 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const stages = await reader.stages(scope.project, scope.runId);
     return stages === null ? notFound(reply, 'no such run') : stages;
+  });
+
+  /**
+   * One stage's own log (§95).
+   *
+   * The stage name is parsed against the pipeline enum before it becomes a filename, so
+   * there is no request shape that addresses a file outside this run's `logs/`. The bytes
+   * were redacted where they were captured; nothing here re-reads a runner.
+   */
+  app.get('/api/v1/runs/:runId/stages/:stage/log', async (request, reply) => {
+    const params = StageLogParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) return badRequest(reply, 'unknown pipeline stage');
+
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const log = await reader.stageLog(project, params.data.runId, params.data.stage);
+    return log === undefined ? notFound(reply, 'no such run') : log;
   });
 
   app.get('/api/v1/runs/:runId/tasks', async (request, reply) => {
@@ -518,6 +550,61 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     };
   });
 
+  /**
+   * The runner types this installation can register (§7).
+   *
+   * Not scoped to a project, and it reads no configuration: which adapters exist is a
+   * property of the installed package, the same for every project on the machine. That
+   * is also why it answers before any runner is declared — it is what the editor offers
+   * when the file has none yet.
+   */
+  app.get('/api/v1/runner-types', (): RunnerTypeView[] =>
+    describeRunnerTypes({ processRunner: options.processRunner, fs: options.fs }).map((entry) => ({
+      type: entry.type,
+      fields: entry.fields.map((field) => ({
+        name: field.name,
+        required: field.required,
+        ...(field.secretEnv === undefined ? {} : { secretEnv: field.secretEnv }),
+      })),
+      capabilities: {
+        supportedReasoningLevels: [...entry.capabilities.supportedReasoningLevels],
+        supportsReadOnly: entry.capabilities.supportsReadOnly,
+        supportsWorkingDirectory: entry.capabilities.supportsWorkingDirectory,
+        structuredOutputStrategy: entry.capabilities.structuredOutputStrategy,
+      },
+    })),
+  );
+
+  /**
+   * Which models each enabled runner reports (AD-13).
+   *
+   * Costs a spawn or a request per runner that can answer, which is why it is its own
+   * route rather than a field on `/runners`: a page that lists runners should not pay for
+   * model enumeration, and the editor that offers models asks for it deliberately.
+   */
+  app.get('/api/v1/runners/models', async (request, reply): Promise<RunnerModelsView[] | undefined> => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const config = await loadConfig({
+      fs: options.fs,
+      globalConfigPath: options.globalConfigPath,
+      projectDir: project.path,
+    });
+    const registry = buildRegistry(config.global, {
+      processRunner: options.processRunner,
+      fs: options.fs,
+    });
+
+    return Promise.all(registry.ids().map(async (id): Promise<RunnerModelsView> => {
+      const runner = registry.get(id);
+      // A runner that cannot enumerate says nothing; one that throws is treated the same,
+      // because this is a suggestion list and a failure here must not fail the page.
+      const models = await runner.listModels?.().catch(() => []) ?? [];
+      return { id, models: [...models] };
+    }));
+  });
+
   app.get('/api/v1/runners', async (request, reply): Promise<RunnerView[] | undefined> => {
     const project = projectOf(request.query);
     if (project === undefined) return notFound(reply, 'no such project');
@@ -613,8 +700,12 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     return routes.map((route) => ({
       role: route.role,
+      configKeys: [...roleConfigKeys(route.role)],
       prompts: [...route.prompts],
       requiresReadOnly: route.requirements.readOnly === true,
+      // The requirement that separates a coding CLI from an inference endpoint, and the
+      // one a person is actually choosing between when they route a role.
+      requiresWorkingDirectory: route.requirements.workingDirectory === true,
       requiresNativeStructuredOutput: route.requirements.nativeStructuredOutput === true,
       configured: route.configured,
       ...(route.resolved === undefined ? {} : { resolved: route.resolved }),
@@ -637,6 +728,62 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     if (project === undefined) return notFound(reply, 'no such project');
 
     return configReader.describe(project);
+  });
+
+  app.get('/api/v1/config/editor', async (request, reply) => {
+    const query = ConfigEditorQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) return badRequest(reply, 'invalid configuration target');
+
+    try {
+      return editorView(await configEditor.describe(editorTarget(query.data)));
+    } catch (error) {
+      return configEditorFailure(reply, error);
+    }
+  });
+
+  app.post('/api/v1/config/editor/validate', async (request, reply) => {
+    const query = ConfigEditorQuerySchema.safeParse(request.query ?? {});
+    const body = ConfigValidateRequestSchema.safeParse(request.body ?? {});
+    if (!query.success || !body.success) return badRequest(reply, 'invalid configuration request');
+
+    try {
+      const validation = await configEditor.validate({
+        target: editorTarget(query.data),
+        operations: body.data.operations as readonly ConfigEditOperation[],
+      });
+      if (!validation.valid) void reply.code(422);
+      return validation;
+    } catch (error) {
+      return configEditorFailure(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/config/editor', async (request, reply) => {
+    const query = ConfigEditorQuerySchema.safeParse(request.query ?? {});
+    const body = ConfigApplyRequestSchema.safeParse(request.body ?? {});
+    if (!query.success || !body.success) return badRequest(reply, 'invalid configuration request');
+
+    try {
+      const result = await configEditor.apply({
+        target: editorTarget(query.data),
+        expectedRevision: body.data.expectedRevision,
+        operations: body.data.operations as readonly ConfigEditOperation[],
+      });
+      if (result.status === 'applied') return { ...result, view: editorView(result.view) };
+      if (result.status === 'invalid') {
+        void reply.code(422);
+        return result.validation;
+      }
+      void reply.code(409);
+      return {
+        error: 'revision_conflict',
+        message: 'The configuration changed after it was loaded.',
+        action: 'Review the fresh state and retry your changes.',
+        view: editorView(result.view),
+      };
+    } catch (error) {
+      return configEditorFailure(reply, error);
+    }
   });
 
   app.get('/api/v1/prompts', async (): Promise<PromptView[]> => prompts.list());
@@ -833,6 +980,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const outcome = await retryTask(depsFor(project), params.data.runId, params.data.taskId, {
       force: body.data.force,
+      expectNoChange: body.data.expectNoChange,
     });
 
     if (!outcome.ok) return rejectAction(reply, outcome.error);
@@ -1287,5 +1435,48 @@ function notFound(
   message: string,
 ): undefined {
   reply.code(404).send({ error: 'not_found', message });
+  return undefined;
+}
+
+function editorTarget(query: { scope: 'global' | 'project'; projectId?: string }): ConfigTarget {
+  return {
+    scope: query.scope,
+    ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
+  };
+}
+
+function editorView(view: ConfigEditView) {
+  const { unknownPaths, ...safe } = view;
+  return { ...safe, unknownKeys: unknownPaths };
+}
+
+/** Error boundary for config I/O: paths, stack traces and source bytes stay local. */
+function configEditorFailure(
+  reply: { code(status: number): { send(body: unknown): unknown } },
+  error: unknown,
+): undefined {
+  if (error instanceof ConfigEditorTargetError) {
+    const status = error.code === 'project_not_found' ? 404 : 400;
+    reply.code(status).send({
+      error: error.code,
+      message: error.message,
+      action: status === 404 ? 'Choose a registered project.' : 'Provide a registered project id.',
+    });
+    return undefined;
+  }
+  if (error instanceof ConfigSourceCodecError) {
+    reply.code(422).send({
+      error: 'config_invalid',
+      message: 'The configuration source cannot be edited safely.',
+      action: 'Correct the YAML source and retry.',
+      diagnostics: [{ severity: 'error', code: `yaml_${error.code}`, path: [], message: error.message }],
+    });
+    return undefined;
+  }
+  reply.code(500).send({
+    error: 'config_io_error',
+    message: 'The configuration could not be read or saved.',
+    action: 'Check filesystem access and retry.',
+  });
   return undefined;
 }
