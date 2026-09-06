@@ -19,3 +19,11 @@ paths:
     - test
 rules:
   architecture: []
+roles:
+  executors:
+    trivial:
+      runner: agy
+    normal:
+      runner: agy
+    complex:
+      runner: agy

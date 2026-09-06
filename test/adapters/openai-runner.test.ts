@@ -253,6 +253,25 @@ describe('OpenAiRunner error normalisation', () => {
   });
 });
 
+describe('OpenAiRunner model enumeration (AD-13)', () => {
+  it('reads the ids the endpoint serves, from the endpoint', async () => {
+    const { runner } = makeRunner((url) =>
+      url.endsWith('/models')
+        ? jsonResponse({ data: [{ id: 'moe' }, { id: 'qwen3-coder' }, { id: '' }, { other: 'no id' }] })
+        : jsonResponse({}));
+
+    expect(await runner.listModels?.()).toEqual(['moe', 'qwen3-coder']);
+  });
+
+  it('offers nothing when the endpoint refuses or is unreachable', async () => {
+    const refused = makeRunner((url) => url.endsWith('/models') ? jsonResponse({}, 401) : jsonResponse({}));
+    expect(await refused.runner.listModels?.()).toEqual([]);
+
+    const unreachable = makeRunner(() => { throw new Error('ECONNREFUSED'); });
+    expect(await unreachable.runner.listModels?.()).toEqual([]);
+  });
+});
+
 describe('OpenAiRunner health', () => {
   it('reports executable and configured when the model list answers', async () => {
     const { runner } = makeRunner((url) =>

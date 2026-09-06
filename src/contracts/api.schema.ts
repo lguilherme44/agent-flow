@@ -678,6 +678,22 @@ export interface RunnerTypeView {
   };
 }
 
+/**
+ * The models a runner reports it can be pointed at (AD-13).
+ *
+ * Asked of the provider — `agy models`, an OpenAI-compatible `GET /models` — never held
+ * as a table in this repository, where it would be provider knowledge above the adapter
+ * boundary and would rot besides. `models` is empty for a runner that cannot enumerate,
+ * which is a fact about that CLI and not an error.
+ *
+ * A **suggestion**, never a constraint: a model released this morning has to stay
+ * typeable this morning, so nothing downstream may treat this as the set of valid values.
+ */
+export interface RunnerModelsView {
+  readonly id: string;
+  readonly models: readonly string[];
+}
+
 export interface RunnerHealthView {
   readonly id: string;
   readonly installed: boolean;

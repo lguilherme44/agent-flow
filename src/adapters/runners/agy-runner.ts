@@ -148,6 +148,33 @@ export class AgyRunner extends BaseRunner {
     };
   }
 
+  /**
+   * What `agy models` enumerates, verbatim (AD-13).
+   *
+   * The same command `docs/runner-capabilities.md` used to measure the effective effort
+   * per family, read here for a different question: which ids a person may point a role
+   * at. One id per line, the id being the first field — the human label after it is for
+   * the terminal, not for a config file.
+   *
+   * A CLI that is absent or refuses contributes nothing rather than an error: this feeds
+   * a suggestion list, and a screen with no suggestions is the screen we already have.
+   */
+  async listModels(): Promise<readonly string[]> {
+    const result = await this.processRunner.run({
+      command: this.command,
+      args: ['models'],
+      cwd: process.cwd(),
+      timeoutSeconds: 15,
+    });
+
+    if (result.spawnFailed || result.exitCode !== 0) return [];
+
+    return result.stdout
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/)[0] ?? '')
+      .filter((id) => id !== '' && !id.startsWith('-'));
+  }
+
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
     const args = ['--output-format', 'json'];
 

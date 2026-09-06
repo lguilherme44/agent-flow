@@ -16,6 +16,7 @@ const editor = (scope: 'global' | 'project', projectId?: string): ConfigEditorVi
     { path: ['runners', 'moe', 'enabled'], explicitValue: true, effectiveValue: true, origin: scope, editable: true, effect: 'next_execution_context', valueType: 'boolean' },
     { path: ['runners', 'endpoint', 'type'], explicitValue: 'openai-compatible', effectiveValue: 'openai-compatible', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
     { path: ['roles', 'architect', 'runner'], explicitValue: 'moe', effectiveValue: 'moe', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
+    { path: ['roles', 'architect', 'model'], explicitValue: undefined, effectiveValue: undefined, origin: 'default', editable: true, effect: 'next_execution_context', valueType: 'string' },
     { path: ['roles', 'architect', 'effort'], explicitValue: 'high', effectiveValue: 'high', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'reasoning_level', options: ['low', 'medium', 'high', 'very_high'] },
     { path: ['roles', 'executors', 'trivial', 'runner'], explicitValue: 'ghost', effectiveValue: 'ghost', origin: scope, editable: true, effect: 'next_execution_context', valueType: 'string' },
     { path: ['parallelism', 'maxTasks'], explicitValue: scope === 'global' ? 2 : undefined, effectiveValue: 2, origin: 'global', editable: true, effect: 'next_execution_context', valueType: 'integer' },
@@ -80,6 +81,7 @@ describe('CrewPage configuration workflow', () => {
       if (target.includes('/config/editor/validate')) return response({ valid: true, revision, diagnostics: [], changes: [{ path: ['parallelism', 'maxTasks'], before: 2, after: 1, effect: 'next_execution_context' }] });
       if (target.includes('/agents')) return response(routes);
       if (target.includes('/runner-types')) return response(runnerTypes);
+      if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
       if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
       if (target.includes('/runners/health')) return response([{ id: 'moe', installed: true, executable: true, auth: 'configured' }]);
       return response({ status: 'applied', view: editor('project', 'flowcanvas'), changes: [] });
@@ -168,6 +170,26 @@ describe('CrewPage configuration workflow', () => {
     expect(screen.getByText(/effort high ran as medium/)).toBeInTheDocument();
   });
 
+  it('offers the models the routed runner reported, without closing the field', async () => {
+    render(<CrewPage />);
+    const model = await screen.findByLabelText('roles.architect.model');
+
+    // `architect` is routed to `moe`, so the ids offered are the ones `moe` reported.
+    expect(model).toHaveAttribute('list');
+    const list = document.getElementById(model.getAttribute('list') ?? '');
+    expect([...(list?.querySelectorAll('option') ?? [])].map((option) => option.getAttribute('value')))
+      .toEqual(['gpt-5-codex', 'gpt-5-codex-mini']);
+
+    // A suggestion, not a constraint: a model released this morning is still typeable.
+    expect(model.tagName).toBe('INPUT');
+    fireEvent.change(model, { target: { value: 'a-model-released-this-morning' } });
+    await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/config/editor/validate'));
+      const body = JSON.parse(String(call?.[1]?.body)) as { operations: unknown[] };
+      expect(body.operations).toContainEqual({ kind: 'set', path: ['roles', 'architect', 'model'], value: 'a-model-released-this-morning' });
+    });
+  });
+
   it('assigns every role at once, and leaves out the ones the runner cannot serve', async () => {
     render(<CrewPage />);
     const pick = await screen.findByLabelText('Assign every role to');
@@ -254,6 +276,7 @@ describe('CrewPage configuration workflow', () => {
       }
       if (target.includes('/config/editor/validate')) return response({ valid: true, revision, diagnostics: [], changes: [] });
       if (target.includes('/runner-types')) return response(runnerTypes);
+      if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
       if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
       if (target.includes('/agents') || target.includes('/runners/health')) return response([]);
       return response({});
@@ -280,6 +303,7 @@ describe('CrewPage configuration workflow', () => {
       if (target.includes('/config/editor') && init?.method === undefined) return response(editor('global'));
       if (target.includes('/config/editor/validate')) return response({ valid: false, revision, diagnostics: [{ severity: 'error', code: 'bad', path: ['parallelism', 'maxTasks'], message: 'Must be positive.' }], changes: [] }, 422);
       if (target.includes('/runner-types')) return response(runnerTypes);
+      if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
       if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
       if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
       if (target.includes('/agents') || target.includes('/runners/health')) return response([]);
@@ -302,6 +326,7 @@ describe('CrewPage configuration workflow', () => {
       if (target.includes('/config/editor/validate')) return response({ valid: true, revision, diagnostics: [], changes: [{ path: ['parallelism', 'maxTasks'], before: 2, after: 3, effect: 'next_execution_context' }] });
       if (target.includes('/config/editor') && init?.method === 'PATCH') return response({ error: 'revision_conflict', message: 'The configuration changed after it was loaded.', view: fresh }, 409);
       if (target.includes('/runner-types')) return response(runnerTypes);
+      if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
       if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
       if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
       if (target.includes('/agents') || target.includes('/runners/health')) return response([]);

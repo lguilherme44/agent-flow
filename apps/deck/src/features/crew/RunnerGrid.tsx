@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerHealthView, RunnerTypeView } from '@contracts/index.js';
+import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerHealthView, RunnerModelsView, RunnerTypeView } from '@contracts/index.js';
 import type { ConfigEditorOperation } from '../../lib/api';
 import { Chip, Empty, Skeleton } from '../../components/ui';
 import { words } from '../../lib/tone';
@@ -15,11 +15,12 @@ import { FieldControl } from './FieldControl';
  * the identity, the switch, the model, the reported health and the roles that depend on
  * it in the one place a person asks about them.
  */
-export function RunnerGrid({ view, roles, health, types, operations, onChange, onOperations }: {
+export function RunnerGrid({ view, roles, health, types, models, operations, onChange, onOperations }: {
   readonly view: ConfigEditorView;
   readonly roles: readonly RoleRouteView[] | undefined;
   readonly health: { readonly data: readonly RunnerHealthView[] | undefined; readonly loading: boolean; readonly error: unknown };
   readonly types: { readonly data: readonly RunnerTypeView[] | undefined; readonly error: unknown };
+  readonly models: readonly RunnerModelsView[] | undefined;
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
@@ -42,6 +43,7 @@ export function RunnerGrid({ view, roles, health, types, operations, onChange, o
             roles={roles}
             health={health.data?.find((entry) => entry.id === id)}
             types={types.data}
+            models={models?.find((entry) => entry.id === id)?.models}
             operations={operations}
             onChange={onChange}
             onOperations={onOperations}
@@ -60,12 +62,14 @@ export function RunnerGrid({ view, roles, health, types, operations, onChange, o
   );
 }
 
-function RunnerCard({ id, view, roles, health, types, operations, onChange, onOperations }: {
+function RunnerCard({ id, view, roles, health, types, models, operations, onChange, onOperations }: {
   readonly id: string;
   readonly view: ConfigEditorView;
   readonly roles: readonly RoleRouteView[] | undefined;
   readonly health: RunnerHealthView | undefined;
   readonly types: readonly RunnerTypeView[] | undefined;
+  /** What this runner reported it can be pointed at. A suggestion, never a constraint. */
+  readonly models: readonly string[] | undefined;
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
@@ -106,7 +110,13 @@ function RunnerCard({ id, view, roles, health, types, operations, onChange, onOp
         <summary>{fields.length} setting{fields.length === 1 ? '' : 's'}</summary>
         <div className="runner-card__fields">
           {fields.filter(({ path }) => path[2] !== 'enabled').map((field) => (
-            <RunnerField key={pathLabel(field.path)} field={field} operations={operations} onChange={onChange} />
+            <RunnerField
+              key={pathLabel(field.path)}
+              field={field}
+              operations={operations}
+              onChange={onChange}
+              {...(field.path[2] === 'model' && models !== undefined ? { suggestions: models } : {})}
+            />
           ))}
         </div>
       </details>
@@ -133,12 +143,13 @@ function RunnerCard({ id, view, roles, health, types, operations, onChange, onOp
   );
 }
 
-function RunnerField({ field, operations, onChange, compact = false }: {
+function RunnerField({ field, operations, onChange, compact = false, suggestions }: {
   readonly field: ConfigEditorFieldView;
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   /** Renders the control alone, for the switch that sits in the card's header. */
   readonly compact?: boolean;
+  readonly suggestions?: readonly string[];
 }) {
   const label = pathLabel(field.path);
   const leaf = String(field.path[2]);
@@ -154,6 +165,7 @@ function RunnerField({ field, operations, onChange, compact = false }: {
       field={field}
       raw={raw}
       inherited={field.explicitValue === undefined && operation === undefined}
+      {...(suggestions === undefined ? {} : { suggestions })}
       onChange={(value, inherit) => onChange(field, value, inherit)}
     />
   );

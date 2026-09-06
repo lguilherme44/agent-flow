@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ConfigEditorFieldView, ConfigEditorScope, ConfigEditorView, ConfigValidationView, ConfigView, ProjectView, RoleRouteView, RunnerHealthView, RunnerTypeView } from '@contracts/index.js';
+import type { ConfigEditorFieldView, ConfigEditorScope, ConfigEditorView, ConfigValidationView, ConfigView, ProjectView, RoleRouteView, RunnerHealthView, RunnerModelsView, RunnerTypeView } from '@contracts/index.js';
 import { ApiError, api, keys, type ConfigEditorOperation } from '../../lib/api';
 import { invalidate, useResource } from '../../lib/store';
 import { Empty, Skeleton } from '../../components/ui';
@@ -19,6 +19,9 @@ export function CrewPage({ projectId }: { projectId?: string }) {
   const roles = useResource<RoleRouteView[]>(scope === undefined ? null : keys.agents(scope), () => api.agents(scope), { refreshMs: 60_000 });
   const health = useResource<RunnerHealthView[]>(scope === undefined ? null : keys.runnersHealth(scope), () => api.runnersHealth(scope), { refreshMs: 60_000 });
   const types = useResource<RunnerTypeView[]>(keys.runnerTypes(), api.runnerTypes);
+  // What each runner says it can be pointed at. Costs a spawn per runner, so it refreshes
+  // rarely: a model list changes when a CLI is upgraded, not while somebody is editing.
+  const models = useResource<RunnerModelsView[]>(scope === undefined ? null : keys.runnerModels(scope), () => api.runnerModels(scope));
   // Which files the two scopes are. Read from the one endpoint that already publishes
   // them: a screen that edits a file should say which file.
   const sources = useResource<ConfigView>(scope === undefined ? null : keys.config(scope), () => api.config(scope));
@@ -55,7 +58,7 @@ export function CrewPage({ projectId }: { projectId?: string }) {
           note="Committed with the repository"
         />
       </div>
-      <ConfigPanel key={`${configScope}/${project.id}`} scope={configScope} project={project} roles={roles} health={health} types={types} />
+      <ConfigPanel key={`${configScope}/${project.id}`} scope={configScope} project={project} roles={roles} health={health} types={types} models={models} />
     </main>
   );
 }
@@ -85,12 +88,13 @@ function ScopeButton({ scope, active, onPick, title, path, note }: {
   );
 }
 
-function ConfigPanel({ scope, project, roles, health, types }: {
+function ConfigPanel({ scope, project, roles, health, types, models }: {
   scope: ConfigEditorScope;
   project: ProjectView;
   roles: ReturnType<typeof useResource<RoleRouteView[]>>;
   health: ReturnType<typeof useResource<RunnerHealthView[]>>;
   types: ReturnType<typeof useResource<RunnerTypeView[]>>;
+  models: ReturnType<typeof useResource<RunnerModelsView[]>>;
 }) {
   const projectId = scope === 'project' ? project.id : undefined;
   const resourceKey = keys.configEditor(scope, projectId);
@@ -180,8 +184,8 @@ function ConfigPanel({ scope, project, roles, health, types }: {
         </button>
       </div>
       {tab === 'crew' ? <>
-        <RunnerGrid view={view} roles={roles.data} health={health} types={types} operations={operations} onChange={updateField} onOperations={validate} />
-        <RoutingEditor view={view} roles={roles} types={types.data} operations={operations} onChange={updateField} onOperations={validate} />
+        <RunnerGrid view={view} roles={roles.data} health={health} types={types} models={models.data} operations={operations} onChange={updateField} onOperations={validate} />
+        <RoutingEditor view={view} roles={roles} types={types.data} models={models.data} operations={operations} onChange={updateField} onOperations={validate} />
       </> : <>
       <div className="crew-filter">
         <span>{advancedFields.filter(({ explicitValue }) => explicitValue !== undefined).length} of {advancedFields.length} fields are set in this source.</span>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerTypeView } from '@contracts/index.js';
+import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerModelsView, RunnerTypeView } from '@contracts/index.js';
 import type { ConfigEditorOperation } from '../../lib/api';
 import { Empty, Skeleton } from '../../components/ui';
 import { displayValue, pathLabel, roleNeeds, runnerIdsOf } from './crew-config';
@@ -18,10 +18,11 @@ import { FieldControl } from './FieldControl';
  * needs runner capabilities the browser does not have, and a guess in this column is
  * worse than a stale truth: it is the column people trust.
  */
-export function RoutingEditor({ view, roles, types, operations, onChange, onOperations }: {
+export function RoutingEditor({ view, roles, types, models, operations, onChange, onOperations }: {
   readonly view: ConfigEditorView;
   readonly roles: { readonly data: readonly RoleRouteView[] | undefined; readonly loading: boolean; readonly error: unknown };
   readonly types: readonly RunnerTypeView[] | undefined;
+  readonly models: readonly RunnerModelsView[] | undefined;
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
@@ -42,7 +43,7 @@ export function RoutingEditor({ view, roles, types, operations, onChange, onOper
             <div className="table-wrap"><table className="table crew-roles__table">
             <thead><tr><th>role</th><th>needs</th><th>runner</th><th>model</th><th>effort</th><th>resolves to</th></tr></thead>
             <tbody>{(roles.data ?? []).map((role) => (
-              <RoutingRow key={role.role} role={role} view={view} runners={runners} operations={operations} onChange={onChange} />
+              <RoutingRow key={role.role} role={role} view={view} runners={runners} models={models} operations={operations} onChange={onChange} />
             ))}</tbody>
             </table></div>
           </>}
@@ -109,14 +110,19 @@ function canServe(role: RoleRouteView, capabilities: RunnerTypeView['capabilitie
   return !(role.requiresReadOnly && !capabilities.supportsReadOnly);
 }
 
-function RoutingRow({ role, view, runners, operations, onChange }: {
+function RoutingRow({ role, view, runners, models, operations, onChange }: {
   readonly role: RoleRouteView;
   readonly view: ConfigEditorView;
   readonly runners: readonly string[];
+  readonly models: readonly RunnerModelsView[] | undefined;
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
 }) {
   const pending = operations.some((operation) => pathLabel(operation.path).startsWith(`${pathLabel(role.configKeys)}.`));
+  // The models offered are the ones the runner *this row points at* reported. Offering
+  // every runner's models here would suggest a Gemini id for a role routed to Claude.
+  const routed = String(view.fields.find((field) => pathLabel(field.path) === pathLabel([...role.configKeys, 'runner']))?.effectiveValue ?? '');
+  const suggested = models?.find((entry) => entry.id === routed)?.models;
   return (
     <tr data-pending={pending} data-unresolved={role.error !== undefined}>
       <td>
@@ -130,7 +136,7 @@ function RoutingRow({ role, view, runners, operations, onChange }: {
         </span>
       </td>
       <RoutingCell role={role} view={view} leaf="runner" options={runners} operations={operations} onChange={onChange} />
-      <RoutingCell role={role} view={view} leaf="model" operations={operations} onChange={onChange} />
+      <RoutingCell role={role} view={view} leaf="model" {...(suggested === undefined ? {} : { suggestions: suggested })} operations={operations} onChange={onChange} />
       <RoutingCell role={role} view={view} leaf="effort" operations={operations} onChange={onChange} />
       <td className="crew-roles__resolved">
         {role.error === undefined
@@ -160,11 +166,12 @@ function originNote(field: ConfigEditorFieldView, inherited: boolean): string {
 }
 
 /** One editable leaf of a role's route, addressed by the path the server published. */
-function RoutingCell({ role, view, leaf, options, operations, onChange }: {
+function RoutingCell({ role, view, leaf, options, suggestions, operations, onChange }: {
   readonly role: RoleRouteView;
   readonly view: ConfigEditorView;
   readonly leaf: 'runner' | 'model' | 'effort';
   readonly options?: readonly string[];
+  readonly suggestions?: readonly string[];
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
 }) {
@@ -189,6 +196,7 @@ function RoutingCell({ role, view, leaf, options, operations, onChange }: {
         raw={raw}
         inherited={inherited}
         {...(options === undefined ? {} : { options })}
+        {...(suggestions === undefined ? {} : { suggestions })}
         onChange={(value, inherit) => onChange(field, value, inherit)}
       />
       <small className="crew-roles__origin">{originNote(field, inherited)}</small>

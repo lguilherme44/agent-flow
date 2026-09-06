@@ -109,6 +109,19 @@ export class ClaudeCodeRunner extends BaseRunner {
     };
   }
 
+  /**
+   * The aliases this CLI accepts, not the model ids behind them (AD-13).
+   *
+   * Claude Code has no `models` subcommand to ask, so this is the one list here that is
+   * declared rather than enumerated — and it is declared as *aliases* on purpose. An
+   * alias like `opus` keeps meaning the current Opus as versions land; the dated id it
+   * resolves to today is exactly the kind of name AD-13 says rots. A person who wants a
+   * pinned id still types it: this is a suggestion list, and the field stays open.
+   */
+  async listModels(): Promise<readonly string[]> {
+    return ['opus', 'sonnet', 'haiku'];
+  }
+
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
     const args = ['-p', '--output-format', 'json'];
 

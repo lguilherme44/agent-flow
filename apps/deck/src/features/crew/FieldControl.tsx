@@ -27,6 +27,12 @@ export interface FieldControlProps {
    * this source, most concretely. Overrides `field.options` when present.
    */
   readonly options?: readonly string[];
+  /**
+   * Values worth offering that are not the only values allowed — model ids a runner
+   * reported, most concretely. Renders as a datalist beside a text box, so a model
+   * released this morning is still typeable this morning (AD-13).
+   */
+  readonly suggestions?: readonly string[];
   readonly onChange: (raw: string, inherit?: boolean) => void;
 }
 
@@ -107,17 +113,24 @@ function NumberControl({ id, field, raw, inherited, onChange }: FieldControlProp
   );
 }
 
-function TextControl({ id, field, raw, inherited, onChange }: FieldControlProps) {
+function TextControl({ id, field, raw, inherited, suggestions, onChange }: FieldControlProps) {
+  const offered = suggestions ?? [];
   return (
-    <input
-      id={id}
-      type="text"
-      className="input mono"
-      value={raw}
-      disabled={!field.editable}
-      placeholder={inherited ? displayValue(field.effectiveValue) : undefined}
-      onChange={(event) => onChange(event.target.value)}
-    />
+    <>
+      <input
+        id={id}
+        type="text"
+        className="input mono"
+        value={raw}
+        disabled={!field.editable}
+        placeholder={inherited ? displayValue(field.effectiveValue) : undefined}
+        {...(offered.length === 0 ? {} : { list: `${id}-suggestions` })}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {offered.length === 0
+        ? null
+        : <datalist id={`${id}-suggestions`}>{offered.map((value) => <option key={value} value={value} />)}</datalist>}
+    </>
   );
 }
 

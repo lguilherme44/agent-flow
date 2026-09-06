@@ -690,7 +690,7 @@ input[type='checkbox'].field-switch:disabled {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--s-2);
-  margin-bottom: var(--s-3);
+  margin: var(--s-3) 0;
   color: var(--ink-3);
   font-size: var(--fs-1);
 }
@@ -705,9 +705,6 @@ input[type='checkbox'].field-switch:disabled {
 }
 
 /* One card per agent: identity, health, what it can do, and what depends on it. */
-.crew-runners {
-  margin-bottom: var(--s-5);
-}
 .runner-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
@@ -753,9 +750,9 @@ input[type='checkbox'].field-switch:disabled {
 .runner-card__switch .field-bool__word {
   display: none;
 }
-/* Cards in a row read as a fleet only if they line up. */
+/* Cards in a row read as a fleet only if they line up: equal height, feet on one line. */
 .runner-cards {
-  align-items: start;
+  align-items: stretch;
 }
 .runner-card__caps {
   display: flex;
@@ -839,7 +836,11 @@ input[type='checkbox'].field-switch:disabled {
 }
 
 /* One row per post: what it is configured to use, and what that resolves to. */
-.crew-roles {
+.crew-roles,
+.crew-runners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
   margin-bottom: var(--s-5);
 }
 .crew-roles__table td {

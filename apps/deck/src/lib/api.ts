@@ -11,6 +11,7 @@ import type {
   RunSummaryView,
   ConfigView,
   RunnerHealthView,
+  RunnerModelsView,
   RunnerTypeView,
   StageViewResponse,
   TaskDetailView,
@@ -182,6 +183,9 @@ export const api = {
     getJson<RoleRouteView[]>('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>
     getJson<RunnerHealthView[]>('/runners/health', projectId === undefined ? {} : { projectId }),
+  /** What each runner reports it can be pointed at. Costs a spawn, so it is its own call. */
+  runnerModels: (projectId?: string) =>
+    getJson<RunnerModelsView[]>('/runners/models', projectId === undefined ? {} : { projectId }),
   /** Which adapters this installation supports. A property of the machine, not a project. */
   runnerTypes: () => getJson<RunnerTypeView[]>('/runner-types', {}),
   /** Read-only, and read here for one thing: which files the two scopes actually are. */
@@ -245,6 +249,7 @@ export const keys = {
   runnersHealth: (projectId?: string) =>
     url('/runners/health', projectId === undefined ? {} : { projectId }),
   runnerTypes: () => url('/runner-types', {}),
+  runnerModels: (projectId?: string) => url('/runners/models', projectId === undefined ? {} : { projectId }),
   config: (projectId?: string) => url('/config', projectId === undefined ? {} : { projectId }),
   configEditor: (scope: ConfigEditorScope, projectId?: string) => url('/config/editor', configQuery(scope, projectId)),
 };

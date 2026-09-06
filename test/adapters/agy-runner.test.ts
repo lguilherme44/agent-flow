@@ -118,6 +118,32 @@ describe('AgyRunner capabilities', () => {
   });
 });
 
+describe('AgyRunner model enumeration (AD-13)', () => {
+  it('reads the ids `agy models` prints, and drops the human labels beside them', async () => {
+    const proc = new FakeProcessRunner().push({
+      stdout: [
+        'gemini-3.7-flash-high      Gemini 3.7 Flash (High)',
+        'gemini-3.1-pro-low         Gemini 3.1 Pro (Low)',
+        'claude-sonnet-4-6          Claude Sonnet 4.6 (Thinking)',
+        '',
+      ].join('\n'),
+      exitCode: 0,
+    });
+    const { runner } = makeRunner(proc);
+
+    expect(await runner.listModels?.()).toEqual([
+      'gemini-3.7-flash-high', 'gemini-3.1-pro-low', 'claude-sonnet-4-6',
+    ]);
+    expect(proc.calls[0]?.args).toEqual(['models']);
+  });
+
+  it('offers nothing when the CLI is absent or refuses, rather than failing', async () => {
+    // This feeds a suggestion list. A screen with no suggestions is the screen we had.
+    expect(await makeRunner(new FakeProcessRunner().push({ spawnFailed: true })).runner.listModels?.()).toEqual([]);
+    expect(await makeRunner(new FakeProcessRunner().push({ exitCode: 1, stderr: 'unknown command' })).runner.listModels?.()).toEqual([]);
+  });
+});
+
 describe('AgyRunner argv construction', () => {
   /**
    * The arguments actually handed to the CLI when the clamp has fired (AR-01).

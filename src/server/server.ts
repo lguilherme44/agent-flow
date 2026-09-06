@@ -32,6 +32,7 @@ import {
   type RunSummaryView,
   type WorkspaceView,
   type RunnerHealthView,
+  type RunnerModelsView,
   type RunnerTypeView,
   type RunnerView,
   type ServerEvent,
@@ -554,6 +555,36 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       },
     })),
   );
+
+  /**
+   * Which models each enabled runner reports (AD-13).
+   *
+   * Costs a spawn or a request per runner that can answer, which is why it is its own
+   * route rather than a field on `/runners`: a page that lists runners should not pay for
+   * model enumeration, and the editor that offers models asks for it deliberately.
+   */
+  app.get('/api/v1/runners/models', async (request, reply): Promise<RunnerModelsView[] | undefined> => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const config = await loadConfig({
+      fs: options.fs,
+      globalConfigPath: options.globalConfigPath,
+      projectDir: project.path,
+    });
+    const registry = buildRegistry(config.global, {
+      processRunner: options.processRunner,
+      fs: options.fs,
+    });
+
+    return Promise.all(registry.ids().map(async (id): Promise<RunnerModelsView> => {
+      const runner = registry.get(id);
+      // A runner that cannot enumerate says nothing; one that throws is treated the same,
+      // because this is a suggestion list and a failure here must not fail the page.
+      const models = await runner.listModels?.().catch(() => []) ?? [];
+      return { id, models: [...models] };
+    }));
+  });
 
   app.get('/api/v1/runners', async (request, reply): Promise<RunnerView[] | undefined> => {
     const project = projectOf(request.query);

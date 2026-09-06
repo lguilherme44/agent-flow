@@ -195,4 +195,17 @@ export interface AgentRunner {
   capabilities(model?: string): RunnerCapabilities;
   healthCheck(): Promise<RunnerHealth>;
   run(input: AgentRunInput): Promise<AgentRunResult>;
+  /**
+   * The models this runner can be pointed at, asked of the provider (AD-13).
+   *
+   * Optional, and absent is a real answer: not every CLI can enumerate its models, and a
+   * table of model names kept in the core would be provider knowledge above the adapter
+   * boundary — the exact thing AD-13 forbids — with the added defect that model names
+   * rot. `agy models` and an OpenAI-compatible `GET /models` both answer this for real;
+   * a runner that cannot is expected to say nothing rather than to guess.
+   *
+   * Never a closed list for an editor to enforce. What it feeds is a suggestion: a model
+   * released this morning must remain typeable this morning.
+   */
+  listModels?(): Promise<readonly string[]>;
 }

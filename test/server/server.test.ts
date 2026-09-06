@@ -28,6 +28,7 @@ import type {
   RunEventLogView,
   RunSummaryView,
   RunnerHealthView,
+  RunnerModelsView,
   RunnerTypeView,
   RunnerView,
   StageViewResponse,
@@ -591,6 +592,20 @@ describe('UI-04 — the run read API', () => {
     expect(JSON.stringify(types)).not.toContain('127.0.0.1');
     for (const field of types.flatMap(({ fields }) => fields)) {
       expect(Object.keys(field).filter((key) => !['name', 'required', 'secretEnv'].includes(key))).toEqual([]);
+    }
+  });
+
+  it('reports what each runner says it can be pointed at, and an empty list is an answer', async () => {
+    const { server } = await serve();
+
+    const models = (await server.app.inject('/api/v1/runners/models?projectId=demo')).json<RunnerModelsView[]>();
+
+    // One entry per enabled runner, whether or not it can enumerate: a CLI that cannot is
+    // a fact about that CLI, and the editor needs to tell it apart from a failed request.
+    expect(models.length).toBeGreaterThan(0);
+    for (const entry of models) {
+      expect(entry).toHaveProperty('id');
+      expect(Array.isArray(entry.models)).toBe(true);
     }
   });
 

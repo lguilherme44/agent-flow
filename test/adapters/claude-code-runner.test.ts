@@ -56,6 +56,16 @@ describe('capabilities', () => {
   });
 });
 
+describe('ClaudeCodeRunner model suggestions (AD-13)', () => {
+  it('offers the aliases the CLI accepts, not the dated ids behind them', async () => {
+    // No `models` subcommand exists to ask, so this list is declared — and declared as
+    // aliases, which keep meaning the current model as versions land. A dated id would be
+    // the exact name AD-13 says rots, printed by us in a control people trust.
+    const runner = new ClaudeCodeRunner({ id: 'claude', processRunner: new FakeProcessRunner() });
+    expect(await runner.listModels?.()).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+});
+
 describe('argv construction', () => {
   it('runs non-interactively with JSON output', async () => {
     const { runner, proc } = makeRunner(
