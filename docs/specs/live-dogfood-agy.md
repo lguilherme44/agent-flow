@@ -13,7 +13,7 @@
 |---|---|---|
 | 1 | The operator's `~/.claude/settings.json` reaches every agent | `execution.isolateRunnerSettings` → `--safe-mode` (PRI-18) |
 | 2 | Cost, tokens and model returned and discarded | `AgentRunUsage` on the port, filled by two adapters, surfaced by `agent-flow status` (PRI-19) |
-| 3 | `agy` barred from 6 of 9 roles | one criterion applied to all three CLI adapters (PRI-18) |
+| 3 | `agy` barred from 6 of 9 roles | **not closed — the finding was half right.** The criterion *was* applied unequally; the conclusion that `agy` passes it was wrong. See below |
 | 4 | A forgotten `expectsNoChange` kills a run | `retry --expect-no-change`, and a button on the Deck (PRI-20) |
 | 5 | No elapsed time on stage transitions | `cli/render/progress.ts` |
 | 6 | `doctor` says `OK` with auth unverified | `renderVerdict` in `cli/doctor.ts` |
@@ -21,18 +21,67 @@
 | 8 | `agy` wrote `.atl/` into the repo under test | `--disable-slash-commands` on write stages (PRI-18) |
 | 9 | Failure evidence shows the tail of the output | `verdictLine` in `core/recovery-policy.ts` |
 
-Two of the fixes came out differently from what this report proposed, and both times a live
-CLI is why:
+Three of the fixes came out differently from what this report proposed, and every time a
+live CLI is why:
 
-- **`--system-prompt` was the wrong instrument for #1.** It replaces the CLI's built-in
-  prompt, which is where its own tool conventions live. `--safe-mode` drops the operator's
-  customisations and keeps them.
+- **`--system-prompt` was the wrong instrument for #1**, and `--safe-mode` alone was not
+  enough either. The first replaces the CLI's built-in prompt, which is where its own tool
+  conventions live. The second leaves `language` and `outputStyle` in place — measured, on
+  the same prompt. Both `--setting-sources ''` and `--safe-mode` are passed.
 - **#8's flag cancels read-only mode.** `agy --mode plan --disable-slash-commands` warns
   that plan mode has no effect. So the flag is passed on write stages only — where the
-  measured leak was — and read-only stages keep their containment.
+  measured leak was.
+- **#3 was half right, and the half that was wrong cost a live run.** This report said the
+  criterion was applied unequally, and it was. It implied `agy` would pass a fair one, and
+  it does not: `--mode plan` is a planning *workflow*, not a containment mode — it writes
+  its answer to `~/.gemini/antigravity-cli/brain/` and returns a pointer, and in the live
+  run it returned nothing at all for a stage that produced 2,709 output tokens.
+  `--mode accept-edits`, with or without `--sandbox`, overwrote a real file in the working
+  directory. No mode both answers inline and leaves the repository alone, so
+  `supportsReadOnly` is back to `false` — right value, and now the right reason.
 
-The record below is left exactly as it was written, including the wrong proposal. A report
+The record below is left exactly as it was written, including the wrong proposals. A report
 edited to agree with what was eventually built is a report nobody can learn from.
+
+---
+
+## The end-to-end run this produced
+
+A second sandbox, `cart-fees`, four tasks, `claude` on the read-only stages and `agy` on the
+executors. Third attempt; the first two failures are the point.
+
+| Attempt | Died at | Why | Fix |
+|---|---|---|---|
+| 1 | `architecture-impact` | Every role routed at `agy`; discovery returned empty | `supportsReadOnly: false`, and an empty answer is now a repair problem |
+| 2 | first task dispatch | `npm install` rewrote an uncommitted `package-lock.json` | `init` says so before planning is paid for; the halt names the file |
+| 3 | — | | |
+
+**FEATURE COMPLETE**, verified independently rather than taken on the product's word:
+12 tests written and passing in the integration worktree, the bands correct at every
+boundary, `TypeError` on both arguments, README updated with the inclusivity of the lower
+bound that nobody asked for and everybody wonders about. Diff: 3 files, +88/−7, nothing
+outside the declared scope.
+
+```
+Spend
+  tokens        230,186 in · 80,510 out · 1,441,466 from cache
+  cost          $3.3055 as the runner priced it — not necessarily your bill
+```
+
+And the row that answers finding #2 outright — **nothing in the configuration pinned a
+model**:
+
+```
+discovery            claude   model=claude-opus-5   out=7031    cost=0.328179
+sdd                  claude   model=claude-opus-5   out=21023   cost=0.845710
+implementation       agy      model=—               out=18154   cost=None
+final-review         claude   model=claude-opus-5   out=1718    cost=0.501320
+```
+
+`claude-opus-5` came from `modelUsage.canonicalModel`, which is what AD-13 asks for: the
+model that answered, without a pinned name anywhere. The em dashes are `agy` reporting
+tokens and neither a model nor a price, and reporting nothing rather than a zero is the
+contract.
 
 ---
 
