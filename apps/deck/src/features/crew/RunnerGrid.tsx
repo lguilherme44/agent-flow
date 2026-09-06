@@ -62,6 +62,42 @@ export function RunnerGrid({ view, roles, health, types, models, operations, onC
   );
 }
 
+/**
+ * Whether this runner is on, counting the switch the operator has already flipped.
+ *
+ * Read from the pending operations first and from `effectiveValue` only as the fallback.
+ * The control itself has always resolved its own value this way; the *card* did not, so
+ * flipping the switch left the card lit and undimmed until the change was saved — the one
+ * moment when saying something is still useful.
+ */
+function pendingEnabled(
+  fields: readonly ConfigEditorFieldView[],
+  operations: readonly ConfigEditorOperation[],
+): boolean {
+  const field = fields.find(({ path }) => path[2] === 'enabled');
+  if (field === undefined) return true;
+
+  const label = pathLabel(field.path);
+  const operation = [...operations].reverse().find((entry) => pathLabel(entry.path) === label);
+  // `unset` returns the key to whatever the layer beneath declares, which the view already
+  // carries as the effective value — the pending edit removes an override, not the answer.
+  if (operation?.kind === 'set') return operation.value !== false && operation.value !== 'false';
+  return field.effectiveValue !== false;
+}
+
+/**
+ * The sentence a switched-off runner owes the roles still pointing at it.
+ *
+ * Assembled here rather than interpolated across JSX so it renders as one text node. Split
+ * across five expressions it read the same on screen and was unmatchable by any query that
+ * asks for a sentence — which is how a message ends up untested for the one thing it says.
+ */
+function brokenBySwitch(routes: number): string {
+  return routes === 1
+    ? 'Turned off, and 1 route still points here — it cannot run until it is re-pointed or this is switched back on.'
+    : `Turned off, and ${String(routes)} routes still point here — they cannot run until they are re-pointed or this is switched back on.`;
+}
+
 function RunnerCard({ id, view, roles, health, types, models, operations, onChange, onOperations }: {
   readonly id: string;
   readonly view: ConfigEditorView;
@@ -76,7 +112,7 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
 }) {
   const fields = runnerLeafFields(view.fields, id);
   const type = String(fields.find(({ path }) => path[2] === 'type')?.effectiveValue ?? '');
-  const enabled = fields.find(({ path }) => path[2] === 'enabled')?.effectiveValue !== false;
+  const enabled = pendingEnabled(fields, operations);
   const declared = types?.find((entry) => entry.type === type);
   const used = (roles ?? []).filter((role) => role.resolved?.runner === id || role.configured.runner === id).length;
   const blocked = blockedRunnerDependencies(id, view.fields);
@@ -136,9 +172,30 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
       </div>
       {blocked.length === 0
         ? null
-        : <small className="runner-card__blocked" title={blocked.join(', ')}>
-          Referenced by {blocked.length} route{blocked.length === 1 ? '' : 's'}
-        </small>}
+        : enabled
+          ? <small className="runner-card__blocked" title={blocked.join(', ')}>
+            Referenced by {blocked.length} route{blocked.length === 1 ? '' : 's'}
+          </small>
+          /**
+           * Turned off with routes still pointing here (PRI-27).
+           *
+           * `Remove` is already refused while any route references this runner, and the
+           * switch beside it was not — for the same consequence. Every one of those roles
+           * resolves to `runner_disabled` and cannot run, and until PRI-26 the error they
+           * produced said the runner was "not registered" while listing it as known.
+           *
+           * A live config had exactly this: three lines of project YAML turning `claude`
+           * off, six roles still on it, and six red rows underneath explaining themselves
+           * badly. The card knew — it prints the route count — and said nothing about what
+           * the switch had just done.
+           *
+           * Stated rather than refused. Turning a runner off and re-pointing its roles in
+           * one edit is a legitimate thing to do, and the change bar validates before any
+           * of it is written. Silence is the only wrong answer.
+           */
+          : <small className="runner-card__broken" title={blocked.join(', ')}>
+            {brokenBySwitch(blocked.length)}
+          </small>}
     </div>
   );
 }

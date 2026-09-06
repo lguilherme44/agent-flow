@@ -226,6 +226,28 @@ describe('CrewPage configuration workflow', () => {
     expect(screen.queryByText(/no working directory/)).not.toBeInTheDocument();
   });
 
+  /**
+   * A runner turned off with roles still on it says so (PRI-27).
+   *
+   * `Remove` is refused while any route references a runner; the switch beside it was not,
+   * for the same consequence — every role pointing there resolves to `runner_disabled`.
+   * A live project had three lines of YAML turning `claude` off, six roles still on it, and
+   * six red rows underneath. The card printed the route count and said nothing about what
+   * the switch had done.
+   */
+  it('warns when a runner is switched off with routes still pointing at it', async () => {
+    render(<CrewPage />);
+    await screen.findByLabelText('Assign every role to');
+
+    // `moe` is enabled and `architect` points at it: a plain reference, stated quietly.
+    expect(screen.getByText(/Referenced by 1 route/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('switch', { name: /runners\.moe\.enabled/ }));
+
+    expect(screen.getByText(/1 route still points here/)).toBeInTheDocument();
+    expect(screen.getByText(/cannot run until/)).toBeInTheDocument();
+  });
+
   it('assigns every role at once, and leaves out the ones the runner cannot serve', async () => {
     render(<CrewPage />);
     const pick = await screen.findByLabelText('Assign every role to');

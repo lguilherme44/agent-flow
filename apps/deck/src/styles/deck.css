@@ -810,6 +810,19 @@ input[type='checkbox'].field-switch:disabled {
   font-size: var(--fs-0);
   overflow-wrap: anywhere;
 }
+/**
+ * The same line, when the switch has made it a problem (PRI-27).
+ *
+ * Warn rather than muted: `runner-card__blocked` states a fact about a healthy runner, and
+ * this states that several roles cannot run. The card is already dimmed by `data-off`, so
+ * without a colour of its own this sentence would be the quietest thing on a card whose
+ * whole message it now carries.
+ */
+.runner-card__broken {
+  color: var(--warn);
+  font-size: var(--fs-0);
+  overflow-wrap: anywhere;
+}
 .runner-card--add {
   align-items: center;
   justify-content: center;
