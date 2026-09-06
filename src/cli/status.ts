@@ -68,6 +68,14 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     const startedStages = stagesOf('stage_started');
     // Reuse is recorded too, and a stage served from cache is not a stage pending.
     const reusedStages = stagesOf('stage_reused');
+    // Already on the event, never on a screen until now.
+    const contextBytes = new Map<string, number>();
+    for (const event of events) {
+      if (event.type !== 'stage_context_measured') continue;
+      const stage = event.detail['stage'];
+      const bytes = event.detail['totalBytes'];
+      if (typeof stage === 'string' && typeof bytes === 'number') contextBytes.set(stage, bytes);
+    }
 
     const planRaw = await store.readArtifact(state.runId, 'plan');
     const reviewRaw = await store.readArtifact(state.runId, 'planReview');
@@ -158,6 +166,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         codeReview,
         startedStages,
         reusedStages,
+        contextBytes,
       )}\n`,
     );
 
@@ -195,15 +204,29 @@ export function renderPlanningProgress(
   status: RunState['status'],
   startedStages: readonly string[] = [],
   reusedStages: readonly string[] = [],
+  /**
+   * Prompt size per stage, from `stage_context_measured` (AR-09).
+   *
+   * Recorded on every run since the event existed and surfaced nowhere: on a live run the
+   * prompt went from 3.9 KB at discovery to 57.4 KB at plan-review, fifteen-fold, and the
+   * only way to see it was to parse `events.jsonl` by hand. It is the number that predicts
+   * what a stage costs, and the 80% window warning that would otherwise catch this is
+   * inert — it needs a `contextWindow` no runner declares.
+   */
+  contextBytes: ReadonlyMap<string, number> = new Map(),
 ): string[] {
   const done = new Set(completedStages);
   const begun = new Set(startedStages);
   const reused = new Set(reusedStages);
+  const sized = (stage: string): string => {
+    const bytes = contextBytes.get(stage);
+    return bytes === undefined ? '' : `  ${(bytes / 1024).toFixed(1)} KB in`;
+  };
 
   return PLANNING_STAGES.map((stage) => {
     const label = STAGE_LABELS[stage] ?? stage;
 
-    if (done.has(stage)) return `  ${label.padEnd(16)}✓`;
+    if (done.has(stage)) return `  ${label.padEnd(16)}✓${sized(stage)}`;
 
     // A stage served from cache is satisfied, and printing `·` for it says the
     // opposite. Measured on a real run: discovery came from the fingerprint cache
@@ -315,6 +338,7 @@ export function render(
   /** Stages with a `stage_started` event — see `renderPlanningProgress`. */
   startedStages: readonly string[] = [],
   reusedStages: readonly string[] = [],
+  contextBytes: ReadonlyMap<string, number> = new Map(),
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -324,7 +348,7 @@ export function render(
     '',
   ];
 
-  lines.push(...renderPlanningProgress(completedStages, state.stage, state.status, startedStages, reusedStages));
+  lines.push(...renderPlanningProgress(completedStages, state.stage, state.status, startedStages, reusedStages, contextBytes));
 
   lines.push(`  ${'Approval'.padEnd(16)}${state.approved ? '✓' : '·'}`);
   lines.push('');

@@ -1,0 +1,167 @@
+
+> billing-rules@0.1.0 test
+> node --test test/*.test.js
+
+✔ a line is quantity times unit price (0.348791ms)
+✔ an order is the sum of its lines (0.341958ms)
+✔ an undefined discount leaves the order total unchanged (0.041958ms)
+✔ a 0% discount leaves the order total unchanged (0.03675ms)
+✖ a 100% discount reduces the order total to zero (0.322667ms)
+✖ a 100% discount on a negative subtotal produces zero (0.079959ms)
+✖ a 10% discount on an evenly divisible subtotal produces an exact total (0.06475ms)
+✖ a 15% discount floors the order total to whole cents (0.047083ms)
+✔ a floored discount total produces an integer number of cents (0.044334ms)
+✖ a 15% discount on a negative subtotal floors away from zero (0.078042ms)
+✔ an empty order with a discount returns zero (0.042416ms)
+✖ invalid discount types and non-integers throw a typeerror (0.099875ms)
+✖ discount percentages outside 0 to 100 throw a rangeerror (0.043792ms)
+✔ order lines and their line objects are not mutated by calculating a discount (0.038291ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 7
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33.157375
+
+✖ failing tests:
+
+test at test/pricing.test.js:22:1
+✖ a 100% discount reduces the order total to zero (0.322667ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1250 !== 0
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:23:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1250,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/pricing.test.js:26:1
+✖ a 100% discount on a negative subtotal produces zero (0.079959ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  -1999 !== 0
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:27:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: -1999,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/pricing.test.js:30:1
+✖ a 10% discount on an evenly divisible subtotal produces an exact total (0.06475ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1250 !== 1125
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:31:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1250,
+    expected: 1125,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/pricing.test.js:34:1
+✖ a 15% discount floors the order total to whole cents (0.047083ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1999 !== 1699
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:35:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1999,
+    expected: 1699,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/pricing.test.js:42:1
+✖ a 15% discount on a negative subtotal floors away from zero (0.078042ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  -1999 !== -1700
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:43:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: -1999,
+    expected: -1700,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/pricing.test.js:50:1
+✖ invalid discount types and non-integers throw a typeerror (0.099875ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception (TypeError).
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:52:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at test/pricing.test.js:61:1
+✖ discount percentages outside 0 to 100 throw a rangeerror (0.043792ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception (RangeError).
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-guilhermelellis-wk-agent-flow/d77c0e16-425a-4a4f-9b50-ff4741111fd9/scratchpad/dogfood/test/pricing.test.js:63:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:788:18)
+      at Test.postRun (node:internal/test_runner/test:1235:19)
+      at Test.run (node:internal/test_runner/test:1163:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }

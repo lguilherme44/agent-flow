@@ -466,7 +466,7 @@ export async function runDoctorCommand(
     // says. `assessHealth` never sees this fault, so the verdict is widened here rather
     // than misreported there.
     const status = cannotRun.length > 0 ? 'FAIL' : verdict.status;
-    lines.push(status);
+    lines.push(renderVerdict({ status, notes: verdict.notes }));
 
     if (status === 'DEGRADED' && !globals.strict) {
       lines.push('');
@@ -744,6 +744,24 @@ function renderAuth(auth: ObservedRunner['auth']): string {
 export interface DoctorRemediation {
   readonly problem: string;
   readonly fix: string;
+}
+
+/**
+ * The last line on screen, and the only one most readers keep.
+ *
+ * A bare `OK` has to mean what it says, and on a shallow check it does not: authentication
+ * is never probed, so a run started from an `OK` can die on its first model call — after
+ * discovery has already read the repository. Measured on a live run.
+ *
+ * `assessHealth` refuses to call that DEGRADED, and is right to: "we did not check" would
+ * be true on every healthy machine, and a DEGRADED that is always on is worth nothing. So
+ * the status is unchanged and the sentence stops overstating it. Anything other than a
+ * clean `OK` is left exactly as it was — a FAIL needs no softening.
+ */
+export function renderVerdict(verdict: { readonly status: string; readonly notes: readonly string[] }): string {
+  return verdict.status === 'OK' && verdict.notes.length > 0
+    ? 'OK — nothing here blocks a run, but see the note above'
+    : verdict.status;
 }
 
 export function generateRemediations(

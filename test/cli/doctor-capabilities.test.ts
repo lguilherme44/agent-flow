@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ReasoningLevel } from '../../src/contracts/index.js';
 import {
   renderCapabilityReport,
+  renderVerdict,
   unresolvableRoles,
   type CapabilityObservation,
 } from '../../src/cli/doctor.js';
@@ -236,5 +237,24 @@ describe('the live probe stays opt-in and gets harder (AR-01)', () => {
 
     expect(runner.calls.some((call) => call.prompt === TOOL_USE_PROBE_PROMPT)).toBe(false);
     expect(result.toolUse).toBeUndefined();
+  });
+});
+
+
+describe('the verdict says what it means (§95)', () => {
+  it('qualifies OK when something was not checked, and leaves it bare when nothing was', () => {
+    // Measured on a live run: `doctor` printed `OK` with authentication unverified for
+    // every runner. `OK` is the last line and the one a person acts on, and the run they
+    // started from it would have died on its first model call.
+    //
+    // `assessHealth` refuses to call this DEGRADED on purpose — a shallow check never
+    // probes auth, so it would be true on every healthy machine. The status stays; the
+    // sentence stops overstating it.
+    const unverified = renderVerdict({ status: 'OK', notes: ['authentication not verified for: claude'] });
+    expect(unverified).toContain('OK');
+    expect(unverified).toMatch(/see the note above/);
+
+    const clean = renderVerdict({ status: 'OK', notes: [] });
+    expect(clean).toBe('OK');
   });
 });

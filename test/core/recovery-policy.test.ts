@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { GlobalConfigSchema, type RecoveryConfig } from '../../src/contracts/index.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 import { parse as parseYaml } from 'yaml';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   decideCorrectivePlanRepair,
   decideCorrectiveRound,
   decideTaskRecovery,
+  escalationEvidence,
   isCompleteEscalation,
   type TaskRecoveryCounters,
 } from '../../src/core/recovery-policy.js';
@@ -362,5 +365,44 @@ describe('purity and determinism', () => {
       expect(decision.mayProceedAutomatically).toBe(false);
       expect(decision.step).toBeUndefined();
     }
+  });
+});
+
+
+describe('the evidence line is the verdict, not the last line of the output (§95)', () => {
+  /**
+   * Captured from a live run: `node --test` against an implementation that did not satisfy
+   * the tests written for it. 168 lines, and the shape is what every block-reporting tool
+   * produces — the count near the top, the stack at the bottom.
+   */
+  const NODE_TEST_FAILURE = readFileSync(
+    join(import.meta.dirname, '../fixtures/responses/node-test-failure.txt'),
+    'utf8',
+  );
+
+  const failed = (stdout: string): Parameters<typeof escalationEvidence>[0] => ({
+    taskId: 'TASK-002',
+    status: 'review_required',
+    attempts: 2,
+    validation: {
+      passed: false,
+      expectation: 'pass',
+      commands: [{ command: 'npm run test', exitCode: 1, durationMs: 119, stdout, stderr: '', truncated: false }],
+    },
+  } as unknown as Parameters<typeof escalationEvidence>[0]);
+
+  it('names the test that failed, rather than the bracket the output ends with', () => {
+    const [line] = escalationEvidence(failed(NODE_TEST_FAILURE));
+
+    // What this used to produce, measured: `npm run test → exit 1: }` — the closing brace
+    // of an assertion object, arrived at by truncating to the tail and taking its last
+    // line. What it produces now is the first failing test by name, because a runner
+    // reports each failure as it happens and its summary afterwards.
+    expect(line).toBe('npm run test → exit 1: ✖ a 100% discount reduces the order total to zero (0.322667ms)');
+  });
+
+  it('falls back to the last line with content when nothing announces a failure', () => {
+    const quiet = 'building\nlinking\n  }\n';
+    expect(escalationEvidence(failed(quiet))[0]).toContain('linking');
   });
 });
