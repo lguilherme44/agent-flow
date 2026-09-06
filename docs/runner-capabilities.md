@@ -502,7 +502,7 @@ field above, so a 401 or 429 is recognised structurally rather than by phrasing.
 | Model selection | ✅ | `--model <id>`, ids from `agy models` |
 | Reasoning level | ⚠️ **CLI accepts three; a model may offer fewer** | see the table below — encoded in the adapter since AR-01 |
 | Structured output | ⚠️ `prompted` | `--json-schema` exists; enforcement in headless mode needs permission configuration the adapter does not assume |
-| Read-only mode | ✅ **since PRI-18** | `--mode plan`. It was `false`, on the strength of writes to `~/.gemini/antigravity-cli/` — a criterion the other two adapters never faced, though both write `~/.claude` and `~/.codex` on every run. See *the criterion, applied once* below |
+| Read-only mode | ❌ **declared false** | This CLI has no mode that both answers inline and refuses to modify the repository. Measured — see *the criterion, applied once* below |
 | Working directory | ✅ | `--add-dir <path>` |
 | Non-interactive **file edits** | ✅ | `--mode accept-edits` |
 | Non-interactive **command execution** | ❌ **not granted** | the dogfood's own failure — see below |
@@ -523,24 +523,49 @@ agy --output-format json
 Prompt on stdin, as with the other two runners. `--dangerously-skip-permissions` exists and
 is **never** passed: it removes the containment AD-14 assigns to the runner.
 
-### The criterion, applied once (PRI-18)
+### The criterion, applied once — and this runner fails it (PRI-18, corrected)
 
-Three CLIs, the same behaviour, one of them barred from six of the nine roles — and the
-exclusion took cross-provider review with it, so `approve` warned that a plan review "does
-not protect against an assumption repeated from planning" for a reason that was not the
-operator's choice.
+The old justification was "writes to `~/.gemini/antigravity-cli/ occurred during probe`" — a
+criterion applied to this adapter and to no other, when `claude` writes `~/.claude` and
+`codex` writes `~/.codex` on every run and both declare `true`. PRI-18 flipped this to
+`true` on that reasoning. **A live end-to-end run proved the flip wrong within one stage,
+and it is back to `false` for a reason that holds.**
 
-**The criterion, stated once and applied to all three: can this CLI be put in a mode where
-it does not modify the repository under test?** `--mode plan` here, `--permission-mode plan`
-at Claude Code, `-s read-only` at Codex. All three are declared from their CLI's
-documentation and none has been probed with a write attempt — the same evidentiary footing,
-which is the whole change.
+**The criterion, stated once: can this CLI be put in a mode that both returns its answer and
+refuses to modify the repository under test?** `--permission-mode plan` does it at Claude
+Code, `-s read-only` does it at Codex. Nothing here does.
 
-The one measured write into a repository under test did come from this runner, and it is not
-evidence against read-only mode: it happened during an **implementation** task, which is
-allowed to write, through skill expansion from the operator's home directory. That is closed
-on write stages by `--disable-slash-commands`, and it is caught in the first place by
-`assertScopeContainment`, which is the assertion that owns that question.
+`--mode plan` is a planning **workflow**, not a containment mode. It writes its answer to a
+file outside the workspace and returns a sentence pointing at it:
+
+```
+$ agy --output-format json --effort high --mode plan --add-dir <dir>
+  "Write a short markdown document …"
+→ {"status":"SUCCESS",
+   "response":"I have created the implementation plan in
+               [repository_architecture_plan.md](file:///…/.gemini/antigravity-cli/
+               brain/<uuid>/repository_architecture_plan.md)",
+   "usage":{"output_tokens":3689,…}}
+```
+
+In the live run the same mode returned an **empty** response for a discovery stage that had
+produced 2,709 output tokens. Neither is an answer a stage can use.
+
+And the other two invocations do not contain writes. Measured against a real file:
+
+| invocation | answers inline | leaves the repo alone |
+|---|---|---|
+| `--mode accept-edits` | ✅ | ❌ overwrote `target.txt` |
+| `--mode accept-edits --sandbox` | ✅ | ❌ overwrote `target.txt` |
+| `--mode plan` | ❌ | — |
+
+The cost is real and is now a known limitation rather than a defect: this runner serves the
+executor roles and cannot be the second provider a cross-provider plan review needs.
+
+The measured write into a repository under test came from an **implementation** task, which
+is allowed to write, through skill expansion from the operator's home directory. That is
+closed by `--disable-slash-commands`, and caught in the first place by
+`assertScopeContainment`.
 
 ### Reasoning level — CLI surface
 

@@ -110,35 +110,49 @@ export class AgyRunner extends BaseRunner {
     return {
       supportedReasoningLevels: reasoningLevelsFor(model),
       /**
-       * `true` since PRI-18, and the change is a criterion rather than a concession.
+       * `false`, and the reason is not the one this comment used to give.
        *
-       * It was `false`, justified by "writes to `~/.gemini/antigravity-cli` occurred
-       * during probe". That criterion — *no write anywhere* — was applied to this adapter
-       * and to no other: `claude` writes `~/.claude` and `codex` writes `~/.codex` during
-       * every run, both declare `true`, and neither wrote a word of justification. Three
-       * CLIs, the same behaviour, one of them barred from six of the nine roles.
+       * It said "writes to `~/.gemini/antigravity-cli` occurred during probe" — a criterion
+       * applied to this adapter and to no other, when `claude` writes `~/.claude` and
+       * `codex` writes `~/.codex` on every run and both declare `true`. PRI-18 flipped this
+       * to `true` on exactly that reasoning, and a live end-to-end run proved the flip
+       * wrong within one stage.
        *
-       * The cost was not academic. It excluded the only second provider on the machine
-       * from every read-only role, which is most of a run's model calls — and it took
-       * cross-provider review with it, so `approve` warned that the plan review "does not
-       * protect against an assumption repeated from planning" for a reason that was not
-       * the operator's choice.
+       * **`--mode plan` is a planning *workflow*, not a containment mode, and it does not
+       * return the answer.** The discovery stage completed in 31s having produced 2,709
+       * output tokens, and `result.text` was empty. Reproduced directly:
        *
-       * **The criterion, stated once and applied to all three: can this CLI be put in a
-       * mode where it does not modify the repository under test.** `--mode plan` here,
-       * `--permission-mode plan` at Claude Code, `-s read-only` at Codex. Every one of the
-       * three is declared from its CLI's documentation and none of the three has been
-       * probed with a write attempt, so this is now the same evidentiary footing rather
-       * than a stricter one for one vendor.
+       * ```
+       * $ agy --output-format json --effort high --mode plan --add-dir <dir>
+       *   "Write a short markdown document …"
+       * → {"status":"SUCCESS",
+       *    "response":"I have created the implementation plan in
+       *                [repository_architecture_plan.md](file:///…/.gemini/antigravity-cli/
+       *                brain/<uuid>/repository_architecture_plan.md)",
+       *    "usage":{"output_tokens":3689,…}}
+       * ```
        *
-       * The one measured write into a repository under test came from this runner and is
-       * not evidence against read-only mode: it happened during an *implementation* task,
-       * which is allowed to write, through skill expansion from the operator's home
-       * directory — closed on write stages by {@link AgyRunner.isolationArgs}, and caught
-       * in the first place by `assertScopeContainment`, which owns that question. Read-only
-       * stages keep plan mode instead, for the reason that method records.
+       * The document is written to a file outside the workspace and the envelope carries a
+       * sentence about it. A stage handed that gets a pointer, or nothing.
+       *
+       * **And the other two modes do not contain writes.** Measured against a real file:
+       *
+       * | invocation | answers inline | leaves the repo alone |
+       * |---|---|---|
+       * | `--mode accept-edits` | ✅ | ❌ overwrote `target.txt` |
+       * | `--mode accept-edits --sandbox` | ✅ | ❌ overwrote `target.txt` |
+       * | `--mode plan` | ❌ | — |
+       *
+       * So this CLI has **no mode that both answers inline and refuses to modify the
+       * repository under test**, which is what a read-only stage needs. The old value was
+       * right for the wrong reason; this is the right reason.
+       *
+       * What has not changed is that the criterion must be *one* criterion. `claude`'s
+       * `--permission-mode plan` and `codex`'s `-s read-only` are genuine containment modes
+       * that still return their answer; this CLI's `plan` is a different concept wearing
+       * the same word.
        */
-      supportsReadOnly: true,
+      supportsReadOnly: false,
       supportsNonInteractive: true,
       supportsWorkingDirectory: true,
       // Structured output strategy is prompted because native json-schema enforcement in headless CLI mode requires manual permission configuration.
@@ -238,14 +252,13 @@ export class AgyRunner extends BaseRunner {
    * ```
    *
    * `--mode accept-edits --disable-slash-commands` warns about nothing, and `--mode plan`
-   * alone warns about nothing. So on a read-only stage the two flags trade the containment
-   * that makes {@link AgyRunner.capabilities} declare `supportsReadOnly` for the isolation —
-   * a strictly worse bargain, and one that would have made that declaration a lie.
+   * alone warns about nothing.
    *
-   * Containment is never traded away, so read-only stages keep `--mode plan` and go without
-   * this flag. They are also the stages where the loss costs least: the leak that produced
-   * the finding was a *write* into the repository from an implementation task, and plan mode
-   * is what stops a skill from writing at all.
+   * The read-only branch below is therefore kept even though {@link AgyRunner.capabilities}
+   * now declares `supportsReadOnly: false`, which means the resolver refuses this runner for
+   * every read-only role and the branch cannot be reached through configuration. An adapter
+   * that behaved correctly only because of what a layer above it happens to allow is an
+   * adapter that breaks the day that layer changes.
    *
    * A person who wants the personalisation gone from read-only stages too can turn the
    * skill off in their own `agy` configuration. This product will not disarm the sandbox to

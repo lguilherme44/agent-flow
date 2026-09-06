@@ -33,7 +33,18 @@ const DEFAULT_CAPABILITIES: RunnerCapabilities = {
 export class FakeAgentRunner implements AgentRunner {
   readonly calls: AgentRunInput[] = [];
   private readonly scripts: AgentScript[] = [];
-  private fallbackScript: AgentScript = () => ({ ok: true, text: '', durationMs: 1 });
+  /**
+   * The answer a test gets when it scripted none.
+   *
+   * Non-empty since PRI-22, when an empty answer became a stage failure — a live run
+   * recorded `stage_completed` for a discovery that returned nothing, and the failure
+   * surfaced two stages later pointing at the wrong file. The placeholder is arbitrary in
+   * the way the empty string was, and it no longer means "this stage produced nothing".
+   *
+   * A test that wants the empty case pushes it explicitly, which is the right way round:
+   * asserting on an absence should require asking for one.
+   */
+  private fallbackScript: AgentScript = () => ({ ok: true, text: 'ok', durationMs: 1 });
 
   constructor(
     readonly id = 'fake',

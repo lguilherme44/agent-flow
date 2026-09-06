@@ -124,6 +124,70 @@ describe('running a stage', () => {
     expect(log).toContain('recurring bookings');
   });
 
+  /**
+   * A stage that answers nothing has failed (PRI-22).
+   *
+   * Found by a live run, which is the only way it could have been: `discovery` completed in
+   * 31 seconds having produced 2,709 output tokens — the usage accounting says so — and
+   * returned an empty string. It has no schema and no structural check, so nothing objected
+   * and `stage_completed` was written. The failure surfaced two stages later as
+   * `Prompt "architecture-impact" is missing required variables: architecture`, naming the
+   * wrong stage, the wrong file and the wrong problem.
+   */
+  it('asks again when the answer is empty, instead of recording it as complete', async () => {
+    const runner = new FakeAgentRunner('claude');
+    runner.push({ ok: true, text: '   \n  ', durationMs: 1 });
+    runner.push({ ok: true, text: '# SDD body', durationMs: 1 });
+    const { stageRunner, run, store } = await harness({ runner });
+
+    const result = await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    // Repaired rather than refused: the same loop that handles a malformed answer now
+    // handles an absent one, and the re-prompt says which it was.
+    expect(result.text).toBe('# SDD body');
+    expect(result.repairs).toBe(2);
+    expect(runner.calls[1]?.prompt).toContain('empty answer');
+    expect((await store.readEvents(run.runId)).map((e) => e.type)).toContain('stage_completed');
+  });
+
+  it('fails the stage when every answer is empty', async () => {
+    const runner = new FakeAgentRunner('claude');
+    runner.always({ ok: true, text: '', durationMs: 1 });
+    const { stageRunner, run, store } = await harness({ runner });
+
+    await expect(stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' })).rejects.toThrow();
+
+    const types = (await store.readEvents(run.runId)).map((event) => event.type);
+    expect(types).toContain('stage_failed');
+    expect(types).not.toContain('stage_completed');
+  });
+
+  it('says the answer was empty rather than that it was malformed', async () => {
+    // A schema-bearing stage would otherwise report "expected a JSON object, got
+    // unparseable output", which is true of an empty string and describes the wrong defect:
+    // a malformed answer is a runner that tried, an absent one is a runner that did not.
+    const runner = new FakeAgentRunner('claude');
+    runner.always({ ok: true, text: '', durationMs: 1 });
+    const { stageRunner, run, fs } = await harness({ runner });
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' }).catch(() => undefined);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    expect(log).toContain('empty answer');
+  });
+
+  it('accepts an empty text when the runner parsed a structured answer', async () => {
+    // Raw text and the parsed object are two channels, and an answer that satisfies the
+    // contract is an answer whatever the text looks like.
+    const runner = new FakeAgentRunner('claude');
+    runner.push({ ok: true, text: '', json: { ok: true }, durationMs: 1 });
+    const { stageRunner, run } = await harness({ runner });
+
+    await expect(
+      stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' }),
+    ).resolves.toBeDefined();
+  });
+
   it('writes a per-stage log', async () => {
     const { stageRunner, run, fs } = await harness();
     await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });

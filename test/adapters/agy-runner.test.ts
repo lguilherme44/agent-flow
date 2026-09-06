@@ -111,25 +111,33 @@ describe('AgyRunner capabilities', () => {
   });
 
   /**
-   * One criterion, applied to every CLI adapter (PRI-18).
+   * One criterion, applied to every CLI adapter — and this runner genuinely fails it.
    *
-   * This runner declared `false` — justified by writes to `~/.gemini` during a probe —
-   * while `claude` and `codex` declared `true` and write `~/.claude` and `~/.codex` on
-   * every run. Same behaviour, three adapters, one of them barred from six of nine roles
-   * and from being the second provider a cross-provider review needs.
+   * PRI-18 flipped this adapter to `true`, reasoning that its `false` rested on writes to
+   * `~/.gemini` while `claude` and `codex` write `~/.claude` and `~/.codex` and declare
+   * `true`. The reasoning about the *criterion* was right and the conclusion was wrong: a
+   * live end-to-end run failed one stage later, and the measurement is recorded in
+   * {@link AgyRunner.capabilities}.
    *
-   * The assertion is deliberately about the *set* rather than about this adapter. A future
-   * change that lowers one of them alone has to say why here, which is the sentence whose
-   * absence made the original divergence invisible.
+   * `--mode plan` is a planning workflow rather than a containment mode. It writes its
+   * answer to a file under `~/.gemini/antigravity-cli/brain/` and returns a sentence
+   * pointing at it, so a stage handed that gets a pointer or nothing — the discovery stage
+   * produced 2,709 output tokens and an empty `text`. `--mode accept-edits`, with or
+   * without `--sandbox`, answers inline and overwrote a real file in the working directory.
+   *
+   * The assertion stays about the *set*, because nothing asserting the three together is
+   * why the original divergence lasted. What differs now is stated rather than implied.
    */
   it('answers supportsReadOnly on the same criterion as every other CLI adapter', () => {
     const proc = new FakeProcessRunner();
     const claude = new ClaudeCodeRunner({ id: 'claude', processRunner: proc });
     const codex = new CodexRunner({ id: 'codex', processRunner: proc, fs: new InMemoryFileSystem() });
 
-    expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(true);
+    // The two whose read-only mode both contains writes and returns the answer.
     expect(claude.capabilities().supportsReadOnly).toBe(true);
     expect(codex.capabilities().supportsReadOnly).toBe(true);
+    // And the one that has no such mode. Measured, not assumed — see the doc comment.
+    expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(false);
   });
 
   it('reports non-interactive and working directory support', () => {

@@ -724,6 +724,32 @@ export class StageRunner {
   private validate(stage: StageDefinition, text: string, json: unknown): string[] {
     const problems: string[] = [];
 
+    /**
+     * An empty answer is a failed stage, not a successful one (PRI-22).
+     *
+     * A live run found this the expensive way. `discovery` completed in 31 seconds having
+     * produced 2,709 output tokens — the accounting says so — and returned an empty string.
+     * No schema, no structural check, so `problems` was empty and the stage was recorded
+     * `stage_completed`. The failure surfaced two stages later as
+     * `Prompt "architecture-impact" is missing required variables: architecture`, which
+     * names the wrong stage, the wrong file and the wrong problem.
+     *
+     * Checked before the schema so the message says what actually happened. A schema-bearing
+     * stage would otherwise report "expected a JSON object, got unparseable output", which
+     * is true of an empty string and describes a malformed answer rather than an absent one.
+     *
+     * `json` is consulted because a runner can return a parsed object with empty raw text,
+     * and an answer that satisfies the contract is an answer whatever the text looks like.
+     */
+    if (text.trim() === '' && json === undefined) {
+      problems.push(
+        'the runner returned an empty answer; nothing was written and no later stage can use it',
+      );
+      // Returned rather than accumulated: every check below describes the *shape* of an
+      // answer, and there is none to describe.
+      return problems;
+    }
+
     if (stage.outputSchema !== undefined) {
       const candidate = json ?? safeJson(text);
       if (candidate === undefined) {
