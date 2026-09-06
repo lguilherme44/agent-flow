@@ -41,6 +41,8 @@ export interface CodexRunnerOptions {
   readonly envPass?: readonly string[];
   /** `RunnerConfig.args`, forwarded to `BaseRunnerOptions` (§7). */
   readonly extraArgs?: readonly string[];
+  /** `execution.isolateRunnerSettings`, forwarded to `BaseRunnerOptions` (PRI-18). */
+  readonly isolateSettings?: boolean;
   /**
    * Required, unlike the Claude adapter: `--output-schema` takes a *file path*,
    * so producing structured output means writing the schema to disk first.
@@ -83,6 +85,9 @@ export class CodexRunner extends BaseRunner {
       // the base, silently dropped here, and the symptom would be an operator's
       // configured argument simply never arriving.
       ...(options.extraArgs === undefined ? {} : { extraArgs: options.extraArgs }),
+      // And the third the same comment predicted. This constructor exists to add `fs`
+      // and it has now dropped a base option twice by writing itself out by hand.
+      ...(options.isolateSettings === undefined ? {} : { isolateSettings: options.isolateSettings }),
       ...(options.command === undefined ? {} : { command: options.command }),
     });
     this.fs = options.fs;
@@ -163,6 +168,34 @@ export class CodexRunner extends BaseRunner {
       auth: 'unknown',
       version: result.stdout.trim().split('\n')[0] ?? undefined,
     };
+  }
+
+  /**
+   * `--ignore-user-config`, from `codex exec --help` on 0.149.0 (PRI-18).
+   *
+   * "Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`" — the operator's
+   * own configuration is dropped and the credential that makes the run possible is not,
+   * which is the split this policy needs.
+   *
+   * **Measured, and the first two observables were not evidence.** `model:` and `approval:`
+   * in the session header are identical with and without the flag — and identical again
+   * with `CODEX_HOME` pointed at an empty directory, which is what proves they were
+   * defaults rather than leaks. The observable that discriminates is the hook count on
+   * stderr for the same prompt: **30 without the flag, 0 with it.**
+   *
+   * **Two things it does not reach.** The workspace's own `AGENTS.md` still loads, and that
+   * is the intended line rather than a gap: a file inside the repository under test is that
+   * repository's convention, which the work should respect. `project_doc_max_bytes` exists
+   * as a config key in this build and what a value of `0` does there is unmeasured, so it
+   * is not passed.
+   *
+   * The operator's **skills** also still load — the same probe shows the skills warning in
+   * both runs. They live in `$CODEX_HOME/vendor_imports/skills` rather than in
+   * `config.toml`, and `codex exec --help` on 0.149.0 offers no flag that reaches them.
+   * That is an open gap, recorded in `docs/runner-capabilities.md` rather than papered over.
+   */
+  protected override isolationArgs(): readonly string[] {
+    return ['--ignore-user-config'];
   }
 
   protected async buildInvocation(input: AgentRunInput): Promise<RunnerInvocation> {

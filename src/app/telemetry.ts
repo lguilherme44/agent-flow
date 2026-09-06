@@ -39,6 +39,18 @@ export async function collectTelemetry(
   ].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }
 
+/**
+ * The usage block on an event's detail, when it carries one that looks like a record.
+ *
+ * Typed loosely because the detail is `Record<string, unknown>` read off a JSONL file that
+ * older runs wrote before this field existed. The schema parse below is the real gate; this
+ * only has to avoid throwing on a shape from another era.
+ */
+function usageOf(detail: Record<string, unknown>): { model?: string } | undefined {
+  const usage = detail['usage'];
+  return typeof usage === 'object' && usage !== null ? (usage as { model?: string }) : undefined;
+}
+
 function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntry[] {
   const entries: TelemetryEntry[] = [];
 
@@ -62,7 +74,10 @@ function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntr
       stage,
       role: detail['role'],
       runner: detail['runner'],
-      model: detail['model'],
+      // Configured first, then what the runner said actually answered (PRI-19). The
+      // order matters: a pinned model is the operator's declared intent and stays the
+      // label, and the fallback is what rescues every run that pinned nothing.
+      model: detail['model'] ?? usageOf(detail)?.model,
       reasoning: detail['reasoning'],
       reasoningClamped: detail['reasoningClamped'] ?? false,
       fallback: detail['fallback'],
@@ -77,6 +92,7 @@ function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntr
       // change and belongs to the milestone that owns read models.
       attempts: detail['repairs'] ?? detail['attempts'] ?? 1,
       ...(detail['errorCode'] === undefined ? {} : { errorCode: detail['errorCode'] }),
+      ...(detail['usage'] === undefined ? {} : { usage: detail['usage'] }),
     };
 
     const parsed = TelemetryEntrySchema.safeParse(candidate);
@@ -111,7 +127,9 @@ async function taskEntries(
       taskId: result.task,
       role,
       runner: result.runner,
-      ...(result.model === undefined ? {} : { model: result.model }),
+      ...(result.model ?? result.usage?.model) === undefined
+        ? {}
+        : { model: result.model ?? result.usage?.model },
       reasoning: result.reasoning,
       reasoningClamped: result.reasoningClamped,
       ...(result.fallback === undefined ? {} : { fallback: result.fallback }),
@@ -123,6 +141,7 @@ async function taskEntries(
       // its own file, so the count of tries is only knowable from the state.
       attempts: Math.max(1, task.attempts),
       ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+      ...(result.usage === undefined ? {} : { usage: result.usage }),
     });
 
     if (parsed.success) entries.push(parsed.data);

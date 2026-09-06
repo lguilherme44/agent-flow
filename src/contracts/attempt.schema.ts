@@ -6,6 +6,7 @@ import {
   IsoTimestampSchema,
   ReasoningLevelSchema,
   RunIdSchema,
+  RunUsageSchema,
   RunnerErrorCodeSchema,
 } from './common.schema.js';
 import { CommandResultSchema, CommandSummarySchema } from './result.schema.js';
@@ -76,6 +77,8 @@ export const TaskAttemptResultSchema = z
     fallback: z
       .object({ from: z.string().min(1), errorCode: RunnerErrorCodeSchema })
       .optional(),
+    /** What this attempt spent, when the runner reported it (PRI-19). */
+    usage: RunUsageSchema.optional(),
 
     startedAt: IsoTimestampSchema,
     finishedAt: IsoTimestampSchema,
@@ -236,6 +239,14 @@ export const FailedAttemptSchema = z.object({
   reasoning: ReasoningLevelSchema,
   reasoningClamped: z.boolean().default(false),
   fallback: z.object({ from: z.string().min(1), errorCode: RunnerErrorCodeSchema }).optional(),
+  /**
+   * What this attempt spent, when the runner reported it (PRI-19).
+   *
+   * On the failure record too, and deliberately: a call that failed after the model
+   * answered was paid for, and accounting that counts only successes under-reports
+   * exactly the runs somebody is trying to understand.
+   */
+  usage: RunUsageSchema.optional(),
 
   startedAt: IsoTimestampSchema,
   finishedAt: IsoTimestampSchema,

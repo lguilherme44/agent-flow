@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { AgyRunner } from '../../src/adapters/runners/agy-runner.js';
+import { ClaudeCodeRunner } from '../../src/adapters/runners/claude-code-runner.js';
+import { CodexRunner } from '../../src/adapters/runners/codex-runner.js';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import type { AgentRunInput } from '../../src/ports/index.js';
 
 function makeRunner(proc = new FakeProcessRunner()) {
@@ -107,8 +110,26 @@ describe('AgyRunner capabilities', () => {
     });
   });
 
-  it('declares supportsReadOnly false per security baseline probe requirements', () => {
-    expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(false);
+  /**
+   * One criterion, applied to every CLI adapter (PRI-18).
+   *
+   * This runner declared `false` — justified by writes to `~/.gemini` during a probe —
+   * while `claude` and `codex` declared `true` and write `~/.claude` and `~/.codex` on
+   * every run. Same behaviour, three adapters, one of them barred from six of nine roles
+   * and from being the second provider a cross-provider review needs.
+   *
+   * The assertion is deliberately about the *set* rather than about this adapter. A future
+   * change that lowers one of them alone has to say why here, which is the sentence whose
+   * absence made the original divergence invisible.
+   */
+  it('answers supportsReadOnly on the same criterion as every other CLI adapter', () => {
+    const proc = new FakeProcessRunner();
+    const claude = new ClaudeCodeRunner({ id: 'claude', processRunner: proc });
+    const codex = new CodexRunner({ id: 'codex', processRunner: proc, fs: new InMemoryFileSystem() });
+
+    expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(true);
+    expect(claude.capabilities().supportsReadOnly).toBe(true);
+    expect(codex.capabilities().supportsReadOnly).toBe(true);
   });
 
   it('reports non-interactive and working directory support', () => {

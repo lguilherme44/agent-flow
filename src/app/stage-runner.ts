@@ -5,6 +5,7 @@ import {
   type FailureClass,
   type GlobalConfig,
   type ReasoningLevel,
+  type RunUsage,
   type RunStage,
   type RunnerErrorCode,
   type Task,
@@ -119,6 +120,16 @@ export interface StageExecution {
   readonly reasoning: ReasoningLevel;
   readonly reasoningClamped: boolean;
   readonly fallback?: { readonly from: string; readonly errorCode: RunnerErrorCode };
+  /**
+   * What the runner said this call spent (PRI-19).
+   *
+   * Beside `model` and not merged into it, because the two answer different questions:
+   * that one is what the configuration asked for, this one is what the provider says
+   * actually answered. A run that pins no model — the arrangement AD-13 recommends — has
+   * `model` absent and `usage.model` populated, which is the case that made every such
+   * run unattributable before this field existed.
+   */
+  readonly usage?: RunUsage;
 }
 
 export interface StageResult {
@@ -537,7 +548,7 @@ export class StageRunner {
           : { outputSchema: toJsonSchema(stage.outputSchema) }),
       });
 
-      lastExecution = executionOf(result.provenance, resolved);
+      lastExecution = executionOf(result.provenance, resolved, result.usage);
 
       if (!result.ok) {
         // Infrastructure failures are not retried here: re-running immediately
@@ -619,6 +630,33 @@ export class StageRunner {
       const problems = this.validate(stage, result.text, result.json);
       if (problems.length === 0) {
         await this.persist(runId, stage, result.text);
+
+        /**
+         * What the runner said, on the path where it worked (§95).
+         *
+         * The failure path has written this block since the day somebody had to open a
+         * vendor's own log directory to find out what an agent said. The success path
+         * wrote two lines — `repair=1 ok durationMs=…` — for what a live run measured as
+         * six minutes of model work. With `execution.recordPrompts` on, that log then held
+         * the question and not the answer, which is the same asymmetry inverted.
+         *
+         * A stage with an artifact gets a pointer instead of a copy. Its answer is already
+         * on disk under a name, and two copies of one document is how a reader ends up
+         * comparing them.
+         *
+         * Redacted with the same context and the same function as everywhere else, so no
+         * credential reaches a log through this door that would not through the others.
+         */
+        logLines.push(
+          ...(stage.artifact === undefined
+            ? [
+                '--- runner output (redacted) ---',
+                redactEvidence(result.text, this.redactionContext(options)),
+                '--- end runner output ---',
+              ]
+            : [`answer written to artifact "${stage.artifact}"`]),
+        );
+
         await this.writeLog(runId, stage, logLines);
 
         const execution = lastExecution;
@@ -751,6 +789,10 @@ export function executionDetail(execution: StageExecution): Record<string, unkno
     reasoning: execution.reasoning,
     reasoningClamped: execution.reasoningClamped,
     ...(execution.fallback === undefined ? {} : { fallback: execution.fallback }),
+    // What it spent, when the runner said (PRI-19). Emitted on `stage_completed` and
+    // `stage_failed` alike, through this one function, so the event log can total a run's
+    // cost without a reader knowing which event it is looking at.
+    ...(execution.usage === undefined ? {} : { usage: execution.usage }),
   };
 }
 
@@ -784,13 +826,23 @@ function safeJson(text: string): unknown {
 function executionOf(
   provenance: RunProvenance | undefined,
   resolved: ResolvedAgentConfig,
+  /**
+   * What the runner reported spending, when it reported anything (PRI-19).
+   *
+   * Separate from `provenance` because they come from different places and only one of
+   * them is a substitution: usage is present on an ordinary call and provenance is not.
+   */
+  usage?: RunUsage,
 ): StageExecution {
+  const spent = usage === undefined ? {} : { usage };
+
   if (provenance === undefined) {
     return {
       runner: resolved.runner,
       ...(resolved.model === undefined ? {} : { model: resolved.model }),
       reasoning: resolved.reasoning,
       reasoningClamped: resolved.reasoningClamped,
+      ...spent,
     };
   }
 
@@ -803,5 +855,6 @@ function executionOf(
       from: provenance.substitutedFor.runner,
       errorCode: provenance.substitutedFor.errorCode,
     },
+    ...spent,
   };
 }

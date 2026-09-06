@@ -57,6 +57,32 @@ export type RunnerErrorCode = z.infer<typeof RunnerErrorCodeSchema>;
  * surfacing it, so the remaining codes are deliberately excluded here — at the
  * schema level, where config cannot opt back in.
  */
+/**
+ * What one model call spent, as the runner reported it (PRI-19).
+ *
+ * The persisted mirror of `AgentRunUsage` in the port. It lives in the contracts because
+ * three readers need it — the attempt artifact, the event log and whatever reads them —
+ * and a shape restated in three places is three shapes.
+ *
+ * **Every field optional, and nothing defaults to zero.** An absent field means the CLI
+ * did not report it; a zero means it reported zero. Conflating the two would let a run
+ * whose cost is unknown be totalled as free, which is the wrong direction to be wrong in
+ * for a tool that spends money on somebody's behalf.
+ *
+ * `model` is what the *runner* said answered, which is a different fact from the `model`
+ * beside it on a result: that one is what the configuration asked for, and on the honest
+ * default recommended by AD-13 it is absent.
+ */
+export const RunUsageSchema = z.object({
+  model: z.string().min(1).optional(),
+  inputTokens: z.number().int().min(0).optional(),
+  outputTokens: z.number().int().min(0).optional(),
+  cacheReadTokens: z.number().int().min(0).optional(),
+  cacheWriteTokens: z.number().int().min(0).optional(),
+  costUsd: z.number().min(0).optional(),
+});
+export type RunUsage = z.infer<typeof RunUsageSchema>;
+
 export const FALLBACK_TRIGGERS = ['quota_exceeded', 'auth_required', 'runner_unavailable'] as const;
 
 export const FallbackTriggerSchema = z.enum(FALLBACK_TRIGGERS);

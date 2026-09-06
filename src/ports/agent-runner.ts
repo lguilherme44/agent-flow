@@ -72,6 +72,45 @@ export interface RunProvenance {
   readonly substitutedFor: { readonly runner: string; readonly errorCode: RunnerErrorCode };
 }
 
+/**
+ * What one invocation actually spent, as the runner itself reported it (PRI-19).
+ *
+ * **Every field optional, and the optionality is the contract.** An orchestrator whose
+ * whole job is spending model calls could not answer "what did this run cost" or "which
+ * model wrote this" — not because the numbers were unavailable, but because the adapters
+ * parsed the envelope and threw them away. Claude Code returns `modelUsage`, `usage` and
+ * `total_cost_usd` on every response; the only mention of `usage` in four adapters was a
+ * regex looking for the words "usage limit".
+ *
+ * Not every CLI reports the same set, and an adapter that invents a number is worse than
+ * one that says nothing (AD-30, applied to accounting). A reader must therefore treat an
+ * absent field as *unmeasured* and never as zero — a run whose cost is unknown and a run
+ * that cost nothing are different runs.
+ *
+ * `model` is the field that matters most and the one nothing else can supply. The
+ * execution record carries a model only when the configuration pinned one, and AD-13 says
+ * not to pin: so on the honest default, every run was unattributable. The runner's own
+ * account of which model answered closes that without a table of model names anywhere
+ * above the adapter boundary.
+ */
+export interface AgentRunUsage {
+  /** The model that actually answered, as the provider names it. Opaque to the core. */
+  readonly model?: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  /**
+   * Tokens served from the provider's prompt cache.
+   *
+   * Worth its own field rather than folded into `inputTokens`: one measured call read
+   * 31,810 cached tokens against 2 fresh ones, which is the difference between a run that
+   * cost cents and one that cost dollars.
+   */
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  /** What the provider says it charged, in USD. Absent where the CLI does not say. */
+  readonly costUsd?: number;
+}
+
 export interface AgentRunSuccess {
   readonly ok: true;
   /** Raw text output, always present even when `json` is populated. */
@@ -81,6 +120,8 @@ export interface AgentRunSuccess {
   readonly durationMs: number;
   /** Absent when the run happened on the runner that was asked. */
   readonly provenance?: RunProvenance;
+  /** What this call spent, when the runner reported it (PRI-19). */
+  readonly usage?: AgentRunUsage;
 }
 
 export interface AgentRunFailure {
@@ -101,6 +142,14 @@ export interface AgentRunFailure {
    * able to say so rather than blaming the one that was tried first.
    */
   readonly provenance?: RunProvenance;
+  /**
+   * What this call spent, when the runner reported it (PRI-19).
+   *
+   * Present on failures as well as successes, for a blunt reason: a call that failed after
+   * the model answered was still paid for. Accounting that only counts successes
+   * under-reports exactly the runs an operator is trying to understand.
+   */
+  readonly usage?: AgentRunUsage;
 }
 
 export type AgentRunResult = AgentRunSuccess | AgentRunFailure;

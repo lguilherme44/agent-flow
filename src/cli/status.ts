@@ -8,6 +8,7 @@ import { summariseTelemetry } from '../core/telemetry.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { renderEscalation } from './render/escalation.js';
+import { renderSpend, summariseSpend } from './render/spend.js';
 import { projectRun, type RunProjection } from '../core/run-projection.js';
 import { loadConfig } from '../config/loader.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
@@ -169,6 +170,15 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         contextBytes,
       )}\n`,
     );
+
+    // What it cost, from the accounting the runners already returned (PRI-19).
+    //
+    // Read here rather than folded into `render` above, whose signature is already
+    // thirteen positionals — a fourteenth would be the kind of call site where an argument
+    // slips one place and nothing complains. It also collects the same telemetry `--json`
+    // reports, so the two surfaces cannot disagree about what a run spent.
+    const spend = renderSpend(summariseSpend(await collectTelemetry(store, state)));
+    if (spend !== undefined) process.stdout.write(`\n${spend}\n`);
 
     // C-22, at the one surface a person is most likely to be looking at when a run stops.
     // Rendered after the run summary rather than instead of it: the escalation says what to

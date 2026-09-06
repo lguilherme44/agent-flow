@@ -132,9 +132,48 @@ describe('running a stage', () => {
     expect(log).toContain('sdd');
   });
 
-  it('records telemetry without any monetary figure (§57)', async () => {
-    // Operational telemetry only. Presenting a cost would imply agent-flow
-    // knows what the user is billed, which it does not.
+  /**
+   * A stage that worked used to log two lines (§95, PRI-21).
+   *
+   * The failure path has written the runner's whole output since somebody had to open a
+   * vendor's log directory to find out what an agent said. The success path wrote
+   * `repair=1 ok durationMs=…` for what a live run measured as six minutes of model work —
+   * and once `execution.recordPrompts` shipped, the log held the question and not the
+   * answer, which is the same asymmetry pointing the other way.
+   */
+  it('says where a successful answer went when the stage has an artifact', async () => {
+    const { stageRunner, run, fs, runner } = await harness();
+    runner.pushText('# SDD body');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+
+    // A pointer rather than a copy: the answer is already on disk under a name, and two
+    // copies of one document is how a reader ends up comparing them.
+    expect(log).toContain('answer written to artifact "sdd"');
+    expect(log).not.toContain('--- runner output (redacted) ---');
+  });
+
+  it('writes the answer itself when no artifact would hold it', async () => {
+    const { stageRunner, run, fs, runner } = await harness();
+    runner.pushText('the whole answer, kept nowhere else');
+
+    await stageRunner.run(
+      { name: 'sdd', role: 'sdd', prompt: 'sdd', logName: 'sdd' },
+      run.runId,
+      { featureRequest: 'x' },
+    );
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+
+    expect(log).toContain('--- runner output (redacted) ---');
+    expect(log).toContain('the whole answer, kept nowhere else');
+  });
+
+  it('invents no monetary figure when the runner reported none (§57, PRI-19)', async () => {
+    // §57's prohibition, narrowed rather than dropped. What it forbids absolutely is a
+    // price *this codebase computes* — a table of per-token rates would make agent-flow
+    // accountable for a number it has no basis for. What PRI-19 allows is a price the
+    // provider itself returned, and this fake returns none, so nothing may appear.
     const { stageRunner, run, store } = await harness();
     await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
 
@@ -143,6 +182,7 @@ describe('running a stage', () => {
 
     expect(completed?.detail['runner']).toBe('claude');
     expect(completed?.detail['role']).toBe('sdd');
+    expect(completed?.detail['usage']).toBeUndefined();
     expect(JSON.stringify(completed)).not.toMatch(/cost|usd|price/i);
   });
 

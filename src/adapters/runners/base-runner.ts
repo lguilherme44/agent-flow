@@ -1,6 +1,7 @@
 import type {
   AgentRunInput,
   AgentRunResult,
+  AgentRunUsage,
   AgentRunner,
   RunnerCapabilities,
   RunnerHealth,
@@ -59,6 +60,19 @@ export interface BaseRunnerOptions {
    * seam without knowing it exists, and so no adapter can quietly drop it.
    */
   readonly extraArgs?: readonly string[];
+  /**
+   * `execution.isolateRunnerSettings` — whether this CLI is cut off from the operator's
+   * own customisations (PRI-18).
+   *
+   * Carried on the runner for the same reason `envPass` is: an operator who wants a
+   * reproducible run wants it for every invocation, not for one, and a policy read at the
+   * spawn would be a policy the spawn boundary had to know about.
+   *
+   * Defaults to `true` here as well as in the schema. The two agree on purpose — a fake
+   * or a test that constructs an adapter directly gets the isolated behaviour, because
+   * the un-isolated one is the one that needs a decision behind it.
+   */
+  readonly isolateSettings?: boolean;
   /** Overrides the executable looked up on PATH. */
   readonly command?: string;
 }
@@ -82,6 +96,8 @@ export abstract class BaseRunner implements AgentRunner {
   private readonly extraArgs: readonly string[];
   /** `execution.passEnv`, carried so every spawn of this runner sees the same list. */
   protected readonly envPass: readonly string[] | undefined;
+  /** `execution.isolateRunnerSettings` (PRI-18). Read by {@link isolationArgs}. */
+  protected readonly isolateSettings: boolean;
 
   constructor(options: BaseRunnerOptions) {
     this.id = options.id;
@@ -89,6 +105,7 @@ export abstract class BaseRunner implements AgentRunner {
     this.command = options.command ?? this.defaultCommand();
     this.envPass = options.envPass;
     this.extraArgs = options.extraArgs ?? [];
+    this.isolateSettings = options.isolateSettings ?? true;
   }
 
   /**
@@ -133,6 +150,52 @@ export abstract class BaseRunner implements AgentRunner {
   }
 
   /**
+   * What this invocation spent, read from whatever the CLI reported (PRI-19).
+   *
+   * `undefined` here, and `undefined` is a measurement: a CLI that does not report its
+   * usage must produce no numbers rather than zeros, because a reader cannot tell a
+   * fabricated zero from a free call. Each adapter that *does* get the data overrides
+   * this and reads its own envelope, which is where provider vocabulary belongs (AD-13).
+   *
+   * Called on the success and the failure path alike — the model answered either way, and
+   * either way somebody paid for it.
+   */
+  protected parseUsage(_result: ProcessResult, _parsed: unknown): AgentRunUsage | undefined {
+    return undefined;
+  }
+
+  /**
+   * The flags that cut this CLI off from the operator's own customisations (PRI-18).
+   *
+   * Empty here, and empty is a real answer: a CLI that offers no such flag must not be
+   * given one that looks like it works. Each adapter that *does* have one overrides this
+   * and names it, because the flag is provider vocabulary and provider vocabulary lives
+   * below the port (AD-13).
+   *
+   * Consulted on every spawn rather than folded into `buildInvocation`, so an adapter
+   * added later gets the seam without knowing it exists — the same reason `extraArgs`
+   * is applied here and not inside each adapter.
+   *
+   * Given the input, because one measured CLI's isolation flag and its read-only mode
+   * cancel each other — see {@link AgyRunner.isolationArgs}. An adapter that has to choose
+   * between containment and reproducibility must be able to see which stage it is running.
+   */
+  protected isolationArgs(_input: AgentRunInput): readonly string[] {
+    return [];
+  }
+
+  /**
+   * The whole argv: what the adapter built, then the product's policy, then the operator's.
+   *
+   * The order is the precedence. An operator's `RunnerConfig.args` comes last so it can
+   * still have the final word over a flag this product added on their behalf.
+   */
+  private argsFor(invocation: RunnerInvocation, input: AgentRunInput): string[] {
+    const isolation = this.isolateSettings ? this.isolationArgs(input) : [];
+    return [...invocation.args, ...isolation, ...this.extraArgs];
+  }
+
+  /**
    * True when the CLI positively reported success.
    *
    * Checked before any error rule runs. Without it, a rule that scans text for
@@ -150,10 +213,10 @@ export abstract class BaseRunner implements AgentRunner {
     try {
       const result = await this.processRunner.run({
         command: invocation.command,
-        // The adapter's argv, then the operator's. Appended and never merged: the
-        // adapter owns the subcommand and its flags, and a value that fights them is
-        // the operator's to resolve.
-        args: this.extraArgs.length === 0 ? invocation.args : [...invocation.args, ...this.extraArgs],
+        // The adapter's argv, then the product's isolation policy, then the operator's.
+        // Appended and never merged: the adapter owns the subcommand and its flags, and a
+        // value that fights them is the operator's to resolve.
+        args: this.argsFor(invocation, input),
         cwd: input.workingDirectory,
         timeoutSeconds: input.timeoutSeconds,
         // Left at the default, `allowlist` (PRI-17). Stated by omission everywhere else in
@@ -170,12 +233,15 @@ export abstract class BaseRunner implements AgentRunner {
       const envelope = this.parseEnvelope(result);
       const errorCode = this.normaliseError(result, envelope);
 
+      const usage = this.parseUsage(result, envelope);
+
       if (errorCode !== null) {
         return {
           ok: false,
           errorCode,
           raw: this.rawMessage(result),
           durationMs: result.durationMs,
+          ...(usage === undefined ? {} : { usage }),
         };
       }
 
@@ -186,6 +252,7 @@ export abstract class BaseRunner implements AgentRunner {
           text,
           ...(json === undefined ? {} : { json }),
           durationMs: result.durationMs,
+          ...(usage === undefined ? {} : { usage }),
         };
       } catch (error) {
         // A zero exit with unusable output is still a failure, and specifically
@@ -196,6 +263,7 @@ export abstract class BaseRunner implements AgentRunner {
           errorCode: 'invalid_output',
           raw: `${(error as Error).message}\n${this.rawMessage(result)}`,
           durationMs: result.durationMs,
+          ...(usage === undefined ? {} : { usage }),
         };
       }
     } finally {

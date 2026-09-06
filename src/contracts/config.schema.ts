@@ -227,6 +227,33 @@ export const GlobalConfigSchema = z.object({
        * unrecoverable. That is worth a switch and not worth a default.
        */
       recordPrompts: z.boolean().default(false),
+      /**
+       * Whether a spawned CLI is cut off from the operator's own customisations (PRI-18).
+       *
+       * **On, and on is the only defensible default.** In a live dogfood the SDD came back
+       * in Portuguese, under a persona, for a repository whose prompts and code are
+       * English — neither came from any of the eleven prompts this product ships. They
+       * came from `~/.claude/settings.json` on the machine that ran it. A second runner
+       * expanded a skill from the same home directory and left 56 KB of untracked files
+       * inside the repository it was judging.
+       *
+       * That is three failures in one: a persona competing with the prompt an engineering
+       * stage was given, a run whose artifacts depend on whose laptop it ran on, and a
+       * personal instruction — "never write tests", "always use tabs" — obeyed by an agent
+       * whose job this product defines. This repository already closed the same leak by
+       * another route, when the orchestrator was reading `AGENTS.md` out of the workspace
+       * and pasting it into the prompt.
+       *
+       * Each adapter translates this into its own CLI's flag, because only the adapter
+       * knows one exists (AD-13). A runner whose CLI offers nothing contributes nothing
+       * rather than pretending: the switch is a request, and `docs/runner-capabilities.md`
+       * records what each one actually honours.
+       *
+       * `false` restores the previous behaviour exactly, for the operator who wants their
+       * MCP servers or their project's `CLAUDE.md` to reach the agent. It is a deliberate
+       * trade of reproducibility for reach, and it should be made deliberately.
+       */
+      isolateRunnerSettings: z.boolean().default(true),
     })
     .prefault({}),
   /**
