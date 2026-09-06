@@ -120,11 +120,15 @@ describe('AgyRunner capabilities', () => {
 
 describe('AgyRunner model enumeration (AD-13)', () => {
   it('reads the ids `agy models` prints, and drops the human labels beside them', async () => {
+    // Copied from `agy models` 1.1.25, progress line and all — the first version of this
+    // fixture was written from the shape the output should have had, and agreed with a
+    // parser that offered `Fetching` as a model.
     const proc = new FakeProcessRunner().push({
       stdout: [
-        'gemini-3.7-flash-high      Gemini 3.7 Flash (High)',
-        'gemini-3.1-pro-low         Gemini 3.1 Pro (Low)',
-        'claude-sonnet-4-6          Claude Sonnet 4.6 (Thinking)',
+        'Fetching available models...',
+        'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+        'gemini-3.1-pro-low\tGemini 3.1 Pro (Low)',
+        'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
         '',
       ].join('\n'),
       exitCode: 0,
@@ -132,7 +136,7 @@ describe('AgyRunner model enumeration (AD-13)', () => {
     const { runner } = makeRunner(proc);
 
     expect(await runner.listModels?.()).toEqual([
-      'gemini-3.7-flash-high', 'gemini-3.1-pro-low', 'claude-sonnet-4-6',
+      'gemini-3.8-flash-high', 'gemini-3.1-pro-low', 'claude-sonnet-4-6',
     ]);
     expect(proc.calls[0]?.args).toEqual(['models']);
   });

@@ -153,8 +153,11 @@ export class AgyRunner extends BaseRunner {
    *
    * The same command `docs/runner-capabilities.md` used to measure the effective effort
    * per family, read here for a different question: which ids a person may point a role
-   * at. One id per line, the id being the first field — the human label after it is for
-   * the terminal, not for a config file.
+   * at. The format is `<id>\t<label>`, and only lines carrying that tab are ids: the
+   * command opens with `Fetching available models...`, which has no tab and is progress
+   * rather than data. Splitting on whitespace instead offered `Fetching` as a model —
+   * caught by running the real CLI, not by a fixture written from the shape it should
+   * have had.
    *
    * A CLI that is absent or refuses contributes nothing rather than an error: this feeds
    * a suggestion list, and a screen with no suggestions is the screen we already have.
@@ -171,8 +174,10 @@ export class AgyRunner extends BaseRunner {
 
     return result.stdout
       .split('\n')
-      .map((line) => line.trim().split(/\s+/)[0] ?? '')
-      .filter((id) => id !== '' && !id.startsWith('-'));
+      .flatMap((line) => {
+        const [id] = line.split('\t');
+        return line.includes('\t') && id !== undefined && id.trim() !== '' ? [id.trim()] : [];
+      });
   }
 
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
