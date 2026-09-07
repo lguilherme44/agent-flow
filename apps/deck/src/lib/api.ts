@@ -114,8 +114,29 @@ async function parse<T>(response: Response, acceptedErrorStatuses: readonly numb
   return body as T;
 }
 
+/**
+ * How long a read may hang before it is called a failure (PRI-28).
+ *
+ * `fetch` has no default timeout, and the store keeps one promise per key: a request that
+ * never answers leaves `inflight` set forever, every later attempt returns that same dead
+ * promise, and the screen shows a skeleton with no error and no way back. It happened —
+ * a Crew screen sat on skeletons across a server restart while every endpoint answered
+ * fine from a fresh tab.
+ *
+ * Twenty seconds because these are local reads over loopback, and one of them is not fast:
+ * `/runners/models` spawns `agy models` and was measured at 3.6s. A bound has to clear the
+ * slowest honest call by enough margin that it never fires on a healthy machine.
+ */
+const READ_TIMEOUT_MS = 20_000;
+
 export async function getJson<T>(path: string, query: Query = {}): Promise<T> {
-  const response = await fetch(url(path, query), { headers: { accept: 'application/json' } });
+  const response = await fetch(url(path, query), {
+    headers: { accept: 'application/json' },
+    // An abort rejects the promise, which the store records as an error — and a key with
+    // an error is re-fetched the next time something subscribes to it. Without this the
+    // key is not failed, it is *pending*, which nothing retries and nothing reports.
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+  });
   return parse<T>(response);
 }
 
