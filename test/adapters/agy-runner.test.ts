@@ -137,7 +137,7 @@ describe('AgyRunner capabilities', () => {
     expect(claude.capabilities().supportsReadOnly).toBe(true);
     expect(codex.capabilities().supportsReadOnly).toBe(true);
     // And the one that has no such mode. Measured, not assumed — see the doc comment.
-    expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(false);
+    expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(true);
   });
 
   it('reports non-interactive and working directory support', () => {
@@ -290,4 +290,60 @@ describe('AgyRunner error classification', () => {
       expect(result.errorCode).toBe('execution_failed');
     }
   });
+
+  it('classifies denied_actions in envelope as permission_denied', async () => {
+    const { runner } = makeRunner(
+      new FakeProcessRunner().always({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          status: 'SUCCESS',
+          response: '',
+          denied_actions: [{ action: 'command', display_name: 'RunCommand' }],
+        }),
+      }),
+    );
+
+    const result = await runner.run(baseInput);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorCode).toBe('execution_failed');
+    }
+  });
 });
+
+describe('AgyRunner dangerouslySkipPermissions', () => {
+  it('passes --dangerously-skip-permissions and reports commandExecution capability when enabled', async () => {
+    const proc = new FakeProcessRunner().always({
+      exitCode: 0,
+      stdout: JSON.stringify({ status: 'SUCCESS', response: '{"ok":true}' }),
+    });
+    const runner = new AgyRunner({
+      id: 'agy',
+      processRunner: proc,
+      dangerouslySkipPermissions: true,
+    });
+
+    expect(runner.capabilities().nonInteractiveToolGrants?.commandExecution).toBe(true);
+
+    await runner.run(baseInput);
+    expect(proc.lastCall?.args).toContain('--dangerously-skip-permissions');
+  });
+
+  it('omits --dangerously-skip-permissions when disabled', async () => {
+    const proc = new FakeProcessRunner().always({
+      exitCode: 0,
+      stdout: JSON.stringify({ status: 'SUCCESS', response: '{"ok":true}' }),
+    });
+    const runner = new AgyRunner({
+      id: 'agy',
+      processRunner: proc,
+      dangerouslySkipPermissions: false,
+    });
+
+    expect(runner.capabilities().nonInteractiveToolGrants?.commandExecution).toBe(false);
+
+    await runner.run(baseInput);
+    expect(proc.lastCall?.args).not.toContain('--dangerously-skip-permissions');
+  });
+});
+

@@ -1,7 +1,7 @@
 import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import type { AgentRunInput, AgentRunUsage, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
-import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
+import { BaseRunner, type BaseRunnerOptions, type ErrorRule, type RunnerInvocation } from './base-runner.js';
 
 const EFFORT: Readonly<Record<'low' | 'medium' | 'high', string>> = {
   low: 'low',
@@ -70,6 +70,7 @@ interface AgyEnvelope {
   is_error?: boolean;
   status_code?: number | null;
   structured_output?: unknown;
+  denied_actions?: ReadonlyArray<{ action?: string; display_name?: string }>;
   /** Token accounting, as measured from `agy 1.1.27`. No cost and no model in it. */
   usage?: {
     input_tokens?: number;
@@ -89,10 +90,25 @@ function asEnvelope(value: unknown): AgyEnvelope | undefined {
   return typeof value === 'object' && value !== null ? (value as AgyEnvelope) : undefined;
 }
 
+export interface AgyRunnerOptions extends BaseRunnerOptions {
+  /**
+   * When true, passes `--dangerously-skip-permissions` to auto-approve tool execution
+   * in headless/non-interactive mode.
+   */
+  readonly dangerouslySkipPermissions?: boolean;
+}
+
 /**
  * AGY (Antigravity CLI) adapter.
  */
 export class AgyRunner extends BaseRunner {
+  private readonly dangerouslySkipPermissions: boolean;
+
+  constructor(options: AgyRunnerOptions) {
+    super(options);
+    this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? false;
+  }
+
   protected defaultCommand(): string {
     return 'agy';
   }
@@ -152,7 +168,7 @@ export class AgyRunner extends BaseRunner {
        * that still return their answer; this CLI's `plan` is a different concept wearing
        * the same word.
        */
-      supportsReadOnly: false,
+      supportsReadOnly: true,
       supportsNonInteractive: true,
       supportsWorkingDirectory: true,
       // Structured output strategy is prompted because native json-schema enforcement in headless CLI mode requires manual permission configuration.
@@ -164,7 +180,7 @@ export class AgyRunner extends BaseRunner {
       // `commandExecution` is false — the two properties are different, and conflating
       // them under `supportsNonInteractive` is what hid the failure until it cost an
       // attempt.
-      nonInteractiveToolGrants: { fileEdit: true, commandExecution: false },
+      nonInteractiveToolGrants: { fileEdit: true, commandExecution: this.dangerouslySkipPermissions },
     };
   }
 
@@ -310,6 +326,10 @@ export class AgyRunner extends BaseRunner {
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
     const args = ['--output-format', 'json'];
 
+    if (this.dangerouslySkipPermissions) {
+      args.push('--dangerously-skip-permissions');
+    }
+
     if (input.model !== undefined) {
       args.push('--model', input.model);
     }
@@ -317,9 +337,7 @@ export class AgyRunner extends BaseRunner {
     const effortKey = input.reasoning === 'very_high' ? 'high' : input.reasoning;
     args.push('--effort', EFFORT[effortKey]);
 
-    if (input.permissions === 'read-only') {
-      args.push('--mode', 'plan');
-    } else {
+    if (input.permissions !== 'read-only') {
       args.push('--mode', 'accept-edits');
     }
 
@@ -346,6 +364,13 @@ export class AgyRunner extends BaseRunner {
 
   protected override isDefiniteSuccess(result: ProcessResult, parsed: unknown): boolean {
     const envelope = asEnvelope(parsed);
+    // If the runner auto-denied tools, it did not genuinely produce an accepted execution
+    if (envelope?.denied_actions && Array.isArray(envelope.denied_actions) && envelope.denied_actions.length > 0) {
+      return false;
+    }
+    if (/jetski: no output produced/i.test(result.stderr)) {
+      return false;
+    }
     if (envelope?.status === 'SUCCESS' && result.exitCode === 0) return true;
     if (envelope?.is_error === false && result.exitCode === 0) return true;
     if (result.exitCode === 0 && envelope?.error === undefined && envelope?.status !== 'ERROR' && envelope?.status !== 'FAILED') return true;
@@ -369,6 +394,15 @@ export class AgyRunner extends BaseRunner {
       {
         code: 'auth_required',
         when: (result, parsed) => /not authenticated|login required|invalid api key/i.test(diagnosisOf(result, parsed)),
+      },
+      {
+        code: 'execution_failed',
+        when: (result, parsed) =>
+          /jetski: no output produced/i.test(diagnosisOf(result, parsed)) ||
+          /tool required the ["']?command["']? permission/i.test(diagnosisOf(result, parsed)) ||
+          (asEnvelope(parsed)?.denied_actions !== undefined &&
+            Array.isArray(asEnvelope(parsed)?.denied_actions) &&
+            (asEnvelope(parsed)?.denied_actions?.length ?? 0) > 0),
       },
       {
         code: 'execution_failed',
@@ -404,5 +438,6 @@ export class AgyRunner extends BaseRunner {
 function diagnosisOf(result: ProcessResult, parsed: unknown): string {
   const envelope = asEnvelope(parsed);
   const message = envelope?.error ?? (envelope?.is_error === true ? (envelope.result ?? envelope.response ?? '') : '');
-  return `${String(message)} ${result.stderr}`;
+  const denied = envelope?.denied_actions ? JSON.stringify(envelope.denied_actions) : '';
+  return `${String(message)} ${denied} ${result.stderr}`;
 }

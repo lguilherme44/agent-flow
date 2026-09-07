@@ -466,6 +466,14 @@ const PERMISSION_DENIAL_SIGNATURES: readonly DenialSignature[] = [
     seenIn: 'AGY 1.1.13 — the evidence run',
   },
   {
+    pattern: /(?:jetski: )?no output produced — a tool required the ["']?([^"'\s]+)["']? permission that headless mode cannot prompt for/i,
+    seenIn: 'AGY 1.1.27 headless auto-denial',
+  },
+  {
+    pattern: /"denied_actions":\s*\[\s*\{\s*"action":\s*"([^"]+)"/i,
+    seenIn: 'AGY 1.1.27 envelope denied actions',
+  },
+  {
     pattern: /(?:tool call|tool use|tool request)[^\n]{0,60}?requires? (?:approval|confirmation)(?:[^\n]*?[:\s]["']?([A-Za-z_][\w.-]*)\s*\()?/i,
     seenIn: 'generic CLI phrasing for an unattended approval prompt',
   },

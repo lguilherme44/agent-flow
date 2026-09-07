@@ -25,15 +25,30 @@ const STAGES: readonly PipelineStage[] = [
   'final-review',
 ];
 
-export function StageLog({ address }: { readonly address: RunAddress }) {
-  const [stage, setStage] = useState<PipelineStage>('planning');
+export function StageLog({
+  address,
+  stage: controlledStage,
+  onStageChange,
+}: {
+  readonly address: RunAddress;
+  readonly stage?: PipelineStage;
+  readonly onStageChange?: (stage: PipelineStage) => void;
+}) {
+  const [internalStage, setInternalStage] = useState<PipelineStage>('planning');
+  const stage = controlledStage ?? internalStage;
+
+  const handleStageChange = (nextStage: PipelineStage) => {
+    setInternalStage(nextStage);
+    onStageChange?.(nextStage);
+  };
+
   const log = useResource<StageLogView>(keys.stageLog(address, stage), () => api.stageLog(address, stage));
 
   return (
     <div className="stage-log">
       <label className="stage-log__pick">
         <span className="visually-hidden">Stage log</span>
-        <select className="input mono" value={stage} onChange={(event) => setStage(event.target.value as PipelineStage)}>
+        <select className="input mono" value={stage} onChange={(event) => handleStageChange(event.target.value as PipelineStage)}>
           {STAGES.map((name) => <option key={name} value={name}>{name}</option>)}
         </select>
       </label>

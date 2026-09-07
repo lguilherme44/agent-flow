@@ -68,6 +68,10 @@ export const RunnerConfigSchema = z.object({
    */
   args: z.array(z.string()).default([]),
   /**
+   * Auto-approve tool permissions in non-interactive/headless mode (e.g. for agy-cli).
+   */
+  dangerouslySkipPermissions: z.boolean().default(false),
+  /**
    * The model's context window in tokens, when the operator knows it.
    *
    * Nothing infers this, and the default is to say nothing rather than to assume a

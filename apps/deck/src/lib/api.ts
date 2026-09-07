@@ -11,6 +11,7 @@ import type {
   RunSummaryView,
   ConfigView,
   PipelineStage,
+  RunStage,
   RunnerHealthView,
   RunnerModelsView,
   RunnerTypeView,
@@ -239,6 +240,12 @@ export const api = {
     ),
   revise: (a: RunAddress, instruction: string) =>
     postJson<ActionJobView>(`/runs/${a.runId}/revise`, { instruction }, scoped(a)),
+  resumePlanning: (a: RunAddress, from?: RunStage) =>
+    postJson<ActionJobView>(
+      `/runs/${a.runId}/plan`,
+      from === undefined ? {} : { from },
+      scoped(a),
+    ),
   start: (a: RunAddress, taskId?: string) =>
     postJson<ActionJobView>(
       `/runs/${a.runId}/start`,

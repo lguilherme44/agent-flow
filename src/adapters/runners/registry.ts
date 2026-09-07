@@ -114,6 +114,7 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       // `RunnerConfig.args` (§7): the seam for what this schema does not model,
       // most concretely pointing a coding CLI at another inference endpoint.
       extraArgs: config.args,
+      dangerouslySkipPermissions: config.dangerouslySkipPermissions,
     }),
 
   /**
@@ -212,6 +213,7 @@ export function describeRunnerTypes(deps: RegistryDependencies): RunnerTypeDescr
       type,
       enabled: true,
       args: [],
+      dangerouslySkipPermissions: false,
       // Satisfies the one factory that refuses a runner without an endpoint. Never
       // called: only `capabilities()` is read from this instance.
       ...(fields.some(({ name }) => name === 'baseUrl') ? { baseUrl: 'http://127.0.0.1/v1' } : {}),

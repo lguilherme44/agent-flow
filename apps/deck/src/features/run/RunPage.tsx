@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ActionJobView, ApprovalGateView, AttentionItem, ControlSnapshotView, RunDagView, RunDetailView, RunEventLogView, StageViewResponse, TaskSummaryView } from '@contracts/index.js';
+import type { ActionJobView, ApprovalGateView, AttentionItem, ControlSnapshotView, PipelineStage, RunDagView, RunDetailView, RunEventLogView, RunStage, StageViewResponse, TaskSummaryView } from '@contracts/index.js';
 import { ApiError, api, keys } from '../../lib/api';
 import { buildTimeline, stateAt } from '../../lib/replay';
 import { invalidate, useResource } from '../../lib/store';
@@ -131,6 +131,13 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
    */
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [logTab, setLogTab] = useState<'events' | 'stage'>('events');
+  const [selectedStage, setSelectedStage] = useState<PipelineStage>('planning');
+
+  const onOpenStageLog = (stg: string): void => {
+    setSelectedStage(stg as PipelineStage);
+    setLogTab('stage');
+  };
+
   const cancelRun = (): Promise<void> => {
     setConfirmCancel(false);
     return ask(() => api.cancel(address), 'Cancelled. Evidence, the integration branch and the worktrees are all still on disk.');
@@ -139,6 +146,22 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   // and the Definition of Done run as a job; the run's status moves when they are done.
   const finalReview = (): Promise<void> =>
     ask(() => api.review(address), 'Asked. Verification and the final review run as a job; the run closes when the Definition of Done holds.');
+
+  const failedPlanningStage = useMemo<RunStage | undefined>(() => {
+    if (run.data?.runtime.status !== 'failed') return undefined;
+    if (run.data.taskCount > 0) return undefined;
+    const events = log.data?.events ?? [];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev?.type === 'stage_failed' && typeof ev.detail['stage'] === 'string') {
+        return ev.detail['stage'] as RunStage;
+      }
+    }
+    return (run.data.stage as RunStage) ?? 'planning';
+  }, [run.data, log.data]);
+
+  const retryPlanning = (stg?: RunStage): Promise<void> =>
+    ask(() => api.resumePlanning(address, stg), `Retrying planning from ${stg ?? 'stage'}…`);
 
   const openGate = (tab: 'decide' | 'revise'): void => {
     setGateTab(tab);
@@ -281,6 +304,11 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
             {job.data !== null && job.data !== undefined ? (
               <span className="job">{job.data.kind === 'start' ? 'executing' : job.data.kind === 'review' ? 'reviewing' : job.data.kind === 'revise' ? 're-planning' : job.data.kind === 'plan' ? 'planning' : job.data.kind}…</span>
             ) : null}
+            {failedPlanningStage !== undefined && idle ? (
+              <button type="button" className="btn btn--primary" onClick={() => void retryPlanning(failedPlanningStage)}>
+                Retry {failedPlanningStage}
+              </button>
+            ) : null}
             {showReview ? (
               <button type="button" className="btn btn--primary" onClick={() => void finalReview()}>
                 Run the final review
@@ -332,6 +360,12 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
           </div>
         </div>
       </header>
+
+      {failedPlanningStage !== undefined ? (
+        <Notice tone="bad" k="planning failed">
+          Planning stopped at stage <b>{failedPlanningStage}</b>. Review the error in the feed below, inspect the <b>Stage output</b> tab, or click <b>Retry {failedPlanningStage}</b> above to resume from this stage.
+        </Notice>
+      ) : null}
 
       {actionNote === undefined ? null : (
         <Notice tone={actionNote.tone} k={actionNote.tone === 'ok' ? 'asked' : 'refused'}>
@@ -452,8 +486,8 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
           </div>
           <div className="panel__body">
             {logTab === 'events'
-              ? <Feed timeline={timeline ?? buildTimeline([], now)} t={t} live={live} onJump={onJump} selected={selected} />
-              : <StageLog address={address} />}
+              ? <Feed timeline={timeline ?? buildTimeline([], now)} t={t} live={live} onJump={onJump} selected={selected} runId={runId} onOpenStageLog={onOpenStageLog} />
+              : <StageLog address={address} stage={selectedStage} onStageChange={setSelectedStage} />}
           </div>
         </section>
       </div>

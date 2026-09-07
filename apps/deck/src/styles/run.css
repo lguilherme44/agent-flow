@@ -834,23 +834,86 @@ input[type='checkbox'] {
 
 /* Two logs in one panel: the tape of facts, and what a runner said inside a stage. */
 .panel__tabs {
-  display: flex;
-  gap: var(--s-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  padding: 2px;
 }
 .panel__tabs button {
-  padding: 0;
+  padding: 3px 10px;
   border: 0;
-  background: none;
-  color: var(--ink-4);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--ink-3);
   font-family: var(--font-mono);
   font-size: var(--fs-0);
-  letter-spacing: 0.1em;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 .panel__tabs button[aria-selected='true'] {
-  color: var(--ink-2);
+  background: var(--bg-3);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
-.panel__tabs button:hover {
+.panel__tabs button:hover:not([aria-selected='true']) {
+  color: var(--ink-2);
+  background: var(--bg-2);
+}
+
+.feed__failure-box {
+  margin: var(--s-1) 0 var(--s-2) calc(64px + var(--s-3));
+  padding: var(--s-2) var(--s-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--bad);
+  border-radius: var(--r-1);
+  font-size: var(--fs-1);
+}
+.feed__failure-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-1);
+}
+.feed__failure-excerpt {
+  margin: var(--s-2) 0 0;
+  padding: var(--s-2);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.feed__failure-hint {
+  margin: var(--s-2) 0 0;
+  font-size: var(--fs-0);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+}
+.feed__row-expand-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: var(--s-2);
+  color: var(--warn);
+  font-size: var(--fs-0);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.feed__row-expand-btn:hover {
   color: var(--ink);
 }
 

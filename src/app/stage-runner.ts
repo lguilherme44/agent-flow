@@ -436,6 +436,7 @@ export class StageRunner {
     // is prose, for a person; this is for the read model, which must never have to parse
     // one. §8 keeps `RunEvent.detail` an open record precisely so evidence can be enriched
     // without a migration, and these fields are additive.
+    await store.updateRun(runId, (state) => ({ ...state, stage: stage.name }));
     await store.appendEvent(runId, 'stage_started', {
       stage: stage.name,
       role: stage.role,

@@ -6,6 +6,7 @@ import type { Finding, FindingAdjudication } from './review.schema.js';
 import {
   WorkflowClassSchema,
   PipelineStageSchema,
+  RunStageSchema,
   type Degradation,
   type PipelineStage,
   type PipelineStatus,
@@ -229,6 +230,13 @@ export const PlanRequestSchema = z.object({
   /** Ignore the cached repository map, as `--no-cache` does. */
   noCache: z.boolean().default(false),
 });
+
+export const ResumePlanningRequestSchema = z.object({
+  from: RunStageSchema.optional(),
+  skipReview: z.boolean().default(false),
+  noCache: z.boolean().default(false),
+});
+export type ResumePlanningRequest = z.infer<typeof ResumePlanningRequestSchema>;
 
 export const JobParamsSchema = z.object({
   jobId: z.string().regex(/^job-\d{4,}$/, 'expected a job id'),

@@ -1790,6 +1790,40 @@ describe('UI-27 — the write API', () => {
       expect(response.json<ActionErrorView>().action).toBeTruthy();
       expect((await server.app.inject('/api/v1/runs')).json<RunSummaryView[]>()).toHaveLength(before);
     });
+
+    it('resumes planning for an existing run via POST /api/v1/runs/:runId/plan', async () => {
+      const { server, run, fs } = await serve();
+      fs.seed('/home/.agent-flow/config.yaml', 'git:\n  useWorktrees: false\n');
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/plan`,
+        payload: { from: 'planning' },
+      });
+
+      expect(response.statusCode).toBe(202);
+      const job = response.json<ActionJobView>();
+      expect(job.kind).toBe('plan');
+      expect(job.runId).toBe(run.runId);
+    });
+
+    it('refuses to resume planning for a non-existent run', async () => {
+      const { server } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: '/api/v1/runs/AF-2026-999/plan',
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(202);
+      const job = response.json<ActionJobView>();
+      const settled = await settleJob(server, job.id);
+      expect(settled.status).toBe('failed');
+      expect(settled.error?.error).toBe('no_run');
+    });
   });
 
   describe('review', () => {

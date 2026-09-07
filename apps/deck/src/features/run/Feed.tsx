@@ -12,10 +12,36 @@ import { Empty } from '../../components/ui';
  * the recorder reads as paging through the log. Clicking a line moves the playhead to it,
  * and selects its task when it names one.
  */
-export function Feed({ timeline, t, live, onJump, selected }: { timeline: Timeline; t: number; live: boolean; onJump: (at: number, task?: string) => void; selected: string | undefined }) {
+export function Feed({
+  timeline,
+  t,
+  live,
+  onJump,
+  selected,
+  runId,
+  onOpenStageLog,
+}: {
+  timeline: Timeline;
+  t: number;
+  live: boolean;
+  onJump: (at: number, task?: string) => void;
+  selected: string | undefined;
+  runId?: string;
+  onOpenStageLog?: (stage: string) => void;
+}) {
   const [needle, setNeedle] = useState('');
   const [onlySelected, setOnlySelected] = useState(false);
+  const [expandedIndices, setExpandedIndices] = useState<ReadonlySet<number>>(new Set());
   const currentRef = useRef<HTMLButtonElement>(null);
+
+  const toggleExpand = (index: number) => {
+    setExpandedIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
 
   const rows = useMemo(() => {
     const q = needle.trim().toLowerCase();
@@ -68,6 +94,16 @@ export function Feed({ timeline, t, live, onJump, selected }: { timeline: Timeli
         lastDay = day;
         const task = (event.detail['task'] ?? event.detail['taskId']) as string | undefined;
         const isCurrent = current === event.index && !live;
+
+        const isFailure = event.type === 'stage_failed' || (event.type === 'task_finished' && event.detail['status'] === 'failed');
+        const rawExcerpt = event.detail['rawExcerpt'] as string | undefined;
+        const failureClass = (event.detail['failureClass'] ?? event.detail['reason']) as string | undefined;
+        const deniedCommand = event.detail['deniedCommand'] as string | undefined;
+        const problems = Array.isArray(event.detail['problems']) ? (event.detail['problems'] as unknown[]).map(String) : undefined;
+        const stage = event.detail['stage'] as string | undefined;
+        const hasFailureDetails = isFailure && Boolean(rawExcerpt || failureClass || deniedCommand || (problems && problems.length > 0));
+        const isExpanded = expandedIndices.has(event.index);
+
         return (
           <div key={event.index}>
             {separator}
@@ -77,16 +113,65 @@ export function Feed({ timeline, t, live, onJump, selected }: { timeline: Timeli
               className="feed__row"
               data-current={isCurrent}
               data-future={!live && event.at_ms > t}
-              onClick={() => onJump(event.at_ms, task)}
+              onClick={() => {
+                onJump(event.at_ms, task);
+                if (hasFailureDetails) toggleExpand(event.index);
+              }}
               title={event.type}
             >
               <span className="feed__time">{formatClock(event.at_ms)}</span>
               <span className="feed__dot" data-tone={said.tone} aria-hidden="true" />
               <span className="feed__text">
-                <div className="feed__title">{said.title}</div>
+                <div className="feed__title">
+                  {said.title}
+                  {hasFailureDetails ? (
+                    <button
+                      type="button"
+                      className="feed__row-expand-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleExpand(event.index);
+                      }}
+                    >
+                      {isExpanded ? 'less' : 'details'}
+                    </button>
+                  ) : null}
+                </div>
                 {said.detail === undefined ? null : <div className="feed__detail">{said.detail}</div>}
               </span>
             </button>
+            {isExpanded && hasFailureDetails ? (
+              <div className="feed__failure-box">
+                <div className="feed__failure-meta">
+                  {failureClass ? <span className="chip" data-tone="bad">{failureClass}</span> : null}
+                  {deniedCommand ? <span className="chip" data-tone="warn">denied tool: {deniedCommand}</span> : null}
+                  {stage && onOpenStageLog ? (
+                    <button
+                      type="button"
+                      className="btn btn--sm btn--ghost"
+                      onClick={() => onOpenStageLog(stage)}
+                    >
+                      open {stage} log
+                    </button>
+                  ) : null}
+                </div>
+                {problems && problems.length > 0 ? (
+                  <ul style={{ margin: '6px 0 6px 16px', padding: 0 }}>
+                    {problems.map((prob, i) => (
+                      <li key={i}>{prob}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {rawExcerpt ? (
+                  <pre className="feed__failure-excerpt">{rawExcerpt}</pre>
+                ) : null}
+                {stage && runId ? (
+                  <div className="feed__failure-hint">
+                    Log on disk: .agent-flow/runs/{runId}/logs/{stage}.log
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         );
       })}

@@ -19,6 +19,13 @@ paths:
     - test
 rules:
   architecture: []
+runners:
+  agy:
+    type: agy-cli
+    enabled: true
+    dangerouslySkipPermissions: true
+  claude:
+    enabled: false
 roles:
   executors:
     trivial:
@@ -27,3 +34,15 @@ roles:
       runner: agy
     complex:
       runner: agy
+  architect:
+    runner: agy
+  sdd:
+    runner: agy
+  planner:
+    runner: agy
+  planReviewer:
+    runner: agy
+  verification:
+    runner: agy
+  finalReviewer:
+    runner: agy

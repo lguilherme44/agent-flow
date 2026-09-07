@@ -12,6 +12,7 @@ import {
   PromptParamsSchema,
   RejectRequestSchema,
   PlanRequestSchema,
+  ResumePlanningRequestSchema,
   RetryRequestSchema,
   ReviewRequestSchema,
   ReviseRequestSchema,
@@ -921,6 +922,49 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return await startJob(reply, project, 'plan', runId, async () => {
       const outcome = await planFeature(deps, runId, description, {
         ...(workflow === undefined ? {} : { workflow }),
+        ...(skipReview ? { skipReview: true } : {}),
+        ...(noCache ? { noCache: true } : {}),
+      });
+      if (!outcome.ok) return { error: outcome.error };
+
+      return {
+        summary: `Planned ${String(outcome.value.taskCount)} tasks${
+          outcome.value.reviewVerdict === undefined ? '' : `; review ${outcome.value.reviewVerdict}`
+        }.`,
+      };
+    });
+  });
+
+  app.post('/api/v1/runs/:runId/plan', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf);
+    if (scope === undefined) return undefined;
+
+    const body = ResumePlanningRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid plan resume request');
+
+    const deps = depsFor(scope.project);
+    const runId = scope.runId;
+    const { from, skipReview, noCache } = body.data;
+
+    return await startJob(reply, scope.project, 'plan', runId, async () => {
+      const store = new StateStore({
+        fs: options.fs,
+        clock: options.clock,
+        projectDir: scope.project.path,
+      });
+      const state = await store.loadRun(runId);
+      if (state === null) {
+        return {
+          error: {
+            code: 'no_such_run',
+            message: `No such run ${runId}`,
+            action: 'Check the run id.',
+          },
+        };
+      }
+
+      const outcome = await planFeature(deps, runId, state.feature, {
+        ...(from === undefined ? {} : { from }),
         ...(skipReview ? { skipReview: true } : {}),
         ...(noCache ? { noCache: true } : {}),
       });

@@ -228,7 +228,7 @@ describe('an inherited GIT_EXEC_PATH does not choose which programs Git loads', 
 
     // Without the variable, Git has never heard of this subcommand — it exits
     // non-zero, so `execFileSync` throws, which is the assertion.
-    expect(() => repoA?.userGit(['sentinel'])).toThrow(/not a git command/);
+    expect(() => repoA?.userGit(['sentinel'])).toThrow(/not a git command|não é um comando git/i);
 
     poison('GIT_EXEC_PATH', execPath);
 

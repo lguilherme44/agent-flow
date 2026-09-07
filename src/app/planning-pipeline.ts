@@ -203,7 +203,7 @@ export class PlanningPipeline {
         files: repoFiles,
       });
       const workflow: WorkflowClass = classification.workflow;
-      await store.updateRun(runId, (s) => ({ ...s, workflow }));
+      await store.updateRun(runId, (s) => ({ ...s, workflow, status: 'running' }));
       await store.appendEvent(runId, 'workflow_classified', {
         workflow,
         rationale: classification.rationale,
