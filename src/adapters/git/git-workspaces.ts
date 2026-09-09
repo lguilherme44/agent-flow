@@ -689,9 +689,28 @@ export class GitWorkspaces {
 
   // -- worktrees ----------------------------------------------------------
 
-  /** The absolute path a location resolves to, proven to be under the root. */
+  /**
+   * The absolute path a location resolves to, proven to be under the root.
+   *
+   * **Separators are `/`, because this port already answers in `/` elsewhere.**
+   * {@link listWorktrees} reports what Git printed and Git prints `/` on Windows;
+   * {@link ownWorktrees} reports what `realPath` returned and the file-system adapter
+   * normalises for exactly this reason. This method resolved with `path.resolve` and so
+   * answered `\` — one port, two vocabularies, and a caller comparing one against the
+   * other decides that nothing is inside anything.
+   *
+   * `namespace-reclaim` is that caller. It survived only because it also asks `realPath`
+   * and checks both forms, under a comment about symlinks that never mentions the
+   * separator — and its `?? path.value` fallback drops back to the `\` form, where the
+   * membership test fails and a worktree that should be reclaimed is silently kept.
+   *
+   * {@link resolveWithinRoot} is left alone: it is the containment *check*, its rules are
+   * asserted for win32 from Linux through an injected `impl` (§26.2), and normalising
+   * inside it would change what those assertions are about.
+   */
   workspacePath(location: WorkspaceLocation): GitResult<string> {
-    return resolveWithinRoot(this.worktreeRoot, location.segments);
+    const resolved = resolveWithinRoot(this.worktreeRoot, location.segments);
+    return resolved.ok ? gitOk(resolved.value.replace(/\\/g, '/')) : resolved;
   }
 
   /**

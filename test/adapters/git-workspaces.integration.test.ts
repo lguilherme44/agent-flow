@@ -50,6 +50,19 @@ function integrationAt(): WorkspaceLocation {
   return location.value;
 }
 
+/**
+ * Where a location lands, spelled independently of the port but in the port's vocabulary.
+ *
+ * Still `join`, so the expectation is derived rather than borrowed from the thing under
+ * test — but normalised, because every path this port hands out or reports uses `/`:
+ * `git worktree list` prints `/` on Windows, `realPath` normalises for the same reason,
+ * and `workspacePath` now does too. Comparing a `\` expectation against it reported a
+ * violation that was the assertion, not the product.
+ */
+function pathAt(root: string, location: WorkspaceLocation): string {
+  return join(root, ...location.segments).replace(/\\/g, '/');
+}
+
 const IDENTITY = { name: 'Agent Flow', email: 'agent-flow@local' } as const;
 const DATES = { author: '2026-01-01T00:00:00Z', committer: '2026-01-01T00:00:00Z' } as const;
 
@@ -89,7 +102,7 @@ describe('worktree add, list, unlock, remove, prune (§7.3, §23, §47)', () => 
 
     expect(added.ok).toBe(true);
     if (!added.ok) return;
-    expect(added.value).toBe(join(repo.worktreeRoot, ...location.segments));
+    expect(added.value).toBe(pathAt(repo.worktreeRoot, location));
     expect(existsSync(join(added.value, 'README.md'))).toBe(true);
   });
 
@@ -136,7 +149,7 @@ describe('worktree add, list, unlock, remove, prune (§7.3, §23, §47)', () => 
     expect(removed.ok).toBe(false);
     if (removed.ok) return;
     expect(removed.failure.code).toBe('git_command_failed');
-    expect(existsSync(join(repo.worktreeRoot, ...location.segments))).toBe(true);
+    expect(existsSync(pathAt(repo.worktreeRoot, location))).toBe(true);
   });
 
   it('refuses to remove a dirty worktree, and forces one only when asked', async () => {
@@ -150,7 +163,7 @@ describe('worktree add, list, unlock, remove, prune (§7.3, §23, §47)', () => 
     // the forced form must actually work, or the probe's `finally` is decoration.
     repo = await makeTempRepoWithCommit();
     const location = attemptAt('TASK-001', 1);
-    const path = join(repo.worktreeRoot, ...location.segments);
+    const path = pathAt(repo.worktreeRoot, location);
     await repo.workspaces.addWorktree({
       cwd: repo.dir,
       location,
@@ -188,13 +201,13 @@ describe('worktree add, list, unlock, remove, prune (§7.3, §23, §47)', () => 
     const removed = await repo.workspaces.removeWorktree({ cwd: repo.dir, location, force: true });
 
     expect(removed.ok).toBe(false);
-    expect(existsSync(join(repo.worktreeRoot, ...location.segments))).toBe(true);
+    expect(existsSync(pathAt(repo.worktreeRoot, location))).toBe(true);
   });
 
   it('unlocks, then removes, then prunes', async () => {
     repo = await makeTempRepoWithCommit();
     const location = attemptAt('TASK-001', 1);
-    const path = join(repo.worktreeRoot, ...location.segments);
+    const path = pathAt(repo.worktreeRoot, location);
     await repo.workspaces.addWorktree({
       cwd: repo.dir,
       location,
@@ -242,7 +255,47 @@ describe('worktree add, list, unlock, remove, prune (§7.3, §23, §47)', () => 
     expect(ours.ok).toBe(true);
     if (!ours.ok) return;
     expect(ours.value).toHaveLength(1);
-    expect(ours.value[0]?.path).toBe(join(repo.worktreeRoot, ...location.segments));
+    expect(ours.value[0]?.path).toBe(pathAt(repo.worktreeRoot, location));
+  });
+
+  /**
+   * One vocabulary out of this port, and the reason it is a rule.
+   *
+   * `workspacePath` resolved with `path.resolve` and answered `\` on Windows, while
+   * `listWorktrees` reports what Git printed and `ownWorktrees` reports what `realPath`
+   * returned — both `/`. A caller comparing one against the other decides that nothing is
+   * inside anything, and `namespace-reclaim` is that caller: it survived only because it
+   * also asks `realPath` and tests both forms, under a comment about symlinks. Its
+   * `?? path.value` fallback drops back to the `\` form, where the membership test fails
+   * and a worktree that should be reclaimed is silently retained.
+   */
+  it('hands out and reports every path in one separator, on every host', async () => {
+    repo = await makeTempRepoWithCommit();
+    const location = attemptAt('TASK-001', 1);
+    await repo.workspaces.addWorktree({
+      cwd: repo.dir,
+      location,
+      branch: `agent-flow/${RUN_KEY}/TASK-001/attempt-1`,
+      base: repo.head(),
+      reason: 'ours',
+    });
+
+    const composed = repo.workspaces.workspacePath(location);
+    const listed = await repo.workspaces.listWorktrees({ cwd: repo.dir });
+    const ours = await repo.workspaces.ownWorktrees({ cwd: repo.dir });
+
+    expect(composed.ok).toBe(true);
+    expect(listed.ok).toBe(true);
+    expect(ours.ok).toBe(true);
+    if (!composed.ok || !listed.ok || !ours.ok) return;
+
+    for (const path of [composed.value, ...listed.value.map((e) => e.path), ...ours.value.map((e) => e.path)]) {
+      expect(path, 'a path in the host separator cannot be compared to one Git printed').not.toContain('\\');
+    }
+
+    // The comparison the product actually makes, made here without the `realPath`
+    // second chance that was hiding the mismatch.
+    expect(new Set(ours.value.map((entry) => entry.path)).has(composed.value)).toBe(true);
   });
 
   it('checks out an existing branch when no -b is given (the integration shape, §14.1)', async () => {

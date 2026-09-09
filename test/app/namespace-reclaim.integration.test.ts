@@ -38,13 +38,26 @@ async function readyWorkspace(current: WorktreeRun): Promise<IntegrationWorkspac
   return prepared.workspace;
 }
 
-/** Every worktree Git has registered, by path. */
+/**
+ * Every worktree Git has registered, by path — in Git's own separator, which is `/`.
+ *
+ * Normalised at the *comparison*, not at the source, because the source is Git and Git is
+ * already right: `worktree list --porcelain` prints `/` on Windows. What was wrong is the
+ * other side, where a `join`-built expectation carries the host separator and the two can
+ * never be equal. The fourth copy of that defect found in this suite; see
+ * `TODO.md` §8.5 for the systemic one, which is the fixture and is its own pass.
+ */
 function registered(current: WorktreeRun): string[] {
   return current.repo
     .userGit(['worktree', 'list', '--porcelain'])
     .split('\n')
     .filter((line) => line.startsWith('worktree '))
     .map((line) => line.slice('worktree '.length));
+}
+
+/** A `join`-built path in the vocabulary Git answers in, so the two can be compared. */
+function asGitPath(path: string): string {
+  return path.replace(/\\/g, '/');
 }
 
 /** Every ref under this run's namespace. */
@@ -142,7 +155,7 @@ describe('what reclamation refuses to touch (§20.2)', () => {
     await reclaimNamespace(depsOf(run), run.runId, { worktrees: true, branches: true });
 
     expect(existsSync(foreignPath), 'a foreign worktree was removed').toBe(true);
-    expect(registered(run)).toContain(foreignPath);
+    expect(registered(run)).toContain(asGitPath(foreignPath));
     expect(
       run.repo.userGit(['rev-parse', 'refs/heads/my-own-work']).trim(),
       'a foreign branch was deleted',
