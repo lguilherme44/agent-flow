@@ -5,6 +5,7 @@ import {
   summariseVerification,
   failureDetail,
   VERIFICATION_ORDER,
+  shellInvocation,
 } from '../../src/app/verification-commands.js';
 import { ProjectConfigSchema } from '../../src/contracts/index.js';
 
@@ -28,7 +29,9 @@ describe('running the project commands (AD-10)', () => {
     const proc = new FakeProcessRunner().always({ exitCode: 0 });
     await run(proc, { build: 'b', test: 't', lint: 'l', typecheck: 'tc' });
 
-    const executed = proc.calls.map((call) => call.args[1]);
+    // The command line is the last argument on every platform: `sh -c <line>` and
+    // `cmd /d /s /c <line>` differ in what comes before it, not in where it lands.
+    const executed = proc.calls.map((call) => call.args.at(-1));
     expect(executed).toEqual(['l', 'tc', 't', 'b']);
     expect(VERIFICATION_ORDER).toEqual(['lint', 'typecheck', 'test', 'build']);
   });
@@ -43,8 +46,13 @@ describe('running the project commands (AD-10)', () => {
     const proc = new FakeProcessRunner().always({ exitCode: 0 });
     await run(proc, { test: 'npm test -- --coverage' });
 
-    expect(proc.lastCall?.command).toBe('/bin/sh');
-    expect(proc.lastCall?.args).toEqual(['-c', 'npm test -- --coverage']);
+    // Asked of the module rather than spelled out, so this reads "through this host's
+    // shell" instead of "through the one shell Linux has". The line itself is asserted
+    // separately, because that part is the claim and it is platform-independent.
+    const expected = shellInvocation('npm test -- --coverage');
+    expect(proc.lastCall?.command).toBe(expected.command);
+    expect(proc.lastCall?.args).toEqual(expected.args);
+    expect(proc.lastCall?.args.at(-1)).toBe('npm test -- --coverage');
   });
 
   it('costs no LLM call at all', async () => {

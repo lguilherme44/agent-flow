@@ -49,6 +49,26 @@ function sequentialRun(): RunState {
   return { ...isolatedRun('a'.repeat(40)), isolationMode: 'none' } as RunState;
 }
 
+/**
+ * An install command line that leaves `count` untracked files, in this host's shell.
+ *
+ * The fixture said `for i in $(seq 1 25); do …; done`, which is `sh` syntax and *shell*
+ * syntax — `cmd` has no command substitution, so on Windows the install produced nothing
+ * and the test failed on its own `changes.length > 0` guard. The loop over `changes`
+ * above it had already passed by iterating zero times, which is the shape worth naming:
+ * a test that fails on the count is honest, and one that passes on an empty list is not.
+ *
+ * Platform-aware here for the same reason `shellInvocation` is platform-aware in the
+ * product: a command line is run by a shell, and the two hosts have different ones. The
+ * *subject* — that many changes are reported bounded and repository-relative — is
+ * identical on both, which is why this is a fixture detail rather than a skip.
+ */
+function generatesUntracked(count: number): string {
+  return process.platform === 'win32'
+    ? `for /l %i in (1,1,${count}) do @echo x > generated-%i.ts`
+    : `for i in $(seq 1 ${count}); do echo x > generated-$i.ts; done`;
+}
+
 function workspacesFor(temp: TempRepo, install?: string): TaskWorkspaces {
   const config = {
     global: {},
@@ -336,10 +356,12 @@ describe('a refusal names no absolute path, in any field (§7.2, §21.3)', () =>
     repo = await makeTempRepoWithCommit();
     const base = repo.head();
 
-    const outcome = await workspacesFor(
-      repo,
-      'for i in $(seq 1 25); do echo x > generated-$i.ts; done',
-    ).prepare({ state: isolatedRun(base), taskId: 'TASK-001', attempt: 1, base });
+    const outcome = await workspacesFor(repo, generatesUntracked(25)).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 1,
+      base,
+    });
 
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;

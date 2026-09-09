@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 /**
  * Executable versions of the rules UI-B is judged against.
@@ -12,6 +12,19 @@ import { join, relative } from 'node:path';
 
 const SRC = join(import.meta.dirname, '..');
 
+/**
+ * A file's name in these rules' vocabulary, which is `/` on every host.
+ *
+ * Every rule below is written with `/` — `'lib/api.ts'`, `'hooks/use-live-events.ts'` —
+ * and `relative` answers in the host separator, so on Windows five of them compared
+ * `'lib\api.ts'` against `'lib/api.ts'` and reported a violation that was the guard
+ * failing to run. The same defect the root suite closed at its own `repoPath`; this is
+ * the copy that lived here, one directory away, and was missed.
+ */
+function srcPath(file: string): string {
+  return relative(SRC, file).split(sep).join('/');
+}
+
 function sources(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
 
@@ -20,7 +33,7 @@ function sources(): { path: string; text: string }[] {
       const full = join(dir, entry);
       if (statSync(full).isDirectory()) walk(full);
       else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) {
-        out.push({ path: relative(SRC, full), text: readFileSync(full, 'utf8') });
+        out.push({ path: srcPath(full), text: readFileSync(full, 'utf8') });
       }
     }
   };
@@ -28,6 +41,28 @@ function sources(): { path: string; text: string }[] {
   walk(SRC);
   return out;
 }
+
+describe('the rules in this file can see their own subjects', () => {
+  /**
+   * The guard on {@link srcPath}, and the reason it is a rule rather than a comment.
+   *
+   * A path in the host separator does not make these rules error — it makes them stop
+   * matching, and a gate that fails open is worse than no gate, because the green tells
+   * you it looked.
+   */
+  it('names every file with `/`, on every host', () => {
+    const nonPosix = sources()
+      .map(({ path }) => path)
+      .filter((path) => path.includes('\\'));
+
+    expect(nonPosix, 'a rule written with `/` cannot match this path').toEqual([]);
+  });
+
+  it('finds the files the rules are about', () => {
+    // Guards the rule above from passing vacuously: an empty scan has no backslash in it.
+    expect(sources().length).toBeGreaterThan(10);
+  });
+});
 
 /** Where `@contracts/*` actually points, per `vite.config.ts` and `tsconfig.json`. */
 const CONTRACTS = join(SRC, '../../../src/contracts');

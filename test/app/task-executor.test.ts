@@ -26,6 +26,17 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { testGitCommand } from '../fakes/test-git-command.js';
 import { GitWorkspaces } from '../../src/adapters/git/git-workspaces.js';
 import type { ProcessResult } from '../../src/ports/index.js';
+import { shellInvocation } from '../../src/app/verification-commands.js';
+
+/**
+ * The shell the product actually spawns, asked rather than assumed.
+ *
+ * These assertions named `/bin/sh` outright, which stopped being true the day the
+ * product learned to run a configured command line on Windows. Reading it from the
+ * module under test keeps one answer to "what runs a command line" instead of two that
+ * agree on Linux and nowhere else.
+ */
+const SHELL = shellInvocation('noop').command;
 
 const PROJECT = '/repo';
 const PROMPTS = '/pkg/prompts';
@@ -249,8 +260,13 @@ describe('validation is run by agent-flow, not reported by the agent (§42)', ()
 
     // The id resolved to the command the *project* configured, not to anything
     // the plan carried (V-01 regression).
+    //
+    // **`at(-1)`, not `[1]`.** The command line is the last argument on every platform —
+    // `sh -c <line>` and `cmd /d /s /c <line>` differ in what comes before it, not in
+    // where it lands — and `[1]` is `/s` on Windows. The same correction
+    // `verification-commands.test.ts` already carries; this was the copy that did not.
     expect(proc.calls).toHaveLength(1);
-    expect(proc.lastCall?.args[1]).toBe('npm test -- recurrence');
+    expect(proc.lastCall?.args.at(-1)).toBe('npm test -- recurrence');
   });
 
   it('sends a task to review when its validation fails', async () => {
@@ -777,7 +793,7 @@ describe('where a task runs (M2-04 §4.2)', () => {
       workspace(),
     );
 
-    const validation = processRunner.calls.filter((call) => call.command === '/bin/sh');
+    const validation = processRunner.calls.filter((call) => call.command === SHELL);
     expect(validation.length).toBeGreaterThan(0);
     for (const call of validation) expect(call.cwd).toBe(WORKSPACE);
   });
@@ -803,7 +819,7 @@ describe('where a task runs (M2-04 §4.2)', () => {
     await world.executor.execute(task({ validation: ['test'] }), world.run.runId, 'SDD');
 
     expect(world.runner.calls.at(-1)?.workingDirectory).toBe(PROJECT);
-    for (const call of processRunner.calls.filter((entry) => entry.command === '/bin/sh')) {
+    for (const call of processRunner.calls.filter((entry) => entry.command === SHELL)) {
       expect(call.cwd).toBe(PROJECT);
     }
     expect(world.runner.calls.at(-1)?.prompt ?? '').toContain('Project rules');

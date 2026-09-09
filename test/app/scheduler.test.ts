@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { isAbsolute } from 'node:path';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeHost } from '../fakes/fake-host.js';
@@ -1682,7 +1683,17 @@ describe('what a refused workspace writes to disk (§7.2, §21.3)', () => {
     }
     // A control: the assertion above is worthless if the paths were never
     // plausible strings to find. The install genuinely printed one.
-    expect(repo.worktreeRoot.startsWith('/')).toBe(true);
+    //
+    // **`isAbsolute`, not `startsWith('/')`.** The control was the POSIX spelling of
+    // "absolute", so on Windows it failed on `C:/Users/…` — and it is the control on a
+    // *security* invariant, which is the worst place for a guard that cannot run. The
+    // claim is that these are absolute paths worth searching for, and `path.isAbsolute`
+    // is that claim on every host. Length is asserted too: an empty string is contained
+    // in everything, which would make the search above pass for the wrong reason.
+    for (const absolute of [repo.dir, repo.home, repo.worktreeRoot]) {
+      expect(absolute.length, 'an empty path is found in every string').toBeGreaterThan(0);
+      expect(isAbsolute(absolute), `${absolute} is not an absolute path`).toBe(true);
+    }
   });
 });
 
