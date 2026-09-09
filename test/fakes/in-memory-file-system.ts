@@ -29,9 +29,30 @@ export class InMemoryFileSystem implements FileSystem {
   /** Symbolic links, as link path → what it really is. */
   private readonly links = new Map<string, string>();
 
+  /**
+   * The map key for a path, with the host's separator folded to `/`.
+   *
+   * **This fake is keyed in POSIX and the code under test is not.** Production joins with
+   * `node:path`, so on Windows `discoverProjects` looks up
+   * `\wk\api\.agent-flow\config.yaml` in a map that was seeded with
+   * `/wk/api/.agent-flow/config.yaml`, misses, and reports an empty workspace. Measured:
+   * 14 of the server's path tests failed that way on Windows, and the production code was
+   * right in every one of them — the double was the thing that only worked on Linux.
+   *
+   * A real filesystem accepts both separators on Windows and only `/` elsewhere, so
+   * folding here is the fake behaving like the thing it stands in for. It deliberately
+   * does *not* touch link resolution or containment: `isAtOrUnderRoot` already takes a
+   * flavour and has its own win32 tests, and a second normalisation on that path would be
+   * a second answer to a security question.
+   */
+  private key(path: string): string {
+    return path.replace(/\\/g, '/');
+  }
+
   seed(path: string, content: string): void {
-    this.ensureParents(path);
-    this.files.set(path, content);
+    const key = this.key(path);
+    this.ensureParents(key);
+    this.files.set(key, content);
   }
 
   /**
@@ -45,27 +66,29 @@ export class InMemoryFileSystem implements FileSystem {
    * for.
    */
   link(path: string, target: string): void {
-    this.links.set(path, target);
-    this.mkdirpSync(path);
+    const key = this.key(path);
+    this.links.set(key, this.key(target));
+    this.mkdirpSync(key);
   }
 
   /** The longest declared link that prefixes `path`, applied. */
   private resolve(path: string): string {
+    const key = this.key(path);
     const longest = [...this.links.keys()]
-      .filter((link) => path === link || path.startsWith(`${link}/`))
+      .filter((link) => key === link || key.startsWith(`${link}/`))
       .sort((a, b) => b.length - a.length)[0];
 
     return longest === undefined
-      ? path
-      : `${this.links.get(longest) ?? longest}${path.slice(longest.length)}`;
+      ? key
+      : `${this.links.get(longest) ?? longest}${key.slice(longest.length)}`;
   }
 
   snapshot(): Record<string, string> {
     return Object.fromEntries(this.files);
   }
 
-  private ensureParents(path: string): void {
-    const parts = path.split('/').filter(Boolean);
+  private ensureParents(raw: string): void {
+    const parts = this.key(raw).split('/').filter(Boolean);
     let current = '';
     for (const part of parts.slice(0, -1)) {
       current += `/${part}`;
@@ -83,7 +106,7 @@ export class InMemoryFileSystem implements FileSystem {
     const injected = this.failWrite?.('atomic', path, content);
     if (injected !== undefined) throw injected;
 
-    const temp = `${path}.tmp`;
+    const temp = `${this.key(path)}.tmp`;
     this.writes.push(temp);
     this.files.set(temp, content);
 
@@ -93,17 +116,18 @@ export class InMemoryFileSystem implements FileSystem {
     }
 
     this.files.delete(temp);
-    this.ensureParents(path);
-    this.files.set(path, content);
-    this.writes.push(path);
+    this.ensureParents(this.key(path));
+    this.files.set(this.key(path), content);
+    this.writes.push(this.key(path));
   }
 
   async appendFile(path: string, content: string): Promise<void> {
     const injected = this.failWrite?.('append', path, content);
     if (injected !== undefined) throw injected;
 
-    this.ensureParents(path);
-    this.files.set(path, (this.files.get(path) ?? '') + content);
+    const key = this.key(path);
+    this.ensureParents(key);
+    this.files.set(key, (this.files.get(key) ?? '') + content);
   }
 
   async exists(path: string): Promise<boolean> {
@@ -115,8 +139,8 @@ export class InMemoryFileSystem implements FileSystem {
     this.mkdirpSync(path);
   }
 
-  private mkdirpSync(path: string): void {
-    const parts = path.split('/').filter(Boolean);
+  private mkdirpSync(raw: string): void {
+    const parts = this.key(raw).split('/').filter(Boolean);
     let current = '';
     for (const part of parts) {
       current += `/${part}`;
@@ -137,7 +161,7 @@ export class InMemoryFileSystem implements FileSystem {
     return [...entries].sort();
   }
 
-  async remove(path: string): Promise<void> {
+  async remove(raw: string): Promise<void> {
     // **The link, never what it points at.** `fs.rm` on a symbolic link unlinks the
     // link itself, and a fake that resolved first would delete the target — which is
     // both wrong and dangerous to model, because a test asserting "the file is gone"
@@ -146,6 +170,7 @@ export class InMemoryFileSystem implements FileSystem {
     // Missing until M4-02, and the gap was not academic: a link left in this map after
     // its path was removed still answered `exists` through the target, so a caller that
     // correctly removed a hostile symlink was reported as having failed to.
+    const path = this.key(raw);
     this.links.delete(path);
 
     this.files.delete(path);
@@ -165,9 +190,10 @@ export class InMemoryFileSystem implements FileSystem {
    * for the *policy* — stale recovery, cross-host caution, the refusal shape.
    */
   async createExclusive(path: string, content: string): Promise<boolean> {
-    if (this.files.has(path)) return false;
-    this.ensureParents(path);
-    this.files.set(path, content);
+    const key = this.key(path);
+    if (this.files.has(key)) return false;
+    this.ensureParents(key);
+    this.files.set(key, content);
     return true;
   }
 

@@ -136,8 +136,33 @@ describe('AgyRunner capabilities', () => {
     // The two whose read-only mode both contains writes and returns the answer.
     expect(claude.capabilities().supportsReadOnly).toBe(true);
     expect(codex.capabilities().supportsReadOnly).toBe(true);
-    // And the one that has no such mode. Measured, not assumed — see the doc comment.
+    // And the one whose `--sandbox` closes the terminal and not the editor. `true` here is
+    // a routing decision, stated as one in the doc comment: `false` would bar this runner
+    // from six of the nine roles and break the operator who has a single agent.
     expect(makeRunner().runner.capabilities().supportsReadOnly).toBe(true);
+  });
+
+  /**
+   * The flags the routing decision leans on, asserted rather than described.
+   *
+   * `supportsReadOnly: true` is defensible only while a read-only stage is actually
+   * narrowed — measured on `agy 1.1.27`: with `--sandbox` a shell write comes back
+   * `denied_actions: [command]` and the file is untouched, and without it the same prompt
+   * overwrote `target.txt`. If these arguments ever stop being sent, the capability
+   * becomes a claim about nothing, silently. That is what this test is for.
+   */
+  it('closes the terminal on a read-only stage, and leaves it open on a writing one', async () => {
+    const ok = { stdout: JSON.stringify({ status: 'SUCCESS', response: 'ok' }) };
+
+    const readOnly = makeRunner(new FakeProcessRunner().always(ok));
+    await readOnly.runner.run({ ...baseInput, permissions: 'read-only' });
+    expect(readOnly.proc.lastCall?.args).toContain('--sandbox');
+    // Never `--mode plan`: it answers with a pointer to a file outside the workspace.
+    expect(readOnly.proc.lastCall?.args).not.toContain('plan');
+
+    const writing = makeRunner(new FakeProcessRunner().always(ok));
+    await writing.runner.run({ ...baseInput, permissions: 'write' });
+    expect(writing.proc.lastCall?.args).not.toContain('--sandbox');
   });
 
   it('reports non-interactive and working directory support', () => {

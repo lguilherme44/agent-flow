@@ -128,14 +128,34 @@ describe('it goes through the wrapper (I-7)', () => {
 
 describe('bounded commit diff snapshots (M3-06)', () => {
   it('preserves rename/copy paths, deletes, binary flags, odd filenames, and ordering', async () => {
+    /**
+     * The odd pair, chosen per platform.
+     *
+     * The point is Git's `-z` output: a path this adapter must read back byte for byte
+     * rather than through the octal escaping `core.quotePath` applies to anything unusual.
+     * A newline is the sharpest case and was the original choice — and Win32 rejects
+     * *every* control character in a filename, so on Windows this test died in `open`
+     * before it had made any claim about quoting at all. Measured: `\n` and `\t` both
+     * ENOENT there.
+     *
+     * A non-ASCII name is what remains, and it is not a weaker case: `core.quotePath`
+     * escapes those bytes exactly as it escapes a newline, so the adapter is still read
+     * back against Git's quoting rather than against a plain path. The newline stays on
+     * the platforms where a newline can exist.
+     */
+    const [renameFrom, renameTo] =
+      process.platform === 'win32'
+        ? ['rename ção source.txt', 'renamed ção file.txt']
+        : ['rename\nsource.txt', 'renamed\nfile.txt'];
+
     repo = await makeTempRepoWithCommit();
     repo.write('delete me.txt', 'remove me\n');
-    repo.write('rename\nsource.txt', 'rename me\n');
+    repo.write(renameFrom, 'rename me\n');
     repo.write('copy source.txt', 'copy me exactly\n');
     repo.write('binary.bin', '\u0000old\n');
     const base = repo.commitAll('diff base');
 
-    repo.userGit(['mv', 'rename\nsource.txt', 'renamed\nfile.txt']);
+    repo.userGit(['mv', renameFrom, renameTo]);
     repo.write('copy destination.txt', 'copy me exactly\n');
     unlinkSync(`${repo.dir}/delete me.txt`);
     repo.write('binary.bin', '\u0000new\n');
@@ -155,8 +175,8 @@ describe('bounded commit diff snapshots (M3-06)', () => {
         { status: 'A', path: 'space name.txt', binary: false },
         {
           status: 'R100',
-          previousPath: 'rename\nsource.txt',
-          path: 'renamed\nfile.txt',
+          previousPath: renameFrom,
+          path: renameTo,
           binary: false,
         },
         {
@@ -201,12 +221,24 @@ describe('bounded commit diff snapshots (M3-06)', () => {
 
     const sentinel = join(repo.home, 'textconv-fired');
     const textconv = join(repo.home, 'textconv.sh');
+
+    /**
+     * Paths handed to `sh`, in the separator `sh` reads.
+     *
+     * Git runs a textconv driver through a shell — its own bundled one on Windows — where
+     * a backslash inside a double-quoted string is an escape. `C:\Users\…` therefore
+     * reached the driver as `C:UsersUsers…` and it died with `command not found`, which
+     * failed the *positive control* below rather than the claim this test makes. Git
+     * accepts `/` on every platform, and so does its shell.
+     */
+    const shellPath = (path: string): string => path.replace(/\\/g, '/');
+
     writeFileSync(
       textconv,
-      `#!/bin/sh\nprintf 'fired\\n' >> "${sentinel}"\nwc -c < "$1"\n`,
+      `#!/bin/sh\nprintf 'fired\\n' >> "${shellPath(sentinel)}"\nwc -c < "$1"\n`,
     );
     chmodSync(textconv, 0o755);
-    repo.userGit(['config', 'diff.sentinel.textconv', textconv]);
+    repo.userGit(['config', 'diff.sentinel.textconv', shellPath(textconv)]);
 
     // Positive control: ordinary porcelain diff trusts and executes the driver.
     repo.userGit(['diff', '--patch', '--binary', base, head, '--']);

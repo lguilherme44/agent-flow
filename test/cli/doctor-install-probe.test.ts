@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
@@ -7,6 +7,34 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { probeInstallCleanliness } from '../../src/cli/doctor.js';
 import type { EffectiveConfig } from '../../src/contracts/index.js';
 import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
+
+/**
+ * An install command, as a Node script on disk outside the repository.
+ *
+ * These were POSIX one-liners — `mkdir -p node_modules`, `echo rewritten >
+ * package-lock.json` — run through whatever shell the product picks for the host.
+ * `cmd.exe` has no `-p`, no `/dev/null` and different redirection, so on Windows the
+ * probe reported failures about the fixture rather than about the cleanliness rule under
+ * test. `node -e` is not the answer either: the script needs quotes, and a quoted
+ * argument inside `cmd /c "…"` nests badly enough that the command silently became
+ * something else and the probe reported the tree *clean*.
+ *
+ * A file has no quoting problem in any shell. It goes in the repository's home directory
+ * rather than in the repository, because an install command that dirties the tree by
+ * merely existing would be the thing under test.
+ */
+function installScript(temp: TempRepo, name: string, body: string): string {
+  const path = join(temp.home, `${name}.cjs`);
+  writeFileSync(path, body, 'utf8');
+  return `node ${path.replace(/\\/g, '/')}`;
+}
+
+const REWRITE_LOCKFILE = `require('node:fs').writeFileSync('package-lock.json', 'rewritten\\n');\n`;
+const MAKE_IGNORED_OUTPUT = `require('node:fs').mkdirSync('node_modules', { recursive: true });\n`;
+/** Reports what Git thinks the checkout is, then behaves like a clean install. */
+const REPORT_THE_CHECKOUT =
+  `require('node:child_process').execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD']);\n` +
+  MAKE_IGNORED_OUTPUT;
 
 /**
  * §8.4 — `doctor` must warn about a dirty install **before** a run, not after.
@@ -57,7 +85,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
     repo.write('package-lock.json', '{"lockfileVersion":3}\n');
     repo.commitAll('a lockfile');
 
-    const report = await probe(repo, 'echo rewritten > package-lock.json');
+    const report = await probe(repo, installScript(repo, 'rewrite-lock', REWRITE_LOCKFILE));
 
     expect(report).toContain('Install probe');
     expect(report).toContain('package-lock.json');
@@ -71,7 +99,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
     repo.write('.gitignore', 'node_modules/\n');
     repo.commitAll('ignore install output');
 
-    const report = await probe(repo, 'mkdir -p node_modules');
+    const report = await probe(repo, installScript(repo, 'ignored-output', MAKE_IGNORED_OUTPUT));
 
     expect(report).toContain('Install probe');
     expect(report).toContain('leaves a fresh checkout clean');
@@ -97,7 +125,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
     repo.userGit(['config', 'filter.dirtier.smudge', 'sed s/original/smudged/']);
     repo.userGit(['config', 'filter.dirtier.clean', 'cat']);
 
-    const report = await probe(repo, 'mkdir -p node_modules');
+    const report = await probe(repo, installScript(repo, 'ignored-output', MAKE_IGNORED_OUTPUT));
 
     expect(report).toContain('not clean before installing');
     expect(report).toContain('content.txt');
@@ -117,7 +145,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
 
     // Observed while it exists, by having the install report what Git thinks the
     // checkout is — the probe's worktree is gone by the time the call returns.
-    const report = await probe(repo, 'git rev-parse --abbrev-ref HEAD > /dev/null; mkdir -p node_modules');
+    const report = await probe(repo, installScript(repo, 'report-checkout', REPORT_THE_CHECKOUT));
 
     expect(report).toContain('leaves a fresh checkout clean');
     // No ref appeared, and none disappeared.
@@ -133,22 +161,29 @@ describe('the install-cleanliness probe (§8.4)', () => {
     // worktree holding a modified tracked file or an untracked non-ignored one —
     // so without `--force` a `doctor` run would leak a checkout every single time
     // it had something useful to say.
+    const DIRTIES_THE_TREE =
+      `require('node:fs').writeFileSync('package-lock.json', 'rewritten\\n');\n` +
+      `require('node:fs').writeFileSync('stray.txt', 'stray\\n');\n`;
+    const FAILS_HALFWAY =
+      `require('node:fs').writeFileSync('package-lock.json', 'half-written\\n');\n` +
+      `process.exit(9);\n`;
+
     const CASES = [
       {
         label: 'a clean install',
-        install: 'mkdir -p node_modules',
+        script: MAKE_IGNORED_OUTPUT,
         ignore: 'node_modules/\n',
         expect: 'leaves a fresh checkout clean',
       },
       {
         label: 'an install that dirties the tree',
-        install: 'echo rewritten > package-lock.json && echo stray > stray.txt',
+        script: DIRTIES_THE_TREE,
         ignore: '',
         expect: 'modifies files that are tracked or not ignored',
       },
       {
         label: 'an install that fails outright',
-        install: 'echo half-written > package-lock.json && exit 9',
+        script: FAILS_HALFWAY,
         ignore: '',
         expect: 'failed in a fresh checkout',
       },
@@ -163,7 +198,9 @@ describe('the install-cleanliness probe (§8.4)', () => {
         const refsBefore = repo.userGit(['for-each-ref', '--format=%(refname)']).trim();
 
         // The branch of the probe under test really was taken.
-        expect(await probe(repo, scenario.install)).toContain(scenario.expect);
+        expect(await probe(repo, installScript(repo, 'residue', scenario.script))).toContain(
+          scenario.expect,
+        );
 
         // Not registered with Git any more…
         const listed = repo.userGit(['worktree', 'list', '--porcelain']);
@@ -193,7 +230,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
     repo.commitAll('a lockfile');
     const before = repo.userGit(['status', '--porcelain=v1']).trim();
 
-    await probe(repo, 'echo rewritten > package-lock.json');
+    await probe(repo, installScript(repo, 'rewrite-lock', REWRITE_LOCKFILE));
 
     // The probe runs in its own checkout; the install never touches the tree the
     // user has open (I-10).
@@ -219,7 +256,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
       processRunner: new NodeProcessRunner(),
       config: {
         global: {},
-        project: { commands: { install: 'mkdir -p node_modules' } },
+        project: { commands: { install: installScript(repo, 'ignored-output', MAKE_IGNORED_OUTPUT) } },
       } as unknown as EffectiveConfig,
       projectDir: outside,
       host: new FakeHost(4242, 'test-host', [4242], repo.home),

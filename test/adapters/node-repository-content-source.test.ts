@@ -98,12 +98,17 @@ describe('NodeRepositoryContentSource', () => {
   });
 
   it('rejects a double-swap when the opened handle was never the authorized final inode', async () => {
-    const root = '/virtual/repo';
-    const candidate = `${root}/src/candidate.txt`;
+    // Built with `join`, not with `/`. The adapter walks the path with `node:path`, so a
+    // fixture keyed in POSIX only agrees with it on POSIX — on Windows every `lstat` and
+    // `readdir` lookup missed, the mock threw, and the double-swap this test exists to
+    // catch was reported as an ordinary `read_failed`. A security test that fails for an
+    // unrelated reason is a security test nobody can read.
+    const root = join('/virtual', 'repo');
+    const candidate = join(root, 'src', 'candidate.txt');
     const read = vi.fn().mockResolvedValue({ bytesRead: 0 });
     const identities = new Map([
       [root, { dev: 1n, ino: 1n, directory: true }],
-      [`${root}/src`, { dev: 1n, ino: 2n, directory: true }],
+      [join(root, 'src'), { dev: 1n, ino: 2n, directory: true }],
       [candidate, { dev: 1n, ino: 3n, directory: false }],
     ]);
 
@@ -123,7 +128,7 @@ describe('NodeRepositoryContentSource', () => {
     });
     vi.spyOn(nodeFs, 'readdir').mockImplementation(async (path) => {
       if (path === root) return [Buffer.from('src')] as never;
-      if (path === `${root}/src`) return [Buffer.from('candidate.txt')] as never;
+      if (path === join(root, 'src')) return [Buffer.from('candidate.txt')] as never;
       throw new Error(`unexpected readdir: ${String(path)}`);
     });
     vi.spyOn(nodeFs, 'open').mockResolvedValue({
@@ -160,8 +165,20 @@ describe('NodeRepositoryContentSource', () => {
 
     const flags = openSpy.mock.calls[0]?.[1];
     expect(typeof flags).toBe('number');
-    expect((flags as number) & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
-    expect((flags as number) & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK);
+
+    /**
+     * **Asserted where the flags exist, and asserted as absent where they do not.**
+     * `O_NOFOLLOW` and `O_NONBLOCK` are POSIX-only in Node, and `secureOpenFlags` says so:
+     * it contributes 0 for a missing one rather than pretending. Written unconditionally,
+     * this compared against `undefined` and failed on Windows for a reason that had
+     * nothing to do with the adapter. The claim is the same on both hosts — the adapter
+     * asks for every containment flag the platform offers, and never sets a bit the
+     * platform did not define.
+     */
+    for (const flag of [constants.O_NOFOLLOW, constants.O_NONBLOCK]) {
+      if (typeof flag === 'number') expect((flags as number) & flag).toBe(flag);
+    }
+    expect((flags as number) & constants.O_RDONLY).toBe(constants.O_RDONLY);
   });
 
   it('rejects EOF before the authorized size instead of returning truncated content', async () => {

@@ -25,13 +25,26 @@ export const RUN = 'AF-2026-001';
  *
  * The imports are absolute, resolved at build time: a relative specifier would resolve
  * against the temp directory the entry is written into rather than against the repo.
+ *
+ * **With `/`, and that is the whole difference between this suite running and not.**
+ * `root` is interpolated into a JavaScript string literal, so on Windows every `\` in
+ * `C:\Users\lguil\wk\…` was read as an escape: the generated import said
+ * `C:Userslguilwkparticularagent-flow/src/…`, esbuild could not resolve any of the four,
+ * and the whole file failed to build. Vitest reports that as 8 tests *skipped* — so the
+ * proof that eight real processes cannot both hold one lock was absent, silently, on
+ * every Windows machine, and absent in the shape that looks deliberate.
+ *
+ * Forward slashes rather than a `file:` URL: esbuild resolves specifiers as paths, and
+ * `file:///C:/…` is not one — it fails the same way, for a new reason. Windows accepts
+ * `/` in a path, and a JavaScript string literal has nothing to escape in it.
  */
 function harnessSource(root: string): string {
+  const base = `${root.replace(/\\/g, '/')}/`;
   return `
-import { NodeFileSystem } from '${root}/src/adapters/fs/node-file-system.ts';
-import { NodeHost } from '${root}/src/adapters/host/node-host.ts';
-import { SystemClock } from '${root}/src/adapters/clock/system-clock.ts';
-import { RunExecutionLock } from '${root}/src/app/run-execution-lock.ts';
+import { NodeFileSystem } from '${base}src/adapters/fs/node-file-system.ts';
+import { NodeHost } from '${base}src/adapters/host/node-host.ts';
+import { SystemClock } from '${base}src/adapters/clock/system-clock.ts';
+import { RunExecutionLock } from '${base}src/app/run-execution-lock.ts';
 
 const [projectDir, runId, holdMs, mode] = process.argv.slice(2);
 

@@ -13,11 +13,10 @@ const DEFAULT_KILL_GRACE_MS = 5_000;
 /**
  * Whether `process.kill(-pid)` can signal a process group.
  *
- * POSIX only. On Windows `detached` opens a new console instead of a process
- * group and there is no negative-pid convention, so the timeout there still
- * reaches only the direct child — killing a tree would need `taskkill /T /F`.
- * Windows is not a supported platform for this MVP; this constant is what the
- * eventual fix will hang off.
+ * POSIX only. On Windows `detached` opens a new console instead of a process group and
+ * there is no negative-pid convention, so this stays false there — and the tree is killed
+ * with `taskkill /T /F` instead. See {@link NodeProcessRunner.run}'s `killTree`, which is
+ * the fix this constant was left here to hang off.
  */
 const SUPPORTS_PROCESS_GROUPS = process.platform !== 'win32';
 
@@ -158,18 +157,47 @@ export class NodeProcessRunner implements ProcessRunner {
       });
 
       /**
-       * Signals the whole process group where the platform allows it.
+       * Signals the whole tree, by whichever mechanism the platform has.
        *
-       * A negative pid means "the group" on POSIX. It throws ESRCH once nothing
-       * is left to signal, which is the normal end state rather than an error.
+       * POSIX: a negative pid means "the group". It throws ESRCH once nothing is left to
+       * signal, which is the normal end state rather than an error.
+       *
+       * **Windows: `taskkill /T`, and it is not a nicety.** There is no process group and
+       * no negative-pid convention there, so `child.kill()` reaches only the direct child
+       * — and every case this runner exists for spawns children: the agent CLIs, `npm
+       * test`, anything shelled out. Node emits `close` once the process has exited *and*
+       * every inherited stdout pipe is closed, so killing only the parent leaves the
+       * promise pending until the grandchild finishes on its own. Measured on POSIX before
+       * the group fix: 4s against a 300ms timeout. Windows had that defect for the whole
+       * MVP, with a comment saying so and nothing hanging off it.
+       *
+       * `taskkill` is fire-and-forget: it is spawned detached from this runner's own
+       * bookkeeping, and its failure — the tree already gone, most often — is the normal
+       * end state, exactly as ESRCH is on POSIX. `/F` because the graceful half of the
+       * escalation has no Windows equivalent worth the wait: there is no SIGTERM for a
+       * console process that is not attached to this console, so the grace period below
+       * degrades into a delay before the only signal that works.
        */
       const killTree = (signal: NodeJS.Signals): void => {
         try {
           if (SUPPORTS_PROCESS_GROUPS && child.pid !== undefined) {
             process.kill(-child.pid, signal);
-          } else {
-            child.kill(signal);
+            return;
           }
+
+          if (process.platform === 'win32' && child.pid !== undefined) {
+            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+              stdio: 'ignore',
+              windowsHide: true,
+            }).on('error', () => {
+              // `taskkill` missing from PATH is not something this runner can repair,
+              // and the direct-child kill below is still better than nothing.
+              child.kill(signal);
+            });
+            return;
+          }
+
+          child.kill(signal);
         } catch {
           // Already gone, or never started. Either way there is nothing to do.
         }

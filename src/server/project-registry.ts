@@ -32,7 +32,25 @@ export interface DiscoverOptions {
    * startup that takes minutes and reads places nobody asked it to.
    */
   readonly depth?: number;
+  /**
+   * The path flavour to walk with. Production leaves it out and gets `node:path`.
+   *
+   * **The same seam `within` and `normalise` already have, finally reaching the walk.**
+   * Both of those take a flavour precisely so the Windows rules can be asserted somewhere
+   * other than Windows — and the walk between them did not, so it used the host's. On
+   * Windows that meant `resolve('/wk')` returning `C:\wk` and `join` producing
+   * backslashes, and every test written against a rootless POSIX fixture discovered
+   * nothing. The production default is unchanged; what changes is that a test can now
+   * name the flavour it is making a claim about.
+   */
+  readonly path?: WalkFlavour;
 }
+
+/** What the walk needs from a path implementation. `node:path` satisfies it. */
+export type WalkFlavour = Pick<
+  typeof nodePath,
+  'join' | 'resolve' | 'relative' | 'isAbsolute' | 'sep'
+>;
 
 export const DEFAULT_WORKSPACE_DEPTH = 2;
 /** The deepest a workspace scan may be configured to go. */
@@ -97,6 +115,7 @@ const SKIP = new Set([
  */
 export async function discoverProjects(options: DiscoverOptions): Promise<DiscoveryResult> {
   const depth = Math.min(options.depth ?? DEFAULT_WORKSPACE_DEPTH, MAX_WORKSPACE_DEPTH);
+  const flavour = options.path ?? nodePath;
   const found: string[] = [];
   const skipped: SkippedDirectory[] = [];
   const seen = new Set<string>();
@@ -105,7 +124,7 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
     const resolved = await options.fs.realPath(dir);
     if (resolved === null) return;
 
-    if (!within(root, resolved)) {
+    if (!within(root, resolved, flavour)) {
       skipped.push({ path: dir, reason: 'outside_workspace', resolved });
       return;
     }
@@ -113,7 +132,7 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
     if (seen.has(resolved)) return;
     seen.add(resolved);
 
-    if (await options.fs.exists(nodePath.join(dir, '.agent-flow', 'config.yaml'))) {
+    if (await options.fs.exists(flavour.join(dir, '.agent-flow', 'config.yaml'))) {
       // The resolved path, not the one the walk arrived by. A project reached
       // through a link inside the workspace is the same project, and registering
       // it under the link would give it an id from the link's name — `current`
@@ -135,14 +154,14 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
 
     for (const entry of entries) {
       if (entry.startsWith('.') || SKIP.has(entry)) continue;
-      const child = nodePath.join(dir, entry);
+      const child = flavour.join(dir, entry);
       const stat = await options.fs.stat(child);
       if (stat?.isDirectory === true) await walk(child, root, remaining - 1);
     }
   };
 
   for (const root of options.roots) {
-    const start = normalise(root);
+    const start = normalise(root, flavour);
     // The root is resolved too, so both sides of every comparison came out of
     // the same function. Comparing a resolved child against a raw root would
     // reject an entire workspace reached through a symlinked home directory.

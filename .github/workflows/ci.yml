@@ -35,9 +35,9 @@ jobs:
         node: ['20', '22']
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -55,6 +55,45 @@ jobs:
       # of one contract is two answers to "is this green".
       - run: npm run gate:node
 
+  # The same gate on Windows, because "it runs on your machine" was not a claim anybody
+  # was checking.
+  #
+  # **Measured before this job existed: 121 of 4500 tests failed there, and none of the
+  # failures was a defect in the product.** Two mechanical causes accounted for 76 —
+  # `path.relative` answering in `\` to rules written in `/`, and a repository path
+  # interpolated into a generated import where `C:\Users\…` was read as escape sequences,
+  # which took the eight-process lock race out of the suite as *skipped*. A gate that
+  # cannot run on a maintainer's machine is a gate that maintainer stops running, and a
+  # proof that reports itself as skipped is the worst shape a missing proof can take.
+  #
+  # One Node version, not the matrix: this job exists to catch what the *platform*
+  # changes, and paying twice for that on every push buys nothing the Linux matrix does
+  # not already cover.
+  check-windows:
+    runs-on: windows-latest
+
+    # Git worktree integration on Windows is genuinely slower — locally, single files in
+    # this suite took nine and eleven minutes. The default would cut the job off in the
+    # middle and report it as a failure of the code.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      # The suite creates Git worktrees and asserts on `status --porcelain`. Without
+      # this, Git rewrites every checked-out line ending and the first assert-clean of
+      # every isolated run refuses a tree nothing had touched.
+      - run: git config --global core.autocrlf false
+
+      - run: npm ci
+
+      - run: npm run gate:node
+
   # A browser, driven against the real local server (UI-31).
   #
   # In the pinned Playwright container because that is the one place a Chromium and
@@ -68,9 +107,9 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -84,7 +123,7 @@ jobs:
       # two lanes are kept the same shape so neither becomes the exception.
       - run: npm run gate:browser -- --ci
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: e2e-report
@@ -109,9 +148,9 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -129,7 +168,7 @@ jobs:
 
       # The expected, the actual and the diff for every mismatch. "Screenshot
       # comparison failed" without the images is a failure nobody can act on.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: visual-diff
@@ -151,9 +190,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -170,9 +209,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm

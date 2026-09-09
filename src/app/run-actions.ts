@@ -59,7 +59,7 @@ import {
   VERIFICATION_ORDER,
   type VerificationOutcome,
 } from './verification-commands.js';
-import { prepareWorkspace } from './workspace-preparation.js';
+import { prepareWorkspace, type PreparationOutcome } from './workspace-preparation.js';
 import {
   FINAL_REVIEW_STAGE,
   ReviewResponseSchema,
@@ -1981,21 +1981,45 @@ async function judgeRun(
   //
   // `install` is not a verification step and is not in `VERIFICATION_ORDER`: it has to run
   // *before* the step whose failure it would otherwise be blamed for.
+  //
+  // **And only an isolated tree is prepared.** `prepareWorkspace` opens with `assert
+  // clean`, which is right for a worktree born from a commit and wrong for the other
+  // mode: a sequential run reviews the operator's own checkout, and that checkout holds
+  // the implementation as uncommitted changes. Asserting it clean asks the review to
+  // refuse the very work it was called to judge — every sequential `review` would report
+  // `workspace_preparation_failed`, verification `NOT_RUN`, and a Definition of Done that
+  // can never be met. Nor is `npm ci` in a person's working tree something this run may
+  // decide to do: the dependencies are already installed there, and the `exit 127` this
+  // preparation exists to prevent is a property of a freshly created worktree.
   const install = context.config.project?.commands?.install;
-  const prepared = await prepareWorkspace(
-    { workspaces: context.workspaces, processRunner: context.processRunner },
-    {
-      path: tree.value.cwd,
-      ...(install === undefined ? {} : { install }),
-    },
-  );
+  const isolated = tree.value.integration !== undefined;
+  const prepared: PreparationOutcome = isolated
+    ? await prepareWorkspace(
+        { workspaces: context.workspaces, processRunner: context.processRunner },
+        {
+          path: tree.value.cwd,
+          ...(install === undefined ? {} : { install }),
+        },
+      )
+    : { ok: true };
 
   if (prepared.ok) {
+    // The record says which of the two happened, because they are different facts and
+    // the audit trail is read by somebody asking why a command behaved as it did.
+    // `install: 'none configured'` for a project that configures one is the failure this
+    // event exists to prevent, told about itself.
     await context.store.appendEvent(runId, 'workspace_prepared', {
       phase: 'verification',
-      ...(prepared.install === undefined
-        ? { install: 'none configured' }
-        : { install: prepared.install.command, exitCode: prepared.install.exitCode }),
+      workspace: isolated ? 'integration' : 'checkout',
+      ...(isolated
+        ? prepared.install === undefined
+          ? { install: 'none configured' }
+          : { install: prepared.install.command, exitCode: prepared.install.exitCode }
+        : {
+            skipped: 'reviewing the working tree, which carries the uncommitted work',
+            install: install === undefined ? 'none configured' : install,
+            installRan: false,
+          }),
     });
   } else {
     await context.store.appendEvent(runId, 'workspace_preparation_failed', {

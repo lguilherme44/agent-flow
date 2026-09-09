@@ -165,15 +165,28 @@ describe('M8 acceptance — the gate contract (ACC-01 … 03)', () => {
     );
   });
 
-  it('M8-ACC-02 CI blocking gates cannot drift from canonical lanes', () => {
+  it('M8-ACC-02 CI blocking gates cannot drift from canonical lanes', async () => {
     const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
     const security = readFileSync(join(ROOT, '.github/workflows/security.yml'), 'utf8');
 
-    // Every `run:` in either workflow is `npm ci` or a lane. `test/gates.test.ts` proves
-    // the rule catches a smuggled command; this is the state of the tree today.
+    /**
+     * The infrastructure list is **read**, not restated.
+     *
+     * It used to be `npm ci` inlined in the pattern below — a second copy of the contract
+     * `scripts/gates.mjs` exists to be the only copy of, and it behaved exactly as this
+     * whole file predicts a second copy behaves: adding a setup step to the Windows job
+     * failed here with a regex mismatch after the manifest had already accepted it, so
+     * the two lists disagreed about the same tree.
+     */
+    const specifier = new URL('../../scripts/gates.mjs', import.meta.url).href;
+    const { INFRASTRUCTURE } = (await import(specifier)) as { INFRASTRUCTURE: string[] };
+
+    // Every `run:` in either workflow is infrastructure or a lane. `test/gates.test.ts`
+    // proves the rule catches a smuggled command; this is the state of the tree today.
     for (const workflow of [ci, security]) {
       for (const [, command] of workflow.matchAll(/^\s*- run: (.+)$/gm)) {
-        expect(command).toMatch(/^(?:npm ci|npm run gate:[\w-]+(?: -- --ci)?)$/);
+        if (command !== undefined && INFRASTRUCTURE.includes(command)) continue;
+        expect(command).toMatch(/^npm run gate:[\w-]+(?: -- --ci)?$/);
       }
     }
   });

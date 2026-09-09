@@ -86,10 +86,19 @@ const ADAPTERS = [
   {
     name: 'agy-cli',
     flag: '--disable-slash-commands',
-    // Measured: `--mode plan --disable-slash-commands` makes the CLI warn that plan mode
-    // has no effect. Containment is not traded for isolation, so read-only stages go
-    // without it.
-    readOnlyToo: false,
+    /**
+     * **Now `true`, and the old `false` was the leak.** The warning that motivated it is
+     * real and specific: `--mode plan --disable-slash-commands` makes the CLI say plan
+     * mode has no effect. But this adapter never sends `--mode plan` — measured, that
+     * mode answers with a pointer to a file under `~/.gemini/…/brain/` rather than with
+     * the answer — so nothing was being traded. What the exemption bought instead was
+     * finding #8: skill expansion left `.atl/skill-registry.md` and 56 KB of cache inside
+     * the repository under test, from read-only stages, which are six of the nine.
+     *
+     * `--sandbox` rides along on those stages; see {@link AgyRunner.capabilities} for what
+     * it does and does not contain.
+     */
+    readOnlyToo: true,
     build: (proc: FakeProcessRunner, isolate?: boolean) =>
       new AgyRunner({
         id: 'agy',

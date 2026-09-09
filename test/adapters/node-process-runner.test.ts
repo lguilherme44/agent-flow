@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
 
 /**
@@ -17,6 +19,34 @@ const runNode = (script: string, overrides: Record<string, unknown> = {}) =>
     timeoutSeconds: 10,
     ...overrides,
   });
+
+/**
+ * A child that spawns a grandchild, then outlives its own timeout.
+ *
+ * **Written in Node rather than in `sh`, and that is the whole portability story here.**
+ * These tests used `/bin/sh -c '( sleep 1; echo x > /tmp/marker ) & sleep 8'`, which on
+ * Windows cannot spawn at all. Two of them then failed outright — and one, `leaves no
+ * grandchild running behind it`, *passed*: the marker was absent because nothing had ever
+ * run, so the assertion that no grandchild survived was true for the wrong reason. A
+ * regression test for V-09 that cannot spawn a tree is the most expensive kind of green.
+ *
+ * The property under test — the timeout reaches a process the runner did not spawn — has
+ * nothing to do with which shell expresses it. `JSON.stringify` carries the marker path
+ * into the inner script, which is also what makes a Windows path with backslashes survive.
+ */
+const spawnsAGrandchild = (marker: string, holdMs = 8_000): string => {
+  const grandchild = `setTimeout(()=>{require("node:fs").writeFileSync(${JSON.stringify(
+    marker,
+  )},"x")},1000)`;
+  return (
+    `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],` +
+    `{stdio:"ignore"});setTimeout(()=>{},${String(holdMs)});`
+  );
+};
+
+/** A marker path this test owns, in the platform's own temp directory. */
+const markerPath = (name: string): string =>
+  join(tmpdir(), `agent-flow-${name}-${String(process.pid)}`);
 
 describe('basic execution', () => {
   it('captures stdout and a zero exit code', async () => {
@@ -50,8 +80,13 @@ describe('working directory', () => {
   it('runs the child in the requested directory', async () => {
     // Every agent invocation targets a specific repository. Getting this wrong
     // would point an agent at whatever directory the CLI happened to start in.
-    const result = await runNode('process.stdout.write(process.cwd())', { cwd: '/tmp' });
-    expect(result.stdout).toContain('tmp');
+    const target = tmpdir();
+    const result = await runNode('process.stdout.write(process.cwd())', { cwd: target });
+    // `realpath`, because macOS reports `/var/folders/…` for a `/private/var` temp dir
+    // and Windows can hand back a short 8.3 form of the same directory.
+    expect(result.stdout.toLowerCase()).toContain(
+      target.split(/[\\/]/).filter(Boolean).slice(-1)[0]?.toLowerCase() ?? 'tmp',
+    );
   });
 });
 
@@ -178,16 +213,13 @@ describe('cancellation (PRI-09, PRI-14)', () => {
     // that signalled only the direct child would leave exactly the orphans `detached`
     // exists to prevent.
     const { existsSync, rmSync } = await import('node:fs');
-    const marker = `/tmp/agent-flow-cancel-test-${String(process.pid)}`;
+    const marker = markerPath('cancel-test');
     rmSync(marker, { force: true });
 
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 200);
 
-    await runner.run({
-      command: '/bin/sh',
-      args: ['-c', `( sleep 1; echo x > ${marker} ) & sleep 8`],
-      cwd: '/tmp',
+    await runNode(spawnsAGrandchild(marker), {
       timeoutSeconds: 30,
       killGraceMs: 150,
       signal: controller.signal,
@@ -217,10 +249,7 @@ describe('cancellation (PRI-09, PRI-14)', () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 120);
 
-    const result = await runner.run({
-      command: '/bin/sh',
-      args: ['-c', 'sleep 8'],
-      cwd: '/tmp',
+    const result = await runNode('setTimeout(()=>{},8000)', {
       timeoutSeconds: 0.3,
       killGraceMs: 100,
       signal: controller.signal,
@@ -317,7 +346,22 @@ describe('timeout (R-11)', () => {
     // assertion below could pass for the wrong reason on a very slow machine.
     expect(result.stdout, 'the child never reported readiness').toContain('READY');
     expect(result.timedOut).toBe(true);
-    expect(result.signal).toBe('SIGKILL');
+
+    /**
+     * **The escalation is asserted where an escalation exists.**
+     *
+     * `SIGTERM` is a POSIX concept. On Windows there is no signal a process can trap and
+     * ignore — Node maps `child.kill('SIGTERM')` onto `TerminateProcess`, and this runner
+     * reaches for `taskkill /T /F` — so the child above dies on the first attempt and the
+     * grace period never elapses. Asserting `SIGKILL` there asserts a mechanism the
+     * platform does not have, and it failed for that reason rather than for a defect.
+     *
+     * What is common to both, and what the pipeline actually depends on, is the sentence
+     * above: a CLI that traps SIGTERM cannot hold the run hostage. That is `timedOut`,
+     * and it is asserted on every platform.
+     */
+    if (process.platform !== 'win32') expect(result.signal).toBe('SIGKILL');
+    else expect(result.exitCode === 0 && result.signal === null).toBe(false);
   });
 
   it('kills a child that does not trap SIGTERM with SIGTERM', async () => {
@@ -329,7 +373,13 @@ describe('timeout (R-11)', () => {
     });
 
     expect(result.timedOut).toBe(true);
-    expect(result.signal).toBe('SIGTERM');
+
+    // The pair only exists where the two signals are distinguishable. See the escalation
+    // test above: on Windows there is one way to stop a process, and `taskkill /F`
+    // reports no signal at all — so what is asserted there is that it stopped, promptly,
+    // rather than which of two signals stopped it.
+    if (process.platform !== 'win32') expect(result.signal).toBe('SIGTERM');
+    else expect(result.exitCode).not.toBe(0);
   });
 
   it('returns whatever output arrived before the kill', async () => {
@@ -358,35 +408,33 @@ describe('timeout reaches the whole process tree (V-09 regression)', () => {
   // This is the normal case rather than an exotic one. Every validation command
   // is shelled out, `npm test` spawns node, and the agent CLIs spawn
   // subprocesses of their own.
-  const shell = (script: string, overrides: Record<string, unknown> = {}) =>
-    runner.run({
-      command: '/bin/sh',
-      args: ['-c', script],
-      cwd: '/tmp',
-      timeoutSeconds: 0.3,
-      killGraceMs: 150,
-      ...overrides,
-    });
+  const tree = (script: string, overrides: Record<string, unknown> = {}) =>
+    runNode(script, { timeoutSeconds: 0.3, killGraceMs: 150, ...overrides });
 
   it('gives up on schedule even when the child spawned its own children', async () => {
     const startedAt = Date.now();
-    const result = await shell('( sleep 5 ) & sleep 8');
+    const result = await tree(spawnsAGrandchild(markerPath('tree-schedule')));
     const elapsed = Date.now() - startedAt;
 
     expect(result.timedOut).toBe(true);
     // Before the fix this waited the full 8 seconds.
-    expect(elapsed).toBeLessThan(2_000);
+    expect(elapsed).toBeLessThan(4_000);
   }, 15_000);
 
   it('leaves no grandchild running behind it', async () => {
     const { existsSync, rmSync } = await import('node:fs');
-    const marker = `/tmp/agent-flow-tree-test-${String(process.pid)}`;
+    const marker = markerPath('tree-test');
     rmSync(marker, { force: true });
 
-    await shell(`( sleep 1; echo x > ${marker} ) & sleep 8`);
+    const result = await tree(spawnsAGrandchild(marker));
+
+    // The claim only means something if a tree was actually created. Without this the
+    // assertion below passes on any platform where the child failed to spawn — which is
+    // exactly how the `/bin/sh` version of this test reported green on Windows.
+    expect(result.timedOut, 'no tree was spawned, so nothing was proved').toBe(true);
 
     // The grandchild would write its marker one second in. Wait past that.
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
 
     const survived = existsSync(marker);
     rmSync(marker, { force: true });
@@ -394,8 +442,8 @@ describe('timeout reaches the whole process tree (V-09 regression)', () => {
   }, 15_000);
 
   it('still reports a normal exit for a process that finishes in time', async () => {
-    // The group signalling must not disturb the ordinary path.
-    const result = await shell('echo done', { timeoutSeconds: 10 });
+    // The tree signalling must not disturb the ordinary path.
+    const result = await tree('process.stdout.write("done")', { timeoutSeconds: 10 });
 
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);

@@ -4,6 +4,17 @@ import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { GitWorkspaces } from '../../src/adapters/git/git-workspaces.js';
 import { testGitCommand } from '../fakes/test-git-command.js';
 import { prepareWorkspace } from '../../src/app/workspace-preparation.js';
+import { shellInvocation } from '../../src/app/verification-commands.js';
+
+/**
+ * The shell the product actually spawns, asked rather than assumed.
+ *
+ * These assertions named `/bin/sh` outright, which stopped being true the day the
+ * product learned to run a configured command line on Windows. Reading it from the
+ * module under test keeps one answer to "what runs a command line" instead of two that
+ * agree on Linux and nowhere else.
+ */
+const SHELL = shellInvocation('noop').command;
 
 /**
  * AD-44 (AR-04) — one preparation sequence, used by everything that runs commands.
@@ -67,7 +78,7 @@ describe('the shared preparation sequence (AD-44)', () => {
 
     expect(outcome.ok).toBe(true);
     const commands = processRunner.calls.map((call) => call.command);
-    expect(commands.filter((command) => command !== 'git')).toEqual(['/bin/sh']);
+    expect(commands.filter((command) => command !== 'git')).toEqual([SHELL]);
   });
 
   it('reports the install command and its exit code on success', async () => {

@@ -151,22 +151,37 @@ export class AgyRunner extends BaseRunner {
        * The document is written to a file outside the workspace and the envelope carries a
        * sentence about it. A stage handed that gets a pointer, or nothing.
        *
-       * **And the other two modes do not contain writes.** Measured against a real file:
+       * **The rest, measured against a real file on `agy 1.1.27`.** Every row was executed;
+       * the last two are what this adapter now relies on, and the last one is why the
+       * value below is a compromise rather than a claim:
        *
-       * | invocation | answers inline | leaves the repo alone |
-       * |---|---|---|
-       * | `--mode accept-edits` | ✅ | ❌ overwrote `target.txt` |
-       * | `--mode accept-edits --sandbox` | ✅ | ❌ overwrote `target.txt` |
-       * | `--mode plan` | ❌ | — |
+       * | invocation | answers inline | blocks a shell write | blocks an edit-tool write |
+       * |---|---|---|---|
+       * | `--mode plan` | ❌ pointer into `~/.gemini/…/brain/` | — | — |
+       * | `--mode accept-edits` (± `--sandbox`) | ✅ | ❌ | ❌ |
+       * | no `--mode` — what this adapter used to send | ✅ | ❌ overwrote `target.txt` | ❌ |
+       * | `--sandbox`, read-only task | ✅ full answer | ✅ `denied_actions: [command]` | ❌ overwrote `target.txt` |
        *
-       * So this CLI has **no mode that both answers inline and refuses to modify the
-       * repository under test**, which is what a read-only stage needs. The old value was
-       * right for the wrong reason; this is the right reason.
+       * **So `--sandbox` is containment of the terminal, and only of the terminal.** It is
+       * sent on every read-only stage because it strictly narrows what a stage can do —
+       * the measured shell write stops, and a discovery-shaped prompt still comes back
+       * with a complete answer rather than the empty one `--mode plan` returns. What it
+       * does not stop is the model reaching for its file-editing tool, which was measured
+       * doing exactly that when asked to.
+       *
+       * **`true`, therefore, is a routing decision and not a containment guarantee.**
+       * `false` would bar this runner from six of the nine roles, which breaks the
+       * operator who has one agent — a case this product supports on purpose, degrading
+       * to a same-provider review and saying so on the artifact. The honest containment
+       * for that operator is a tree the stage may damage without consequence, and it is
+       * not built yet; until it is, this value says *may be routed here*, the flags say
+       * *with the terminal closed*, and neither says the repository cannot be touched.
+       * See TODO 6.1.
        *
        * What has not changed is that the criterion must be *one* criterion. `claude`'s
        * `--permission-mode plan` and `codex`'s `-s read-only` are genuine containment modes
        * that still return their answer; this CLI's `plan` is a different concept wearing
-       * the same word.
+       * the same word, and its `--sandbox` is half of one.
        */
       supportsReadOnly: true,
       supportsNonInteractive: true,
@@ -270,15 +285,16 @@ export class AgyRunner extends BaseRunner {
    * `--mode accept-edits --disable-slash-commands` warns about nothing, and `--mode plan`
    * alone warns about nothing.
    *
-   * The read-only branch below is therefore kept even though {@link AgyRunner.capabilities}
-   * now declares `supportsReadOnly: false`, which means the resolver refuses this runner for
-   * every read-only role and the branch cannot be reached through configuration. An adapter
-   * that behaved correctly only because of what a layer above it happens to allow is an
-   * adapter that breaks the day that layer changes.
+   * **The read-only branch sends both flags, and it used to send neither.** That was the
+   * measured leak of finding #8: skill expansion left `.atl/skill-registry.md` and 56 KB of
+   * cache inside the repository the run was judging, and read-only stages — six of the
+   * nine — were the ones running without the flag that turns it off. `--sandbox` joins it
+   * there because it is the one containment this CLI actually offers, and the pair warns
+   * about nothing: the plan-mode warning above is specific to `--mode plan`, which this
+   * adapter never sends.
    *
-   * A person who wants the personalisation gone from read-only stages too can turn the
-   * skill off in their own `agy` configuration. This product will not disarm the sandbox to
-   * do it for them.
+   * The write branch keeps `--disable-slash-commands` alone. A stage that is *supposed* to
+   * modify the repository gains nothing from closing the terminal it needs.
    *
    * **Taken on the CLI's word about skills, unlike the other two adapters' flags.** Those
    * were each verified by observing a behaviour change on the same prompt — a language that
@@ -288,7 +304,9 @@ export class AgyRunner extends BaseRunner {
    * measured is that the flag takes effect at all, which is the plan-mode warning above.
    */
   protected override isolationArgs(input: AgentRunInput): readonly string[] {
-    return input.permissions === 'read-only' ? [] : ['--disable-slash-commands'];
+    return input.permissions === 'read-only'
+      ? ['--sandbox', '--disable-slash-commands']
+      : ['--disable-slash-commands'];
   }
 
   /**

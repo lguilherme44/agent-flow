@@ -6,6 +6,17 @@ import { review, type RunActionDeps } from '../../src/app/run-actions.js';
 import { buildDag } from '../../src/core/dag.js';
 import type { ProcessResult, ProcessRunner, ProcessSpawnOptions } from '../../src/ports/index.js';
 import { makeWorktreeRun, type WorktreeRun } from '../fixtures/worktree-run.js';
+import { shellInvocation } from '../../src/app/verification-commands.js';
+
+/**
+ * The shell the product actually spawns, asked rather than assumed.
+ *
+ * These assertions named `/bin/sh` outright, which stopped being true the day the
+ * product learned to run a configured command line on Windows. Reading it from the
+ * module under test keeps one answer to "what runs a command line" instead of two that
+ * agree on Linux and nowhere else.
+ */
+const SHELL = shellInvocation('noop').command;
 
 /**
  * `agent-flow review`, driven through the real use case, over a real repository.
@@ -56,7 +67,7 @@ class RecordingProcessRunner implements ProcessRunner {
   async run(options: ProcessSpawnOptions): Promise<ProcessResult> {
     if (options.command === 'git') return this.real.run(options);
 
-    if (options.command === '/bin/sh') {
+    if (options.command === SHELL) {
       this.shellCwds.push(options.cwd);
       this.shellCommands.push(options.args.join(' '));
       return this.real.run(options);
@@ -295,6 +306,51 @@ describe('the verification workspace is prepared first (AR-04)', () => {
     const prepared = events.find((event) => event.type === 'workspace_prepared');
 
     expect(prepared?.detail).toMatchObject({ install: 'printf ok', exitCode: 0 });
+  });
+
+  /**
+   * The other half of AR-04, and the half that was told as a falsehood.
+   *
+   * A sequential run reviews the operator's own checkout, which holds the implementation
+   * as uncommitted changes — so `prepareWorkspace`'s opening `assert clean` would refuse
+   * the very work the review was called to judge, and no sequential run could ever reach
+   * Definition of Done. Skipping it there is right.
+   *
+   * What was wrong is what the skip *recorded*: `workspace_prepared` with
+   * `install: 'none configured'` for a project whose config configures `printf ok`. The
+   * audit trail is the surface a person reads when asking why a command behaved as it
+   * did, and this one answered with the opposite of the configuration.
+   */
+  it('says the working tree was not prepared, and does not call a configured install absent', async () => {
+    const { current, deps, runner } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: printf ok\n  test: cat one.txt\n',
+    );
+
+    const sequential = await current.store.createRun('another feature', () => ({
+      isolationMode: 'none' as const,
+    }));
+    await current.store.writeArtifact(sequential.runId, 'sdd', '# SDD\n');
+    await current.store.writeArtifact(sequential.runId, 'plan', JSON.stringify(PLAN));
+
+    const before = runner.shellCommands.length;
+    await review(deps, sequential.runId);
+
+    const events = await current.store.readEvents(sequential.runId);
+    const prepared = events.find((event) => event.type === 'workspace_prepared');
+
+    expect(prepared?.detail).toMatchObject({
+      workspace: 'checkout',
+      install: 'printf ok',
+      installRan: false,
+    });
+    // And it is a claim about behaviour, not only about wording: nothing installed.
+    expect(runner.shellCommands.slice(before).filter((line) => line.includes('printf ok'))).toEqual(
+      [],
+    );
+    expect(events.some((event) => event.type === 'workspace_preparation_failed')).toBe(false);
   });
 
   it('reports NOT_RUN rather than FAIL when the install fails', async () => {

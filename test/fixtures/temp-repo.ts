@@ -93,6 +93,18 @@ export async function makeTempRepo(): Promise<TempRepo> {
   // wrapper's `-c` now has to beat a *repository-level* setting, which outranks
   // any global one.
   userGit(['config', 'core.hooksPath', join(dir, '.git', 'hooks')]);
+  /**
+   * Pinned for the same reason as `core.hooksPath` above: a machine setting must not
+   * decide what these tests measure.
+   *
+   * Git for Windows defaults `core.autocrlf` to `true`, which rewrites every line ending
+   * on checkout. This suite creates worktrees and then asserts on `status --porcelain`,
+   * so with the default the very first `assert clean` of an isolated run refuses a tree
+   * nothing had touched — a preparation failure that describes the developer's Git
+   * installation and gets read as a verdict on the run. Repository-level, so it outranks
+   * whatever the machine says and changes nothing outside the temp directory.
+   */
+  userGit(['config', 'core.autocrlf', 'false']);
 
   const processRunner = new NodeProcessRunner();
   const fs = new NodeFileSystem();

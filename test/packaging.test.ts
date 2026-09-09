@@ -90,7 +90,11 @@ function buildOutputs(): string[] {
   const webOut = /outDir:\s*'([^']+)'/.exec(vite)?.[1];
   if (webOut !== undefined) outputs.push(`apps/web/${webOut}`);
 
-  expect(outputs, 'no build config declares an output directory').toHaveLength(2);
+  const deck = readFileSync(join(ROOT, 'apps/deck/vite.config.ts'), 'utf8');
+  const deckOut = /outDir:\s*'([^']+)'/.exec(deck)?.[1];
+  if (deckOut !== undefined) outputs.push(`apps/deck/${deckOut}`);
+
+  expect(outputs, 'no build config declares an output directory').toHaveLength(3);
   return outputs;
 }
 

@@ -821,7 +821,6 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
     it('handles non-Error thrown exceptions in discovery, health check, and inference safely', async () => {
       const stringThrowingDiscovery = {
         async discoverCandidates(): Promise<readonly string[]> {
-          // eslint-disable-next-line @typescript-eslint/only-throw-error
           throw 'Non-error string thrown in discovery';
         },
       };
@@ -835,7 +834,6 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
 
       const stringThrowingHealthModel = new FakeUtilityModel();
       stringThrowingHealthModel.healthCheck = async () => {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw 'Non-error string thrown in healthCheck';
       };
       const r2 = new RepositoryRetriever({
@@ -848,7 +846,6 @@ describe('RepositoryRetriever & Candidate Discovery (M3-04)', () => {
       expect(res2.reason).toContain('Non-error string thrown in healthCheck');
 
       const stringThrowingRunModel = new FakeUtilityModel().push(() => {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw 'Non-error string thrown in run';
       });
       const r3 = new RepositoryRetriever({

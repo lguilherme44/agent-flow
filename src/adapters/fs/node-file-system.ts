@@ -21,14 +21,45 @@ export class NodeFileSystem implements FileSystem {
 
     // Same directory as the target: rename is only atomic within a filesystem,
     // and a temp directory may well be on a different one.
-    const temp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+    const temp = join(
+      dirname(path),
+      `.${basename(path)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+    );
 
     await fs.writeFile(temp, content, 'utf8');
-    try {
-      await fs.rename(temp, path);
-    } catch (error) {
-      await fs.rm(temp, { force: true });
-      throw error;
+
+    // On Windows, rename can fail with EPERM, EBUSY, or EACCES if the target file
+    // already exists and is locked or briefly held open by a reader (e.g. UI watcher,
+    // antivirus, indexer). Retry with backoff, and fall back to copyFile + unlink if needed.
+    const maxAttempts = process.platform === 'win32' ? 10 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await fs.rename(temp, path);
+        return;
+      } catch (error) {
+        const err = error as { code?: string };
+        const isWindowsLock =
+          process.platform === 'win32' &&
+          (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES');
+
+        if (isWindowsLock && attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 20 * attempt));
+          continue;
+        }
+
+        if (isWindowsLock) {
+          try {
+            await fs.copyFile(temp, path);
+            await fs.rm(temp, { force: true });
+            return;
+          } catch {
+            // If copyFile also fails, proceed to cleanup and throw original error
+          }
+        }
+
+        await fs.rm(temp, { force: true });
+        throw error;
+      }
     }
   }
 
@@ -127,7 +158,8 @@ export class NodeFileSystem implements FileSystem {
 }
 
 function basename(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
+  const normalized = path.replace(/\\/g, '/');
+  return normalized.slice(normalized.lastIndexOf('/') + 1);
 }
 
 /**

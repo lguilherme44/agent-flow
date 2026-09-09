@@ -141,7 +141,7 @@ describe('the guarantee the rewrite must not have lost', () => {
     }
     fs.link('/wk/elsewhere', '/private/secrets');
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
     expect(found.skipped).toEqual([
@@ -155,7 +155,7 @@ describe('the guarantee the rewrite must not have lost', () => {
     fs.seed('/wk/.agent-flow/config.yaml', CONFIG);
     fs.link('/wk/near', '/wknight');
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk']);
     expect(found.skipped.map((entry) => entry.resolved)).toEqual(['/wknight']);
@@ -165,7 +165,7 @@ describe('the guarantee the rewrite must not have lost', () => {
     const fs = new InMemoryFileSystem();
     fs.seed('/wk/api/.agent-flow/config.yaml', CONFIG);
 
-    const found = await discoverProjects({ fs, roots: ['/wk/api'] });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk/api'] });
 
     expect(found.projects.map((project) => project.id)).toEqual(['api']);
   });

@@ -295,6 +295,17 @@ describe('an inherited GIT_EXEC_PATH does not choose which programs Git loads', 
   });
 });
 
+/**
+ * A path as this codebase compares them: `/`, on every platform.
+ *
+ * `NodeFileSystem.realPath` normalises deliberately — a containment check between one
+ * separator and the other decides that nothing is inside anything, which fails safe and
+ * silently wrong — and Git for Windows reports `C:/Users/…` in `worktree list` for the
+ * same reason. The expectations below were built with `join`, so on Windows they compared
+ * `C:\…` against `C:/…` and reported the ownership rule as broken when it was working.
+ */
+const asCompared = (path: string): string => path.replace(/\\/g, '/');
+
 describe('worktree ownership is decided on real locations (S-4)', () => {
   it('does not own a worktree whose path escapes the root through a symlink', async () => {
     repoA = await makeTempRepoWithCommit();
@@ -328,7 +339,7 @@ describe('worktree ownership is decided on real locations (S-4)', () => {
     expect(listed.ok).toBe(true);
     if (!listed.ok) return;
     // Git still reports the path it recorded, and it still starts with the root.
-    expect(listed.value.some((entry) => entry.path === registered)).toBe(true);
+    expect(listed.value.some((entry) => entry.path === asCompared(registered))).toBe(true);
     // A `startsWith` check would have called this ours and handed it to
     // `git worktree remove`, which would have removed a directory outside the
     // root that Agent Flow never created.
@@ -355,7 +366,7 @@ describe('worktree ownership is decided on real locations (S-4)', () => {
     expect(owned.ok).toBe(true);
     if (!owned.ok) return;
     expect(owned.value).toHaveLength(1);
-    expect(owned.value[0]?.path).toBe(join(repoA.worktreeRoot, ...location.segments));
+    expect(owned.value[0]?.path).toBe(asCompared(join(repoA.worktreeRoot, ...location.segments)));
   });
 
   it('drops a registered worktree whose path no longer resolves', async () => {
@@ -386,8 +397,33 @@ describe('worktree ownership is decided on real locations (S-4)', () => {
   });
 });
 
+/**
+ * Whether this platform can hold the attack these tests are about.
+ *
+ * The forgery needs a *directory whose name contains a newline*, and Win32 rejects every
+ * control character in a filename — `git worktree add` fails at creation, so the three
+ * tests below died setting up a state that platform cannot reach. Skipping them there is
+ * right; skipping them silently is not, which is what the assertion in the guard test is
+ * for: it proves the premise rather than assuming it.
+ */
+const NEWLINE_PATHS_EXIST = process.platform !== 'win32';
+
 describe('a forged worktree record is refused rather than parsed (§24)', () => {
-  it('fails closed when a registered path contains a newline that forges a record', async () => {
+  it.runIf(!NEWLINE_PATHS_EXIST)(
+    'is moot on this platform, because it refuses to create such a path at all',
+    async () => {
+      repoA = await makeTempRepoWithCommit();
+      const hostile = join(repoA.home, 'inj\nworktree /tmp/agent-flow-injected');
+
+      // The skip below is a claim about the platform. This is the claim, executed.
+      expect(() => mkdirSync(hostile, { recursive: true })).toThrow();
+      expect(existsSync(hostile)).toBe(false);
+    },
+  );
+
+  it.runIf(NEWLINE_PATHS_EXIST)(
+    'fails closed when a registered path contains a newline that forges a record',
+    async () => {
     repoA = await makeTempRepoWithCommit();
 
     // Probed on Git 2.52.0: the non-`-z` porcelain format cannot represent this,
@@ -409,7 +445,7 @@ describe('a forged worktree record is refused rather than parsed (§24)', () => 
     expect(owned.ok).toBe(false);
   });
 
-  it('still reads an ordinary listing after the hostile worktree is gone', async () => {
+  it.runIf(NEWLINE_PATHS_EXIST)('still reads an ordinary listing after the hostile worktree is gone', async () => {
     // So the failure above is about the forged frame and not about the parser
     // having become unable to read anything.
     repoA = await makeTempRepoWithCommit();
@@ -422,7 +458,7 @@ describe('a forged worktree record is refused rather than parsed (§24)', () => 
     expect((await repoA.workspaces.listWorktrees({ cwd: repoA.dir })).ok).toBe(true);
   });
 
-  it('leaves a plain newline path out of ownership rather than truncating it into one', async () => {
+  it.runIf(NEWLINE_PATHS_EXIST)('leaves a plain newline path out of ownership rather than truncating it into one', async () => {
     // The case the framing check cannot see: a newline with nothing that looks
     // like an attribute after it simply arrives truncated. `realPath` is what
     // closes it — the truncated string does not name a directory that exists.

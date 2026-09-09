@@ -115,7 +115,16 @@ export const RECURRENCES = ['per-change', 'per-change-and-weekly', 'per-release'
  * from "CI installs dependencies". Anything not here and not `npm run gate:<lane>` is a
  * second gate list forming, which is the failure this whole file exists to prevent.
  */
-export const INFRASTRUCTURE = ['npm ci'];
+export const INFRASTRUCTURE = [
+  'npm ci',
+  // Windows only, and a property of the checkout rather than of the code. Git's default
+  // `core.autocrlf=true` on that platform rewrites every line ending on checkout, and this
+  // suite creates worktrees and then asserts on `status --porcelain`: the first
+  // assert-clean of every isolated run would refuse a tree nothing had touched. Declared
+  // here rather than tolerated in the workflow, because the point of this list is that a
+  // reader can see everything CI runs that is not a gate.
+  'git config --global core.autocrlf false',
+];
 
 /**
  * Every gate, and what its result is worth.

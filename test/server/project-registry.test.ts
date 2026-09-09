@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { posix } from 'node:path';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import {
   assignIds,
@@ -28,7 +29,7 @@ describe('discoverProjects', () => {
   it('finds a project in the root itself', async () => {
     const fs = world(['/wk/api']);
 
-    const found = await discoverProjects({ fs, roots: ['/wk/api'] });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk/api'] });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
@@ -36,7 +37,7 @@ describe('discoverProjects', () => {
   it('finds several under one root', async () => {
     const fs = world(['/wk/api', '/wk/web']);
 
-    const found = await discoverProjects({ fs, roots: ['/wk'] });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'] });
 
     expect(found.projects.map((project) => project.id)).toEqual(['api', 'web']);
   });
@@ -47,7 +48,7 @@ describe('discoverProjects', () => {
     const fs = world(['/wk/api']);
     fs.seed('/wk/leftover/.agent-flow/runs/AF-2026-001/state.json', '{}');
 
-    const found = await discoverProjects({ fs, roots: ['/wk'] });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'] });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
@@ -57,15 +58,15 @@ describe('discoverProjects', () => {
     // and reads places nobody asked it to.
     const fs = world(['/wk/a/b/c/deep']);
 
-    expect((await discoverProjects({ fs, roots: ['/wk'], depth: 2 })).projects).toEqual([]);
-    expect((await discoverProjects({ fs, roots: ['/wk'], depth: 4 })).projects).toHaveLength(1);
+    expect((await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 2 })).projects).toEqual([]);
+    expect((await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 4 })).projects).toHaveLength(1);
   });
 
   it('never descends into a dependency directory', async () => {
     const fs = world(['/wk/api']);
     fs.seed('/wk/node_modules/thing/.agent-flow/config.yaml', CONFIG);
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 4 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 4 });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
@@ -73,7 +74,7 @@ describe('discoverProjects', () => {
   it('descends past a project, for a monorepo holding initialised packages', async () => {
     const fs = world(['/wk/mono', '/wk/mono/packages/api']);
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 4 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 4 });
 
     expect(found.projects.map((project) => project.path)).toEqual([
       '/wk/mono',
@@ -84,7 +85,7 @@ describe('discoverProjects', () => {
   it('returns nothing rather than failing on an unreadable root', async () => {
     const fs = new InMemoryFileSystem();
 
-    expect((await discoverProjects({ fs, roots: ['/nowhere'] })).projects).toEqual([]);
+    expect((await discoverProjects({ fs, path: posix, roots: ['/nowhere'] })).projects).toEqual([]);
   });
 });
 
@@ -97,7 +98,7 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
     const fs = world(['/wk/api', '/private/secrets']);
     fs.link('/wk/elsewhere', '/private/secrets');
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
     expect(found.skipped).toEqual([
@@ -112,7 +113,7 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
     const fs = world(['/wk/repos/api']);
     fs.link('/wk/current', '/wk/repos/api');
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
 
     expect(found.skipped).toEqual([]);
     // One project, not two. The walk keys on the resolved path, so the same
@@ -125,7 +126,7 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
     const fs = world(['/wk/api']);
     fs.link('/wk/api/self', '/wk');
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 6 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 6 });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
   });
@@ -138,7 +139,7 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
     const fs = world(['/real/wk/api']);
     fs.link('/home/me/wk', '/real/wk');
 
-    const found = await discoverProjects({ fs, roots: ['/home/me/wk'], depth: 2 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/home/me/wk'], depth: 2 });
 
     expect(found.projects.map((project) => project.id)).toEqual(['api']);
     expect(found.skipped).toEqual([]);
@@ -150,7 +151,7 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
     fs.link('/wk/near', '/wknight');
     fs.seed('/wk/.agent-flow/config.yaml', CONFIG);
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 3 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
 
     expect(found.projects.map((project) => project.path)).toEqual(['/wk']);
     expect(found.skipped.map((entry) => entry.resolved)).toEqual(['/wknight']);
@@ -159,7 +160,7 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
   it('caps a depth beyond the bound rather than honouring it', async () => {
     const fs = world(['/wk/a/b/c/d/e/f/g/deep']);
 
-    const found = await discoverProjects({ fs, roots: ['/wk'], depth: 99 });
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 99 });
 
     expect(found.projects).toEqual([]);
   });
