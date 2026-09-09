@@ -357,16 +357,26 @@ progress *is*. There is no second channel reporting it.
 
 ### What it cannot change
 
-- **`pause`, `resume`, `cancel`** — not implemented. The core has no semantics for any
-  of the three: there is no paused or cancelled run status, and the scheduler has no
-  way to be interrupted between tasks. See
-  [`pause-resume-cancel-design.md`](pause-resume-cancel-design.md).
-- **Configuration** — `/settings` reads. Writing a merged value back means deciding
-  which of three layers it belongs in, and a page that guessed would move a project's
-  override into the global file, silently changing every other project on the machine.
-  See [`config-write-design.md`](config-write-design.md).
-- **Adding a project** — the button exists, disabled, because §68 lists it. Adding one
-  means writing to the registry.
+Two entries here described the product as it was when this page was written, and both
+stopped being true without the page noticing. They are corrected rather than deleted,
+because "the dashboard cannot do X" is the kind of claim that makes somebody stop looking
+for X — the same defect this document spends a section on further up.
+
+- **`pause`, `resume`, `cancel`** — **implemented, and not in this dashboard.** The core
+  grew what this entry said it lacked: `cancelled` is a terminal run status, `pausedAt`
+  records what an operator asked for as an axis separate from what the run is doing, and
+  `run_cancelled` is an event. The three routes are live and **Deck** has the buttons.
+  This bundle still does not, which is a gap in this bundle and no longer a gap in the
+  product. [`pause-resume-cancel-design.md`](pause-resume-cancel-design.md) is the design
+  it was built from.
+- **Configuration** — **writable, and not from here.** `/settings` reads. The layer
+  question this entry raises is answered by the config editor — the scope is chosen
+  explicitly, validated, and applied against an expected revision — and Deck's `/crew`
+  page is where that happens. See [`config-write-design.md`](config-write-design.md).
+- **Adding a project** — still true. The button exists, disabled, because §68 lists it.
+  Adding one means writing to the registry, and no route does.
+- **`doctor`, `clean`** — still true, and true of Deck too. There is no HTTP route for
+  either, so "can this machine work" is a question only the CLI can be asked.
 
 ### What an isolated run shows
 

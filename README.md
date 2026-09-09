@@ -81,12 +81,23 @@ and in our first real run, that is exactly what caught a bad plan.
 
 ```text
 version          v0.1.0
-MVP 1            complete  (Implementation Spec v3)
-MVP 2            complete  — Safe Parallel Execution
-  items          M2-00 … M2-12, all closed
+MVP 1            complete  — the execution foundation
+MVP 2            complete  — safe parallel execution
+MVP 3            complete  — context intelligence, advisory local model
+M4 … M7          complete  — collaboration, teams, review gates, forge delivery
+M8               complete  — control plane and operational kanban
+AR               in progress — autonomous execution & recovery
+  landed         AR-00 … AR-06, AR-08, AR-09; recovery.enabled ships true
+  open           AR-07 cross-surface pin · AR-10 live benchmark
 parallelism      up to 8 tasks at once, in worktree mode only
-npm              not published; install from a checkout
+npm              not published; `npm run install:global` from a checkout
 ```
+
+**This block was three milestones behind the code.** It stopped at MVP 2 while MVP 3 and
+M4 … M8 were all built and dogfooded — the normative account is
+[`docs/roadmap.md`](docs/roadmap.md), and where that and this disagree, the roadmap wins.
+Two things ship deliberately **off**: M4's agent-to-agent channel (`enabled: false`), and
+every remote write the forge can make.
 
 **Parallel execution is a feature now, and only under isolation.** With
 `git.useWorktrees: true`, each task attempt runs in its own locked Git worktree on
@@ -140,8 +151,11 @@ Full picture: [`docs/roadmap.md`](docs/roadmap.md). Normative source:
 | A shared blackboard whose entries are never silently overwritten | Available — opt-in |
 | Team context in an implementation prompt, byte-bounded and attributed | Available — opt-in |
 | A handoff that changes who *executes* a task | Available — opt-in twice, `collaboration.handoffsReassignExecution` |
-| `pause` / `resume` / `cancel` | Available |
-| Configuration writes from the dashboard | Designed, not built |
+| `pause` / `resume` / `cancel` | Available — CLI and Deck |
+| Configuration writes from the dashboard | Available — Deck's `/crew`, scoped and revision-checked |
+| Review findings, delivery record and artifacts on the dashboard | Available — Deck's run page |
+| Analytics, per-run telemetry and prompts on the dashboard | `--classic` only |
+| `doctor`, `init` and `clean` from the dashboard | Not built — no HTTP route exists |
 | Remote or distributed execution | Out of scope for MVP 2 |
 
 ---
@@ -347,11 +361,37 @@ git clone https://github.com/lguilherme44/agent-flow
 cd agent-flow
 
 npm install
-npm run build
-npm run build:web
-
-npm install -g "$(npm pack | tail -1)"
+npm run install:global
 ```
+
+`install:global` builds all three bundles, packs, installs the tarball, deletes it, and
+then asks the **installed** command what version it is — because `npm install -g` exits 0
+whether or not the binary ended up on your PATH, and whether or not an older global is
+still answering ahead of it. It runs on macOS and Windows, being Node rather than shell.
+
+`--dry-run` builds and packs without installing.
+
+<details>
+<summary>What this replaced, and why the old lines were wrong</summary>
+
+The previous instructions were `npm run build`, `npm run build:web`, then
+`npm install -g "$(npm pack | tail -1)"`. Both halves failed quietly.
+
+They never ran `build:deck`, so the global install carried no Deck bundle and
+`agent-flow ui` served the previous dashboard instead — silently, because falling back is
+what the server is *supposed* to do when a bundle is missing. The section above this one
+says `ui` opens Deck, and for anyone who followed these instructions it did not.
+
+And `$(… | tail -1)` is `sh`, so there was no documented way to install on Windows at
+all. `tail -1` is also the wrong way to read `npm pack` even where it runs: npm prints
+notices to stdout, and the last line is not reliably the filename. The script asks for
+`--json`.
+
+</details>
+
+After `git pull`, run `npm install && npm run install:global` again. There is no watch
+mode for the global install, and a stale global that reports the right version is the
+confusing case this section exists to avoid.
 
 ## Quick start
 
@@ -380,8 +420,17 @@ agent-flow ui ~/wk
 a run page built around a *recorder* — drag the playhead back through the audit log and the
 graph, the task and the feed show what was true at that instant. A feature can be started
 from the page too — **New feature** goes through the same use case `agent-flow feature`
-does — and the final review is one button on the run that is waiting for it. The previous
-dashboard is one flag away, `agent-flow ui --classic`, and reads the same API.
+does — and the final review is one button on the run that is waiting for it.
+
+Below the recorder is the **outcome**: what the reviewers found and which gates hold, the
+branch and pull request and the forge's own checks, and the seven artifacts a run can
+write, read as text. That is the end of a run, and for one release it was reachable only
+from the previous dashboard.
+
+Two things are still only there, `agent-flow ui --classic`, and it reads the same API:
+**analytics** (duration per stage, model usage, outcomes, context telemetry) and
+**prompts**. Three things are in neither, because no HTTP route exists for them: `doctor`,
+`init` and `clean`.
 
 Walked through with a real four-task feature, a DAG and the artifacts it produces:
 [`docs/example-walkthrough.md`](docs/example-walkthrough.md).
@@ -792,9 +841,12 @@ Not a roadmap — what is true today.
 - **Local only.** Loopback by default, no authentication, no cloud control plane. Anyone
   who can reach the port can approve a plan and start a run.
 - **Not on npm.** No published package and no GitHub release; install from a checkout.
-- **Worktree mode is unvalidated on Windows** — no CI job, and the process timeout
-  cannot signal a process tree there, so a CLI that spawns children can outlive its
-  timeout.
+- **Windows runs the node gate in CI, and nothing beyond it.** `check-windows` runs the
+  same `gate:node` lane as Linux, and the process timeout reaches a whole tree there via
+  `taskkill /T /F` — the gap where a CLI that spawns children outlived its timeout is
+  closed. What has no Windows job is the browser E2E and the visual set, whose baselines
+  are per platform; and no live run of the full workflow against real coding CLIs has been
+  measured there.
 - **Visual baselines are per platform.** darwin and Linux sets are both committed and
   never compared against each other; font rasterisation differs.
 - **A lock claim can be unreadable under contention.** Mutual exclusion is unaffected,
@@ -987,16 +1039,24 @@ npm run check          # the node lane only — and it says what it did not run
 
 npm run dev:deck       # Deck against a running `agent-flow ui`, on :4784
 npm run dev:web        # the previous dashboard against the same server, on :4783
+
+npm run install:global # all three builds, packed, installed, and the binary asked who it is
 ```
 
 Once built, the CLI runs from the checkout as `node dist/bin/agent-flow.js`, or
-`npm link` it and use `agent-flow` as documented above.
+`npm link` it and use `agent-flow` as documented above. `install:global` is the third
+option and the one that exercises what a user would get: it goes through `npm pack`, so a
+`files` entry that is wrong fails here rather than for somebody else.
 
 ## Tests
 
 ```bash
 npm run verify                  # the whole locally required contract, cheapest lane first
 npm run verify:release          # the same, plus what must be green before publishing
+
+npm run test:fast               # everything that spawns nothing — ~3 900 tests, ~140s
+npm run test:subprocess         # the tests that run real Git and real children
+npm run test                    # both, in that order
 
 npm run gate:node               # types, lint, Vitest, dashboard unit, both builds
 npm run gate:browser            # Playwright, through the real local server
@@ -1026,6 +1086,21 @@ in CI.
 isolation, `write-tree`, `commit-tree`, merges, ancestry, cleanup — is tested against
 real repositories in temporary directories, under a temporary home. Platform
 differences in worktree behaviour are exactly the class of thing only real Git catches.
+
+**And that is why there are two lanes.** A pure test finishes in single-digit
+milliseconds; one that checks out a repository, installs into it and merges a marker
+costs eleven seconds, and more on Windows, where spawning a process is far more
+expensive. One `testTimeout` over both is either too tight for the second or meaningless
+for the first — measured, it was too tight: a clean Windows run reported **129 timeouts
+at 30 s**, every one of them in a test that spawns something and every one green when its
+file ran alone. The lanes get 30 s and 120 s. **No assertion was relaxed to arrive at
+either number**, and a deadlock still fails just as loudly, ninety seconds later.
+
+Which file is in which lane is *derived*, in [`vitest.lanes.ts`](vitest.lanes.ts), from
+what the file imports — a hand-written list is the thing that rots, and the next test to
+grow a subprocess would land in the tight lane and go red on somebody else's machine
+months later. `test/architecture.test.ts` fails if the predicate stops matching its
+subjects, if the two lanes stop covering every file, or if coverage stops reading both.
 
 [`docs/testing.md`](docs/testing.md) explains what each layer can and cannot prove,
 including why the gsd-browser smoke does not replace Playwright and why it runs locally

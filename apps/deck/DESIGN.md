@@ -66,9 +66,22 @@ than its word drops the word and keeps the colour (`@container`).
 | | |
 |---|---|
 | `/` | Stats · needs-you queue (folded to six) · one lane per project |
-| `/p/<project>/runs/<run>` | Header (id, runtime, three progress axes, the tape, the actions the server offers) · this run's attention · **recorder** · graph / task / log |
+| `/p/<project>/runs/<run>` | Header (id, runtime, three progress axes, the tape, the actions the server offers) · this run's attention · **recorder** · graph / task / log · **outcome** |
 | `/runs` | History, filtered locally |
 | `/crew` | Runner health · routing by role |
+
+**The outcome panel is the end of the run**, and the recorder is the middle of it. Three
+tabs over three projections the server already had and Deck did not read: `review`
+(threads, findings, gates — `unsatisfiedGates` arrives answered, so the panel never
+recomputes `required && status !== 'passed'`), `delivery` (branch, pull request, the
+forge's own checks), and `artifacts` (the seven a run can write, listed by the server and
+read as text — never as markup, because a runner's output must not borrow the page's
+authority).
+
+`AttentionFocus` decides which tab a queue row opens. The projection has emitted a focus
+per item since M8 and Deck read none of it, so every non-acting row selected a task and
+stopped — the same defect the previous dashboard's `?panel=` had for two milestones. A
+field nobody reads fails no compiler and no assertion.
 
 A run is always addressed with its project. Run ids restart per project per year, and
 `AF-2026-001` exists in several repositories on the same machine. `?task=` and `?at=` ride
@@ -87,9 +100,18 @@ along, so a moment in a run is a link.
 
 ## What it does not do
 
-- Pause, resume, cancel: the server has routes; the core has no semantics for them yet.
-- Configuration writes, adding a project: unchanged from the previous dashboard.
-- Analytics and prompts pages: still in the previous dashboard, one flag away.
+- **Analytics and per-run telemetry**: `/analytics` and `/runs/:id/telemetry` are served
+  and Deck renders neither. Still in the previous dashboard, one flag away.
+- **Prompts**: `/prompts` likewise.
+- **Team and collaboration**: `/team` and `/collaboration` are served; M4 ships off, so
+  there is usually nothing to draw, which is why this is last rather than absent.
+- **`doctor`, `init`, `clean`**: no HTTP route exists for any of the three. Adding a
+  project to the registry and asking whether this machine can work are still CLI-only,
+  and that is a server gap before it is a Deck one.
+
+Pause, resume and cancel *are* here — the core grew a terminal `cancelled` status, a
+`pausedAt` and a `run_cancelled` event, and the three buttons are on the run header.
+`docs/web-ui.md` still says otherwise about the previous dashboard.
 
 ## Working on it
 

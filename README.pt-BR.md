@@ -81,12 +81,23 @@ e na nossa primeira execução real foi exatamente isso que pegou um plano ruim.
 
 ```text
 versão           v0.1.0
-MVP 1            completo  (Implementation Spec v3)
-MVP 2            completo  — Safe Parallel Execution
-  itens          M2-00 … M2-12, todos fechados
+MVP 1            completo  — a fundação de execução
+MVP 2            completo  — execução paralela segura
+MVP 3            completo  — inteligência de contexto, modelo local consultivo
+M4 … M7          completo  — colaboração, times, gates de review, entrega no forge
+M8               completo  — control plane e kanban operacional
+AR               em andamento — execução autônoma e recuperação
+  entregue       AR-00 … AR-06, AR-08, AR-09; recovery.enabled sai como true
+  aberto         AR-07 pin entre superfícies · AR-10 benchmark ao vivo
 paralelismo      até 8 tasks ao mesmo tempo, só no modo worktree
-npm              não publicado; instale a partir de um checkout
+npm              não publicado; `npm run install:global` a partir de um checkout
 ```
+
+**Este bloco estava três milestones atrás do código.** Parava no MVP 2 enquanto o MVP 3 e
+os M4 … M8 já estavam construídos e dogfooded — o relato normativo é o
+[`docs/roadmap.md`](docs/roadmap.md), e onde ele e este arquivo discordarem, o roadmap
+vence. Duas coisas saem **desligadas** de propósito: o canal agente-a-agente do M4
+(`enabled: false`) e toda escrita remota que o forge sabe fazer.
 
 **Execução paralela agora é feature, e só sob isolamento.** Com
 `git.useWorktrees: true`, cada attempt de task roda no seu próprio worktree Git travado,
@@ -140,9 +151,48 @@ Quadro completo: [`docs/roadmap.md`](docs/roadmap.md). Fonte normativa:
 | Blackboard compartilhado cujas entradas nunca são sobrescritas em silêncio | Disponível — opt-in |
 | Contexto de time no prompt de implementação, limitado em bytes e atribuído | Disponível — opt-in |
 | Handoff que muda quem *executa* uma task | Disponível — opt-in duas vezes, `collaboration.handoffsReassignExecution` |
-| `pause` / `resume` / `cancel` | Disponível |
-| Escrita de configuração pelo dashboard | Desenhado, não construído |
+| `pause` / `resume` / `cancel` | Disponível — CLI e Deck |
+| Escrita de configuração pelo dashboard | Disponível — `/crew` do Deck, com escopo e checagem de revisão |
+| Findings do review, registro de entrega e artefatos no dashboard | Disponível — página de run do Deck |
+| Analytics, telemetria por run e prompts no dashboard | Só no `--classic` |
+| `doctor`, `init` e `clean` pelo dashboard | Não construído — não existe rota HTTP |
 | Execução remota ou distribuída | Fora do escopo do MVP 2 |
+
+---
+
+## Parando um run
+
+Duas operações, e elas não são a mesma.
+
+```bash
+agent-flow pause          # para de começar trabalho; a task em voo termina
+agent-flow resume         # tira a pausa e segue
+agent-flow cancel --yes   # encerra, mata os agentes, preserva tudo
+```
+
+**Pause é cooperativo.** Ele registra um pedido e retorna. O scheduler lê esse pedido no
+topo do loop de dispatch, *entre* tasks — nunca durante uma, porque o arquivo de resultado
+de uma task é escrito uma única vez no fim, e cortar no meio jogaria fora trabalho já
+pago. Então o relato é "pausando…", depois "pausado", e um `agent-flow run` digitado
+depois é recusado com o `resume` como saída. O pedido está em disco, então ele vale entre
+processos: pause num terminal, e o run no outro encontra a pausa.
+
+**Cancel não é.** Ele termina os process groups inteiros dos agentes em execução, move as
+tasks que estavam rodando para `interrupted`, e deixa o run num status terminal
+`cancelled` que não é nem `completed` nem `failed` — reportar a decisão de um operador
+como falha faria toda superfície descrever uma escolha como defeito.
+
+**Cancel não apaga nada.** Nem a integration branch, nem os worktrees que falharam, nem um
+único artefato de attempt. Um run cancelado é justamente o que você mais provavelmente vai
+querer ler. Limpar continua sendo um ato separado e deliberado: `agent-flow clean`.
+
+O que nenhum dos dois consegue é des-editar arquivos. No modo worktree as edições de uma
+task cancelada ficam confinadas ao workspace dela e o seu checkout fica intocado, como
+sempre; sem worktrees, uma task cancelada deixa a working tree onde o agente chegou, e a
+confirmação diz isso com essas palavras.
+
+Os três também estão no Deck, no cabeçalho da run. O `docs/web-ui.md` dizia que não
+estavam — ele descrevia o produto de quando a página foi escrita.
 
 ---
 
@@ -312,11 +362,37 @@ git clone https://github.com/lguilherme44/agent-flow
 cd agent-flow
 
 npm install
-npm run build
-npm run build:web
-
-npm install -g "$(npm pack | tail -1)"
+npm run install:global
 ```
+
+O `install:global` constrói os três bundles, empacota, instala o tarball, apaga o tarball
+e então pergunta ao comando **instalado** qual versão ele é — porque `npm install -g` sai
+com 0 tendo ou não o binário caído no seu PATH, e tendo ou não um global antigo
+respondendo na frente dele. Roda no macOS e no Windows, por ser Node em vez de shell.
+
+`--dry-run` constrói e empacota sem instalar.
+
+<details>
+<summary>O que isso substituiu, e por que as linhas antigas estavam erradas</summary>
+
+As instruções anteriores eram `npm run build`, `npm run build:web` e
+`npm install -g "$(npm pack | tail -1)"`. As duas metades falhavam em silêncio.
+
+Nunca rodavam `build:deck`, então a instalação global não levava o bundle do Deck e o
+`agent-flow ui` servia o dashboard anterior — em silêncio, porque cair para o fallback é
+exatamente o que o servidor **deve** fazer quando falta um bundle. A seção acima desta diz
+que o `ui` abre o Deck, e para quem seguiu estas instruções ele não abria.
+
+E `$(… | tail -1)` é `sh`, então não havia forma documentada de instalar no Windows. O
+`tail -1` também é a forma errada de ler o `npm pack` mesmo onde ele roda: o npm imprime
+avisos no stdout, e a última linha não é confiavelmente o nome do arquivo. O script pede
+`--json`.
+
+</details>
+
+Depois de um `git pull`, rode `npm install && npm run install:global` de novo. Não existe
+watch mode para a instalação global, e um global velho que reporta a versão certa é
+justamente o caso confuso que esta seção existe para evitar.
 
 ## Primeiros passos
 
@@ -345,8 +421,17 @@ agent-flow ui ~/wk
 projeto, e uma página de run construída em volta de um *gravador* — arraste o playhead para
 trás pelo log de auditoria e o grafo, a task e o feed mostram o que era verdade naquele
 instante. Uma feature também nasce pela tela — **New feature** passa pelo mesmo use case que
-`agent-flow feature` — e o review final é um botão na run que está esperando por ele. O
-dashboard anterior fica a uma flag de distância, `agent-flow ui --classic`, e lê a mesma API.
+`agent-flow feature` — e o review final é um botão na run que está esperando por ele.
+
+Embaixo do gravador fica o **desfecho**: o que os reviewers acharam e quais gates
+sustentam, a branch e o pull request e os checks do próprio forge, e os sete artefatos que
+uma run pode escrever, lidos como texto. Isso é o fim de uma run, e por um release inteiro
+só dava para alcançar pelo dashboard anterior.
+
+Duas coisas continuam só lá, `agent-flow ui --classic`, e ele lê a mesma API:
+**analytics** (duração por stage, uso por modelo, desfechos, telemetria de contexto) e
+**prompts**. Três coisas não estão em nenhum dos dois, porque não existe rota HTTP para
+elas: `doctor`, `init` e `clean`.
 
 Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela produz:
 [`docs/example-walkthrough.md`](docs/example-walkthrough.md) (em inglês).
@@ -960,16 +1045,24 @@ npm run check          # só a lane node — e ela diz o que NÃO rodou
 
 npm run dev:deck       # Deck contra um `agent-flow ui` rodando, em :4784
 npm run dev:web        # o dashboard anterior contra o mesmo servidor, em :4783
+
+npm run install:global # os três builds, empacotados, instalados, e o binário perguntado quem é
 ```
 
 Depois do build, a CLI roda do próprio checkout como `node dist/bin/agent-flow.js`, ou
-faça `npm link` e use `agent-flow` como documentado acima.
+faça `npm link` e use `agent-flow` como documentado acima. O `install:global` é a terceira
+opção e a que exercita o que um usuário receberia: passa pelo `npm pack`, então uma
+entrada errada em `files` falha aqui em vez de falhar para outra pessoa.
 
 ## Testes
 
 ```bash
 npm run verify                  # o contrato local inteiro, da lane mais barata para a mais cara
 npm run verify:release          # o mesmo, mais o que precisa estar verde antes de publicar
+
+npm run test:fast               # tudo que não spawna nada — ~3 900 testes, ~140s
+npm run test:subprocess         # os testes que rodam Git de verdade e filhos de verdade
+npm run test                    # os dois, nessa ordem
 
 npm run gate:node               # tipos, lint, Vitest, unitários do dashboard, os dois builds
 npm run gate:browser            # Playwright, atravessando o servidor local real
@@ -1001,6 +1094,23 @@ de hooks, `write-tree`, `commit-tree`, merges, ancestralidade, limpeza — é te
 repositórios reais em diretórios temporários, sob um home temporário. Diferenças de
 plataforma no comportamento de worktree são exatamente a classe de coisa que só Git real
 pega.
+
+**E é por isso que existem duas lanes.** Um teste puro termina em milissegundos de um
+dígito; um que faz checkout de um repositório, instala dentro dele e mergeia um marker
+custa onze segundos — e mais no Windows, onde spawnar processo é bem mais caro. Um
+`testTimeout` só para os dois é ou apertado demais para o segundo ou sem significado para
+o primeiro, e medido ele estava apertado demais: uma rodada limpa no Windows reportou
+**129 timeouts em 30 s**, todos em teste que spawna alguma coisa e todos verdes quando o
+arquivo rodava sozinho. As lanes recebem 30 s e 120 s. **Nenhuma asserção foi afrouxada
+para chegar a qualquer um dos dois números**, e um deadlock continua falhando igualmente
+alto, noventa segundos depois.
+
+Qual arquivo vai para qual lane é *derivado*, no [`vitest.lanes.ts`](vitest.lanes.ts), do
+que o arquivo importa — uma lista escrita à mão é o que apodrece, e o próximo teste a
+ganhar um subprocesso cairia na lane apertada e ficaria vermelho na máquina de outra
+pessoa meses depois. O `test/architecture.test.ts` falha se o predicado parar de casar com
+os subjects dele, se as duas lanes deixarem de cobrir todos os arquivos, ou se a cobertura
+parar de ler as duas.
 
 O [`docs/testing.md`](docs/testing.md) explica o que cada camada prova e o que não prova —
 inclusive por que o smoke do gsd-browser não substitui o Playwright e por que ele roda
