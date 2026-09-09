@@ -20,9 +20,9 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.subprocess.config.ts",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --config vitest.coverage.config.ts",
     "lint": "eslint src test bin apps/web/src apps/deck/src",
     "gate:node": "node scripts/gate.mjs node",
     "gate:browser": "node scripts/gate.mjs browser",
@@ -47,7 +47,10 @@
     "typecheck:e2e": "npm run typecheck:e2e --workspace @agent-flow/web",
     "test:packaging": "node scripts/packaging-smoke.mjs",
     "test:packaging:browser": "node scripts/gsd-smoke.mjs",
-    "test:visual:linux": "./scripts/visual-linux.sh"
+    "test:visual:linux": "./scripts/visual-linux.sh",
+    "test:fast": "vitest run",
+    "test:subprocess": "vitest run --config vitest.subprocess.config.ts",
+    "install:global": "node scripts/install-global.mjs"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

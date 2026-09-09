@@ -79,7 +79,15 @@ export function run(command, args, options = {}) {
  */
 export function packTarball(destination) {
   step('building, then packing');
+  // **All three, and `build:deck` is the one that was missing.** `files` ships
+  // `apps/deck/dist`, and a bundle nobody built is simply absent from the tarball — npm
+  // says nothing about it. The packaging gate declares `needs: ['build', 'build:web',
+  // 'build:deck']` and so was covered; this function is also called directly, and there
+  // it packed whatever Deck build happened to be left on disk from an earlier session.
+  // A tarball assembled from a stale bundle is the one artifact this file exists to
+  // catch, so it must not be able to produce one.
   run('npm', ['run', 'build']);
+  run('npm', ['run', 'build:deck']);
   run('npm', ['run', 'build:web']);
 
   const packed = run('npm', [
