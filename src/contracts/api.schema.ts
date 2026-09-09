@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ForgeCheck, ForgeFailure } from './forge.schema.js';
 import type { QualityGateResult, ReviewFinding } from './review.schema.js';
-import type { ReasoningLevel } from './common.schema.js';
+import { ArtifactNameSchema, type ReasoningLevel } from './common.schema.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
 import {
   WorkflowClassSchema,
@@ -73,17 +73,17 @@ export const StageLogParamsSchema = z.object({
   stage: PipelineStageSchema,
 });
 
+/**
+ * The artifact names are `ARTIFACT_NAMES`, asked rather than re-spelled.
+ *
+ * This enum was a second hand-written copy of that list, and the two agreed only because
+ * nobody had added an artifact since. The next one would have parsed everywhere in the
+ * product and been refused by this one route, as `unknown artifact` — a 400 naming the
+ * caller for the server's own omission.
+ */
 export const ArtifactParamsSchema = z.object({
   runId: RunIdParamSchema,
-  artifact: z.enum([
-    'request',
-    'architectureImpact',
-    'sdd',
-    'plan',
-    'planReview',
-    'verification',
-    'finalReview',
-  ]),
+  artifact: ArtifactNameSchema,
 });
 
 /**

@@ -24,6 +24,8 @@ import {
   HealthReportSchema,
   toJsonSchema,
   formatValidationError,
+  ARTIFACT_NAMES,
+  ArtifactParamsSchema,
 } from '../../src/contracts/index.js';
 
 describe('ReasoningLevel (§3.1, R-09)', () => {
@@ -770,5 +772,32 @@ describe('formatValidationError', () => {
     const message = formatValidationError(result.error, 'plan.json');
     expect(message).toContain('plan.json');
     expect(message).toContain('id');
+  });
+});
+
+describe('the artifact route names the artifacts the run produces, and no second list', () => {
+  /**
+   * One list, and the reason this is a rule rather than a comment.
+   *
+   * `ArtifactParamsSchema` carried a hand-written copy of {@link ARTIFACT_NAMES}, and the
+   * two agreed only because nobody had added an artifact since. The next one would parse
+   * everywhere in the product and be refused by exactly one route, as `unknown artifact` —
+   * a 400 blaming the caller for the server's own omission, on the one surface that has no
+   * other way to read what a run wrote.
+   */
+  it('accepts every artifact name the run can produce', () => {
+    for (const artifact of ARTIFACT_NAMES) {
+      const parsed = ArtifactParamsSchema.safeParse({ runId: 'AF-2026-001', artifact });
+      expect(parsed.success, artifact).toBe(true);
+    }
+  });
+
+  it('refuses a name nobody declared, and a path dressed as one', () => {
+    for (const artifact of ['anything', '../plan', 'plan.json', '', 'PLAN']) {
+      expect(
+        ArtifactParamsSchema.safeParse({ runId: 'AF-2026-001', artifact }).success,
+        artifact,
+      ).toBe(false);
+    }
   });
 });
