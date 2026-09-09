@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { subprocessLane, testFiles } from '../vitest.lanes.js';
 
 /**
  * Executable architecture rules (plan §7.2).
@@ -46,8 +47,27 @@ function browserFiles(): string[] {
   return BROWSER_SRC.flatMap((dir) => sourceFiles(dir));
 }
 
+/**
+ * The repository-relative path of a file, always with `/`.
+ *
+ * **Every rule in this file names its subjects with `/`** — `'src/app/scheduler.ts'` in an
+ * allowlist, `path.endsWith('src/app/state-store.ts')` in a skip. `relative` answers in the
+ * host's separator, so on Windows every one of those comparisons comes back false and the
+ * rule stops describing anything: an allowlist that matches nothing reports its own
+ * permitted callers as offenders, and a `not.toContain` passes because it is looking at a
+ * string that cannot occur. Measured: 59 of this file's 247 rules failed that way on
+ * Windows, and none of them was an architecture violation.
+ *
+ * A gate that cannot run on a maintainer's machine is a gate that maintainer stops
+ * running. Normalising here rather than at each of the ~50 call sites is deliberate —
+ * this is the one function that turns a filesystem path into a rule's vocabulary.
+ */
+function repoPath(file: string): string {
+  return relative(ROOT, file).split(sep).join('/');
+}
+
 function read(file: string): { path: string; text: string } {
-  return { path: relative(ROOT, file), text: readFileSync(file, 'utf8') };
+  return { path: repoPath(file), text: readFileSync(file, 'utf8') };
 }
 
 /** Import specifiers only — comments and prose must not trip these rules. */
@@ -102,6 +122,30 @@ function codeOnly(text: string): string {
       (literal) => `${literal[0] ?? ''}${literal[0] ?? ''}`,
     );
 }
+
+describe('the rules in this file can see their own subjects', () => {
+  /**
+   * The guard on {@link repoPath}, and the reason it is a rule rather than a comment.
+   *
+   * Every other rule here is stated in `/`. If the vocabulary ever goes back to the host
+   * separator, none of them errors — they all quietly stop matching, which on Windows
+   * turned 59 rules into assertions about a string that cannot occur. A gate that fails
+   * open is worse than no gate, because the green tells you it looked.
+   */
+  it('names every file with `/`, on every host', () => {
+    const nonPosix = [...sourceFiles('src'), ...browserFiles()]
+      .map((file) => read(file).path)
+      .filter((path) => path.includes('\\'));
+
+    expect(nonPosix, 'a rule written with `/` cannot match this path').toEqual([]);
+  });
+
+  it('finds the files the rules are about', () => {
+    // Guards the rule above from passing vacuously: an empty scan has no backslash in it.
+    expect(sourceFiles('src').length).toBeGreaterThan(50);
+    expect(browserFiles().length).toBeGreaterThan(10);
+  });
+});
 
 describe('src/core stays pure (AD-03)', () => {
   it('imports no Node built-ins', () => {
@@ -4309,7 +4353,7 @@ describe('the control plane projects, and the browser renders (M8-A01 … A18)',
     // and a fix nobody can see fail is a fix nobody has evidence for.
     const planted = sourceFiles('test/fixtures/browser-scan');
 
-    expect(planted.map((file) => relative(ROOT, file))).toEqual([
+    expect(planted.map((file) => repoPath(file))).toEqual([
       'test/fixtures/browser-scan/planted.tsx',
     ]);
     // And the construct inside it is one the browser rules forbid, so deleting `.tsx` from
@@ -4676,5 +4720,89 @@ describe('the forge is a destination, never an authority (M7-A01 … A15)', () =
     ]) {
       expect(service).toContain(flag);
     }
+  });
+});
+
+/**
+ * The two test lanes, and the predicate that sorts them.
+ *
+ * A clean run on Windows reported 129 timeouts at the suite's 30 s budget, every one of
+ * them in a test that spawns a real process and every one green when its file ran alone.
+ * `vitest.lanes.ts` splits the suite so each half gets an honest number, and it *derives*
+ * the split rather than listing it — a hand-written list is what rots, and a test that
+ * quietly grew a subprocess would land in the tight lane and go red on somebody else's
+ * machine months later.
+ *
+ * These rules guard the derivation. A predicate that stops matching its subjects does not
+ * error: it silently moves the slow tests back, which is the failure the split exists to
+ * prevent and the same shape as every other gate in this file that fails open.
+ */
+describe('the suite sorts itself into two lanes, and can still see the slow one', () => {
+  const LANE = subprocessLane(ROOT);
+  const ALL = testFiles(ROOT);
+
+  it('finds the files the split is about', () => {
+    // Guards every rule below from passing vacuously: an empty lane satisfies "no fast
+    // test spawns a process" perfectly.
+    expect(ALL.length).toBeGreaterThan(150);
+    expect(LANE.length).toBeGreaterThan(20);
+  });
+
+  it('puts every `*.integration.test.ts` in the slow lane', () => {
+    const named = ALL.filter((file) => file.endsWith('.integration.test.ts'));
+    expect(named.length).toBeGreaterThan(10);
+    expect(named.filter((file) => !LANE.includes(file))).toEqual([]);
+  });
+
+  it('puts every test that reaches real Git or a real child in the slow lane', () => {
+    // The fixture and the runner, named here so a *rename* fails this rule rather than
+    // silently emptying the lane — the modules exist, and every file importing one is in.
+    for (const module of ['test/fixtures/temp-repo.ts', 'src/adapters/process/node-process-runner.ts']) {
+      expect(existsSync(join(ROOT, module)), `${module} moved; the lane predicate is stale`).toBe(true);
+    }
+
+    const spawners = ALL.filter((file) =>
+      importSpecifiers(readFileSync(join(ROOT, file), 'utf8')).some((specifier) =>
+        /fixtures\/temp-repo(\.js)?$|process\/node-process-runner(\.js)?$/.test(specifier),
+      ),
+    );
+
+    expect(spawners.length).toBeGreaterThan(15);
+    expect(spawners.filter((file) => !LANE.includes(file))).toEqual([]);
+  });
+
+  it('sorts on imports, not on prose — this file is the control', () => {
+    // The first version of the predicate scanned raw text, so this suite matched on the
+    // rules it writes *about* `NodeProcessRunner`, excluded itself from both lanes, and
+    // the run reported "No test files found". A rule that reads prose is the trap named
+    // at every other gate in this file, and the lane predicate walked into it.
+    const self = 'test/architecture.test.ts';
+    expect(readFileSync(join(ROOT, self), 'utf8')).toContain('NodeProcessRunner');
+    expect(LANE, 'a suite that only names a spawner does not spawn one').not.toContain(self);
+  });
+
+  it('leaves the two lanes disjoint and together exhaustive', () => {
+    // A file in neither is a file no gate runs, which is the one outcome worse than a
+    // file in the wrong lane.
+    const fast = ALL.filter((file) => !LANE.includes(file));
+    expect(fast.length + LANE.length).toBe(ALL.length);
+    expect(fast.filter((file) => LANE.includes(file))).toEqual([]);
+    expect(fast.length).toBeGreaterThan(100);
+  });
+
+  it('measures coverage over both lanes, against one set of thresholds', () => {
+    // The hole the split opened: `vitest.config.ts` excludes the slow lane, so a coverage
+    // run reading it would measure less against the same floors and pass. Floors only
+    // fail loudly when they are too *high*, so this one had to be a rule.
+    const coverage = read(join(ROOT, 'vitest.coverage.config.ts')).text;
+    expect(coverage).toContain("include: ['test/**/*.test.ts']");
+    expect(coverage).not.toMatch(/\bexclude:/);
+
+    // And one definition of the thresholds, imported by both configs rather than copied.
+    for (const config of ['vitest.config.ts', 'vitest.coverage.config.ts']) {
+      const text = read(join(ROOT, config)).text;
+      expect(text, `${config} spells its own coverage block`).toContain('coverage: COVERAGE');
+    }
+    expect(codeOnly(read(join(ROOT, 'vitest.lanes.ts')).text)).toMatch(/export const COVERAGE\b/);
   });
 });
