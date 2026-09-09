@@ -15,6 +15,7 @@ import { Feed } from './Feed';
 import { StageLog } from './StageLog';
 import { ConfirmCancel } from './ConfirmCancel';
 import { GateDialog } from './GateDialog';
+import { Outcome, type OutcomeTab } from './Outcome';
 
 /** Runtime statuses after which nothing moves, and the recorder's right edge stands still. */
 const FINISHED = new Set(['complete', 'failed', 'cancelled']);
@@ -132,6 +133,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [logTab, setLogTab] = useState<'events' | 'stage'>('events');
   const [selectedStage, setSelectedStage] = useState<PipelineStage>('planning');
+  const [outcomeTab, setOutcomeTab] = useState<OutcomeTab>('review');
 
   const onOpenStageLog = (stg: string): void => {
     setSelectedStage(stg as PipelineStage);
@@ -168,6 +170,36 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
     setGateOpen(true);
   };
 
+  /**
+   * Where a row that only wants to *show* something lands (`AttentionFocus`).
+   *
+   * The projection has emitted a focus for every item since M8, and Deck read none of it:
+   * every non-acting row selected a task and stopped, so "Review the findings" and "The
+   * remote's checks went red" both landed on the same panel, neither of which held the
+   * answer. The exact shape the previous dashboard's `?panel=` had for two milestones —
+   * a field nobody reads fails no compiler and no assertion.
+   *
+   * `plan` is the gate dialog rather than a tab, because the plan is a decision and the
+   * dialog is where a decision is made. `run`, `task` and `team` have no outcome surface,
+   * so they leave the panel alone and let the task selection below do the work.
+   */
+  const outcomeFor = (focus: AttentionItem['focus']): OutcomeTab | undefined => {
+    switch (focus) {
+      case 'review':
+      case 'quality':
+        return 'review';
+      case 'delivery':
+        return 'delivery';
+      case 'run':
+      case 'plan':
+      case 'task':
+      case 'team':
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+
   const onAttentionAction = (item: AttentionItem): void => {
     switch (item.action.kind) {
       case 'approve':
@@ -182,10 +214,13 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         break;
       case 'retry':
       case 'inspect':
-      default:
+      default: {
+        const tab = outcomeFor(item.focus);
+        if (tab !== undefined) setOutcomeTab(tab);
         if (item.scope.taskId !== undefined) setSelected(item.scope.taskId);
         setScrub(null);
         break;
+      }
     }
   };
 
@@ -491,6 +526,8 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
           </div>
         </section>
       </div>
+
+      <Outcome address={address} tab={outcomeTab} onTab={setOutcomeTab} reviewFreshness={rt?.reviewFreshness} />
 
       <GateDialog address={address} gate={gate.data} open={gateOpen} onClose={() => setGateOpen(false)} initialTab={gateTab} />
       <ConfirmCancel runId={runId} open={confirmCancel} onDismiss={() => setConfirmCancel(false)} onConfirm={() => void cancelRun()} />

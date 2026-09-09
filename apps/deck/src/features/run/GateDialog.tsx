@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ApprovalGateView } from '@contracts/index.js';
 import { ApiError, api, type RunAddress } from '../../lib/api';
 import { invalidate } from '../../lib/store';
-import { words } from '../../lib/tone';
+import { severityTone, words } from '../../lib/tone';
 import { Chip, Notice } from '../../components/ui';
 
 /**
@@ -135,7 +135,7 @@ export function GateDialog({ address, gate, open, onClose, initialTab = 'decide'
                       const severity = String((finding as { severity?: string }).severity ?? 'note');
                       const text = String((finding as { description?: string; message?: string }).description ?? (finding as { message?: string }).message ?? '');
                       return (
-                        <div key={index} className="finding" data-tone={severity === 'critical' || severity === 'high' ? 'bad' : severity === 'medium' ? 'warn' : 'idle'}>
+                        <div key={index} className="finding" data-tone={severityTone(severity)}>
                           <span className="finding__sev">{severity}</span>
                           <span className="finding__text">{text}</span>
                         </div>

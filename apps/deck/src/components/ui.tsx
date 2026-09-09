@@ -3,7 +3,7 @@ import type { StageViewResponse } from '@contracts/index.js';
 import { priorityTone, stageTone, words, type Tone } from '../lib/tone';
 
 /** A status word, toned once. */
-export function Chip({ tone, children, plain = false, title }: { tone: Tone; children: ReactNode; plain?: boolean; title?: string }) {
+export function Chip({ tone, children, plain = false, title }: { tone: Tone; children: ReactNode; plain?: boolean; title?: string | undefined }) {
   return (
     <span className={plain ? 'chip chip--plain' : 'chip'} data-tone={tone} title={title}>
       {children}

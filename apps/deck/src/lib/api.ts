@@ -23,6 +23,11 @@ import type {
   ConfigEditorView,
   ConfigValidationView,
   ConfigEditorScope,
+  ArtifactView,
+  ArtifactContentView,
+  ArtifactName,
+  DeliveryView,
+  ReviewView,
 } from '@contracts/index.js';
 
 /**
@@ -204,6 +209,27 @@ export const api = {
   stageLog: (a: RunAddress, stage: PipelineStage) =>
     getJson<StageLogView>(`/runs/${a.runId}/stages/${stage}/log`, scoped(a)),
   approval: (a: RunAddress) => getJson<ApprovalGateView>(`/runs/${a.runId}/approval`, scoped(a)),
+
+  /**
+   * What the reviewers found, what the gates said, and what the run published.
+   *
+   * The three questions asked after a run rather than during it. Deck shipped without
+   * them for a release and the answers were reachable only from the previous dashboard —
+   * which meant the end of every run was a different URL, in a different bundle, with a
+   * different vocabulary.
+   */
+  // `reviewRecord`, because `review` below is the POST that *runs* one. Same path, two
+  // verbs, and a name that says which is which beats two callers guessing.
+  reviewRecord: (a: RunAddress) => getJson<ReviewView>(`/runs/${a.runId}/review`, scoped(a)),
+  delivery: (a: RunAddress) => getJson<DeliveryView>(`/runs/${a.runId}/delivery`, scoped(a)),
+  /**
+   * The list, then one artifact's text — two calls, because the list is cheap and the
+   * text is not. The name is never spelled here: it comes back on the list and goes
+   * straight back out, which is what keeps §93 true of this door as well.
+   */
+  artifacts: (a: RunAddress) => getJson<ArtifactView[]>(`/runs/${a.runId}/artifacts`, scoped(a)),
+  artifact: (a: RunAddress, name: ArtifactName) =>
+    getJson<ArtifactContentView>(`/runs/${a.runId}/artifacts/${name}`, scoped(a)),
   job: (a: RunAddress) => getJson<ActionJobView | null>(`/runs/${a.runId}/job`, scoped(a)),
 
   agents: (projectId?: string) =>
@@ -292,6 +318,10 @@ export const keys = {
   eventLog: (a: RunAddress) => url(`/runs/${a.runId}/events`, scoped(a)),
   stageLog: (a: RunAddress, stage: string) => url(`/runs/${a.runId}/stages/${stage}/log`, scoped(a)),
   approval: (a: RunAddress) => url(`/runs/${a.runId}/approval`, scoped(a)),
+  review: (a: RunAddress) => url(`/runs/${a.runId}/review`, scoped(a)),
+  delivery: (a: RunAddress) => url(`/runs/${a.runId}/delivery`, scoped(a)),
+  artifacts: (a: RunAddress) => url(`/runs/${a.runId}/artifacts`, scoped(a)),
+  artifact: (a: RunAddress, name: string) => url(`/runs/${a.runId}/artifacts/${name}`, scoped(a)),
   job: (a: RunAddress) => url(`/runs/${a.runId}/job`, scoped(a)),
   agents: (projectId?: string) => url('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>

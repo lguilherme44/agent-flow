@@ -147,6 +147,155 @@ export function memberTone(status: string | undefined): Tone {
   }
 }
 
+/**
+ * How severe a finding is, as a colour — `FINDING_SEVERITIES`, least severe first.
+ *
+ * The gate dialog spelled this inline as a nested ternary before the outcome panel needed
+ * the same answer. Two copies of "which severities are red" is exactly the disagreement
+ * this file exists to prevent, and the dialog now asks here.
+ */
+export function severityTone(severity: string | undefined): Tone {
+  switch (severity) {
+    case 'critical':
+    case 'high':
+      return 'bad';
+    case 'medium':
+      return 'warn';
+    case 'low':
+      return 'idle';
+    case 'info':
+      return 'ghost';
+    default:
+      return 'ghost';
+  }
+}
+
+/**
+ * A finding's place in its lifecycle.
+ *
+ * `disputed` is `warn` rather than `bad`: two agents disagreeing is a thing for a person to
+ * settle, not a defect. `fixed` is `live` rather than `ok` — a corrective task claims the
+ * fix, and only `verified` says somebody looked.
+ */
+export function findingTone(status: string | undefined): Tone {
+  switch (status) {
+    case 'verified':
+      return 'ok';
+    case 'fixed':
+      return 'live';
+    case 'disputed':
+    case 'acknowledged':
+      return 'warn';
+    case 'open':
+      return 'bad';
+    default:
+      return 'ghost';
+  }
+}
+
+/** `GATE_STATUSES`. `not_run` is never shown as a pass (I-24), so it is not `ok`. */
+export function gateTone(status: string | undefined): Tone {
+  switch (status) {
+    case 'passed':
+      return 'ok';
+    case 'failed':
+      return 'bad';
+    case 'not_run':
+      return 'idle';
+    case 'not_applicable':
+      return 'ghost';
+    default:
+      return 'ghost';
+  }
+}
+
+/** One review thread's status, as the review projection answered it. */
+export function threadTone(status: string | undefined): Tone {
+  switch (status) {
+    case 'approved':
+      return 'ok';
+    case 'in_review':
+    case 'awaiting_recheck':
+      return 'live';
+    case 'changes_requested':
+      return 'warn';
+    case 'blocked':
+      return 'bad';
+    default:
+      return 'ghost';
+  }
+}
+
+/**
+ * A remote check, from the forge's own two fields.
+ *
+ * The conclusion is the answer once there is one, and the status is the answer until then —
+ * a check that is `completed` with no conclusion is a forge that told us less than it
+ * promised, and `ghost` says exactly that rather than guessing green.
+ */
+export function checkTone(status: string | undefined, conclusion: string | undefined): Tone {
+  if (conclusion !== undefined) {
+    switch (conclusion) {
+      case 'success':
+        return 'ok';
+      case 'neutral':
+      case 'skipped':
+        return 'ghost';
+      case 'cancelled':
+      case 'stale':
+        return 'idle';
+      default:
+        return 'bad';
+    }
+  }
+  switch (status) {
+    case 'queued':
+      return 'idle';
+    case 'in_progress':
+      return 'live';
+    default:
+      return 'ghost';
+  }
+}
+
+/**
+ * How far the reviewer stood from the author (§19), as a colour.
+ *
+ * `0` is unreachable by configuration and `bad` if it ever appears; `1` is a fresh context
+ * on the same model, which is the level a degradation lands on.
+ */
+export function independenceTone(level: number | undefined): Tone {
+  switch (level) {
+    case 3:
+      return 'ok';
+    case 2:
+      return 'live';
+    case 1:
+      return 'warn';
+    case 0:
+      return 'bad';
+    default:
+      return 'ghost';
+  }
+}
+
+/** Whether a statement still describes the current tree (C-20, and the review's own field). */
+export function freshnessTone(freshness: string | undefined): Tone {
+  switch (freshness) {
+    case 'current':
+      return 'ok';
+    case 'stale':
+    case 'superseded':
+      return 'warn';
+    case 'unverifiable':
+      return 'bad';
+    case 'absent':
+      return 'ghost';
+    default:
+      return 'ghost';
+  }
+}
+
 /** A human label for a machine word: `awaiting_human_approval` → `awaiting human approval`. */
 export function words(value: string | undefined): string {
   if (value === undefined) return '—';
