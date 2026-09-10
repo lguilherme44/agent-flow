@@ -993,6 +993,8 @@ Full roadmap, including what MVP 1 established and what is deliberately out of s
 | [`docs/specs/model-first-identity.md`](docs/specs/model-first-identity.md) | Model, role, runner, agent: which one the dashboard leads with, where each is decided, and what an absent model may be said to mean |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | What a message means and what to do about it |
 | [`docs/roadmap.md`](docs/roadmap.md) | What is done, what is next, and what is out of scope |
+| [`docs/plan.md`](docs/plan.md) | Why the current body of work exists: the dogfood session that raised it, finding by finding (pt-BR) |
+| [`docs/todo.md`](docs/todo.md) | The executable queue derived from it, with what closed each item and how it was measured (pt-BR) |
 
 **Architecture & engineering**
 

@@ -1,6 +1,6 @@
 # TODO
 
-Fila executável do [`PLAN.md`](PLAN.md), em ordem. O porquê de cada item está lá; aqui é o
+Fila executável do [`plan.md`](plan.md), em ordem. O porquê de cada item está lá; aqui é o
 que fazer e como saber que fechou.
 
 **Definição de pronto, para todos:** teste cobrindo o comportamento · controle positivo

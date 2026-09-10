@@ -45,7 +45,7 @@ async function readyWorkspace(current: WorktreeRun): Promise<IntegrationWorkspac
  * already right: `worktree list --porcelain` prints `/` on Windows. What was wrong is the
  * other side, where a `join`-built expectation carries the host separator and the two can
  * never be equal. The fourth copy of that defect found in this suite; see
- * `TODO.md` §8.5 for the systemic one, which is the fixture and is its own pass.
+ * `docs/todo.md` §8.5 for the systemic one, which is the fixture and is its own pass.
  */
 function registered(current: WorktreeRun): string[] {
   return current.repo

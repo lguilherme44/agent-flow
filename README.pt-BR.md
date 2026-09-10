@@ -999,6 +999,8 @@ Os documentos abaixo estão em inglês.
 | [`docs/specs/model-first-identity.md`](docs/specs/model-first-identity.md) | Modelo, papel, runner, agente: qual deles o dashboard mostra primeiro, onde cada um é decidido, e o que se pode afirmar sobre um modelo ausente |
 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | O que cada mensagem significa e o que fazer a respeito |
 | [`docs/roadmap.md`](docs/roadmap.md) | O que está feito, o que vem depois, e o que está fora de escopo |
+| [`docs/plan.md`](docs/plan.md) | Por que este corpo de trabalho existe: a sessão de dogfood que o levantou, achado por achado |
+| [`docs/todo.md`](docs/todo.md) | A fila executável derivada dele, com o que fechou cada item e como foi medido |
 
 **Arquitetura e engenharia**
 

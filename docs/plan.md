@@ -3,7 +3,7 @@
 Levantado durante o uso real do Agent Flow para construir um editor de canvas do zero
 (`~/wk/flowcanvas`, 11 tasks, 9 delas executadas por um modelo local numa RTX 3060 Ti de
 8 GB). O relatório com a evidência de cada item está em
-[`~/wk/flowcanvas/docs/agent-flow-feedback.md`](../flowcanvas/docs/agent-flow-feedback.md).
+[`~/wk/flowcanvas/docs/agent-flow-feedback.md`](../../flowcanvas/docs/agent-flow-feedback.md).
 
 Cinco achados foram corrigidos na primeira rodada (`08c66c2`, `034ee4a`, `1e263a8`, `6b8abff`);
 `5246077` e `df7ea8f` fecharam 1.1, 1.2, 2.1, 2.2, 2.3, 3.1 e 3.2 — cada seção abaixo diz
