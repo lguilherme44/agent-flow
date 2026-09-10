@@ -28,6 +28,7 @@ import {
 import { createRunnerFactory } from './runner-factory.js';
 import { recordFallback } from './fallback-audit.js';
 import { TaskWorkspaces } from './task-workspaces.js';
+import { openReadOnlyTree } from './read-only-workspace.js';
 import { CollaborationStore } from './collaboration-store.js';
 import { CollaborationService } from './collaboration-service.js';
 import { teamWaveAdmission } from '../core/team/waves.js';
@@ -250,6 +251,10 @@ export async function buildExecutionContext(
     // in worktree mode an agent runs under `~/.agent-flow/worktrees/…`, so its output
     // quotes a path that names this machine's user.
     host: options.host,
+    // §6.1b: a read-only stage gets a disposable twin of whatever tree it was going to
+    // read, and the stage runner never learns how a checkout is made.
+    openReadOnlyTree: (input) =>
+      openReadOnlyTree({ fs, workspaces, host: options.host }, input),
     ...(advisor === undefined ? {} : { advisor }),
   });
 

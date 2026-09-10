@@ -197,6 +197,21 @@ export class InMemoryFileSystem implements FileSystem {
     return true;
   }
 
+  /**
+   * A copy of the entry, which in a string-valued map is the same operation.
+   *
+   * The fake cannot model the thing the real member exists for — that bytes survive a
+   * copy — because everything in this map is already a string. What it does model is the
+   * shape: a missing source raises, and the destination replaces whatever was there.
+   */
+  async copyFile(from: string, to: string): Promise<void> {
+    const content = this.files.get(this.resolve(from));
+    if (content === undefined) throw new Error(`ENOENT: ${from}`);
+    const key = this.key(to);
+    this.ensureParents(key);
+    this.files.set(key, content);
+  }
+
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
     const resolved = this.resolve(path);
     if (this.dirs.has(resolved)) return { isDirectory: true, mtimeMs: 0, size: 0 };

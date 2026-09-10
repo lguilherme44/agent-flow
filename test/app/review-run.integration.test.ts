@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
@@ -59,6 +60,15 @@ const REVIEW_RESPONSE = { verdict: 'PASS', summary: 'Looks right.', findings: []
  */
 class RecordingProcessRunner implements ProcessRunner {
   readonly agentCwds: string[] = [];
+  /**
+   * What each agent could actually see, read while it is running.
+   *
+   * §6.1b sends a read-only stage into a disposable twin of the tree it was going to
+   * read, and the twin is gone by the time a test could look at it. So the question
+   * "did the reviewer see the integrated work" has to be asked from inside the call —
+   * which is the honest place to ask it anyway, since that is when the agent asks.
+   */
+  readonly agentSaw: (string | null)[] = [];
   readonly shellCwds: string[] = [];
   /** What each shell was asked to run, in order — AR-04 asserts on the ordering. */
   readonly shellCommands: string[] = [];
@@ -74,6 +84,11 @@ class RecordingProcessRunner implements ProcessRunner {
     }
 
     this.agentCwds.push(options.cwd);
+    this.agentSaw.push(
+      existsSync(join(options.cwd, 'one.txt'))
+        ? readFileSync(join(options.cwd, 'one.txt'), 'utf8')
+        : null,
+    );
     return {
       exitCode: 0,
       signal: null,
@@ -182,11 +197,26 @@ describe('review runs over the integration tree (§19.1, §19.2)', () => {
     expect(new Set(runner.shellCwds)).toEqual(new Set([integrationPath]));
     expect(outcome.value.verification.passed).toBe(true);
 
-    // Both review agents ran there too. Left to default they would have run in
-    // the project directory, which is the user's working tree.
+    // Both review agents ran over that same tree — and, since §6.1b, over a *twin* of
+    // it rather than in it.
+    //
+    // The identity §19.2 asks for is about content, not about a path: "verified tree A,
+    // reviewed tree B" is the failure, and two checkouts of one commit are not two trees.
+    // What the twin buys is that a read-only agent reaching its edit tool — measured in
+    // §6.1 — cannot scribble in the integration tree, which *is* evidence (§7.4) and is
+    // the one place a stray write would be least likely to be noticed.
     expect(runner.agentCwds).toHaveLength(2);
-    expect(new Set(runner.agentCwds)).toEqual(new Set([integrationPath]));
+    expect(runner.agentSaw).toEqual(['one\n', 'one\n']);
+    for (const cwd of runner.agentCwds) {
+      expect(cwd).not.toBe(current.repo.dir);
+      expect(cwd).not.toBe(integrationPath);
+      expect(cwd).toContain('read-only-');
+    }
     expect(integrationPath).not.toBe(current.repo.dir);
+
+    // And the twins are gone. A checkout per read-only stage that leaked would fill the
+    // owned root with copies of the repository nobody asked for.
+    for (const cwd of runner.agentCwds) expect(existsSync(cwd)).toBe(false);
 
     // And all of it describes one commit, which is the one the run recorded.
     expect(outcome.value.integration).toEqual({
@@ -229,9 +259,20 @@ describe('review runs over the integration tree (§19.1, §19.2)', () => {
     if (!outcome.ok) return;
 
     expect(outcome.value.integration).toBeUndefined();
-    expect(new Set(runner.agentCwds)).toEqual(new Set([current.repo.dir]));
+    // The commands still run where they always did: the user's checkout is what a
+    // sequential run validates, and `runCommands` is not a stage.
     expect(new Set(runner.shellCwds)).toEqual(new Set([current.repo.dir]));
-    // No branch was cut for it, and no checkout was made.
+    // The agents do not, and that is §6.1b rather than a break in the §25.1 promise. A
+    // sequential run reaches no integration branch, no *persistent* worktree and no Git
+    // namespace — asserted below — and the twin it reads is detached, unnamed and
+    // destroyed before the call returns. What changed is the one thing §6.1 measured
+    // going wrong: the agent no longer holds a handle on the user's working tree.
+    for (const cwd of runner.agentCwds) {
+      expect(cwd).not.toBe(current.repo.dir);
+      expect(cwd).toContain('read-only-');
+      expect(existsSync(cwd)).toBe(false);
+    }
+    // No branch was cut for it, and no checkout was left behind.
     expect(
       current.repo.userGit([
         'for-each-ref',

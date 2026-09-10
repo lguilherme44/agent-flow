@@ -132,6 +132,12 @@ export const DEGRADATION_KINDS = [
   // asked long after the terminal has scrolled, and the honest answer belongs on
   // the run. Recorded only when the two numbers actually differ.
   'parallelism_clamped',
+  // A read-only stage ran in the repository it was describing, because a disposable
+  // checkout could not be cut for it (§6.1b). Recorded rather than logged because the
+  // permission is only a routing decision: on this path nothing but the runner's own flag
+  // stood between the agent's edit tool and the operator's working tree, and that is a
+  // property of the run that a person may want to know about a week later.
+  'read_only_uncontained',
 ] as const;
 
 export const DegradationSchema = z.object({

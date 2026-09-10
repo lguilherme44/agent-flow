@@ -132,6 +132,16 @@ export class NodeFileSystem implements FileSystem {
     }
   }
 
+  /**
+   * `fs.copyFile` — the kernel's copy, so bytes and nothing else cross.
+   *
+   * No `COPYFILE_EXCL`: the caller mirrors a working tree into a checkout that already
+   * holds HEAD's version of the same path, so overwriting is the operation.
+   */
+  async copyFile(from: string, to: string): Promise<void> {
+    await fs.copyFile(from, to);
+  }
+
   async stat(path: string): Promise<{ isDirectory: boolean; mtimeMs: number; size: number } | null> {
     try {
       const stats = await fs.stat(path);

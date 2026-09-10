@@ -50,5 +50,18 @@ export interface FileSystem {
    * the root, and `stat` cannot: it follows the link and reports a perfectly
    * ordinary directory.
    */
+  /**
+   * Copies one file, byte for byte, overwriting the destination.
+   *
+   * Here rather than composed from `readFile` and `writeFileAtomic`, because those two
+   * are string members: a round trip through them decodes as UTF-8 and would hand back a
+   * corrupted PNG, a corrupted lockfile or a mangled CRLF. §6.1b mirrors a working tree's
+   * dirty paths into a disposable checkout, and a mirror that alters bytes is not one.
+   *
+   * The destination's parent must exist; the caller knows the shape it is building and
+   * `mkdirp` is already on this port.
+   */
+  copyFile(from: string, to: string): Promise<void>;
+
   realPath(path: string): Promise<string | null>;
 }

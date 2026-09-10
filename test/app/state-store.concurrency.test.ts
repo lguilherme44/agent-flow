@@ -85,6 +85,10 @@ class GatedReads implements FileSystem {
   createExclusive(path: string, content: string): Promise<boolean> {
     return this.inner.createExclusive(path, content);
   }
+  copyFile(from: string, to: string): Promise<void> {
+    return this.inner.copyFile(from, to);
+  }
+
   realPath(path: string): Promise<string | null> {
     return this.inner.realPath(path);
   }

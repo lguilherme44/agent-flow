@@ -147,12 +147,55 @@ controle positivo no 6.2 e no 6.3.
       **Não voltar para `false`:** barra o runner de 6 dos 9 roles e quebra o operador com
       um agente só, que é caso suportado por projeto.
 
-- [ ] **6.1b · Contenção de verdade para read-only: uma árvore descartável**
+- [x] **6.1b · Contenção de verdade para read-only: uma árvore descartável** — `src/app/read-only-workspace.ts`
       O resíduo medido do 6.1. Nenhum flag do `agy` impede a ferramenta de edição, então a
-      única contenção honesta é uma árvore que a stage pode estragar sem consequência — a
-      máquina de worktree já existe, o roteamento de stage read-only é que não a usa.
-      **Pronto quando:** uma stage read-only em `agy` escreve num arquivo e o repositório
-      sob julgamento continua idêntico.
+      única contenção honesta é uma árvore que a stage pode estragar sem consequência.
+
+      **Um gêmeo da árvore que a stage ia ler, não um checkout do HEAD** — e essa
+      distinção é o desenho inteiro. `git.useWorktrees` é `false` por padrão, então a
+      instalação padrão planeja contra uma árvore de trabalho que pode ter trabalho não
+      commitado (a deviation declarada do §6.2). Uma stage a quem mostrássemos o HEAD
+      descreveria um repositório que não existe. Então: corta no HEAD da *fonte* e espelha
+      os caminhos sujos dela — modificado e não rastreado copiados, apagado apagado, o
+      caminho antigo de um rename removido. Arquivo ignorado não atravessa, porque
+      `status --untracked-files=all` não o reporta — é o que mantém a cópia proporcional à
+      mudança e não ao repositório.
+
+      **A fonte é o diretório em que a stage ia rodar**, não o projeto: o diretório do
+      projeto para uma stage de planejamento, a worktree da tentativa para um code review,
+      a árvore de integração para a revisão final. Cortar o gêmeo *daquela* árvore é o que
+      mantém uma revisão lendo o código que ela revisa. Os comandos de validação continuam
+      onde sempre rodaram — `runCommands` não é stage.
+
+      **Cortada por invocação e destruída num `finally`.** Medido neste repositório, 1107
+      arquivos, Windows: ~3,4 s para abrir e ~0,6 s para soltar, **19,9 s para as cinco
+      stages read-only de uma fase de planejamento**. Um cache com chave de fingerprint
+      economizaria isso e, no dia em que a chave errasse, mostraria à stage o código da
+      fase anterior — um defeito que ninguém acha lendo a saída. E a chave sonhada não
+      existe: `status --porcelain` diz que um arquivo mudou, não *o que* mudou, então duas
+      árvores diferentes produzem a mesma chave.
+
+      **Falha para trás, e diz.** Sem HEAD, sem repositório, `worktree add` recusado — a
+      stage roda onde rodaria e a run registra `read_only_uncontained` (R-16). Uma defesa
+      que vira indisponibilidade é uma troca pior.
+
+      **Pronto:** `test/app/read-only-containment.test.ts` dirige o `StageRunner` real com
+      um runner que escreve dois arquivos no cwd que recebeu — o comportamento que o 6.1
+      mediu — e o repositório sob julgamento fica byte a byte idêntico. O controle
+      positivo é a mesma stage com `permissions: write`, que continua escrevendo no
+      projeto; sem ele as outras asserções passariam também se o fake tivesse simplesmente
+      parado de escrever. `test/app/read-only-workspace.test.ts` cobre a fidelidade
+      (modificado, não rastreado, apagado), a remoção de uma árvore suja, e dois gêmeos
+      concorrentes.
+
+      **Três guardas de arquitetura tiveram de ser editadas**, que era o propósito delas:
+      `addWorktree`, `removeWorktree` e `force: true` estavam presas a um módulo cada, com
+      um comentário mandando o próximo milestone vir se justificar. A justificativa é a
+      distinção do §7.4: a worktree de uma tentativa é a única cópia do que um agente
+      produziu, e esta contém uma cópia de código que existe em outro lugar.
+
+      **O que isto não é:** uma garantia de que o runner obedece. Continua sendo `--sandbox
+      --disable-slash-commands` para o terminal e um diretório descartável para o resto.
 
 - [x] **6.2 · A suíte não passava no Windows, e nenhum CI via** — `.github/workflows/ci.yml`
       Duas rodadas que não concordavam — 101 falhas em 16 arquivos (342s) e 121 em 23

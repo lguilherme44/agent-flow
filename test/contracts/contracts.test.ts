@@ -383,11 +383,17 @@ describe('Degradation and RunState (R-16)', () => {
     expect(RunStateSchema.safeParse({ ...base, runId: 'AF-2026-001' }).success).toBe(true);
   });
 
-  it('adds no degradation kind for MVP 2 (§25.1)', () => {
-    // The whole isolation milestone is covered by `parallelism_clamped`, which
-    // already exists. A new kind would be a contract change for a run that
-    // behaves exactly as before, and every reader of the channel would have to
-    // learn a word for something that is not new.
+  it('names every degradation, and adds one only for a capability actually lost', () => {
+    // MVP 2 added none: the whole isolation milestone was covered by
+    // `parallelism_clamped`, and a new kind would have been a contract change for a run
+    // that behaves exactly as before.
+    //
+    // §6.1b adds one, and it passes that bar. `read_only_uncontained` is not a rename of
+    // anything: it says a read-only stage ran in the repository it was describing, with
+    // nothing but the runner's own flag between the agent's edit tool and the operator's
+    // files — which is precisely a guarantee the workflow normally provides and did not.
+    // The list is asserted whole so the next addition has to come and say which
+    // capability was lost.
     expect([...DEGRADATION_KINDS]).toEqual([
       'runner_unavailable_with_fallback',
       'single_provider',
@@ -395,6 +401,7 @@ describe('Degradation and RunState (R-16)', () => {
       'reasoning_clamped',
       'forced_approval',
       'parallelism_clamped',
+      'read_only_uncontained',
     ]);
   });
 });

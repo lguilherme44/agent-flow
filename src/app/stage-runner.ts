@@ -20,7 +20,8 @@ import {
 } from '../core/failure-classification.js';
 import { redactAndTruncate, redactEvidence } from '../core/evidence-redaction.js';
 import { measurePromptComposition } from '../core/prompt-budget.js';
-import type { PromptLoader } from './prompt-loader.js';
+import type { LoadedPrompt, PromptLoader } from './prompt-loader.js';
+import type { ReadOnlyOutcome, ReadOnlyTree } from './read-only-workspace.js';
 import type { StateStore } from './state-store.js';
 import { runPaths, type ArtifactName } from './paths.js';
 
@@ -187,6 +188,19 @@ export interface StageRunnerOptions {
    * redacted and home paths are not, which is a weaker guarantee rather than a wrong one.
    */
   readonly host?: Host;
+  /**
+   * Cuts a disposable twin of the directory a read-only stage was going to read (§6.1b).
+   *
+   * A function rather than the Git dependency itself, so this class stays free of the
+   * adapter: it knows a read-only stage must not run in the repository under judgement,
+   * and it does not know how a checkout is made. Absent, every stage runs where it always
+   * did — which is what the twenty-odd test wirings that predate this rely on, and what a
+   * `doctor`-less environment falls back to.
+   */
+  readonly openReadOnlyTree?: (options: {
+    readonly source: string;
+    readonly label: string;
+  }) => Promise<ReadOnlyOutcome>;
 }
 
 /**
@@ -320,9 +334,9 @@ export class StageRunner {
   }
 
   /** The roots this stage's output may name, for {@link redactEvidence}. */
-  private redactionContext(options: StageRunOptions): { workspaceRoot: string; home?: string } {
+  private redactionContext(cwd: string): { workspaceRoot: string; home?: string } {
     return redactionContextOf({
-      workingDirectory: options.workingDirectory ?? this.options.projectDir,
+      workingDirectory: cwd,
       ...(this.options.host === undefined ? {} : { home: this.options.host.homeDir }),
     });
   }
@@ -340,9 +354,66 @@ export class StageRunner {
     vars: Record<string, string>,
     options: StageRunOptions = {},
   ): Promise<StageResult> {
-    const { store, clock, config, capabilities, promptLoader, getRunner } = this.options;
+    const prompt = await this.options.promptLoader.load(stage.prompt);
+    const intended = options.workingDirectory ?? this.options.projectDir;
 
-    const prompt = await promptLoader.load(stage.prompt);
+    // **A read-only stage does not run in the repository under judgement** (§6.1b).
+    //
+    // The permission is a routing decision and not a guarantee — §6.1 measured a read-only
+    // stage writing 56 KB into the repo it was describing — so the containment is a
+    // directory instead of a flag. Opened here rather than inside the body below because
+    // the body has a dozen exits, and a checkout that leaks on one of them is a checkout
+    // that accumulates.
+    const contained = await this.contain(runId, stage, prompt, intended);
+
+    try {
+      return await this.runIn(stage, runId, vars, options, prompt, contained?.cwd ?? intended);
+    } finally {
+      await contained?.release();
+    }
+  }
+
+  /**
+   * The twin, or nothing and a degradation on the run.
+   *
+   * Falling back rather than refusing, deliberately: this hardens a path that has always
+   * worked, and a run that stopped because a scratch checkout could not be cut would have
+   * turned a defence into an outage. What must not happen is that it falls back *quietly* —
+   * "this stage ran in your working tree" is exactly the kind of fact R-16 exists to keep
+   * on the run rather than in a log line that scrolls away.
+   */
+  private async contain(
+    runId: string,
+    stage: StageDefinition,
+    prompt: LoadedPrompt,
+    source: string,
+  ): Promise<ReadOnlyTree | undefined> {
+    const open = this.options.openReadOnlyTree;
+    if (prompt.meta.permissions !== 'read-only' || open === undefined) return undefined;
+
+    const outcome = await open({ source, label: stage.name });
+    if (outcome.ok) return outcome.tree;
+
+    await this.options.store.recordDegradation(runId, {
+      kind: 'read_only_uncontained',
+      reason: `a disposable checkout could not be cut (${outcome.reason}): ${outcome.detail}`,
+      impact:
+        `stage "${stage.name}" ran read-only in ${source}, where nothing but the runner's ` +
+        'own flag stops it writing',
+    });
+
+    return undefined;
+  }
+
+  private async runIn(
+    stage: StageDefinition,
+    runId: string,
+    vars: Record<string, string>,
+    options: StageRunOptions,
+    prompt: LoadedPrompt,
+    cwd: string,
+  ): Promise<StageResult> {
+    const { store, clock, config, capabilities, getRunner } = this.options;
 
     // Resolution validates capabilities against what the prompt declares, so a
     // misconfiguration fails here rather than after a process is spawned.
@@ -365,8 +436,17 @@ export class StageRunner {
       options.member,
     );
 
+    // **`projectDir` means "where you are", and this class is what decides that.**
+    //
+    // `discovery.md` prints it under a heading called "Working directory", and the pipeline
+    // used to pass the project directory because that *was* the working directory. Now that
+    // a read-only stage may run in a twin, two places knew the answer and only one of them
+    // was right — an agent told to work in a directory it is not in would walk straight back
+    // into the repository the twin exists to protect.
+    const located = vars.projectDir === undefined ? vars : { ...vars, projectDir: cwd };
+
     // Raises on a missing variable — before anything is spawned or spent.
-    const rendered = prompt.render(vars);
+    const rendered = prompt.render(located);
 
     if (resolved.reasoningClamped) {
       // Never only in a log line: a run that quietly ran below its configured
@@ -515,7 +595,7 @@ export class StageRunner {
     if (config.execution.recordPrompts) {
       logLines.push(
         '--- prompt (redacted) ---',
-        redactEvidence(promptText, this.redactionContext(options)),
+        redactEvidence(promptText, this.redactionContext(cwd)),
         '--- end prompt ---',
       );
     }
@@ -539,7 +619,7 @@ export class StageRunner {
       const result = await runner.run({
         prompt: promptText,
         reasoning: resolved.reasoning,
-        workingDirectory: options.workingDirectory ?? this.options.projectDir,
+        workingDirectory: cwd,
         permissions: prompt.meta.permissions,
         timeoutSeconds: resolved.timeoutSeconds,
         ...(resolved.model === undefined ? {} : { model: resolved.model }),
@@ -560,7 +640,7 @@ export class StageRunner {
         // I-21). Both persistence paths below and the classifier all read the same
         // redacted string, so there is no unredacted mirror and no second opinion about
         // what the runner said.
-        const redactionContext = this.redactionContext(options);
+        const redactionContext = this.redactionContext(cwd);
         const redactedRaw = redactEvidence(result.raw, redactionContext);
         const classification = classifyRunnerFailure({
           errorCode: result.errorCode,
@@ -652,7 +732,7 @@ export class StageRunner {
           ...(stage.artifact === undefined
             ? [
                 '--- runner output (redacted) ---',
-                redactEvidence(result.text, this.redactionContext(options)),
+                redactEvidence(result.text, this.redactionContext(cwd)),
                 '--- end runner output ---',
               ]
             : [`answer written to artifact "${stage.artifact}"`]),

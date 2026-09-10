@@ -716,10 +716,16 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // branch out, and re-creates that checkout when it is gone. The distinction
     // from an attempt worktree is the one §14.1 draws — a branch is the work and
     // a worktree is a checkout of it — which is why only this one is recreatable.
+    // §6.1b adds the fourth, and it is the throwaway kind rather than the preparing
+    // kind: a read-only stage gets a twin of the tree it was going to read, and the twin
+    // is destroyed in a `finally`. It holds a copy of code that exists elsewhere, so
+    // nothing in it is evidence — which is the distinction that decides whether a module
+    // belongs on this list or on the retention side of §7.4.
     const PREPARES = [
       'src/app/task-workspaces.ts',
       'src/app/integrator.ts',
       'src/app/diagnostics.ts',
+      'src/app/read-only-workspace.ts',
     ];
     // `unlock` and `prune` join `doctor`'s list for the Integrator, and only for
     // the recreation path: a locked registration whose directory is gone is not
@@ -738,8 +744,13 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
       'src/app/diagnostics.ts',
       'src/app/integrator.ts',
       'src/app/namespace-reclaim.ts',
+      'src/app/read-only-workspace.ts',
     ];
-    const REMOVES = ['src/app/diagnostics.ts', 'src/app/namespace-reclaim.ts'];
+    const REMOVES = [
+      'src/app/diagnostics.ts',
+      'src/app/namespace-reclaim.ts',
+      'src/app/read-only-workspace.ts',
+    ];
     // M2-05: the operations of the §11.2 sequence, in the one module that owns
     // it. Splitting them would give two answers to "which tree was validated",
     // and only one of them would be the one bound to a receipt.
@@ -988,7 +999,17 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // integration branch already holds or something the user asked for by name. The
     // thing that would be *work* is the branch, and that is cleaned by a different
     // rule behind a different flag (§20.4).
-    const FORCES = ['src/app/diagnostics.ts', 'src/app/namespace-reclaim.ts'];
+    // §6.1b is the third, and it earns `force` the same way the probe does: a contained
+    // read-only stage is *expected* to leave its tree dirty — that is the whole point of
+    // giving it one — and Git refuses to reclaim a worktree holding a modified tracked
+    // file. Without `force` every stage that wrote anything would leak a checkout. The
+    // path is not user input: it is composed from the stage name and this process's pid
+    // under Agent Flow's own root, and the same lock protects it that protects an attempt.
+    const FORCES = [
+      'src/app/diagnostics.ts',
+      'src/app/namespace-reclaim.ts',
+      'src/app/read-only-workspace.ts',
+    ];
     // Scoped to a worktree removal on purpose. `force: true` is ordinary and
     // correct on a filesystem call — `node-file-system.ts` and `node-host.ts`
     // both pass it to `fs.rm` — and a rule that flagged those would be noise
