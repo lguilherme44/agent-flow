@@ -153,7 +153,38 @@ export async function runUiCommand(
       ...(webDir === undefined ? {} : { webDir }),
     });
 
-    await server.app.listen({ host, port });
+    // **A taken port is an ordinary outcome, and it used to print a stack trace.**
+    //
+    // Measured: `Error: listen EADDRINUSE: address already in use 127.0.0.1:4782` followed
+    // by four frames of `node:internal`. The product knows the port, knows the holder is
+    // almost certainly another `agent-flow ui`, and knows `--port` exists — and said none
+    // of it. Worse than unhelpful: the old server kept answering on that port serving a
+    // different workspace, so the failure read as "nothing happened" while the next
+    // request went somewhere else entirely.
+    const listening = await server.app.listen({ host, port }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    if (listening !== undefined) {
+      const code = (listening as { code?: string }).code;
+      if (code !== 'EADDRINUSE') throw listening;
+
+      await server.close();
+      process.stderr.write(
+        [
+          `Port ${String(port)} on ${host} is already in use.`,
+          '',
+          'It is almost certainly another `agent-flow ui` — the dashboard keeps running',
+          'after the terminal that started it is closed. Stop that one, or use a',
+          'different port:',
+          '',
+          `  agent-flow ui --port ${String(port + 1)}`,
+          '',
+        ].join('\n'),
+      );
+      return ExitCode.CONFIG_ERROR;
+    }
     const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${String(port)}`;
 
     const lines = [

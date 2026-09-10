@@ -46,6 +46,7 @@ import {
   observePlanningBaseDrift,
   renderPlanningRefusal,
   resolveRunGitIdentity,
+  unreviewableHighRisk,
   worktreeRefusalAction,
   type PlanningBaseMoment,
   type WorktreeRefusalCode,
@@ -1743,6 +1744,13 @@ export interface CreateFeatureRunResult {
 export async function createFeatureRun(
   deps: RunActionDeps,
   description: string,
+  /**
+   * The workflow class the caller asked for, when it asked for one.
+   *
+   * Taken here rather than only at `planFeature`, because one refusal is answerable from it
+   * alone and used to arrive too late — see below.
+   */
+  workflow?: WorkflowClass,
 ): Promise<ActionOutcome<CreateFeatureRunResult>> {
   const say = deps.say ?? en;
   const trimmed = description.trim();
@@ -1755,6 +1763,26 @@ export async function createFeatureRun(
   }
 
   const context = await buildExecutionContext(deps);
+
+  // **Refused before the run exists, not inside the pipeline** (C-19, §3.2).
+  //
+  // Measured: a run asked for in `high-risk` on a single-provider setup was created,
+  // refused 2.2 seconds later, and left in the history with no plan and no stages. The
+  // refusal itself was good — it named both roles and the provider and said what to change
+  // — but both facts it rests on were known here, before anything was created. A corpse in
+  // the run history is the residue of a question answered in the wrong place.
+  //
+  // Only when the caller *asked* for the class. A workflow the classifier elevates from
+  // signals in the description is not knowable until the description is read, and the
+  // pipeline keeps its own check for exactly that case.
+  if (workflow === 'high-risk') {
+    const unreviewable = unreviewableHighRisk(
+      context.config.global.roles,
+      context.providerOf,
+    );
+    if (unreviewable !== undefined) return failed(planningRefused(unreviewable));
+  }
+
   try {
     const run = await createRunWithIdentity(context, trimmed, say);
     return done({ runId: run.runId });

@@ -3,6 +3,7 @@ import { en, type Phrases } from '../core/phrases/index.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
 import {
   createGitWorkspaces,
+  type GitWorkspaces,
   MINIMUM_SUPPORTED_GIT_VERSION,
   compareGitVersions,
   formatGitVersion,
@@ -21,6 +22,7 @@ import {
   type RunnerCapabilitiesMap,
 } from '../core/role.js';
 import { compareReasoning } from '../core/reasoning.js';
+import { THROWAWAY_WORKSPACE_PREFIXES } from '../core/worktree-policy.js';
 import {
   ALL_WORKFLOW_ROLES,
   roleConfigForStage,
@@ -569,6 +571,17 @@ export async function probeInstallCleanliness(options: {
   config: EffectiveConfig;
   projectDir: string;
   host: Host;
+  /**
+   * The Git adapter, when a caller has one. Built here otherwise.
+   *
+   * A seam rather than a convenience. The measured leak was a `worktree remove` that
+   * *failed* — six directories from six `doctor` calls, each holding a full
+   * `node_modules` — and the branch that now falls back to the filesystem is unreachable
+   * from a fixture: the three residue scenarios below all remove cleanly, which is why
+   * they were green while the leak was happening in the wild. A test has to be able to
+   * make the removal fail.
+   */
+  workspaces?: GitWorkspaces;
 }): Promise<InstallProbe> {
   const install = options.config.project?.commands?.install;
   if (install === undefined || install.trim().length === 0) {
@@ -581,7 +594,7 @@ export async function probeInstallCleanliness(options: {
     fs: options.fs,
     homeDir,
   });
-  const workspaces = await createGitWorkspaces({ git, fs: options.fs, homeDir });
+  const workspaces = options.workspaces ?? (await createGitWorkspaces({ git, fs: options.fs, homeDir }));
 
   const head = await workspaces.resolveHead(options.projectDir);
   if (!head.ok || head.value === null) return { outcome: 'skipped', reason: 'no_head' };
@@ -593,7 +606,7 @@ export async function probeInstallCleanliness(options: {
   // Through the `Host` port rather than `process.pid`, for the reason the port's own
   // doc-comment gives: a use case that reads the process table directly is a use case a
   // test cannot pin down.
-  const probeDirectory = `doctor-install-probe-pid-${String(options.host.pid)}`;
+  const probeDirectory = `${THROWAWAY_WORKSPACE_PREFIXES[0]}pid-${String(options.host.pid)}`;
   const location = { segments: [probeDirectory], relativePath: probeDirectory };
 
   const added = await workspaces.addWorktree({
@@ -643,7 +656,37 @@ export async function probeInstallCleanliness(options: {
     // here is evidence: the report already names the changed paths, and a *failed attempt's*
     // worktree is retained precisely because it is evidence (§7.4).
     await workspaces.unlockWorktree({ cwd: options.projectDir, location });
-    await workspaces.removeWorktree({ cwd: options.projectDir, location, force: true });
+    const reclaimed = await workspaces.removeWorktree({
+      cwd: options.projectDir,
+      location,
+      force: true,
+    });
+
+    // **Git's answer is read, and that is the whole fix.**
+    //
+    // Measured: six `doctor-install-probe-pid-*` directories in the owned root after six
+    // `doctor` calls on one repository, each holding nothing but `node_modules`, none
+    // registered with Git. The probe is on by default in a terminal, so five `doctor` runs
+    // paid for five `npm ci` and kept five copies.
+    //
+    // The first explanation was that `--force` spares ignored files. It was measured and it
+    // is false — a worktree holding `dist/` and `node_modules/` came back gone. These were
+    // removals that *failed*, from a caller that discarded the `GitResult`. A cleanup
+    // nobody checks is a cleanup that leaks silently, and the only evidence is a folder
+    // somebody notices months later.
+    //
+    // The filesystem as a last resort, and §20.2 is not violated: Git has either
+    // unregistered this worktree or refused to touch it, the path was composed here under
+    // Agent Flow's own root, and the probe's whole premise is that nothing in it is worth
+    // keeping. Nothing throws — this is a `finally`, and a `doctor` that crashed while
+    // tidying up would report the machine as broken because a directory would not go away.
+    if (!reclaimed.ok) {
+      try {
+        if (await options.fs.exists(added.value)) await options.fs.remove(added.value);
+      } catch {
+        // Left on disk, which is a disk cost. Nothing here is worth failing `doctor` over.
+      }
+    }
   }
 }
 

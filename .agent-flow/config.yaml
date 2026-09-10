@@ -25,7 +25,29 @@ runners:
     enabled: true
     dangerouslySkipPermissions: true
   claude:
-    enabled: false
+    type: claude-code-cli
+    enabled: true
+
+# Claude Opus carries the judgement; agy writes code.
+#
+# Every role that *decides* something — what the architecture is, what the contract says,
+# what the plan is, whether the work is done — is Claude on Opus, pinned. The executors
+# are agy, which is the one job where a cheaper model's output is checked by somebody
+# else before it counts: the code it writes is read by a review and run by the validation
+# commands.
+#
+# `model: opus` is pinned deliberately, against AD-13's general advice that pinned names
+# rot. The reason is that this repository's dogfood is a measurement, and a measurement
+# whose model changed under it is not one. Never a smaller Claude for these roles: the
+# whole point of putting Claude here is the judgement, and a downgrade would keep the
+# provider and lose the thing it was chosen for.
+#
+# `planReviewer` is the exception, and it has to be: §3.2 requires a HIGH-RISK plan review
+# from a *different provider* than the planner, because one model confirming its own
+# hypothesis is not a review. With Claude planning, the reviewer is agy — and that is the
+# right way round. Measured on 10/09/2026 with the roles reversed: agy planned, Claude
+# reviewed, and Claude found a contradiction inside the SDD itself. The pair is what works,
+# not either half.
 roles:
   executors:
     trivial:
@@ -34,15 +56,38 @@ roles:
       runner: agy
     complex:
       runner: agy
+  # 2400 s, not the 900 s default, and the number comes from measurement rather than
+  # caution. The SDD stage on this repository took 15min03 in AF-2026-003 and 15min02 in
+  # AF-2026-004 — one side of the 900 s default each. Discovery was 10min17 and the
+  # architecture impact 9min17. So the honest ceiling is a multiple of the worst case seen,
+  # not a round number near it: 40 min bounds a runaway without turning a normal stage into
+  # a coin flip.
   architect:
-    runner: agy
+    runner: claude
+    model: opus
+    timeoutSeconds: 2400
   sdd:
-    runner: agy
+    runner: claude
+    model: opus
+    timeoutSeconds: 2400
+  # `agy` plans, and this is the allocation the evidence chose rather than the one that
+  # reads best. With two providers and one strong model, the strong one is worth more on the
+  # *review* than on the plan: measured 10/09/2026, Claude reviewing an agy plan produced 11
+  # findings anchored in file and line — one of them a contradiction inside the SDD itself —
+  # while agy reviewing a Claude plan produced nothing at all (289 s, SUCCESS, empty
+  # response). A strong plan nobody checks is unchecked; a weaker plan with a working review
+  # converges, and high-risk gives three revision cycles to converge in.
   planner:
     runner: agy
   planReviewer:
-    runner: agy
+    runner: claude
+    model: opus
+    timeoutSeconds: 2400
   verification:
-    runner: agy
+    runner: claude
+    model: opus
+    timeoutSeconds: 2400
   finalReviewer:
-    runner: agy
+    runner: claude
+    model: opus
+    timeoutSeconds: 2400

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { EffectiveConfig, IsolationMode, RunState } from '../contracts/index.js';
+import type { EffectiveConfig, GlobalConfig, IsolationMode, RunState } from '../contracts/index.js';
+import { roleConfigOf } from '../contracts/index.js';
 import type { FileSystem } from '../ports/file-system.js';
 import type { Host } from '../ports/host.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
@@ -16,6 +17,8 @@ import {
   repoKeyFromCanonicalRoot,
 } from '../core/worktree-policy.js';
 import { en, type Phrases } from '../core/phrases/index.js';
+import { sharedReviewProvider } from '../core/independence.js';
+import { PlanningRefusal } from './planning-pipeline.js';
 import { agentFlowPaths } from './paths.js';
 import { projectConfigPath } from '../config/loader.js';
 
@@ -1090,4 +1093,33 @@ export function describeIsolation(state: RunState, config: EffectiveConfig): Iso
           configured,
         )} — it does not apply to this run`,
   };
+}
+
+/**
+ * The HIGH-RISK review pair, refused before anything is created (§3.2, C-19).
+ *
+ * Here rather than in the pipeline because two callers need the same sentence: the request
+ * that asks for `high-risk` explicitly — which can be refused before a run exists — and
+ * the pipeline, for the case the *classifier* elevated from signals in the description and
+ * nobody could have known earlier. One builder, so the two cannot drift.
+ *
+ * Returns `undefined` when the pair is independent or cannot be judged.
+ */
+export function unreviewableHighRisk(
+  roles: GlobalConfig['roles'],
+  providerOf: (runnerId: string) => string | undefined,
+): PlanningRefusal | undefined {
+  const shared = sharedReviewProvider({
+    plannerRunner: roleConfigOf(roles, 'planner').runner,
+    reviewerRunner: roleConfigOf(roles, 'planReviewer').runner,
+    providerOf,
+  });
+  if (shared === undefined) return undefined;
+
+  return new PlanningRefusal(
+    'cross_provider_required',
+    `HIGH-RISK workflows require independent cross-provider review. Both planner and planReviewer resolve to provider "${shared}".`,
+    'Configure independent providers for roles.planner and roles.planReviewer in config.yaml.',
+    'configuration',
+  );
 }

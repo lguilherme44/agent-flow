@@ -144,6 +144,47 @@ describe('a read-only stage runs in a twin of the tree, not in the tree', () => 
     expect(existsSync(tree.cwd)).toBe(false);
   });
 
+  it('reports a cleanup it could not finish, rather than throwing out of a finally', async () => {
+    repo = await makeTempRepo();
+    mkdirSync(join(repo.dir, 'src'), { recursive: true });
+    repo.write('src/a.ts', 'export const a = 1;\n');
+    repo.write('.gitignore', 'dist/\n');
+    repo.commitAll('first');
+
+    // Measured in a live run: the removal threw `EBUSY: resource busy or locked, rmdir` on
+    // Windows, the throw left a `finally`, and a plan revision that had already succeeded
+    // was reported as `no_run` — fourteen minutes of model work lost to a directory that
+    // would not go away.
+    //
+    // The throw is injected rather than provoked, because a Windows file lock is not
+    // reproducible on demand and a test that waited for one would be a test that passes on
+    // Linux and flakes here. What is under test is the *contract*: whatever fails inside,
+    // `release` reports it.
+    const outcome = await openReadOnlyTree(
+      {
+        fs: new NodeFileSystem(),
+        // `Object.create` rather than a spread: the adapter's methods live on its
+        // prototype, and a spread would have produced an object with none of them.
+        workspaces: Object.assign(Object.create(repo.workspaces) as typeof repo.workspaces, {
+          removeWorktree: () => Promise.reject(new Error('EBUSY: resource busy or locked, rmdir')),
+        }),
+        host: new FakeHost(4242),
+      },
+      { source: repo.dir, label: 'planning' },
+    );
+    if (!outcome.ok) throw new Error(`expected a tree, got ${outcome.reason}`);
+
+    const released = await outcome.tree.release();
+
+    expect(released.removed).toBe(false);
+    expect(released.detail).toContain('EBUSY');
+
+    // And the directory is still there, which is the honest consequence: a leak is a disk
+    // cost, and `agent-flow clean` reclaims it. `afterEach` removes the whole temp root,
+    // so nothing survives this test either way.
+    expect(existsSync(outcome.tree.cwd)).toBe(true);
+  });
+
   it('gives two concurrent stages two trees', async () => {
     repo = await makeTempRepo();
     mkdirSync(join(repo.dir, 'src'), { recursive: true });

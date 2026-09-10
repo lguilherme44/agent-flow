@@ -441,6 +441,17 @@ export const STAGE_EVENT_TYPES = [
   /** Satisfied by an artifact that already existed; no agent ran. */
   'stage_reused',
   'stage_context_measured',
+  /**
+   * `detail: { stage, detail }`. A read-only stage's disposable checkout is still on disk.
+   *
+   * The stage itself is unaffected — this is a *cleanup* that did not finish, and §6.1b's
+   * whole point is that losing an answer to a failed cleanup is the trade it refuses. It
+   * earns an event rather than a degradation because nothing about the run was degraded:
+   * what is left is a directory in the owned root, which — measured — nothing currently
+   * reclaims. It earns *something* because a leak that repeats has to be findable, and the
+   * first six were found by listing the directory by hand.
+   */
+  'read_only_workspace_retained',
 ] as const;
 export type StageEventType = (typeof STAGE_EVENT_TYPES)[number];
 

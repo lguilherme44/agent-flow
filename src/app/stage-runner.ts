@@ -369,7 +369,24 @@ export class StageRunner {
     try {
       return await this.runIn(stage, runId, vars, options, prompt, contained?.cwd ?? intended);
     } finally {
-      await contained?.release();
+      // **Nothing in here may throw**, and both halves are written for that.
+      //
+      // `release` reports instead of raising — its own contract says why, and the reason is
+      // that this `finally` once turned an `EBUSY` on a directory into a lost revision. The
+      // event is wrapped for the same reason one level down: a store write that failed here
+      // would reintroduce exactly the defect, for the sake of a note about a leaked folder.
+      const released = await contained?.release();
+      if (released !== undefined && !released.removed) {
+        try {
+          await this.options.store.appendEvent(runId, 'read_only_workspace_retained', {
+            stage: stage.name,
+            detail: released.detail ?? 'the checkout could not be removed',
+          });
+        } catch {
+          // A leaked directory is a disk cost somebody eventually deletes. Losing the
+          // stage's answer in order to say so out loud is not a trade worth making.
+        }
+      }
     }
   }
 

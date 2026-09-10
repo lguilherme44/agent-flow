@@ -1010,6 +1010,8 @@ Os documentos abaixo estão em inglês.
 | [`docs/testing.md`](docs/testing.md) | As camadas de teste, o que cada uma prova e onde cada uma para |
 | [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | O que cada CLI faz de fato, com o comando que comprova e a versão em que foi testada |
 | [`docs/engineering/findings.md`](docs/engineering/findings.md) | Log de engenharia: o que construir isto ensinou, incluindo o que segue sem solução |
+| [`docs/specs/live-dogfood-agy.md`](docs/specs/live-dogfood-agy.md) | Dogfood ao vivo: uma feature real em runners reais, e os nove achados que produziu |
+| [`docs/specs/live-dogfood-remote-control.md`](docs/specs/live-dogfood-remote-control.md) | Dogfood ao vivo: o agent-flow planejando uma feature para o agent-flow — cinco achados abertos, dois autoinfligidos, e o que a revisão entre provedores pegou |
 
 **Especificação**
 

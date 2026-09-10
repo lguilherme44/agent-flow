@@ -1,5 +1,10 @@
 import { agentFlowPaths } from './paths.js';
-import { reclaimNamespace, type ReclaimOutcome } from './namespace-reclaim.js';
+import {
+  reclaimNamespace,
+  reclaimStrayWorkspaces,
+  type ReclaimOutcome,
+  type StrayWorkspace,
+} from './namespace-reclaim.js';
 import type { RunExecutionLock } from './run-execution-lock.js';
 import type { StateStore } from './state-store.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
@@ -73,6 +78,16 @@ export interface CleanupReport {
    * working on and a cleanup that cannot see it look identical from the outside.
    */
   readonly protectedRun?: string;
+  /**
+   * Throwaway workspaces that belonged to no run (§20.5).
+   *
+   * Always swept, and not behind `--worktrees`: that flag guards *evidence* — a failed
+   * attempt's checkout, which §7.4 keeps because it is the only copy of what an agent
+   * produced. These hold nothing. Six of them accumulated on this repository from six
+   * `doctor` invocations before anything looked, and a flag would have meant they kept
+   * accumulating for everybody who did not know to pass it.
+   */
+  readonly strays: readonly StrayWorkspace[];
   /** Whether the cached repository map was removed, or would be. */
   readonly cacheRemoved: boolean;
   /** Any run refused — the caller's non-zero exit, and the page's warning. */
@@ -150,6 +165,18 @@ export async function cleanWorkspace(
     runs.push({ runId, outcome: 'removed', reclaim });
   }
 
+  // Swept whatever the runs did, because these belong to none of them — a workspace with
+  // no old run to remove still accumulates a probe directory per `doctor`.
+  const strays = await reclaimStrayWorkspaces(
+    {
+      workspaces: deps.workspaces,
+      fs: deps.fs,
+      host: deps.host,
+      projectDir: deps.projectDir,
+    },
+    options.dryRun === true ? { dryRun: true } : {},
+  );
+
   const cacheRemoved =
     options.cache === true && (await deps.fs.exists(paths.architectureCache));
   if (cacheRemoved && options.dryRun !== true) await deps.fs.remove(paths.architectureCache);
@@ -160,6 +187,7 @@ export async function cleanWorkspace(
     totalRuns: runIds.length,
     runs,
     ...(protectedRun === undefined ? {} : { protectedRun }),
+    strays,
     cacheRemoved,
     refused,
   };

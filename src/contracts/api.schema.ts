@@ -130,11 +130,22 @@ export const DoctorQuerySchema = z.object({
   install: z.coerce.boolean().optional(),
 });
 
-/** A configuration source is named by scope and registry id, never by path. */
+/**
+ * A configuration source is named by scope and registry id, never by path.
+ *
+ * **`lang` is declared here because `.strict()` is load-bearing.** Strictness is what
+ * refuses an unexpected key outright rather than ignoring it — a `path=` on this route
+ * gets a refusal, which is §93 enforced by the shape instead of by a reader's discipline.
+ * The Deck appends `lang` to every URL (the language is part of a read's address), so the
+ * one transport key has to be part of every strict query schema or the route 400s on a
+ * request that is perfectly well formed. Measured: the Crew screen said "the
+ * configuration could not be read" for exactly this reason, on a config that loads fine.
+ */
 export const ConfigEditorQuerySchema = z
   .object({
     scope: z.enum(['global', 'project']),
     projectId: ProjectIdSchema.optional(),
+    lang: LocaleSchema.optional(),
   })
   .strict()
   .superRefine((target, context) => {
@@ -921,6 +932,14 @@ export interface CleanView {
   readonly runs: readonly CleanRunView[];
   /** The active run, kept because `force` was not set. Named rather than skipped. */
   readonly protectedRun?: string;
+  /**
+   * Throwaway workspaces that belonged to no run (§20.5).
+   *
+   * `doctor`'s install probe and a read-only stage each cut one, both at the top of the
+   * owned root, and both outside every per-run reclamation. Reported by segment, never by
+   * path (§21.3).
+   */
+  readonly strays: readonly { readonly segment: string; readonly removed: boolean }[];
   readonly cacheRemoved: boolean;
   /** Something was refused — a non-zero exit in a terminal, a warning on a screen. */
   readonly refused: boolean;

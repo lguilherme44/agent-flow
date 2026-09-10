@@ -1004,6 +1004,8 @@ Full roadmap, including what MVP 1 established and what is deliberately out of s
 | [`docs/testing.md`](docs/testing.md) | The test layers, what each one proves, and where each one stops |
 | [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each CLI actually does, with the command that proves it and the version it was probed against |
 | [`docs/engineering/findings.md`](docs/engineering/findings.md) | Engineering log: what building this taught us, including what is still unsolved |
+| [`docs/specs/live-dogfood-agy.md`](docs/specs/live-dogfood-agy.md) | Live dogfood: a real feature on real runners, and the nine findings it produced |
+| [`docs/specs/live-dogfood-remote-control.md`](docs/specs/live-dogfood-remote-control.md) | Live dogfood: agent-flow planning a feature for agent-flow — five open findings, two self-inflicted, and what cross-provider review caught |
 
 **Specification**
 

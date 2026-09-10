@@ -1,7 +1,13 @@
 import type { FileSystem } from '../ports/file-system.js';
 import type { Host } from '../ports/host.js';
 import type { GitWorkspaces, StatusEntry } from '../adapters/git/git-workspaces.js';
-import type { WorkspaceLocation } from '../core/worktree-policy.js';
+import {
+  THROWAWAY_WORKSPACE_PREFIXES,
+  type WorkspaceLocation,
+} from '../core/worktree-policy.js';
+
+/** `read-only-`, so `clean` and this module cannot disagree about the spelling. */
+const THROWAWAY_PREFIX = THROWAWAY_WORKSPACE_PREFIXES[1];
 
 /**
  * A checkout a read-only stage may ruin (§6.1b).
@@ -27,19 +33,46 @@ import type { WorkspaceLocation } from '../core/worktree-policy.js';
  * command; the two stages that do run commands run them elsewhere, before the read-only
  * agent is asked what the output means.
  *
- * **Cut per invocation and destroyed in a `finally`.** Measured on this repository at
- * 1107 tracked files: 1.5 s to add and 0.8 s to remove, on Windows. A cache keyed on a
- * fingerprint would save a few seconds per run and would, on the day the fingerprint is
- * wrong, show a stage the previous phase's code — which is a defect nobody would find by
- * reading the output. Slow and obviously correct beats fast and subtly wrong.
+ * **Cut per invocation and destroyed in a `finally`.** Measured through this function on
+ * this repository, 1107 tracked files, on Windows: 3.4 s to open and 0.6 s to release, so
+ * 19.9 s across a planning phase's five read-only stages.
+ *
+ * A cache keyed on a fingerprint would save that, and the key does not exist:
+ * `git status --porcelain` says a file changed, not *what* changed, so two different trees
+ * produce the same key. On the day it was wrong it would show a stage the previous phase's
+ * code — a defect nobody finds by reading the output. Slow and obviously correct beats
+ * fast and subtly wrong.
  */
 
 /** One tree, and the promise to take it away. */
 export interface ReadOnlyTree {
   /** Where the stage runs. Absolute. */
   readonly cwd: string;
-  /** Removed through Git, never with `rm -rf` (§20.2). Safe to call twice. */
-  release(): Promise<void>;
+  /**
+   * Takes the tree away. **Never throws, and that is the contract rather than politeness.**
+   *
+   * Measured the expensive way, in a live run. This is called from a `finally`, and on
+   * Windows the removal threw `EBUSY: resource busy or locked, rmdir` on a directory whose
+   * files had been open a moment earlier. The throw propagated out of the `finally` and
+   * killed a plan revision that had already succeeded: fourteen minutes of model work
+   * reported as `no_run`, because the *cleanup* failed. "A defence that becomes an outage
+   * is a worse trade" is the sentence this module opens with, and it had made that trade.
+   *
+   * So a failure is reported rather than raised. The worst case is a directory left in
+   * the owned root, and — measured, not assumed — **nothing reclaims it today**:
+   * `agent-flow clean --worktrees` is scoped to the retained worktrees of *removed runs*,
+   * derived from run state, and this one belongs to no run; Git has already unregistered
+   * it, so `worktree prune` does not see it either. A person deletes it by hand. That is a
+   * gap worth closing, and it is still the smaller of the two costs. Removal goes through
+   * Git first (§20.2); safe to call twice.
+   */
+  release(): Promise<ReleaseOutcome>;
+}
+
+export interface ReleaseOutcome {
+  readonly removed: boolean;
+  /** Why not, when it was not. Absent on success. */
+  readonly detail?: string;
 }
 
 export const READ_ONLY_REFUSALS = [
@@ -87,7 +120,7 @@ function locationFor(label: string, pid: number): WorkspaceLocation {
   // A single flat segment under the owned root, for the reason `doctor`'s probe gives:
   // `git worktree remove` deletes the worktree directory and not its parent, so a nested
   // layout would leave an empty directory behind on every stage.
-  const segment = `read-only-${slug(label)}-pid-${String(pid)}-${String(sequence)}`;
+  const segment = `${THROWAWAY_PREFIX}${slug(label)}-pid-${String(pid)}-${String(sequence)}`;
   return { segments: [segment], relativePath: segment };
 }
 
@@ -135,32 +168,63 @@ export async function openReadOnlyTree(
 
   const tree: ReadOnlyTree = {
     cwd: added.value,
-    release: async () => {
-      // Unlocked first because it was created locked, and forced because the stage's whole
-      // purpose here is to be allowed to dirty this tree — Git refuses to reclaim a
-      // worktree holding a modified tracked file or an untracked non-ignored one, which is
-      // the state a contained stage *is expected* to leave behind. Nothing here is
-      // evidence: what the agent produced is its answer, which the stage has already
-      // persisted, and a failed attempt's worktree is retained precisely because it is
-      // evidence (§7.4). This one holds a copy of code that exists elsewhere.
-      await workspaces.unlockWorktree({ cwd: options.source, location });
-      await workspaces.removeWorktree({ cwd: options.source, location, force: true });
-
-      // **And then the ignored files, which `git worktree remove` does not take.**
-      //
-      // Measured on this repository: three `doctor-install-probe-pid-*` directories in
-      // the owned root, each holding nothing but `node_modules`, from probes that had
-      // already removed their worktree successfully. `--force` discards *tracked*
-      // modifications and untracked non-ignored files; anything `.gitignore` covers is
-      // left where it is, and the directory with it. A read-only stage that writes into
-      // `dist/` would leak one of those per invocation.
-      //
-      // Not a violation of §20.2's "never `rm -rf` a worktree". Git has already
-      // unregistered this one — the removal above is what did it — so what is left is a
-      // stray directory at a path *this process composed*, under Agent Flow's own root,
-      // which is the one place a filesystem delete is the correct tool.
-      if (await fs.exists(added.value)) await fs.remove(added.value);
+    release: async (): Promise<ReleaseOutcome> => {
+      try {
+        return await reclaim();
+      } catch (error) {
+        // The one `catch` that catches everything, and it is deliberate. Anything thrown
+        // from here lands in a `finally` around a stage that has already produced its
+        // answer, and losing that answer to a directory that would not go away is the
+        // trade this module refuses.
+        return {
+          removed: false,
+          detail: error instanceof Error ? error.message : 'the checkout could not be removed',
+        };
+      }
     },
+  };
+
+  const reclaim = async (): Promise<ReleaseOutcome> => {
+    // Unlocked first because it was created locked, and forced because the stage's whole
+    // purpose here is to be allowed to dirty this tree — Git refuses to reclaim a worktree
+    // holding a modified tracked file or an untracked non-ignored one, which is the state a
+    // contained stage *is expected* to leave behind. Nothing here is evidence: what the
+    // agent produced is its answer, which the stage has already persisted, and a failed
+    // attempt's worktree is retained precisely because it is evidence (§7.4). This one
+    // holds a copy of code that exists elsewhere.
+    await workspaces.unlockWorktree({ cwd: options.source, location });
+    const removed = await workspaces.removeWorktree({
+      cwd: options.source,
+      location,
+      force: true,
+    });
+
+    // **Git's answer is read, and that is the fix rather than a nicety.**
+    //
+    // `--force` does delete ignored files: measured directly, a worktree holding `dist/`
+    // and `node_modules/` came back empty and gone. So the three
+    // `doctor-install-probe-pid-*` directories found in the owned root, each holding only
+    // `node_modules`, are not files Git spared — they are removals that **failed**, from a
+    // caller that discarded the result. A cleanup nobody checks is a cleanup that leaks
+    // silently, and the only evidence is a folder somebody notices months later.
+    if (!removed.ok) {
+      // The filesystem as a last resort, and §20.2 is not violated by it: Git has either
+      // unregistered this worktree or refused to touch it, the path was composed by this
+      // process under Agent Flow's own root, and nothing in it is evidence.
+      if (await fs.exists(added.value)) await fs.remove(added.value);
+
+      return (await fs.exists(added.value))
+        ? { removed: false, detail: removed.failure.message }
+        : { removed: true };
+    }
+
+    // A directory Git reported removing and did not is the second half of the same
+    // defect, and it is cheap to check.
+    if (await fs.exists(added.value)) await fs.remove(added.value);
+
+    return (await fs.exists(added.value))
+      ? { removed: false, detail: `${added.value} is still on disk after Git removed it` }
+      : { removed: true };
   };
 
   try {

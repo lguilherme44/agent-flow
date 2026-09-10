@@ -131,7 +131,17 @@ export function renderCleanup(report: CleanupReport): string[] {
     lines.push(`  ${report.dryRun ? 'would remove' : 'removed '} cached repository map`);
   }
 
-  if (report.runs.length === 0 && !report.cacheRemoved) {
+  // Named individually rather than counted, because the answer to "why is my disk full"
+  // is which directories, and six of these were found only by listing the root by hand.
+  for (const stray of report.strays) {
+    lines.push(
+      stray.removed || report.dryRun
+        ? `  ${report.dryRun ? 'would remove' : 'removed '} ${stray.segment}`
+        : `  kept     ${stray.segment}${stray.detail === undefined ? '' : ` — ${stray.detail}`}`,
+    );
+  }
+
+  if (report.runs.length === 0 && !report.cacheRemoved && report.strays.length === 0) {
     lines.push(
       `Nothing to remove — ${String(report.totalRuns)} run(s), keeping ${String(report.keep)}.`,
     );

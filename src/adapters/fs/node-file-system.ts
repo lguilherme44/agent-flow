@@ -89,8 +89,25 @@ export class NodeFileSystem implements FileSystem {
     }
   }
 
+  /**
+   * `fs.rm -rf`, with the same Windows patience `writeFileAtomic` needed.
+   *
+   * Measured in a live run: removing a disposable checkout threw
+   * `EBUSY: resource busy or locked, rmdir '…/read-only-planning-pid-41036-7'`. On Windows
+   * a directory whose files were open moments ago stays locked for a beat — the agent
+   * process that just exited, an indexer, an antivirus scan — and `rm` is not retried by
+   * Node. `writeFileAtomic` above already carries this note for `rename`; `remove` had no
+   * such tolerance, and a *cleanup* that throws is worse than one that is slow.
+   *
+   * `maxRetries` is Node's own backoff for exactly this, so the retry is the platform's
+   * rather than a loop of ours.
+   */
   async remove(path: string): Promise<void> {
-    await fs.rm(path, { recursive: true, force: true });
+    await fs.rm(path, {
+      recursive: true,
+      force: true,
+      ...(process.platform === 'win32' ? { maxRetries: 10, retryDelay: 50 } : {}),
+    });
   }
 
   /**

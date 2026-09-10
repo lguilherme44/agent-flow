@@ -1175,7 +1175,9 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     if (!body.success) return badRequest(reply, say(request).featureNeedsDescription);
 
     const deps = depsFor(project, sayFor(request.query));
-    const created = await createFeatureRun(deps, body.data.description);
+    // The requested class travels with the description, so the one refusal answerable
+    // from configuration alone lands before a run is created (§3.2, C-19).
+    const created = await createFeatureRun(deps, body.data.description, body.data.workflow);
     if (!created.ok) return rejectAction(reply, created.error);
 
     const runId = created.value.runId;

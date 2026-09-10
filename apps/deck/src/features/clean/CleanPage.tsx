@@ -209,7 +209,8 @@ function Toggle({
 /** The plan, or the receipt. Same shape, and the heading is the only difference. */
 function Plan({ report }: { report: CleanView }) {
   const t = useT();
-  const nothing = report.runs.length === 0 && !report.cacheRemoved;
+  const nothing =
+    report.runs.length === 0 && !report.cacheRemoved && report.strays.length === 0;
 
   return (
     <section className="doctor-section" aria-label={report.dryRun ? t.clean.whatWouldGo : t.clean.whatWent}>
@@ -235,6 +236,19 @@ function Plan({ report }: { report: CleanView }) {
           <Chip tone="idle">{t.clean.cacheKey}</Chip> {report.dryRun ? t.clean.cacheWouldGo : t.clean.cacheWent}
         </p>
       ) : null}
+
+      {/*
+        Named one by one rather than counted, because the answer to "why is my disk full"
+        is *which* directories — and the six that started this were found only by listing
+        the owned root by hand.
+      */}
+      {report.strays.map((stray) => (
+        <p key={stray.segment} className="doctor-finding" data-tone="idle">
+          <Chip tone="idle">{stray.removed || report.dryRun ? t.clean.strayKey : t.clean.keptKey}</Chip>{' '}
+          <code>{stray.segment}</code>{' '}
+          {stray.removed ? t.clean.strayWent : report.dryRun ? t.clean.strayWouldGo : t.clean.strayKept}
+        </p>
+      ))}
 
       {report.protectedRun === undefined ? null : (
         <Notice tone="warn" k={t.clean.keptKey}>

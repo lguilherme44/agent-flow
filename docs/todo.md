@@ -112,6 +112,118 @@ lendo a saída · suíte inteira verde.
 
 ---
 
+## Achados do dogfood de 10/09/2026 — `docs/specs/live-dogfood-remote-control.md`
+
+O agent-flow planejou uma feature para o agent-flow: pareamento de dispositivo para o Deck,
+em `high-risk`, `agy` planejando e `claude` revisando. A feature não saiu — a revisão entre
+provedores recusou o plano com 11 achados e a revisão seguinte morreu por um defeito que eu
+mesmo tinha introduzido uma hora antes. Os cinco itens abaixo são o resíduo, e quatro deles
+são o mesmo defeito de roupa diferente: **um resultado que foi calculado e depois jogado
+fora.**
+
+- [x] **D1 · A porta ocupada responde com stack trace de Node** — `src/cli/ui.ts`
+      `Error: listen EADDRINUSE` mais quatro linhas de `node:internal`. O produto sabe que
+      a 4782 está tomada, que o dono é quase certamente outro `agent-flow ui`, e que
+      `--port` existe. **Custou:** a falha foi silenciosa, o servidor antigo continuou
+      respondendo servindo um workspace de `%TEMP%`, e a feature quase foi planejada contra
+      o repositório errado.
+      **Pronto quando:** a mensagem nomeia a porta, o provável dono e a saída, e um teste
+      falha se voltar a ser um `throw` cru.
+
+- [x] **D2 · `cross_provider_required` recusa depois de criar a run** — `src/app/run-actions.ts`
+      `AF-2026-001` existe, sem plano, com 2,2 s de vida. A recusa em si é boa — rápida,
+      nomeia os dois papéis e o provedor, e diz o que mudar. O defeito é *quando* ela
+      dispara: os papéis configurados e a classe de workflow são ambos conhecidos no
+      `POST`, antes de qualquer coisa ser criada. Mesma forma do C-19 que o `start` já
+      corrigiu ("refused before the lock, not inside it") num caminho que não recebeu o
+      tratamento.
+      **Pronto quando:** a combinação impossível é recusada sem criar run, e um teste
+      afirma que o histórico não ganhou entrada.
+
+- [x] **D3 · O orçamento de cerimônia anuncia um limite de tarefas e não aplica** — `src/app/planning-pipeline.ts:346`
+      O maior dos cinco, porque a run declara o limite e então o ignora. O log de
+      `AF-2026-002` registra `budget.maxTasks: 8` em `workflow_classified`; o plano aceito
+      tem **12 tarefas**, o portão reporta `taskCount: 12`, e nada recusou, avisou ou
+      registrou degradação. `trivial` aplica 1 e `simple` aplica 3; `standard` e
+      `high-risk` passam `ceremonyProblems: () => []`.
+      **O custo não é teórico:** o terceiro achado da revisão foi uma tarefa com seis
+      responsabilidades independentes — que é o que um plano faz quando nada empurra de
+      volta no tamanho dele.
+      **Pronto quando:** um plano acima do limite é recusado como os outros dois já são, e
+      o planner é perguntado de novo com o problema anexado.
+
+- [x] **D4 · `doctor` vaza uma worktree por invocação** — `src/app/diagnostics.ts`
+      Seis diretórios em `~/.agent-flow/worktrees/doctor-install-probe-pid-*` depois de
+      seis `doctor`, cada um com `node_modules` e nenhum registrado no Git. A sonda do §8.4
+      é ligada por padrão no terminal, então cinco `doctor` pagam cinco `npm ci` e guardam
+      cinco cópias.
+      **A causa não é o que parece.** Medido: `git worktree remove --force` **apaga**
+      arquivo ignorado. Então essas seis são remoções que *falharam* — e
+      `probeInstallCleanliness` descarta o `GitResult` de `removeWorktree`, então ninguém
+      foi avisado.
+      **Pronto quando:** a sonda lê a resposta do Git, e um teste falha se o resultado for
+      descartado.
+
+- [x] **D5 · Nada recupera um diretório órfão sob a raiz própria** — `src/app/namespace-reclaim.ts`
+      É por isso que o D4 acumula em vez de se resolver. `agent-flow clean --worktrees
+      --dry-run` responde `Nothing to remove — 2 run(s), keeping 5.`: o escopo é *worktrees
+      retidas de runs removidas*, derivado de estado de run. Essas não pertencem a run
+      nenhuma — as da sonda são nomeadas por pid — e o Git já as desregistrou, então
+      `worktree prune` também não as vê. Nenhum comando do produto as recupera.
+      **Pronto quando:** `clean` nomeia e recupera um diretório sob a raiz própria que
+      nenhuma run reivindica, e o dry-run o mostra antes.
+
+- [ ] **D8 · O timeout default por papel é um sorteio para Opus neste repositório** — `src/contracts/config.schema.ts:28`
+      `DEFAULT_TIMEOUT_SECONDS = 900`. Medido duas vezes, no mesmo estágio, no mesmo
+      repositório, com o mesmo modelo: `AF-2026-003` fez o SDD em **15min03 e passou**;
+      `AF-2026-004` fez em **15min02 e estourou**. Não é margem de segurança — é a linha
+      exatamente onde o trabalho cai.
+      **O que isso custa:** o estágio morre com `runner_timeout` e `rawExcerpt: ""` — não há
+      saída para mostrar, porque não houve resposta. Discovery e impacto sobrevivem (os dois
+      honram o ponto de retomada), então são ~20 min de Opus preservados e ~15 min jogados
+      fora, por invocação, sem nada dizer que o limite estava perto.
+      **Pronto quando:** ou o default cabe o pior caso medido de um repositório real, ou o
+      estágio avisa antes de morrer — "este estágio está em 80% do limite" é um fato que o
+      produto tem e não conta. O `doctor` sabe o `timeoutSeconds` de cada papel e nunca o
+      compara com nada.
+
+- [ ] **D6 · `repairs` reporta 1 quando não houve reparo nenhum** — `src/app/stage-runner.ts:626`
+      O contador é incrementado no **topo** do loop, então `repairs: 1` significa uma
+      tentativa e zero re-prompts. O docblock do campo diz que ele conta "how many times
+      the stage had to re-prompt for a well-formed answer" e insiste, em parágrafo próprio,
+      na distinção entre *repair* e *attempt* — enquanto reporta 1 para zero reparos.
+      **Custou:** eu li `repairs: 1` como "o loop de reparo disparou" e escrevi isso no
+      relatório de dogfood como um resultado positivo. Estava errado nas duas runs. O
+      leitor que ele enganou foi quem escreveu o campo de leitura dele.
+      **Pronto quando:** `repairs` é zero numa primeira tentativa bem-sucedida, e um teste
+      fixa os três valores (0 sem reparo, 1 com um, 2 com dois) contra
+      `MAX_REPAIR_ATTEMPTS`.
+
+- [ ] **D7 · "The stages before X are kept" é falso para dois dos três** — `src/app/planning-pipeline.ts:301,315,328`
+      O `skipUntil` chega em exatamente dois estágios — `architecture-impact` e `sdd` — via
+      `stageOrExisting`. Os outros dois nunca o veem:
+
+      | estágio | honra `--from` | por quê |
+      |---|---|---|
+      | discovery | **não** em `high-risk` | `useDiscoveryCache = workflow === 'high-risk' ? false : …`, e o discovery não passa pelo `stageOrExisting` |
+      | architecture-impact | sim | `stageOrExisting` |
+      | sdd | sim | `stageOrExisting` |
+      | planning | **não** | chama `planUntilChecksPass` direto |
+
+      **Medido, não lido.** `AF-2026-004` estourou o tempo no SDD e foi retomada com
+      `--from sdd`; o log mostra `stage_started` para **discovery** sete segundos depois da
+      retomada. A ação da própria recusa promete o contrário: *"The stages before sdd are
+      kept."* Em `high-risk`, dos três estágios antes do SDD, um é preservado e um é
+      refeito ao custo cheio — 10min17 de Opus, ~US$ 3,68.
+      **Custou:** eu afirmei ao operador, duas vezes, que a retomada preservava o trabalho.
+      A segunda vez foi depois de ler o código, e ainda estava errada — porque eu li o
+      `stageOrExisting` e não o ramo do cache do discovery.
+      **Pronto quando:** a frase enumera o que de fato sobrevive, ou os quatro estágios
+      honram o ponto de retomada. E um teste falha se a frase e o comportamento voltarem a
+      discordar — a frase é gerada de uma lista, não escrita à mão.
+
+---
+
 ## Portabilidade, e um contrato que o código contradiz
 
 Levantado em 08/09/2026, numa revisão no Windows: 121 de 4500 testes vermelhos, nenhum

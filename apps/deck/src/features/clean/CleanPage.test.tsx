@@ -37,6 +37,7 @@ const PLAN: CleanView = {
     },
     { runId: 'AF-2026-002', outcome: 'locked' },
   ],
+  strays: [],
   protectedRun: 'AF-2026-009',
   cacheRemoved: false,
   refused: true,

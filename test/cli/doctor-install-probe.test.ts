@@ -223,6 +223,55 @@ describe('the install-cleanliness probe (§8.4)', () => {
         expect(repo.userGit(['for-each-ref', '--format=%(refname)']).trim()).toBe(refsBefore);
       });
     }
+
+    it('sweeps the directory itself when Git will not remove the worktree', async () => {
+      // **The branch the three scenarios above cannot reach, and the one that leaked.**
+      //
+      // Measured in the wild: six `doctor-install-probe-pid-*` directories after six
+      // `doctor` calls on one repository, each holding a full `node_modules`, none
+      // registered with Git — while these tests were green. The reason they were green is
+      // that all three of them remove cleanly. What happened live was a removal that
+      // *failed*, and the probe discarded `removeWorktree`'s `GitResult`, so nobody was
+      // told and the directory stayed.
+      //
+      // The failure is injected because the real cause is a Windows file lock — `npm ci`'s
+      // own children holding `node_modules` — which is not reproducible on demand. What is
+      // under test is that Git's answer is *read*.
+      repo = await makeTempRepoWithCommit();
+      repo.write('.gitignore', 'node_modules/\n');
+      repo.commitAll('a project');
+
+      const real = repo.workspaces;
+      // `Object.create`, because the adapter's methods are on its prototype.
+      const refusing = Object.assign(Object.create(real) as typeof real, {
+        removeWorktree: () =>
+          Promise.resolve({
+            ok: false as const,
+            failure: { code: 'git_command_failed', message: 'EBUSY: resource busy or locked' },
+          }),
+      });
+
+      const finding = await probeInstallCleanliness({
+        fs: new NodeFileSystem(),
+        processRunner: new NodeProcessRunner(),
+        config: {
+          global: {},
+          project: { commands: { install: installScript(repo, 'sweep', MAKE_IGNORED_OUTPUT) } },
+        } as unknown as EffectiveConfig,
+        projectDir: repo.dir,
+        host: new FakeHost(4242, 'test-host', [4242], repo.home),
+        workspaces: refusing as unknown as typeof real,
+      });
+
+      // The probe still answered: a cleanup is not allowed to change the verdict.
+      expect(finding.outcome).toBe('clean');
+
+      // And nothing was left behind, even though Git refused to take it.
+      const leftovers = existsSync(repo.worktreeRoot)
+        ? readdirSync(repo.worktreeRoot).filter((entry) => entry.startsWith('doctor-install-probe'))
+        : [];
+      expect(leftovers).toEqual([]);
+    });
   });
 
   it('leaves the user working tree untouched', async () => {

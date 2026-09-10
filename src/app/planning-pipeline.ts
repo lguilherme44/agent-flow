@@ -5,6 +5,7 @@ import { PlanSchema } from '../contracts/index.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import type { GitCommand } from '../adapters/git/git-command.js';
 import type { PlanningBaseMoment } from './run-git-identity.js';
+import { unreviewableHighRisk } from './run-git-identity.js';
 import type { StageRunner } from './stage-runner.js';
 import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -21,7 +22,6 @@ import {
 } from './stages/definitions.js';
 import { checkPlan } from './stages/planning-checks.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
-import { roleConfigOf } from '../contracts/index.js';
 import {
   computeFingerprint,
   fingerprintDifferences,
@@ -203,11 +203,15 @@ export class PlanningPipeline {
         files: repoFiles,
       });
       const workflow: WorkflowClass = classification.workflow;
+      // Bound once, and it is the same object the event below records. Two calls would be
+      // two answers to "what was this run's budget", and the whole defect this closes was
+      // a budget that was written down and not used.
+      const budget = getCeremonyBudget(workflow);
       await store.updateRun(runId, (s) => ({ ...s, workflow, status: 'running' }));
       await store.appendEvent(runId, 'workflow_classified', {
         workflow,
         rationale: classification.rationale,
-        budget: getCeremonyBudget(workflow),
+        budget,
         highRiskSignals: classification.highRiskSignalsDetected,
       });
 
@@ -282,18 +286,13 @@ export class PlanningPipeline {
       }
 
       // ---- HIGH-RISK Workflow Guard: Enforce strict cross-provider independence
+      // Still here, and now only as the backstop for the case the caller could not have
+      // answered: a workflow the *classifier* elevated to high-risk from signals in the
+      // description. When the class was asked for explicitly, `refuseUnreviewable` has
+      // already refused it before the run existed.
       if (workflow === 'high-risk') {
-        const plannerRunner = roleConfigOf(this.options.config.global.roles, 'planner').runner;
-        const reviewerRunner = roleConfigOf(this.options.config.global.roles, 'planReviewer').runner;
-        const plannerProvider = this.options.providerOf(plannerRunner);
-        const reviewerProvider = this.options.providerOf(reviewerRunner);
-        if (plannerProvider !== undefined && reviewerProvider !== undefined && plannerProvider === reviewerProvider) {
-          throw new PlanningRefusal(
-            'cross_provider_required',
-            `HIGH-RISK workflows require independent cross-provider review. Both planner and planReviewer resolve to provider "${plannerProvider}".`,
-            'Configure independent providers for roles.planner and roles.planReviewer in config.yaml.',
-          );
-        }
+        const refusal = unreviewableHighRisk(this.options.config.global.roles, this.options.providerOf);
+        if (refusal !== undefined) throw refusal;
       }
 
       // ---- STANDARD / HIGH-RISK workflows: Full ceremony
@@ -343,7 +342,31 @@ export class PlanningPipeline {
         featureRequest,
         vars: { sdd, architectureImpact, projectConfig, validationCommands: this.renderValidationCommands() },
         sddText: sdd,
-        ceremonyProblems: () => [],
+        // **The bound the run already recorded, finally applied.**
+        //
+        // `trivial` and `simple` enforced theirs from the start; `standard` and `high-risk`
+        // passed an empty check, so the task half of the ceremony budget was declared and
+        // never used. Measured live: a `high-risk` run wrote
+        // `workflow_classified { budget: { maxTasks: 8 } }` into its own event log and then
+        // accepted a twelve-task plan, with nothing refusing, warning or degrading.
+        //
+        // A budget recorded in the audit trail and not applied is worse than no budget: it
+        // tells a later reader that a bound held when it did not. And the cost was real —
+        // the cross-provider review of that plan objected that one task carried six
+        // independent responsibilities, which is what a plan does when nothing pushes back
+        // on its size.
+        //
+        // Through `ceremonyProblems` rather than as a refusal, so it behaves like the other
+        // two: the planner is asked again with the problem attached, which is the loop that
+        // already turns a rejected plan into an accepted one.
+        ceremonyProblems: (candidate) =>
+          candidate.tasks.length > budget.maxTasks
+            ? [
+                `${workflow.toUpperCase()} workflow ceremony budget allows at most ` +
+                  `${String(budget.maxTasks)} tasks (got ${String(candidate.tasks.length)}). ` +
+                  'Merge what belongs together, or split the feature.',
+              ]
+            : [],
         refusal: 'The plan does not satisfy the SDD:',
         onProgress: options.onProgress,
       });

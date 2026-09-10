@@ -1,5 +1,12 @@
 import type { RunState } from '../contracts/index.js';
-import { REF_NAMESPACE, attemptWorkspace, integrationRef, integrationWorkspace } from '../core/worktree-policy.js';
+import {
+  REF_NAMESPACE,
+  attemptWorkspace,
+  integrationRef,
+  integrationWorkspace,
+  isThrowawayWorkspace,
+} from '../core/worktree-policy.js';
+import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { deriveRepoKey, type RepositoryDeps } from './run-git-identity.js';
 import type { StateStore } from './state-store.js';
 
@@ -453,4 +460,97 @@ async function resolveIntegrationBranch(
   }
 
   return { kind: 'kept', ref: branch.value, head: head.value };
+}
+
+// ---------------------------------------------------------------------------
+// Strays: the throwaway workspaces that belong to no run (§20.5)
+// ---------------------------------------------------------------------------
+
+/** One directory the sweep found, and what became of it. */
+export interface StrayWorkspace {
+  /** The top-level segment under the owned root. Never an absolute path (§7.2, §21.3). */
+  readonly segment: string;
+  /** False when it is still there — `dryRun`, or a removal that failed. */
+  readonly removed: boolean;
+  /** Why not, when it was not. */
+  readonly detail?: string;
+}
+
+/**
+ * Reclaims the throwaway workspaces nothing else can see (§20.5).
+ *
+ * **Why this is a second sweep rather than part of `reclaimNamespace`.** That one is scoped
+ * to one run, and containment is decided under `~/.agent-flow/worktrees/<repoKey>/…`. These
+ * directories belong to no run at all: `doctor`'s install probe names its by pid, and a
+ * read-only stage names its by pid and a counter. Both sit at the *top* of the owned root,
+ * so no per-run reclamation can attribute them and `git worktree prune` cannot see them
+ * either — Git has already unregistered them, which is exactly why they were left behind.
+ *
+ * Measured before this existed: six `doctor-install-probe-pid-*` directories after six
+ * `doctor` invocations on one repository, each holding a full `node_modules`, and
+ * `agent-flow clean --worktrees --dry-run` answering "Nothing to remove".
+ *
+ * **What makes it safe is the prefix list, not the flag.** The sweep can only ever name a
+ * segment matching {@link isThrowawayWorkspace} — a name the product itself composed for
+ * the purpose of discarding — and it asks Git first whether a worktree is registered
+ * there. A sweep that removed "anything that is not a repoKey" would be one bug away from
+ * deleting an attempt worktree, which §7.4 retains because it is the only remaining copy
+ * of what an agent produced.
+ */
+export async function reclaimStrayWorkspaces(
+  deps: RepositoryDeps & { readonly workspaces: GitWorkspaces },
+  options: { readonly dryRun?: boolean } = {},
+): Promise<readonly StrayWorkspace[]> {
+  const root = deps.workspaces.worktreeRoot;
+  if (!(await deps.fs.exists(root))) return [];
+
+  // Registered worktrees, so a directory Git still knows about is never touched. Read once
+  // rather than per candidate: this is one `git worktree list` against a directory that
+  // holds at most a handful of entries.
+  const registered = await deps.workspaces.listWorktrees({ cwd: deps.projectDir });
+  const known = new Set(
+    // Normalised, because `git worktree list` reports `\` on Windows and every path this
+    // codebase composes uses `/` — a containment check between one of each answers the
+    // wrong question, which is the note `workspacePath` already carries.
+    (registered.ok ? registered.value : []).map((entry) => entry.path.replaceAll('\\', '/')),
+  );
+
+  const found: StrayWorkspace[] = [];
+
+  for (const segment of await deps.fs.readDir(root)) {
+    if (!isThrowawayWorkspace(segment)) continue;
+
+    const path = `${root}/${segment}`;
+    const stat = await deps.fs.stat(path);
+    if (stat === null || !stat.isDirectory) continue;
+
+    if (known.has(path)) {
+      // Registered means in use — a probe or a stage running right now, in this process or
+      // another. Reclaiming it would delete a directory an agent is writing into.
+      found.push({ segment, removed: false, detail: 'a worktree is registered here' });
+      continue;
+    }
+
+    if (options.dryRun === true) {
+      found.push({ segment, removed: false, detail: 'would be removed' });
+      continue;
+    }
+
+    // Not through Git, and §20.2 is satisfied rather than bypassed: Git registers nothing
+    // here, so there is no worktree for `git worktree remove` to act on. What is left is a
+    // directory at a path this product composed, under the root it owns.
+    try {
+      await deps.fs.remove(path);
+      found.push({ segment, removed: !(await deps.fs.exists(path)) });
+    } catch (error) {
+      // A Windows lock, most likely — the same one §6.1b's release contract exists for.
+      found.push({
+        segment,
+        removed: false,
+        detail: error instanceof Error ? error.message : 'the directory could not be removed',
+      });
+    }
+  }
+
+  return found;
 }

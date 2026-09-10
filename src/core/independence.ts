@@ -30,6 +30,37 @@ import type { Independence } from '../contracts/index.js';
 /** How a runner is identified for independence: its adapter type, not its id. */
 export type ProviderOf = (runnerId: string) => string | undefined;
 
+/**
+ * Can this configuration ever satisfy a HIGH-RISK plan review? (§3.2)
+ *
+ * **A question about configuration and about nothing else** — which is the whole reason it
+ * is a fold here rather than a check inside the pipeline. It reads two runner ids and their
+ * providers; it needs no run, no description, no repository and no clock. So it is
+ * answerable at the moment somebody asks for a high-risk workflow, before anything has been
+ * created.
+ *
+ * That mattered. The check lived only inside the pipeline, so a run explicitly requested in
+ * HIGH-RISK on a single-provider setup was **created**, refused 2.2 seconds later, and left
+ * in the history with no plan and no stages. Both facts the refusal rests on were known at
+ * the moment of the request. It is C-19's rule — "refused before the lock, not inside it" —
+ * applied to a path that had not received it.
+ *
+ * Returns the shared provider when the two collide, and `undefined` when the pair is fine
+ * *or cannot be judged*. Undecidable is deliberately not a refusal: a runner whose provider
+ * does not resolve is a misconfiguration the registry reports with a better sentence than
+ * this one could.
+ */
+export function sharedReviewProvider(input: {
+  readonly plannerRunner: string;
+  readonly reviewerRunner: string;
+  readonly providerOf: ProviderOf;
+}): string | undefined {
+  const planner = input.providerOf(input.plannerRunner);
+  const reviewer = input.providerOf(input.reviewerRunner);
+  if (planner === undefined || reviewer === undefined) return undefined;
+  return planner === reviewer ? planner : undefined;
+}
+
 export function assessIndependence(
   authorRunners: readonly string[],
   reviewerRunner: string,

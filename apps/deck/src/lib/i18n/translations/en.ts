@@ -217,6 +217,11 @@ export const en = {
       `${String(total)} run${total === 1 ? '' : 's'} on disk, keeping the newest ${String(keep)}.`,
     nothingToRemoveKey: 'nothing to remove',
     nothingToRemove: 'Every run on disk is inside the window you are keeping.',
+    /** A throwaway workspace that belonged to no run (§20.5). */
+    strayKey: 'stray',
+    strayWouldGo: 'would be reclaimed — it belongs to no run',
+    strayWent: 'reclaimed — it belonged to no run',
+    strayKept: 'could not be reclaimed; something still has it open',
     cacheKey: 'cache',
     cacheWouldGo: 'the cached repository map would be removed.',
     cacheWent: 'the cached repository map was removed.',

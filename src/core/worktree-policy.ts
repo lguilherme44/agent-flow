@@ -361,6 +361,33 @@ function composeWorkspace(segments: readonly string[]): PolicyResult<WorkspaceLo
   return ok({ segments, relativePath: segments.join('/') });
 }
 
+/**
+ * The workspaces Agent Flow cuts to throw away, named by their prefix (§20.5).
+ *
+ * Two of them, and both are flat segments at the top of the owned root rather than under
+ * a `<repoKey>/<gitRunKey>/` path — because neither belongs to a run. `doctor`'s §8.4
+ * install probe cuts one per invocation, and §6.1b cuts one per read-only stage.
+ *
+ * Declared here, in the module that owns workspace naming, because three modules need to
+ * agree on the spelling: the two that *create* these directories and the one that
+ * *reclaims* them. Two spellings of a prefix is a sweep that silently stops matching what
+ * it was written to find.
+ *
+ * The list is what makes reclamation safe. A sweep that removed "anything that is not a
+ * repoKey" would be one bug away from deleting an attempt worktree, which §7.4 keeps
+ * because it is the only copy of what an agent produced. This one can only ever name a
+ * directory the product itself composed for the purpose of discarding.
+ */
+export const THROWAWAY_WORKSPACE_PREFIXES = [
+  'doctor-install-probe-',
+  'read-only-',
+] as const;
+
+/** Whether a top-level segment of the owned root is one of ours to discard. */
+export function isThrowawayWorkspace(segment: string): boolean {
+  return THROWAWAY_WORKSPACE_PREFIXES.some((prefix) => segment.startsWith(prefix));
+}
+
 /** `<repoKey>/<gitRunKey>/integration`. */
 export function integrationWorkspace(
   repoKey: string,
