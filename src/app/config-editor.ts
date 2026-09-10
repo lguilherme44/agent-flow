@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { en } from '../core/phrases/index.js';
 import { configFieldAt, configFieldCatalog, type ConfigFieldEffect, type ConfigFieldValueType, type ConfigScope } from '../config/config-fields.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../config/defaults.js';
 import { projectConfigPath } from '../config/loader.js';
@@ -327,7 +328,7 @@ function invalid(state: SourceState, diagnostics: readonly ConfigDiagnostic[]): 
 }
 
 function diagnostic(code: string, path: ConfigPath, message: string): ConfigDiagnostic {
-  return { severity: 'error', code, path, message, action: 'Correct the request before saving.' };
+  return { severity: 'error', code, path, message, action: en.config.correctBeforeSaving };
 }
 
 function revisionOf(source: string, exists: boolean): string {

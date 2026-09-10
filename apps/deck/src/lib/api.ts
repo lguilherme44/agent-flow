@@ -37,6 +37,8 @@ import type {
   TeamView,
   CollaborationView,
 } from '@contracts/index.js';
+import { en, type Dictionary } from './i18n/translations/en.js';
+import { ptBR } from './i18n/translations/pt-BR.js';
 
 /**
  * The only door out of this app.
@@ -88,11 +90,43 @@ export class ApiError extends Error {
 
 type Query = Record<string, string | undefined>;
 
+/**
+ * The language every read is answered in.
+ *
+ * **A module-level value, and this is the one place it is right.** The rest of the bundle
+ * takes its dictionary from the provider, because a component re-renders when the reader
+ * switches. `url()` is called from the store's fetchers, which are plain functions with
+ * no component around them — and the value it needs is not a preference, it is *part of
+ * the address*: a cache key that ignored the language would serve a Portuguese reader the
+ * English answer it fetched a moment ago.
+ *
+ * Set once at mount and again on every switch, by the provider that owns the choice.
+ */
+let requestLocale: string = 'pt-BR';
+
+export function setRequestLocale(locale: string): void {
+  requestLocale = locale;
+}
+
+/**
+ * The `common` slice, for the one sentence this module writes itself.
+ *
+ * The two books are imported rather than the provider, deliberately: `i18n.tsx` imports
+ * `setRequestLocale` from here, and reaching back into it would close a cycle around a
+ * React module for the sake of a fallback string. The dictionaries are plain data.
+ */
+function words(): Dictionary['common'] {
+  return (requestLocale === 'en' ? en : ptBR).common;
+}
+
 export function url(path: string, query: Query = {}): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== '') params.set(key, value);
   }
+  // Last, so it reads as a suffix on every key the store holds — and so switching
+  // language changes the key, which is what makes the refetch happen at all.
+  params.set('lang', requestLocale);
   const search = params.toString();
   return `${API_BASE}${path}${search === '' ? '' : `?${search}`}`;
 }
@@ -117,12 +151,19 @@ async function parse<T>(response: Response, acceptedErrorStatuses: readonly numb
       detail?: Record<string, unknown>;
     };
     const detail = refusal.detail ?? (typeof body === 'object' && body !== null ? body as Record<string, unknown> : undefined);
-    throw new ApiError(response.status, refusal.message ?? `${String(response.status)} from the server`, {
-      ...(refusal.error === undefined ? {} : { code: refusal.error }),
-      ...(refusal.action === undefined ? {} : { action: refusal.action }),
-      ...(refusal.forcible === undefined ? {} : { forcible: refusal.forcible }),
-      ...(detail === undefined ? {} : { detail }),
-    });
+    throw new ApiError(
+      response.status,
+      // The server writes its own refusals in the reader's language (§93.1); this stands in
+      // only when there is no sentence at all — a crash, a proxy, a cut connection — and it
+      // reads the same module-level locale the request was addressed with.
+      refusal.message ?? words().statusFromServer(String(response.status)),
+      {
+        ...(refusal.error === undefined ? {} : { code: refusal.error }),
+        ...(refusal.action === undefined ? {} : { action: refusal.action }),
+        ...(refusal.forcible === undefined ? {} : { forcible: refusal.forcible }),
+        ...(detail === undefined ? {} : { detail }),
+      },
+    );
   }
 
   return body as T;

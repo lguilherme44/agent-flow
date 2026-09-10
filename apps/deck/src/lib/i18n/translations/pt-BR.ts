@@ -22,6 +22,7 @@ import type { Dictionary } from './en';
 export const ptBR: Dictionary = {
   common: {
     none: '—',
+    statusFromServer: (status: string) => `${status} do servidor`,
     cancel: 'Cancelar',
     close: 'Fechar',
     clear: 'limpar',

@@ -51,6 +51,7 @@ import {
   type WorktreeRefusalCode,
 } from './run-git-identity.js';
 import type { IntegrationRefusalCode } from './integrator.js';
+import { en, type Phrases } from '../core/phrases/index.js';
 import { GitClient, renderChanges } from '../adapters/git/git-client.js';
 import {
   failureDetail,
@@ -232,6 +233,14 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
    * refused, so "this run is busy" can say *what* is busy with it.
    */
   readonly owner: LockOwner;
+  /**
+   * The language every refusal below is written in, defaulting to English (§93.1).
+   *
+   * An argument rather than a lookup, and optional rather than required, for the reason
+   * the phrase book gives: `src/cli` never sets it, so a terminal cannot be talked into
+   * answering in a language somebody else's script will try to grep.
+   */
+  readonly say?: Phrases;
 };
 
 // ---------------------------------------------------------------------------
@@ -285,9 +294,9 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
  * unaffected either way, so this reports what it has rather than asserting a pid it does
  * not.
  */
-function describeHolder(held: LockRefusal | undefined): string {
+function describeHolder(held: LockRefusal | undefined, say: Phrases): string {
   if (held?.holder === undefined) return '';
-  return ` (pid ${String(held.holder.pid)} on ${held.holder.hostname})`;
+  return say.actions.heldByPidOn(String(held.holder.pid), held.holder.hostname);
 }
 
 function lockFor(deps: RunActionDeps, _runId: string): RunExecutionLock {
@@ -314,7 +323,7 @@ async function withExecutionLock<T>(
   });
 
   const acquired = await lock.acquire({ runId, owner: deps.owner, operation });
-  if (!acquired.ok) return failed(busy(acquired.refusal, operation));
+  if (!acquired.ok) return failed(busy(acquired.refusal, operation, deps.say ?? en));
 
   const { lease } = acquired;
 
@@ -362,7 +371,7 @@ async function withExecutionLock<T>(
  * their own terminal or with something they should not interrupt. The pid is included
  * only when it is a pid on this machine, where it means something.
  */
-function busy(refusal: LockRefusal, wanted: LockOperation): ActionError {
+function busy(refusal: LockRefusal, wanted: LockOperation, say: Phrases): ActionError {
   const holder = refusal.holder;
 
   if (holder === undefined) {
@@ -373,28 +382,25 @@ function busy(refusal: LockRefusal, wanted: LockOperation): ActionError {
     // generations, and only the highest is the holder.
     return {
       code: 'run_busy',
-      message: `${refusal.runId} is locked, and the claim on it could not be read.`,
-      action:
-        'Agent Flow refuses a claim it cannot read rather than guessing, because guessing ' +
-        'is how a run gets executed twice. Confirm no Agent Flow process is working on this ' +
-        'run — then remove the highest-numbered execution.lock.* file in the run directory.',
+      message: say.actions.lockUnreadable(refusal.runId),
+      action: say.actions.lockUnreadableAction,
     };
   }
 
   const where = refusal.sameHost
-    ? `pid ${String(holder.pid)}`
-    : `host ${holder.hostname}, which is not this machine`;
+    ? say.actions.atPid(String(holder.pid))
+    : say.actions.atHost(holder.hostname);
 
   return {
     code: 'run_busy',
-    message:
-      `${refusal.runId} is already being ${gerund(holder.operation)} by the ` +
-      `${holder.owner} (${where}), since ${holder.createdAt}.`,
-    action: refusal.sameHost
-      ? 'Wait for the active execution to finish.'
-      : 'Agent Flow does not judge a lock from another machine. Stop the execution on that ' +
-        'host, or — if that host is gone — remove the highest-numbered execution.lock.* file ' +
-        'in the run directory here.',
+    message: say.actions.alreadyBeing(
+      refusal.runId,
+      gerund(holder.operation, say),
+      holder.owner,
+      where,
+      holder.createdAt,
+    ),
+    action: refusal.sameHost ? say.actions.waitForExecution : say.actions.lockOnAnotherHost,
     detail: {
       wanted,
       holder: {
@@ -410,20 +416,20 @@ function busy(refusal: LockRefusal, wanted: LockOperation): ActionError {
   };
 }
 
-function gerund(operation: LockOperation): string {
+function gerund(operation: LockOperation, say: Phrases): string {
   switch (operation) {
     case 'run':
-      return 'executed';
+      return say.actions.beingExecuted;
     case 'revise':
-      return 're-planned';
+      return say.actions.beingReplanned;
     case 'retry':
-      return 'modified by a retry';
+      return say.actions.beingRetried;
     case 'approve':
-      return 'approved';
+      return say.actions.beingApproved;
     case 'reject':
-      return 'rejected';
+      return say.actions.beingRejected;
     case 'review':
-      return 'reviewed';
+      return say.actions.beingReviewed;
   }
 }
 
@@ -480,9 +486,10 @@ export async function describeApprovalGate(
   deps: RunActionDeps,
   runId: string,
 ): Promise<ActionOutcome<ApprovalGate>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   const plan = await loadPlanArtifact(context.store, runId);
   const review = await loadReview(context.store, runId);
@@ -491,8 +498,8 @@ export async function describeApprovalGate(
   if (plan === null) {
     return failed({
       code: 'no_plan',
-      message: `${runId} has no plan yet, so there is nothing to approve.`,
-      action: 'Finish planning first.',
+      message: say.actions.noPlanYetToApprove(runId),
+      action: say.actions.finishPlanningFirst,
     });
   }
 
@@ -611,12 +618,14 @@ async function planningBaseGate(
   context: Awaited<ReturnType<typeof buildExecutionContext>>,
   state: RunState,
   moment: PlanningBaseMoment,
+  say: Phrases,
 ): Promise<ActionError | undefined> {
   const repository = {
     workspaces: context.workspaces,
     fs: context.fs,
     host: context.host,
     projectDir: context.projectDir,
+    say,
   };
 
   if (state.isolationMode !== 'worktree') {
@@ -641,8 +650,8 @@ async function planningBaseGate(
 
   return {
     code: preconditions.code,
-    message: `${state.runId} is an isolated run and this repository is not ready: ${preconditions.detail}.`,
-    action: worktreeRefusalAction(preconditions.code),
+    message: say.actions.repositoryNotReady(state.runId, preconditions.detail),
+    action: worktreeRefusalAction(preconditions.code, say),
   };
 }
 
@@ -651,15 +660,16 @@ async function grantApproval(
   runId: string,
   options: { force?: boolean },
 ): Promise<ActionOutcome<ApproveResult>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   // §6.2 moment three. The gate binds a human decision to a plan, and a plan
   // written against a tree that has since moved is a decision about something
   // else. Here rather than in `describeApprovalGate`, which is a read: showing
   // somebody the gate must not append to the audit trail.
-  const notReady = await planningBaseGate(context, state, 'approve');
+  const notReady = await planningBaseGate(context, state, 'approve', say);
   if (notReady !== undefined) return failed(notReady);
 
   const plan = await loadPlanArtifact(context.store, runId);
@@ -671,15 +681,15 @@ async function grantApproval(
     const forcible = refusal !== undefined && FORCIBLE_REFUSALS.has(refusal.kind);
 
     if (!(forcible && options.force === true)) {
-      return failed(explainRefusal(refusal, forcible), check.warnings);
+      return failed(explainRefusal(refusal, forcible, say), check.warnings);
     }
   }
 
   if (plan === null) {
     return failed({
       code: 'no_plan',
-      message: 'There is no plan to approve.',
-      action: 'Finish planning first.',
+      message: say.actions.noPlanToApprove,
+      action: say.actions.finishPlanningFirst,
     });
   }
 
@@ -731,9 +741,10 @@ async function rejectPlan(
   runId: string,
   reason: string | undefined,
 ): Promise<ActionOutcome<{ readonly runId: string }>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   // Two refusals the CLI did not have, and both are about not writing nonsense
   // into the state file. `updateRun` guards *task* transitions; nothing guarded
@@ -742,15 +753,15 @@ async function rejectPlan(
   if (state.status === 'plan_rejected') {
     return failed({
       code: 'already_rejected',
-      message: `${runId} was already rejected.`,
+      message: say.actions.alreadyRejected(runId),
     });
   }
 
   if (state.status === 'completed') {
     return failed({
       code: 'run_completed',
-      message: `${runId} has already completed. Its plan cannot be rejected after the fact.`,
-      action: 'Start a new run if the work needs revisiting.',
+      message: say.actions.completedCannotReject(runId),
+      action: say.actions.startNewRunIfRevisiting,
     });
   }
 
@@ -806,16 +817,17 @@ async function requeue(
   taskId: string,
   options: { force?: boolean; expectNoChange?: boolean },
 ): Promise<ActionOutcome<RetryResult>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   const entry = state.tasks.find((task) => task.id === taskId);
   if (entry === undefined) {
     return failed({
       code: 'no_such_task',
-      message: `${taskId} has not run in ${runId}.`,
-      action: 'Only a task that has already been attempted can be retried.',
+      message: say.actions.taskNeverRan(taskId, runId),
+      action: say.actions.onlyAttemptedCanRetry,
     });
   }
 
@@ -830,13 +842,8 @@ async function requeue(
   if (entry.state === 'completed') {
     return failed({
       code: 'task_completed',
-      message:
-        `${taskId} is already completed${
-          state.isolationMode === 'worktree' ? ', which in worktree mode means integrated' : ''
-        }.`,
-      action:
-        'Retrying finished work would build a second attempt for something the run already ' +
-        'has. Revise the plan and start a new run if the work needs to change.',
+      message: say.actions.taskAlreadyCompleted(taskId, state.isolationMode === 'worktree'),
+      action: say.actions.retryingFinishedWork,
     });
   }
 
@@ -848,21 +855,16 @@ async function requeue(
   if (entry.state === 'running') {
     return failed({
       code: 'task_in_flight',
-      message:
-        `${taskId} is marked running, so either it is executing now or a process died holding it.`,
-      action:
-        'Run `agent-flow run`: it reconciles what the interrupted attempt actually left before ' +
-        'requeuing anything, so a validated attempt is finished rather than repeated.',
+      message: say.actions.taskMarkedRunning(taskId),
+      action: say.actions.runReconcilesFirst,
     });
   }
 
   if (entry.state === 'blocked' && entry.blockReason !== 'dependency' && options.force !== true) {
     return failed({
       code: 'task_blocked',
-      message:
-        `${taskId} is BLOCKED: its agent answered BLOCKED, so it stopped because of ` +
-        'something the SDD does not answer.',
-      action: 'Fix the SDD or the plan — or force the retry deliberately.',
+      message: say.actions.taskAnsweredBlocked(taskId),
+      action: say.actions.fixSddOrForce,
       forcible: true,
     });
   }
@@ -989,7 +991,7 @@ export async function start(
   // Deliberately only this question. A run with no plan, an unapproved plan or a moved
   // planning base has its own gate below with a better sentence, and asking any of them
   // twice is how the two answers start to disagree.
-  const notRunnable = await refuseUnrunnable(store, runId);
+  const notRunnable = await refuseUnrunnable(store, runId, deps.say ?? en);
   if (notRunnable !== undefined) return failed(notRunnable);
 
   return withExecutionLock(deps, store, runId, 'run', () => execute(deps, runId, options));
@@ -1008,6 +1010,7 @@ export async function start(
 async function refuseUnrunnable(
   store: StateStore,
   runId: string,
+  say: Phrases,
 ): Promise<ActionError | undefined> {
   const state = await loadRun(store, runId);
   if (state === null) return undefined;
@@ -1031,8 +1034,8 @@ async function refuseUnrunnable(
   if (state.pauseRequestedAt !== undefined) {
     return {
       code: 'run_paused',
-      message: `${runId} was paused at ${state.pauseRequestedAt}.`,
-      action: 'Resume it with `agent-flow resume`.',
+      message: say.actions.runPausedAt(runId, state.pauseRequestedAt),
+      action: say.actions.resumeIt,
       forcible: false,
     };
   }
@@ -1040,12 +1043,11 @@ async function refuseUnrunnable(
   if (state.status === 'cancelled') {
     return {
       code: 'run_cancelled',
-      message: `${runId} was cancelled${
-        state.cancelledAt === undefined ? '' : ` at ${state.cancelledAt}`
-      }, and a cancelled run is terminal.`,
-      action:
-        'Its evidence, its integration branch and its worktrees are all still on disk. ' +
-        'Start a new run with `agent-flow feature`.',
+      message: say.actions.runCancelledTerminal(
+        runId,
+        state.cancelledAt === undefined ? '' : say.actions.cancelledAt(state.cancelledAt),
+      ),
+      action: say.actions.evidenceStillOnDisk,
       forcible: false,
     };
   }
@@ -1067,20 +1069,26 @@ async function refuseUnrunnable(
     code: 'nothing_to_run',
     message:
       state.status === 'completed' || state.status === 'failed'
-        ? `${runId} has finished (${state.status}), so there is nothing to run.`
+        ? say.actions.finishedNothingToRun(runId, state.status)
         : waiting.length > 0
-          ? `${runId} has no runnable task: ${waiting.map((task) => task.id).join(', ')} ` +
-            `${waiting.length === 1 ? 'is' : 'are'} at review_required.`
+          ? say.actions.noRunnableAtReview(
+              runId,
+              waiting.map((task) => task.id).join(', '),
+              waiting.length,
+            )
           : blocked.length > 0
-            ? `${runId} has no runnable task: ${blocked.map((task) => task.id).join(', ')} ` +
-              `${blocked.length === 1 ? 'is' : 'are'} blocked.`
-            : `${runId} has no runnable task in its current state (${state.status}).`,
+            ? say.actions.noRunnableBlocked(
+                runId,
+                blocked.map((task) => task.id).join(', '),
+                blocked.length,
+              )
+            : say.actions.noRunnableInState(runId, state.status),
     action:
       waiting.length > 0
-        ? `Review the task's evidence, then \`agent-flow retry ${waiting[0]?.id ?? ''}\`.`
+        ? say.actions.reviewEvidenceThenRetry(waiting[0]?.id ?? '')
         : blocked.length > 0
-          ? 'Answer what the blocked task reported, then retry it.'
-          : 'Start a new run, or check `agent-flow status` for what this one is waiting on.',
+          ? say.actions.answerBlockedThenRetry
+          : say.actions.startNewOrCheckStatus,
   };
 }
 
@@ -1089,6 +1097,7 @@ async function execute(
   runId: string,
   options: StartOptions,
 ): Promise<ActionOutcome<StartResult>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext({
     ...deps,
     ...(options.onTaskStart === undefined ? {} : { onTaskStart: options.onTaskStart }),
@@ -1096,7 +1105,7 @@ async function execute(
   });
 
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   // A turned-down plan is not executable (AF-L01.2). Mutual exclusion gives the two
   // operations an order; this is what makes the order *mean* something. Without it,
@@ -1109,8 +1118,8 @@ async function execute(
   if (state.status === 'plan_rejected') {
     return failed({
       code: 'already_rejected',
-      message: `The plan for ${runId} was rejected, so it will not be executed.`,
-      action: 'Revise the plan and approve the result, or start a new run.',
+      message: say.actions.planRejected(runId),
+      action: say.actions.revisePlanOrStartNew,
     });
   }
 
@@ -1118,18 +1127,18 @@ async function execute(
   // would be cut from `planningBase`, so a moved HEAD or a dirty tree has to
   // stop the run rather than be built on. Checked on every entry, including a
   // resume.
-  const notReady = await planningBaseGate(context, state, 'implementation start');
+  const notReady = await planningBaseGate(context, state, 'implementation start', say);
   if (notReady !== undefined) return failed(notReady);
 
-  const current = await requireCurrent(context, runId);
+  const current = await requireCurrent(context, runId, say);
   if (current !== undefined) return failed(current);
 
   const plan = await loadPlanArtifact(context.store, runId);
   if (plan === null) {
     return failed({
       code: 'no_plan',
-      message: `${runId} has no plan yet.`,
-      action: 'Finish planning before starting implementation.',
+      message: say.actions.runHasNoPlan(runId),
+      action: say.actions.finishPlanningBeforeStarting,
     });
   }
 
@@ -1137,18 +1146,16 @@ async function execute(
     if (!state.approved) {
       return failed({
         code: 'approval_required',
-        message: `The plan for ${runId} has not been approved.`,
-        action: 'Review and approve the current plan before starting.',
+        message: say.actions.planNotApproved(runId),
+        action: say.actions.reviewAndApproveBeforeStarting,
       });
     }
 
     if (!approvalCoversPlan(state, plan)) {
       return failed({
         code: 'approval_stale',
-        message:
-          'The plan changed after it was approved. Approval applies to a specific plan, ' +
-          'not to the run.',
-        action: 'Read the current plan and approve it again.',
+        message: say.actions.approvalStale,
+        action: say.actions.readPlanApproveAgain,
         detail: { approvedPlanHash: state.approvedPlanHash, currentPlanHash: planHash(plan) },
       });
     }
@@ -1161,8 +1168,8 @@ async function execute(
   if (sddRequired && sdd === null) {
     return failed({
       code: 'no_sdd',
-      message: `${runId} has no SDD, which the ${workflow.toUpperCase()} workflow requires.`,
-      action: 'Re-run the SDD stage before starting implementation.',
+      message: say.actions.runHasNoSdd(runId, workflow.toUpperCase()),
+      action: say.actions.rerunSddStage,
     });
   }
 
@@ -1196,7 +1203,7 @@ async function execute(
   if (options.taskId !== undefined && target === undefined) {
     return failed({
       code: 'no_such_task',
-      message: `No task ${options.taskId} in the plan for ${runId}.`,
+      message: say.actions.noSuchTaskInPlan(options.taskId, runId),
     });
   }
 
@@ -1207,8 +1214,8 @@ async function execute(
     if (unmet.length > 0) {
       return failed({
         code: 'unmet_dependencies',
-        message: `${target.id} depends on ${unmet.join(', ')}, which has not completed.`,
-        action: 'Run the plan in order, or run the dependencies first.',
+        message: say.actions.dependsOnUnmet(target.id, unmet.join(', ')),
+        action: say.actions.runInOrder,
         detail: { unmet },
       });
     }
@@ -1342,16 +1349,17 @@ export async function pause(
   deps: RunActionDeps,
   runId: string,
 ): Promise<ActionOutcome<PauseResult>> {
+  const say = deps.say ?? en;
   const store = storeFor(deps);
 
   const state = await loadRun(store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   if (state.status === 'cancelled') {
     return failed({
       code: 'run_cancelled',
-      message: `${runId} was cancelled, so there is nothing left to pause.`,
-      action: 'Start a new run with `agent-flow feature`.',
+      message: say.actions.cancelledNothingToPause(runId),
+      action: say.actions.startNewRunFeature,
       forcible: false,
     });
   }
@@ -1359,8 +1367,8 @@ export async function pause(
   if (state.status === 'completed' || state.status === 'failed') {
     return failed({
       code: 'run_completed',
-      message: `${runId} has finished (${state.status}), so there is nothing to pause.`,
-      action: 'Start a new run with `agent-flow feature`.',
+      message: say.actions.finishedNothingToPause(runId, state.status),
+      action: say.actions.startNewRunFeature,
       forcible: false,
     });
   }
@@ -1412,18 +1420,17 @@ export async function resume(
   deps: RunActionDeps,
   runId: string,
 ): Promise<ActionOutcome<ResumeResult>> {
+  const say = deps.say ?? en;
   const store = storeFor(deps);
 
   const state = await loadRun(store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   if (state.status === 'cancelled') {
     return failed({
       code: 'run_cancelled',
-      message: `${runId} was cancelled, and a cancelled run is terminal.`,
-      action:
-        'Its evidence, its integration branch and its worktrees are all still on disk. ' +
-        'Start a new run with `agent-flow feature`.',
+      message: say.actions.runCancelledTerminal(runId, ''),
+      action: say.actions.evidenceStillOnDisk,
       forcible: false,
     });
   }
@@ -1431,8 +1438,8 @@ export async function resume(
   if (state.pauseRequestedAt === undefined) {
     return failed({
       code: 'not_paused',
-      message: `${runId} is not paused.`,
-      action: 'Run it with `agent-flow run`.',
+      message: say.actions.runNotPaused(runId),
+      action: say.actions.runItWithRun,
       forcible: false,
     });
   }
@@ -1444,8 +1451,8 @@ export async function resume(
   if (held !== undefined) {
     return failed({
       code: 'run_busy',
-      message: `${runId} is still executing${describeHolder(held)}.`,
-      action: 'Wait for the paused run to reach its boundary, then resume.',
+      message: say.actions.stillExecuting(runId, describeHolder(held, say)),
+      action: say.actions.waitForBoundary,
       forcible: false,
     });
   }
@@ -1497,10 +1504,11 @@ export async function cancel(
   deps: RunActionDeps,
   runId: string,
 ): Promise<ActionOutcome<CancelResult>> {
+  const say = deps.say ?? en;
   const store = storeFor(deps);
 
   const state = await loadRun(store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   if (state.status === 'cancelled') {
     return done({
@@ -1515,8 +1523,8 @@ export async function cancel(
   if (state.status === 'completed' || state.status === 'failed') {
     return failed({
       code: 'run_completed',
-      message: `${runId} has finished (${state.status}), so there is nothing to cancel.`,
-      action: 'Start a new run with `agent-flow feature`.',
+      message: say.actions.finishedNothingToCancel(runId, state.status),
+      action: say.actions.startNewRunFeature,
       forcible: false,
     });
   }
@@ -1559,8 +1567,7 @@ export async function cancel(
     held === undefined
       ? []
       : [
-          `A process was executing this run${describeHolder(held)}. ` +
-            'It observes the cancellation and terminates its agents.',
+          say.actions.processWasExecuting(describeHolder(held, say)),
         ],
   );
 }
@@ -1570,11 +1577,12 @@ export async function revise(
   runId: string,
   instruction: string,
 ): Promise<ActionOutcome<ReviseResult>> {
+  const say = deps.say ?? en;
   const trimmed = instruction.trim();
   if (trimmed.length === 0) {
     return failed({
       code: 'invalid_input',
-      message: 'A revision needs an instruction saying what should change.',
+      message: say.actions.revisionNeedsInstruction,
     });
   }
 
@@ -1587,11 +1595,12 @@ async function replan(
   runId: string,
   trimmed: string,
 ): Promise<ActionOutcome<ReviseResult>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
-  const notCurrent = await requireCurrent(context, runId);
+  const notCurrent = await requireCurrent(context, runId, say);
   if (notCurrent !== undefined) return failed(notCurrent);
 
   const workflow = state.workflow ?? 'standard';
@@ -1601,19 +1610,16 @@ async function replan(
   if (workflow === 'trivial') {
     return failed({
       code: 'ceremony_budget_exceeded',
-      message: 'TRIVIAL workflow does not support automated revision cycles (budget = 0).',
-      action: 'Approve the plan as is, or start a new run with STANDARD workflow.',
+      message: say.actions.trivialNoRevision,
+      action: say.actions.approveAsIsOrStandard,
     });
   }
 
   if (currentRevisions >= budget.maxRevisionCycles) {
     return failed({
       code: 'ceremony_budget_exceeded',
-      message:
-        `STOP_AND_ASK_HUMAN: ${workflow.toUpperCase()} workflow reached its ceremony budget limit ` +
-        `(${budget.maxRevisionCycles} revision cycle${budget.maxRevisionCycles === 1 ? '' : 's'}). ` +
-        'Unresolved findings require human approval or workflow elevation.',
-      action: 'Review residual findings in Approval dialog and approve over them, or start a new run with a higher workflow class.',
+      message: say.actions.ceremonyBudget(workflow.toUpperCase(), budget.maxRevisionCycles),
+      action: say.actions.reviewResidualFindings,
     });
   }
 
@@ -1687,6 +1693,7 @@ async function replan(
 export async function createRunWithIdentity(
   context: ExecutionContext,
   description: string,
+  say: Phrases = en,
 ): Promise<RunState> {
   const deps = {
     workspaces: context.workspaces,
@@ -1694,6 +1701,7 @@ export async function createRunWithIdentity(
     host: context.host,
     config: context.config,
     projectDir: context.projectDir,
+    say,
   };
 
   const preflight = await checkPlanningPreflight(deps);
@@ -1702,7 +1710,7 @@ export async function createRunWithIdentity(
     // same thing — and so the sentence stays true. It used to blame worktree mode for
     // every refusal, including refusals that have nothing to do with it and refusals a
     // sequential run can now reach (AR-01).
-    const rendered = renderPlanningRefusal(preflight);
+    const rendered = renderPlanningRefusal(preflight, say);
     throw new PlanningRefusal(rendered.code, rendered.message, rendered.action, rendered.kind);
   }
 
@@ -1710,9 +1718,8 @@ export async function createRunWithIdentity(
   if (!identity.ok) {
     throw new PlanningRefusal(
       identity.refusal.code,
-      `Worktree mode was requested and this repository cannot support it ` +
-        `(${identity.refusal.code}): ${identity.refusal.detail}`,
-      worktreeRefusalAction(identity.refusal.code),
+say.git.worktreeCannotSupport(identity.refusal.code, identity.refusal.detail),
+      worktreeRefusalAction(identity.refusal.code, say),
     );
   }
 
@@ -1737,18 +1744,19 @@ export async function createFeatureRun(
   deps: RunActionDeps,
   description: string,
 ): Promise<ActionOutcome<CreateFeatureRunResult>> {
+  const say = deps.say ?? en;
   const trimmed = description.trim();
   if (trimmed.length === 0) {
     return failed({
       code: 'invalid_input',
-      message: 'A feature needs a description.',
-      action: 'Say what the feature should do. A sentence is enough; a paragraph is better.',
+      message: say.actions.featureNeedsDescription,
+      action: say.actions.sayWhatFeatureDoes,
     });
   }
 
   const context = await buildExecutionContext(deps);
   try {
-    const run = await createRunWithIdentity(context, trimmed);
+    const run = await createRunWithIdentity(context, trimmed, say);
     return done({ runId: run.runId });
   } catch (error) {
     if (error instanceof PlanningRefusal) return failed(planningRefused(error));
@@ -1788,9 +1796,10 @@ export async function planFeature(
   description: string,
   options: PlanFeatureOptions = {},
 ): Promise<ActionOutcome<PlanFeatureResult>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   const pipeline = buildPlanningPipeline(context);
   try {
@@ -1816,17 +1825,20 @@ export async function planFeature(
       return failed({
         code: 'planning_refused',
         message: error.message,
-        action: 'The installed prompts do not match this build. Reinstall agent-flow, or run `agent-flow doctor`.',
+        action: say.actions.promptsMismatch,
         detail: { kind: 'configuration' },
       });
     }
     if (error instanceof StageFailure) {
       return failed({
         code: 'stage_failed',
-        message: `Stage "${error.stage}" failed: ${error.failureClass} (${error.errorCode}). ${error.message}`,
-        action:
-          `The stages before ${error.stage} are kept. Resume with: ` +
-          `agent-flow feature "<same description>" --from ${error.stage}`,
+        message: say.actions.stageFailed(
+          error.stage,
+          error.failureClass,
+          error.errorCode,
+          error.message,
+        ),
+        action: say.actions.stagesBeforeKept(error.stage),
         detail: { stage: error.stage, errorCode: error.errorCode, failureClass: error.failureClass },
       });
     }
@@ -1909,9 +1921,10 @@ export async function review(
   runId: string,
   options: ReviewOptions = {},
 ): Promise<ActionOutcome<ReviewOutcome>> {
+  const say = deps.say ?? en;
   const store = storeFor(deps);
   const state = await loadRun(store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   return state.isolationMode === 'worktree'
     ? withExecutionLock(deps, store, runId, 'review', () => judgeRun(deps, runId, options))
@@ -1923,9 +1936,10 @@ async function judgeRun(
   runId: string,
   options: ReviewOptions,
 ): Promise<ActionOutcome<ReviewOutcome>> {
+  const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
-  if (state === null) return failed(noSuchRun(runId));
+  if (state === null) return failed(noSuchRun(runId, say));
 
   const [plan, sdd] = await Promise.all([
     loadPlanArtifact(context.store, runId),
@@ -1935,8 +1949,8 @@ async function judgeRun(
   if (plan === null) {
     return failed({
       code: 'no_plan',
-      message: `${runId} has no plan to review against.`,
-      action: 'Finish planning before reviewing the implementation.',
+      message: say.actions.noPlanToReviewAgainst(runId),
+      action: say.actions.finishPlanningBeforeReviewing,
     });
   }
 
@@ -1946,8 +1960,8 @@ async function judgeRun(
   if (sddRequired && sdd === null) {
     return failed({
       code: 'no_sdd',
-      message: `${runId} has no SDD, which the ${workflow.toUpperCase()} workflow requires.`,
-      action: 'Finish planning before reviewing the implementation.',
+      message: say.actions.runHasNoSdd(runId, workflow.toUpperCase()),
+      action: say.actions.finishPlanningBeforeReviewing,
     });
   }
 
@@ -1961,7 +1975,7 @@ async function judgeRun(
   // reviewer's diff and the Definition of Done all describe. A run reviewed
   // against a commit its own state does not name is a run whose green verdict
   // means nothing.
-  const tree = await openReviewTree(context, state);
+  const tree = await openReviewTree(context, state, say);
   if (!tree.ok) return failed(tree.error);
 
   const git = new GitClient(context.git, tree.value.cwd);
@@ -2242,6 +2256,7 @@ async function judgeRun(
 async function openReviewTree(
   context: ExecutionContext,
   state: RunState,
+  say: Phrases,
 ): Promise<
   | {
       readonly ok: true;
@@ -2265,11 +2280,8 @@ async function openReviewTree(
       ok: false,
       error: {
         code: opened.refusal.code,
-        message:
-          `${state.runId} is an isolated run and its integration tree cannot be read: ` +
-          `${opened.refusal.detail}.`,
-        action:
-          'The integration branch is the product of the run. Restore it, or start a new run.',
+        message: say.actions.integrationTreeUnreadable(state.runId, opened.refusal.detail),
+        action: say.actions.integrationBranchIsProduct,
       },
     };
   }
@@ -2443,10 +2455,10 @@ async function correctPlan(
  */
 const CONTRACT_PATHS = ['src/contracts/'] as const;
 
-function noSuchRun(runId: string): ActionError {
+function noSuchRun(runId: string, say: Phrases): ActionError {
   return {
     code: 'no_such_run',
-    message: `There is no run ${runId} in this project.`,
+    message: say.actions.noSuchRun(runId),
   };
 }
 
@@ -2461,6 +2473,7 @@ function noSuchRun(runId: string): ActionError {
 async function requireCurrent(
   context: ExecutionContext,
   runId: string,
+  say: Phrases,
 ): Promise<ActionError | undefined> {
   const current = await context.store.currentRunId();
   if (current === runId) return undefined;
@@ -2469,9 +2482,9 @@ async function requireCurrent(
     code: 'not_current_run',
     message:
       current === null
-        ? `${runId} is not the active run, and this project has none.`
-        : `${runId} is not the active run — ${current} is.`,
-    action: 'Only the active run can be started or re-planned.',
+        ? say.actions.notActiveRunAndNone(runId)
+        : say.actions.notActiveRunButIs(runId, current),
+    action: say.actions.onlyActiveRun,
     ...(current === null ? {} : { detail: { currentRunId: current } }),
   };
 }
@@ -2525,72 +2538,63 @@ function digest(content: string): string {
 function explainRefusal(
   refusal: ApprovalRefusal | undefined,
   forcible: boolean,
+  say: Phrases,
 ): ActionError {
   const base = { forcible };
 
   switch (refusal?.kind) {
     case 'no_run':
-      return { ...base, code: 'no_run', message: 'There is no active run.' };
+      return { ...base, code: 'no_run', message: say.actions.noActiveRun };
     case 'no_plan':
       return {
         ...base,
         code: 'no_plan',
-        message: 'This run has no plan yet.',
-        action: 'Finish planning first.',
+        message: say.actions.thisRunHasNoPlan,
+        action: say.actions.finishPlanningFirst,
       };
     case 'review_missing':
       return {
         ...base,
         code: 'review_missing',
-        message: 'This plan has not been reviewed.',
-        action: 'Run the review, or approve deliberately over it.',
+        message: say.actions.planNotReviewed,
+        action: say.actions.runReviewOrApproveOver,
       };
     case 'review_stale':
       return {
         ...base,
         code: 'review_stale',
-        message:
-          'The plan review on file judged a different version of this plan. A verdict ' +
-          'about another document is not a verdict about this one.',
-        action: 'Request a revision, or approve deliberately — which is recorded on the run.',
+        message: say.actions.reviewJudgedAnother,
+        action: say.actions.requestRevisionOrApprove,
       };
     case 'review_unverifiable':
       return {
         ...base,
         code: 'review_unverifiable',
-        message:
-          'The plan review on file does not say which plan it judged, so nothing ' +
-          'connects it to the plan in hand.',
-        action: 'Request a revision, or approve deliberately — which is recorded on the run.',
+        message: say.actions.reviewUnverifiable,
+        action: say.actions.requestRevisionOrApprove,
       };
     case 'review_failed':
       return {
         ...base,
         code: 'review_failed',
-        message: `The plan review returned FAIL with ${String(
-          refusal.review.findings.length,
-        )} finding(s).`,
-        action: 'Request a revision addressing them, or approve over the verdict deliberately.',
+        message: say.actions.reviewFailedWith(refusal.review.findings.length),
+        action: say.actions.requestRevisionAddressing,
         detail: { findings: refusal.review.findings },
       };
     case 'already_approved':
-      return { ...base, code: 'already_approved', message: 'This run is already approved.' };
+      return { ...base, code: 'already_approved', message: say.actions.alreadyApproved };
     case 'plan_rejected':
       return {
         ...base,
         code: 'already_rejected',
-        message:
-          'This plan was rejected. Approving it now would leave the run recording both, ' +
-          'and nothing would execute either way.',
-        action:
-          'Revise the plan and approve the result — or approve over the rejection ' +
-          'deliberately, which is recorded on the run.',
+        message: say.actions.planWasRejected,
+        action: say.actions.revisePlanOrApproveOver,
       };
     default:
       return {
         ...base,
         code: 'no_run',
-        message: 'Approval is not possible in the current state.',
+        message: say.actions.approvalNotPossible,
       };
   }
 }

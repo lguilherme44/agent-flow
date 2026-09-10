@@ -1,4 +1,5 @@
 import type { ConfigSectionView, ConfigSettingView, ConfigView } from '../contracts/index.js';
+import { en, type Phrases } from '../core/phrases/index.js';
 import { readSettingOrigins, type SettingOrigins } from '../app/config-origins.js';
 import { ConfigError, loadConfig } from '../config/loader.js';
 import { resolveTaskConcurrency } from '../core/concurrency.js';
@@ -63,7 +64,7 @@ export function createServerConfigEditor(options: {
 export class ConfigReader {
   constructor(private readonly options: ConfigReaderOptions) {}
 
-  async describe(project: RegisteredProject): Promise<ConfigView> {
+  async describe(project: RegisteredProject, say?: Phrases): Promise<ConfigView> {
     const origins = await readSettingOrigins({
       fs: this.options.fs,
       globalConfigPath: this.options.globalConfigPath,
@@ -94,11 +95,11 @@ export class ConfigReader {
         configError:
           error instanceof ConfigError || error instanceof Error
             ? error.message
-            : 'The configuration could not be read.',
+            : (say ?? en).config.configUnreadable,
       };
     }
 
-    return { sources, sections: sectionsOf(config, origins, project) };
+    return { sources, sections: sectionsOf(config, origins, project, say ?? en) };
   }
 }
 
@@ -106,7 +107,9 @@ function sectionsOf(
   config: EffectiveConfig,
   origins: SettingOrigins,
   project: RegisteredProject,
+  say: Phrases,
 ): ConfigSectionView[] {
+  const t = say.config;
   const setting = (
     key: string,
     label: string,
@@ -126,49 +129,47 @@ function sectionsOf(
   return [
     {
       id: 'general',
-      title: 'General',
+      title: t.general,
       settings: [
-        setting('version', 'Config version', String(global.version)),
+        setting('version', t.configVersion, String(global.version)),
         {
           key: 'sources.global',
-          label: 'Global config',
+          label: t.globalConfig,
           value: origins.globalPath,
           origin: origins.globalPresent ? 'global' : 'default',
-          note: origins.globalPresent
-            ? undefined
-            : 'not present — the built-in defaults are in force',
+          note: origins.globalPresent ? undefined : t.notPresentDefaults,
         },
         {
           key: 'sources.project',
-          label: 'Project config',
+          label: t.projectConfig,
           value: origins.projectPath,
           origin: origins.projectPresent ? 'project' : 'default',
-          ...(origins.projectPresent ? {} : { note: 'not present' }),
+          ...(origins.projectPresent ? {} : { note: t.notPresent }),
         },
       ],
     },
     {
       id: 'workspace',
-      title: 'Workspace',
+      title: t.workspace,
       settings: [
-        setting('project.name', 'Project name', overlay?.project.name ?? project.name),
-        setting('project.type', 'Detected stack', overlay?.project.type ?? 'not detected'),
-        setting('paths.source', 'Source paths', list(overlay?.paths.source)),
-        setting('paths.tests', 'Test paths', list(overlay?.paths.tests)),
-        setting('rules.architecture', 'Architecture rules', count(overlay?.rules.architecture)),
+        setting('project.name', t.projectName, overlay?.project.name ?? project.name),
+        setting('project.type', t.detectedStack, overlay?.project.type ?? t.notDetected),
+        setting('paths.source', t.sourcePaths, list(overlay?.paths.source, t)),
+        setting('paths.tests', t.testPaths, list(overlay?.paths.tests, t)),
+        setting('rules.architecture', t.architectureRules, count(overlay?.rules.architecture, t)),
       ],
     },
     {
       id: 'runners',
-      title: 'Runners',
+      title: t.runners,
       settings: Object.entries(global.runners).map(([id, runner]) =>
         setting(
           `runners.${id}`,
           id,
           [
             runner.type,
-            runner.enabled ? 'enabled' : 'disabled',
-            runner.command === undefined ? undefined : `command ${runner.command}`,
+            runner.enabled ? t.enabled : t.disabled,
+            runner.command === undefined ? undefined : t.commandIs(runner.command),
           ]
             .filter((part): part is string => part !== undefined)
             .join(' · '),
@@ -177,25 +178,23 @@ function sectionsOf(
     },
     {
       id: 'models',
-      title: 'Models',
-      note: 'Role routing has its own page, which resolves each role against what its runner can actually do.',
+      title: t.models,
+      note: t.roleRoutingHasItsOwnPage,
       settings: [],
     },
     {
       id: 'execution',
-      title: 'Execution',
+      title: t.execution,
       settings: [
         setting(
           'approval.requiredBeforeImplementation',
-          'Approval before implementation',
-          global.approval.requiredBeforeImplementation ? 'required' : 'not required',
-          global.approval.requiredBeforeImplementation
-            ? undefined
-            : 'implementation can start without a human opening the gate',
+          t.approvalBeforeImplementation,
+          global.approval.requiredBeforeImplementation ? t.required : t.notRequired,
+          global.approval.requiredBeforeImplementation ? undefined : t.canStartWithoutGate,
         ),
         setting(
           'parallelism.maxTasks',
-          'Parallel tasks',
+          t.parallelTasks,
           String(global.parallelism.maxTasks),
           // The note has to say what the *runtime* does, not what the setting
           // would like to. It used to read as though switching worktrees on were
@@ -203,58 +202,58 @@ function sectionsOf(
           // so a reader who followed it would have configured four parallel tasks
           // and got one, with nothing on this page admitting it. Since M2-11 they
           // do exist, and the note says which kind of run gets which number.
-          concurrencyNote(global.parallelism.maxTasks, global.git.useWorktrees),
+          concurrencyNote(global.parallelism.maxTasks, global.git.useWorktrees, t),
         ),
-        setting('retry.maxAttempts', 'Attempts per task', String(global.retry.maxAttempts)),
-        setting('git.useWorktrees', 'Git worktrees', global.git.useWorktrees ? 'on' : 'off'),
+        setting('retry.maxAttempts', t.attemptsPerTask, String(global.retry.maxAttempts)),
+        setting('git.useWorktrees', t.gitWorktrees, global.git.useWorktrees ? t.on : t.off),
         setting(
           'fallback.enabled',
-          'Fallback',
-          global.fallback.enabled ? 'enabled' : 'disabled',
+          t.fallback,
+          global.fallback.enabled ? t.enabled : t.disabled,
         ),
         setting(
           'fallback.on',
-          'Fallback triggers',
+          t.fallbackTriggers,
           global.fallback.on.join(', '),
-          'infrastructure failures only — a capability gap is never routed around',
+          t.infrastructureOnly,
         ),
         setting(
           'validationCommands',
-          'Extra validation commands',
-          count(Object.keys(overlay?.validationCommands ?? {})),
-          'a plan names one of these by id; nothing a model writes reaches a shell',
+          t.extraValidationCommands,
+          count(Object.keys(overlay?.validationCommands ?? {}), t),
+          t.planNamesById,
         ),
       ],
     },
     {
       id: 'ui',
-      title: 'UI',
-      note: 'Everything else the dashboard remembers — filters, tabs, which task is open — lives in the browser.',
+      title: t.ui,
+      note: t.everythingElseInBrowser,
       settings: [
         setting(
           'ui.workspaceDepth',
-          'Workspace scan depth',
+          t.workspaceScanDepth,
           String(global.ui.workspaceDepth),
-          'how far under a workspace root `agent-flow ui ~/wk` looks for projects; a directory beyond it is not discovered and not served',
+          t.scanDepthNote,
         ),
       ],
     },
     {
       id: 'retention',
-      title: 'Retention',
-      note: 'Run history is pruned on request rather than on a policy: agent-flow clean --keep <n>. There is no retention setting to read.',
+      title: t.retention,
+      note: t.retentionNote,
       settings: [],
     },
   ];
 }
 
-function list(values: readonly string[] | undefined): string {
-  return values === undefined || values.length === 0 ? 'not set' : values.join(', ');
+function list(values: readonly string[] | undefined, t: Phrases['config']): string {
+  return values === undefined || values.length === 0 ? t.notSet : values.join(', ');
 }
 
-function count(values: readonly string[] | undefined): string {
+function count(values: readonly string[] | undefined, t: Phrases['config']): string {
   const total = values?.length ?? 0;
-  return total === 0 ? 'none' : `${String(total)} declared`;
+  return total === 0 ? t.none : t.declared(total);
 }
 
 /**
@@ -272,7 +271,11 @@ function count(values: readonly string[] | undefined): string {
  * every *run* page reads `state.isolationMode` instead, because a run created
  * before this setting was touched is not governed by it (I-13, §6.4).
  */
-function concurrencyNote(maxTasks: number, useWorktrees: boolean): string | undefined {
+function concurrencyNote(
+  maxTasks: number,
+  useWorktrees: boolean,
+  t: Phrases['config'],
+): string | undefined {
   // Both answers, because the difference between them is the whole point of the
   // setting above and this is the only place a reader sees the two side by side.
   const isolated = resolveTaskConcurrency(maxTasks, 'worktree');
@@ -280,15 +283,7 @@ function concurrencyNote(maxTasks: number, useWorktrees: boolean): string | unde
 
   if (!isolated.clamped && !shared.clamped) return undefined;
 
-  if (!useWorktrees) {
-    return (
-      `configured, not effective: without isolated workspaces a run executes ` +
-      `${String(shared.effective)} task at a time — turn on git.useWorktrees, then start a new run`
-    );
-  }
+  if (!useWorktrees) return t.configuredNotEffective(shared.effective);
 
-  return (
-    `new runs execute up to ${String(isolated.effective)} at a time in isolated workspaces; ` +
-    `a run created before worktrees were on still executes ${String(shared.effective)}`
-  );
+  return t.newRunsExecuteUpTo(isolated.effective, shared.effective);
 }

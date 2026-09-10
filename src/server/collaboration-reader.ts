@@ -16,6 +16,7 @@ import {
   TaskResultSchema,
 } from '../contracts/index.js';
 import { CollaborationStore } from '../app/collaboration-store.js';
+import type { Phrases } from '../core/phrases/index.js';
 import { runPaths } from '../app/paths.js';
 import { loadConfig } from '../config/loader.js';
 import { projectBlackboard } from '../core/collaboration/blackboard.js';
@@ -173,14 +174,24 @@ export class CollaborationReader {
    * this machine already wrote, so a person can ask "where did this run go" without a
    * credential — and the endpoint cannot be the thing that spends one.
    */
-  async delivery(project: RegisteredProject, runId: string): Promise<DeliveryView | null> {
+  async delivery(
+    project: RegisteredProject,
+    runId: string,
+    say?: Phrases,
+  ): Promise<DeliveryView | null> {
     const state = await this.readState(project, runId);
     if (state === null) return null;
 
     const config = await this.configOf(project);
     const forge = config?.forge ?? FORGE_OFF;
 
-    return deliveryStatus({ fs: this.options.fs, projectDir: project.path, config: forge, runId });
+    return deliveryStatus({
+      fs: this.options.fs,
+      projectDir: project.path,
+      config: forge,
+      runId,
+      ...(say === undefined ? {} : { say }),
+    });
   }
 
   async review(project: RegisteredProject, runId: string): Promise<ReviewView | null> {

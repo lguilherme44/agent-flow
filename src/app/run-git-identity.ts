@@ -15,6 +15,7 @@ import {
   makeGitRunKey,
   repoKeyFromCanonicalRoot,
 } from '../core/worktree-policy.js';
+import { en, type Phrases } from '../core/phrases/index.js';
 import { agentFlowPaths } from './paths.js';
 import { projectConfigPath } from '../config/loader.js';
 
@@ -99,11 +100,11 @@ export type PlanningPreconditions =
   | { readonly satisfied: false; readonly code: PlanningPreflightCode; readonly detail: string };
 
 /** What a person is told to do about a preflight refusal, worktree or otherwise. */
-export function planningPreflightAction(code: PlanningPreflightCode): string {
+export function planningPreflightAction(code: PlanningPreflightCode, say: Phrases = en): string {
   if (code === 'project_not_initialized') {
-    return 'Run `agent-flow init`, then commit what it writes.';
+    return say.git.runInitFirst;
   }
-  return worktreeRefusalAction(code);
+  return worktreeRefusalAction(code, say);
 }
 
 /**
@@ -127,16 +128,19 @@ export interface RenderedPlanningRefusal {
   readonly kind: 'configuration' | 'repository';
 }
 
-export function renderPlanningRefusal(refusal: {
-  readonly code: PlanningPreflightCode;
-  readonly detail: string;
-}): RenderedPlanningRefusal {
-  const action = planningPreflightAction(refusal.code);
+export function renderPlanningRefusal(
+  refusal: {
+    readonly code: PlanningPreflightCode;
+    readonly detail: string;
+  },
+  say: Phrases = en,
+): RenderedPlanningRefusal {
+  const action = planningPreflightAction(refusal.code, say);
 
   if (refusal.code === 'project_not_initialized') {
     return {
       code: refusal.code,
-      message: `This project has not been initialised for Agent Flow: ${refusal.detail}`,
+      message: say.git.notInitialised(refusal.detail),
       action,
       kind: 'configuration',
     };
@@ -144,9 +148,7 @@ export function renderPlanningRefusal(refusal: {
 
   return {
     code: refusal.code,
-    message:
-      `Worktree mode was requested and this repository is not ready ` +
-      `(${refusal.code}): ${refusal.detail}`,
+    message: say.git.worktreeRequestedNotReady(refusal.code, refusal.detail),
     action,
     kind: 'repository',
   };
@@ -168,38 +170,38 @@ export type WorktreePreconditions =
   | { readonly satisfied: false; readonly code: WorktreeRefusalCode; readonly detail: string };
 
 /** What a person is told to do about each refusal. */
-export function worktreeRefusalAction(code: WorktreeRefusalCode): string {
+export function worktreeRefusalAction(code: WorktreeRefusalCode, say: Phrases = en): string {
   switch (code) {
     case 'not_a_git_repository':
-      return 'Run `git init`, or turn worktree mode off with `git.useWorktrees: false`.';
+      return say.git.notAGitRepository;
     case 'repository_is_bare':
-      return 'Worktree mode needs a working tree. Use a normal clone.';
+      return say.git.repositoryIsBare;
     case 'repository_has_no_commits':
-      return 'Make the first commit; there is no base to cut a branch from yet.';
+      return say.git.repositoryHasNoCommits;
     case 'repository_has_submodules':
-      return 'Worktree mode does not populate submodules. Turn it off for this project.';
+      return say.git.repositoryHasSubmodules;
     case 'git_version_unsupported':
-      return `Upgrade Git to ${formatGitVersion(MINIMUM_SUPPORTED_GIT_VERSION)} or newer.`;
+      return say.git.gitVersionUnsupported(formatGitVersion(MINIMUM_SUPPORTED_GIT_VERSION));
     case 'repository_root_unresolvable':
-      return 'The repository root could not be resolved. Check for a broken symlink above it.';
+      return say.git.repositoryRootUnresolvable;
     case 'worktree_path_too_long':
-      return 'Use a shorter home directory path, or enable long paths on this platform.';
+      return say.git.worktreePathTooLong;
     case 'git_identity_missing':
-      return 'This run has no Git namespace. Start a new run.';
+      return say.git.gitIdentityMissing;
     case 'agent_flow_state_not_ignored':
-      return 'Add `.agent-flow/runs/`, `.agent-flow/cache/` and `.agent-flow/current-run` to .gitignore.';
+      return say.git.agentFlowStateNotIgnored;
     case 'working_tree_dirty':
-      return 'Commit or stash your changes, then try again.';
+      return say.git.workingTreeDirty;
     case 'planning_base_moved':
-      return 'Check out the commit this run was planned against, or start a new run.';
+      return say.git.planningBaseMoved;
     case 'git_run_key_collision':
-      return 'This run’s Git namespace already holds refs it did not create. Start a new run.';
+      return say.git.gitRunKeyCollision;
     case 'namespace_missing':
-      return 'The integration branch this run recorded work on is gone. It cannot be rebuilt from here.';
+      return say.git.namespaceMissing;
     case 'integration_head_diverged':
-      return 'The integration branch was rewound or replaced under this run. Start a new run.';
+      return say.git.integrationHeadDiverged;
     case 'git_unavailable':
-      return 'Git could not be run. Check that it is installed and on PATH.';
+      return say.git.gitUnavailable;
   }
 }
 
@@ -253,6 +255,15 @@ export interface RepositoryDeps {
   readonly fs: FileSystem;
   readonly host: Host;
   readonly projectDir: string;
+  /**
+   * The language the refusals below are written in, defaulting to English.
+   *
+   * On the deps rather than on every signature, because a dozen internal checks each
+   * compose one sentence and threading a parameter through all of them would make the
+   * language a thing a new check can silently forget. Optional so `src/cli`, which never
+   * sets it, keeps answering in English by construction.
+   */
+  readonly say?: Phrases;
 }
 
 /** Creation additionally needs the configuration — once, to decide the mode. */
@@ -344,6 +355,7 @@ export async function resolveRunGitIdentity(
 export async function checkProjectInitialized(deps: {
   readonly fs: FileSystem;
   readonly projectDir: string;
+  readonly say?: Phrases;
 }): Promise<PlanningPreconditions> {
   const path = projectConfigPath(deps.projectDir);
   if (await deps.fs.exists(path)) return SATISFIED;
@@ -353,7 +365,7 @@ export async function checkProjectInitialized(deps: {
     code: 'project_not_initialized',
     // The absent path, named. C-01 asks for it because "not initialised" leaves the
     // person guessing which of several directories the tool was looking in.
-    detail: `there is no Agent Flow configuration at ${path}`,
+    detail: (deps.say ?? en).git.noConfigAt(path),
   };
 }
 
@@ -388,19 +400,13 @@ export async function checkPlanningPreflight(
   const head = await deps.workspaces.resolveHead(deps.projectDir);
   if (!head.ok) return unreadable(head.failure.message);
   if (head.value === null) {
-    return refuse(
-      'repository_has_no_commits',
-      'HEAD does not name a commit, so there is no base to cut the run from',
-    );
+    return refuse('repository_has_no_commits', (deps.say ?? en).git.headNamesNoCommit);
   }
 
   const ignored = await checkStatePathsIgnored(deps);
   if (ignored.kind === 'unreadable') return unreadable(ignored.detail);
   if (ignored.kind === 'not_ignored') {
-    return refuse(
-      'agent_flow_state_not_ignored',
-      `${ignored.path} is not ignored by this repository, so Agent Flow's own state would dirty the tree`,
-    );
+    return refuse('agent_flow_state_not_ignored', (deps.say ?? en).git.pathNotIgnored(ignored.path));
   }
 
   const status = await deps.workspaces.status({ cwd: deps.projectDir });
@@ -409,9 +415,10 @@ export async function checkPlanningPreflight(
     const changed = status.value.entries.slice(0, 5).map((entry) => entry.path);
     return refuse(
       'working_tree_dirty',
-      `the working tree has uncommitted changes: ${changed.join(', ')}${
-        status.value.entries.length > changed.length ? ' …' : ''
-      }`,
+      (deps.say ?? en).git.treeHasUncommitted(
+        changed.join(', '),
+        status.value.entries.length > changed.length,
+      ),
     );
   }
 
@@ -505,12 +512,12 @@ export async function checkWorktreePreconditions(
   // begins with the run's own id (§5.2). A mismatch means the state file pairs
   // this run with somebody else's namespace: a refusal, never a repair.
   if (state.gitRunKey === undefined) {
-    return refuse('git_identity_missing', 'this run has no Git namespace recorded');
+    return refuse('git_identity_missing', (deps.say ?? en).git.noNamespaceRecorded);
   }
   if (!gitRunKeyBelongsToRun(state.gitRunKey, state.runId)) {
     return refuse(
       'git_identity_missing',
-      `the recorded Git namespace "${state.gitRunKey}" does not belong to ${state.runId}`,
+      (deps.say ?? en).git.namespaceNotThisRun(state.gitRunKey, state.runId),
     );
   }
 
@@ -520,10 +527,7 @@ export async function checkWorktreePreconditions(
   const ignored = await checkStatePathsIgnored(deps);
   if (ignored.kind === 'unreadable') return unreadable(ignored.detail);
   if (ignored.kind === 'not_ignored') {
-    return refuse(
-      'agent_flow_state_not_ignored',
-      `${ignored.path} is not ignored by this repository, so Agent Flow's own state would dirty the tree`,
-    );
+    return refuse('agent_flow_state_not_ignored', (deps.say ?? en).git.pathNotIgnored(ignored.path));
   }
 
   // 9 — dirty tree. Not forcible, and deliberately: a --force here would be a
@@ -534,9 +538,10 @@ export async function checkWorktreePreconditions(
     const changed = status.value.entries.slice(0, 5).map((entry) => entry.path);
     return refuse(
       'working_tree_dirty',
-      `the working tree has uncommitted changes: ${changed.join(', ')}${
-        status.value.entries.length > changed.length ? ' …' : ''
-      }`,
+      (deps.say ?? en).git.treeHasUncommitted(
+        changed.join(', '),
+        status.value.entries.length > changed.length,
+      ),
     );
   }
 
@@ -548,9 +553,10 @@ export async function checkWorktreePreconditions(
   if (state.planningBase !== undefined && head.value !== state.planningBase) {
     return refuse(
       'planning_base_moved',
-      `this run was planned against ${state.planningBase.slice(0, 8)} and HEAD is now ${
-        head.value === null ? 'unborn' : head.value.slice(0, 8)
-      }`,
+      (deps.say ?? en).git.plannedAgainstHeadNow(
+        state.planningBase.slice(0, 8),
+        head.value === null ? (deps.say ?? en).git.unborn : head.value.slice(0, 8),
+      ),
     );
   }
 
@@ -581,11 +587,11 @@ async function checkStructuralPreconditions(
     // before this reports the less specific answer.
     const bare = await deps.workspaces.isBareRepository(deps.projectDir);
     if (bare.ok && bare.value) {
-      return { code: 'repository_is_bare', detail: 'a bare repository has no working tree' };
+      return { code: 'repository_is_bare', detail: (deps.say ?? en).git.bareHasNoWorkingTree };
     }
     return {
       code: 'not_a_git_repository',
-      detail: `${deps.projectDir} is not inside a Git working tree`,
+      detail: (deps.say ?? en).git.notInsideWorkingTree(deps.projectDir),
     };
   }
 
@@ -594,18 +600,18 @@ async function checkStructuralPreconditions(
   if (head.value === null) {
     return {
       code: 'repository_has_no_commits',
-      detail: 'HEAD is unborn, so there is no commit to cut the run from',
+      detail: (deps.say ?? en).git.headIsUnborn,
     };
   }
 
   const submodules = await hasSubmodules(deps);
   if (submodules === null) {
-    return { code: 'git_unavailable', detail: 'git submodule status could not be read' };
+    return { code: 'git_unavailable', detail: (deps.say ?? en).git.submoduleStatusUnreadable };
   }
   if (submodules) {
     return {
       code: 'repository_has_submodules',
-      detail: 'git worktree add does not populate submodules, so the worktree would be incomplete',
+      detail: (deps.say ?? en).git.worktreeAddSkipsSubmodules,
     };
   }
 
@@ -636,7 +642,7 @@ async function checkWorktreeRoot(deps: RepositoryDeps): Promise<WorktreeRefusal 
   if (repoKey === null) {
     return {
       code: 'repository_root_unresolvable',
-      detail: 'the repository root could not be resolved, so its identity would not be stable',
+      detail: (deps.say ?? en).git.rootUnresolvable,
     };
   }
 
@@ -656,7 +662,7 @@ async function checkWorktreeRoot(deps: RepositoryDeps): Promise<WorktreeRefusal 
   if (projected === null) {
     return {
       code: 'repository_root_unresolvable',
-      detail: 'a worst-case workspace path could not be composed from this repository key',
+      detail: (deps.say ?? en).git.worstCasePathUncomposable,
     };
   }
 
@@ -803,7 +809,7 @@ async function checkNamespace(
   state: RunState,
 ): Promise<WorktreePreconditions> {
   const key = state.gitRunKey;
-  if (key === undefined) return refuse('git_identity_missing', 'this run has no Git namespace');
+  if (key === undefined) return refuse('git_identity_missing', (deps.say ?? en).git.noNamespace);
 
   const integration = integrationRef(key);
   if (!integration.ok) {
@@ -849,7 +855,7 @@ async function checkNamespace(
     ? SATISFIED
     : refuse(
         'integration_head_diverged',
-        `the integration branch no longer contains ${recorded.slice(0, 8)}, which this run recorded as integrated`,
+        (deps.say ?? en).git.integrationNoLongerContains(recorded.slice(0, 8)),
       );
 }
 

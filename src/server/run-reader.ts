@@ -1,4 +1,5 @@
 import { projectRun } from '../core/run-projection.js';
+import type { Phrases } from '../core/phrases/index.js';
 import { recoveryCostAgainstBaseline } from '../core/prompt-budget.js';
 import {
   PlanSchema,
@@ -217,6 +218,8 @@ export class RunReader {
   async runDetail(
     project: RegisteredProject,
     runId: string,
+    /** The language the runtime's gate sentence is written in. English when absent. */
+    say?: Phrases,
   ): Promise<RunDetailView | null> {
     const state = await this.loadState(project, runId);
     if (state === null) return null;
@@ -231,7 +234,7 @@ export class RunReader {
       startedAt: state.createdAt,
       isolation: await this.isolationOf(project, state),
       integrationConflicts: await this.conflictsOf(project, state.runId),
-      runtime: await this.runtimeOf(project, state),
+      runtime: await this.runtimeOf(project, state, say),
     };
   }
 
@@ -250,6 +253,7 @@ export class RunReader {
   private async runtimeOf(
     project: RegisteredProject,
     state: RunState,
+    say?: Phrases,
   ): Promise<RunProjection> {
     const store = this.storeFor(project);
     const plan = await this.loadPlan(store, state.runId);
@@ -266,6 +270,7 @@ export class RunReader {
             })),
           }),
       events,
+      ...(say === undefined ? {} : { say }),
     });
   }
 

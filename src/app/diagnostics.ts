@@ -1,4 +1,5 @@
 import { buildRegistry, type RunnerRegistry } from '../adapters/runners/registry.js';
+import { en, type Phrases } from '../core/phrases/index.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
 import {
   createGitWorkspaces,
@@ -282,6 +283,8 @@ export interface DiagnoseOptions {
    * killed. The caller decides how to say so; this only says *when*.
    */
   readonly onInstallProbe?: (command: string) => void;
+  /** The reader's language for the remediations. English when a caller does not ask. */
+  readonly say?: Phrases;
 }
 
 /**
@@ -367,7 +370,7 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     };
   });
 
-  const verdict = assessHealth(config.global, runners);
+  const verdict = assessHealth(config.global, runners, options.say ?? en);
   const unresolvableRoles = rolesThatCannotRun(capabilities);
 
   return {
@@ -386,7 +389,7 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     degradations: verdict.degradations,
     notes: verdict.notes,
     unresolvableRoles,
-    remediations: generateRemediations(runners, node, git),
+    remediations: generateRemediations(runners, node, git, options.say ?? en),
     readsEnvironment: options.env !== undefined,
   };
 }
@@ -756,37 +759,38 @@ export function generateRemediations(
   observed: readonly ObservedRunner[],
   node: ToolCheck,
   git: ToolCheck,
+  say: Phrases = en,
 ): DoctorRemediation[] {
   const remediations: DoctorRemediation[] = [];
 
   if (!node.present) {
     remediations.push({
-      problem: 'Node.js is missing from PATH',
-      fix: 'Install Node.js 20+ (https://nodejs.org or via fnm/nvm)',
+      problem: say.doctor.nodeMissing,
+      fix: say.doctor.installNode,
     });
   }
 
   if (!git.present) {
     remediations.push({
-      problem: 'Git is missing or older than 2.38',
-      fix: 'Install Git 2.38+ (https://git-scm.com or via your package manager)',
+      problem: say.doctor.gitMissingOrOld,
+      fix: say.doctor.installGit,
     });
   }
 
   for (const runner of observed) {
     if (!runner.installed || !runner.executable) {
-      const guide = getRunnerInstallGuide(runner.id);
+      const guide = getRunnerInstallGuide(runner.id, say);
       if (guide) {
         remediations.push({
-          problem: `Runner "${runner.id}" is not installed or executable`,
+          problem: say.doctor.runnerNotInstalled(runner.id),
           fix: guide,
         });
       }
     } else if (runner.auth === 'not_configured') {
-      const guide = getRunnerAuthGuide(runner.id);
+      const guide = getRunnerAuthGuide(runner.id, say);
       if (guide) {
         remediations.push({
-          problem: `Runner "${runner.id}" is missing credentials`,
+          problem: say.doctor.runnerMissingCredentials(runner.id),
           fix: guide,
         });
       }
@@ -796,14 +800,14 @@ export function generateRemediations(
   return remediations;
 }
 
-function getRunnerInstallGuide(runnerId: string): string | undefined {
+function getRunnerInstallGuide(runnerId: string, say: Phrases): string | undefined {
   switch (runnerId) {
     case 'claude':
       return 'npm install -g @anthropic-ai/claude-code';
     case 'codex':
       return 'npm install -g @openai/codex';
     case 'cursor':
-      return 'Install Cursor CLI and ensure `cursor` is available in PATH';
+      return say.doctor.installAndEnsurePath('Cursor CLI', 'cursor');
     case 'agy':
       return 'curl -fsSL https://antigravity.run/install.sh | bash';
     default:
@@ -811,16 +815,16 @@ function getRunnerInstallGuide(runnerId: string): string | undefined {
   }
 }
 
-function getRunnerAuthGuide(runnerId: string): string | undefined {
+function getRunnerAuthGuide(runnerId: string, say: Phrases): string | undefined {
   switch (runnerId) {
     case 'claude':
-      return 'Run `claude login` or export ANTHROPIC_API_KEY';
+      return say.doctor.runLoginOrExport('claude login', 'ANTHROPIC_API_KEY');
     case 'codex':
-      return 'Run `codex login` or export OPENAI_API_KEY';
+      return say.doctor.runLoginOrExport('codex login', 'OPENAI_API_KEY');
     case 'cursor':
-      return 'Run `cursor auth login` in your terminal';
+      return say.doctor.runInTerminal('cursor auth login');
     case 'agy':
-      return 'Run `agy auth login` or export ANTIGRAVITY_API_KEY';
+      return say.doctor.runLoginOrExport('agy auth login', 'ANTIGRAVITY_API_KEY');
     default:
       return undefined;
   }

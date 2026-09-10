@@ -83,7 +83,7 @@ describe('CrewPage configuration workflow', () => {
     clearStore();
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const target = String(input);
-      if (target.endsWith('/projects')) return response(projects);
+      if (target.includes('/projects?')) return response(projects);
       if (target.includes('/config/editor') && (init?.method === undefined || init.method === 'GET')) {
         const url = new URL(target, 'http://deck');
         const scope = url.searchParams.get('scope') as 'global' | 'project';
@@ -93,7 +93,7 @@ describe('CrewPage configuration workflow', () => {
       if (target.includes('/agents')) return response(routes);
       if (target.includes('/runner-types')) return response(runnerTypes);
       if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
-      if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
+      if (target.includes('/config?')) return response(sources);
       if (target.includes('/runners/health')) return response([{ id: 'moe', installed: true, executable: true, auth: 'configured' }]);
       return response({ status: 'applied', view: editor('project', 'flowcanvas'), changes: [] });
     }));
@@ -327,7 +327,7 @@ describe('CrewPage configuration workflow', () => {
   it('creates a generic nested dynamic entry from the server catalog', async () => {
     vi.mocked(fetch).mockImplementation((input, init) => {
       const target = String(input);
-      if (target.endsWith('/projects')) return response(projects);
+      if (target.includes('/projects?')) return response(projects);
       if (target.includes('/config/editor') && init?.method === undefined) {
         const view = editor('global');
         return response({ ...view, dynamicFields: [{ path: ['teams', '*', 'members', '*', 'runner'], editable: true, effect: 'next_execution_context', valueType: 'string' }] });
@@ -335,7 +335,7 @@ describe('CrewPage configuration workflow', () => {
       if (target.includes('/config/editor/validate')) return response({ valid: true, revision, diagnostics: [], changes: [] });
       if (target.includes('/runner-types')) return response(runnerTypes);
       if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
-      if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
+      if (target.includes('/config?')) return response(sources);
       if (target.includes('/agents') || target.includes('/runners/health')) return response([]);
       return response({});
     });
@@ -357,13 +357,13 @@ describe('CrewPage configuration workflow', () => {
   it('shows validation errors and blocks save', async () => {
     vi.mocked(fetch).mockImplementation((input, init) => {
       const target = String(input);
-      if (target.endsWith('/projects')) return response(projects);
+      if (target.includes('/projects?')) return response(projects);
       if (target.includes('/config/editor') && init?.method === undefined) return response(editor('global'));
       if (target.includes('/config/editor/validate')) return response({ valid: false, revision, diagnostics: [{ severity: 'error', code: 'bad', path: ['parallelism', 'maxTasks'], message: 'Must be positive.' }], changes: [] }, 422);
       if (target.includes('/runner-types')) return response(runnerTypes);
       if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
-      if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
-      if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
+      if (target.includes('/config?')) return response(sources);
+      if (target.includes('/config?')) return response(sources);
       if (target.includes('/agents') || target.includes('/runners/health')) return response([]);
       return response({});
     });
@@ -379,14 +379,14 @@ describe('CrewPage configuration workflow', () => {
     const fresh = { ...editor('global'), revision: `sha256:${'b'.repeat(64)}` };
     vi.mocked(fetch).mockImplementation((input, init) => {
       const target = String(input);
-      if (target.endsWith('/projects')) return response(projects);
+      if (target.includes('/projects?')) return response(projects);
       if (target.includes('/config/editor') && init?.method === undefined) return response(editor('global'));
       if (target.includes('/config/editor/validate')) return response({ valid: true, revision, diagnostics: [], changes: [{ path: ['parallelism', 'maxTasks'], before: 2, after: 3, effect: 'next_execution_context' }] });
       if (target.includes('/config/editor') && init?.method === 'PATCH') return response({ error: 'revision_conflict', message: 'The configuration changed after it was loaded.', view: fresh }, 409);
       if (target.includes('/runner-types')) return response(runnerTypes);
       if (target.includes('/runners/models')) return response([{ id: 'moe', models: ['gpt-5-codex', 'gpt-5-codex-mini'] }]);
-      if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
-      if (target.includes('/config?') || target.endsWith('/config')) return response(sources);
+      if (target.includes('/config?')) return response(sources);
+      if (target.includes('/config?')) return response(sources);
       if (target.includes('/agents') || target.includes('/runners/health')) return response([]);
       return response({});
     });
@@ -404,7 +404,7 @@ describe('CrewPage configuration workflow', () => {
   });
 
   it('reports loading and read errors accessibly', async () => {
-    vi.mocked(fetch).mockImplementation((input) => String(input).endsWith('/projects') ? Promise.reject(new Error('offline')) : response([]));
+    vi.mocked(fetch).mockImplementation((input) => String(input).includes('/projects?') ? Promise.reject(new Error('offline')) : response([]));
     render(<CrewPage />);
     expect(screen.getByLabelText(t.common.loading)).toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent(t.common.couldNotReadProjects);

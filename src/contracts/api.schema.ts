@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ForgeCheck, ForgeFailure } from './forge.schema.js';
 import type { QualityGateResult, ReviewFinding } from './review.schema.js';
 import { ArtifactNameSchema, type ReasoningLevel } from './common.schema.js';
+import { LocaleSchema } from './locale.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
 import {
   WorkflowClassSchema,
@@ -104,6 +105,17 @@ export const PromptParamsSchema = z.object({ prompt: PromptNameSchema });
 
 /** Every read endpoint is scoped to one project. */
 export const ProjectQuerySchema = z.object({ projectId: ProjectIdSchema.optional() });
+
+/**
+ * The language a read is answered in (§93 is untouched: this names no path and no file).
+ *
+ * `passthrough` because every route already parses its own query with its own schema —
+ * this one is read alongside them, not instead of them, and a strict object would refuse
+ * `projectId` on the same request.
+ */
+export const LocaleQuerySchema = z
+  .object({ lang: LocaleSchema.optional() })
+  .passthrough();
 
 /**
  * `doctor`, and the one part of it a caller has to ask for.

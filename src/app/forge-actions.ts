@@ -4,6 +4,7 @@ import {
   type ForgeRepository,
 } from '../contracts/index.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
+import type { Phrases } from '../core/phrases/index.js';
 import { GitHubForgeProvider } from '../adapters/forge/github-forge.js';
 import { RemoteGitPublisher } from '../adapters/git/remote-publisher.js';
 import { parseRepositoryUrl } from '../core/forge/repository.js';
@@ -143,6 +144,7 @@ export async function deliveryStatus(deps: {
   readonly projectDir: string;
   readonly config: ForgeConfig;
   readonly runId: string;
+  readonly say?: Phrases;
 }): Promise<DeliveryView> {
   const record = await new DeliveryStore({
     fs: deps.fs,
@@ -152,6 +154,7 @@ export async function deliveryStatus(deps: {
   return projectDelivery({
     config: deps.config,
     ...(record === undefined ? {} : { record }),
+    ...(deps.say === undefined ? {} : { say: deps.say }),
   });
 }
 

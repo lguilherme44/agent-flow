@@ -13,20 +13,23 @@ import type { DeliveryRecord, ForgeCheck, ForgeConfig } from '../../contracts/in
 
 export { DELIVERY_STATES, type DeliveryState, type DeliveryView } from '../../contracts/index.js';
 import type { DeliveryView } from '../../contracts/index.js';
+import { en, type Phrases } from '../phrases/index.js';
 
 const EMPTY = { total: 0, green: 0, red: 0, pending: 0 } as const;
 
 export function projectDelivery(input: {
   readonly config: ForgeConfig;
   readonly record?: DeliveryRecord;
+  readonly say?: Phrases;
 }): DeliveryView {
+  const say = input.say ?? en;
   if (input.config.provider === 'none') {
     return {
       state: 'disabled',
       provider: 'none',
       checks: [],
       checkSummary: EMPTY,
-      detail: 'no forge is configured, so this run delivers nowhere',
+      detail: say.delivery.noForgeConfigured,
     };
   }
 
@@ -37,7 +40,7 @@ export function projectDelivery(input: {
       provider: input.config.provider,
       checks: [],
       checkSummary: EMPTY,
-      detail: 'nothing has been published for this run yet',
+      detail: say.delivery.nothingPublished,
     };
   }
 
@@ -84,7 +87,7 @@ export function projectDelivery(input: {
   // A branch without a commit is not a publication: both facts arrive together, and one
   // without the other is a record half-written rather than a state to report.
   if (record.remoteBranch === undefined || record.sourceCommit === undefined) {
-    return { ...base, state: 'not_published', detail: 'nothing has been published for this run yet' };
+    return { ...base, state: 'not_published', detail: say.delivery.nothingPublished };
   }
   const published = record.sourceCommit;
 
@@ -92,7 +95,7 @@ export function projectDelivery(input: {
     return {
       ...base,
       state: 'published',
-      detail: `${published.slice(0, 8)} is on ${record.remoteBranch}, with no pull request`,
+      detail: say.delivery.onBranchNoPr(published.slice(0, 8), record.remoteBranch),
     };
   }
 
@@ -107,9 +110,11 @@ export function projectDelivery(input: {
       ...base,
       state: 'remote_diverged',
       detail:
-        `pull request #${String(record.pullRequest.number)} points at ` +
-        `${record.pullRequest.headSha.slice(0, 8)}, and this run approved ` +
-        `${published.slice(0, 8)}`,
+        say.delivery.prPointsElsewhere(
+          String(record.pullRequest.number),
+          record.pullRequest.headSha.slice(0, 8),
+          published.slice(0, 8),
+        ),
     };
   }
 
@@ -117,7 +122,7 @@ export function projectDelivery(input: {
     return {
       ...base,
       state: 'pr_open',
-      detail: `pull request #${String(record.pullRequest.number)} is open; no checks were observed`,
+      detail: say.delivery.prOpenNoChecks(String(record.pullRequest.number)),
     };
   }
 
@@ -125,7 +130,7 @@ export function projectDelivery(input: {
     return {
       ...base,
       state: 'checks_pending',
-      detail: `${String(summary.pending)} of ${String(summary.total)} checks have not finished`,
+      detail: say.delivery.checksUnfinished(summary.pending, summary.total),
     };
   }
 
@@ -135,15 +140,14 @@ export function projectDelivery(input: {
       state: 'checks_red',
       // Said plainly, because the temptation this wording resists is real.
       detail:
-        `${String(summary.red)} remote check(s) failed. This is delivery, not quality: ` +
-        'the local run is unaffected',
+        say.delivery.checksFailed(summary.red),
     };
   }
 
   return {
     ...base,
     state: 'checks_green',
-    detail: `all ${String(summary.total)} remote checks passed`,
+    detail: say.delivery.allChecksPassed(summary.total),
   };
 }
 

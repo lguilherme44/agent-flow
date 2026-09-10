@@ -47,7 +47,10 @@ import {
   type RunnerView,
   type ServerEvent,
   type TelemetryEntry,
+  LocaleQuerySchema,
+  DEFAULT_LOCALE,
 } from '../contracts/index.js';
+import { phrasesFor, type Phrases } from '../core/phrases/index.js';
 import { ConfigEditorTargetError, type ConfigEditOperation, type ConfigEditView, type ConfigTarget } from '../app/config-editor.js';
 import { ConfigSourceCodecError } from '../ports/config-source-codec.js';
 import { StateStore } from '../app/state-store.js';
@@ -279,6 +282,31 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       : options.registry.get(query.data.projectId);
   };
 
+  /**
+   * The language this request's prose is written in.
+   *
+   * **A property of the request, never of the server.** One `agent-flow ui` can be open
+   * in two tabs in two languages, and the projections are computed per read anyway — so
+   * the locale rides on the query string beside `projectId` rather than sitting in
+   * configuration where it would be a global the CLI could also read.
+   *
+   * An absent or unknown value is English, because that is what every non-browser caller
+   * sends and a refusal here would turn a cosmetic mistake into a broken page.
+   */
+  /**
+   * The `server` slice, for the refusals the HTTP layer writes itself.
+   *
+   * A second helper rather than `sayFor(...).server` at fifty call sites, because that is
+   * fifty places to forget the `.server` and reach for a use case's sentence instead.
+   */
+  const say = (request: { readonly query?: unknown }): Phrases['server'] =>
+    sayFor(request.query).server;
+
+  const sayFor = (raw: unknown): Phrases => {
+    const query = LocaleQuerySchema.safeParse(raw ?? {});
+    return phrasesFor(query.success && query.data.lang !== undefined ? query.data.lang : DEFAULT_LOCALE);
+  };
+
   app.get('/api/v1/health', (): HealthResponse => {
     return {
       status: 'ok',
@@ -340,12 +368,12 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.post('/api/v1/projects', async (request, reply): Promise<ProjectRegisteredView | undefined> => {
     const body = RegisterProjectRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'expected a candidate id');
+    if (!body.success) return badRequest(reply, say(request).expectedCandidateId);
 
     const candidate = options.registry
       .candidates()
       .find((entry) => entry.id === body.data.candidateId);
-    if (candidate === undefined) return notFound(reply, 'no such candidate');
+    if (candidate === undefined) return notFound(reply, say(request).noSuchCandidate);
 
     const outcome = await registerProject({
       store: new StateStore({
@@ -362,8 +390,8 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       const active = outcome.active;
       reply.code(409).send({
         error: 'active_run',
-        message: `Run ${active.runId} is still active (${active.status}). init writes files that have to be committed, and that commit moves HEAD.`,
-        action: 'Finish or abandon the run first, or retry with force to proceed anyway.',
+        message: say(request).initRunActive(active.runId, active.status),
+        action: say(request).finishOrAbandonFirst,
         forcible: true,
       });
       return undefined;
@@ -380,8 +408,8 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     if (registered === undefined) {
       reply.code(500).send({
         error: 'not_registered',
-        message: 'The project was written but the workspace scan did not pick it up.',
-        action: 'Restart `agent-flow ui` and check the workspace root and depth.',
+        message: say(request).writtenButNotScanned,
+        action: say(request).restartUiCheckRoot,
       });
       return undefined;
     }
@@ -413,7 +441,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
   app.get('/api/v1/runs', async (request, reply): Promise<RunSummaryView[] | undefined> => {
     const query = ProjectQuerySchema.safeParse(request.query ?? {});
-    if (!query.success) return badRequest(reply, 'invalid projectId');
+    if (!query.success) return badRequest(reply, say(request).invalidProjectId);
 
     // With no project named, every registered project is listed. That is the
     // workspace view of §65, and it is the same read either way.
@@ -424,7 +452,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
             (project): project is RegisteredProject => project !== undefined,
           );
 
-    if (projects.length === 0) return notFound(reply, 'no such project');
+    if (projects.length === 0) return notFound(reply, say(request).noSuchProject);
 
     const runs: RunSummaryView[] = [];
     for (const project of projects) runs.push(...(await reader.listRuns(project)));
@@ -433,19 +461,19 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.get('/api/v1/runs/:runId', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const detail = await reader.runDetail(scope.project, scope.runId);
-    return detail === null ? notFound(reply, 'no such run') : detail;
+    const detail = await reader.runDetail(scope.project, scope.runId, sayFor(request.query));
+    return detail === null ? notFound(reply, say(request).noSuchRun) : detail;
   });
 
   app.get('/api/v1/runs/:runId/stages', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const stages = await reader.stages(scope.project, scope.runId);
-    return stages === null ? notFound(reply, 'no such run') : stages;
+    return stages === null ? notFound(reply, say(request).noSuchRun) : stages;
   });
 
   /**
@@ -457,21 +485,21 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.get('/api/v1/runs/:runId/stages/:stage/log', async (request, reply) => {
     const params = StageLogParamsSchema.safeParse(request.params ?? {});
-    if (!params.success) return badRequest(reply, 'unknown pipeline stage');
+    if (!params.success) return badRequest(reply, say(request).unknownPipelineStage);
 
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const log = await reader.stageLog(project, params.data.runId, params.data.stage);
-    return log === undefined ? notFound(reply, 'no such run') : log;
+    return log === undefined ? notFound(reply, say(request).noSuchRun) : log;
   });
 
   app.get('/api/v1/runs/:runId/tasks', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const tasks = await reader.tasks(scope.project, scope.runId);
-    return tasks === null ? notFound(reply, 'no such run') : tasks;
+    return tasks === null ? notFound(reply, say(request).noSuchRun) : tasks;
   });
 
   /**
@@ -483,22 +511,22 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * a task ticked over.
    */
   app.get('/api/v1/runs/:runId/dag', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const dag = await reader.dag(scope.project, scope.runId);
-    return dag === null ? notFound(reply, 'no such run') : dag;
+    return dag === null ? notFound(reply, say(request).noSuchRun) : dag;
   });
 
   app.get('/api/v1/runs/:runId/tasks/:taskId', async (request, reply) => {
     const params = TaskParamsSchema.safeParse(request.params);
-    if (!params.success) return badRequest(reply, 'invalid run or task id');
+    if (!params.success) return badRequest(reply, say(request).invalidRunOrTaskId);
 
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const detail = await reader.taskDetail(project, params.data.runId, params.data.taskId);
-    return detail === null ? notFound(reply, 'no such task') : detail;
+    return detail === null ? notFound(reply, say(request).noSuchTask) : detail;
   });
 
   /**
@@ -513,11 +541,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * on purpose: "off" invites the operator to turn it on and "on, and quiet" does not.
    */
   app.get('/api/v1/runs/:runId/collaboration', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const view = await collaboration.collaboration(scope.project, scope.runId);
-    return view === null ? notFound(reply, 'no such run') : view;
+    return view === null ? notFound(reply, say(request).noSuchRun) : view;
   });
 
   /**
@@ -530,11 +558,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * with the run puts a decision nobody made on screen.
    */
   app.get('/api/v1/runs/:runId/team', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const view = await collaboration.team(scope.project, scope.runId);
-    return view === null ? notFound(reply, 'no such run') : view;
+    return view === null ? notFound(reply, say(request).noSuchRun) : view;
   });
 
   /**
@@ -548,11 +576,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * projection knows both halves.
    */
   app.get('/api/v1/runs/:runId/review', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const view = await collaboration.review(scope.project, scope.runId);
-    return view === null ? notFound(reply, 'no such run') : view;
+    return view === null ? notFound(reply, say(request).noSuchRun) : view;
   });
 
   /**
@@ -563,11 +591,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * token. Every *write* to a forge stays behind the CLI, which is where an operator is.
    */
   app.get('/api/v1/runs/:runId/delivery', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const view = await collaboration.delivery(scope.project, scope.runId);
-    return view === null ? notFound(reply, 'no such run') : view;
+    const view = await collaboration.delivery(scope.project, scope.runId, sayFor(request.query));
+    return view === null ? notFound(reply, say(request).noSuchRun) : view;
   });
 
   /**
@@ -579,11 +607,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * hundred requests, and two halves of one screen must not describe two moments.
    */
   app.get('/api/v1/runs/:runId/control', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const snapshot = await control.snapshot(scope.project, scope.runId);
-    return snapshot === null ? notFound(reply, 'no such run') : snapshot;
+    const snapshot = await control.snapshot(scope.project, scope.runId, sayFor(request.query));
+    return snapshot === null ? notFound(reply, say(request).noSuchRun) : snapshot;
   });
 
   /**
@@ -598,11 +626,11 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.get('/api/v1/runs/:runId/artifacts', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const artifacts = await reader.artifacts(scope.project, scope.runId);
-    return artifacts === null ? notFound(reply, 'no such run') : artifacts;
+    return artifacts === null ? notFound(reply, say(request).noSuchRun) : artifacts;
   });
 
   // Beyond the endpoint list, and deliberately. The Artifacts card has to show
@@ -610,17 +638,17 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   // the common call heavy to serve one uncommon need.
   app.get('/api/v1/runs/:runId/artifacts/:artifact', async (request, reply) => {
     const params = ArtifactParamsSchema.safeParse(request.params);
-    if (!params.success) return badRequest(reply, 'unknown artifact');
+    if (!params.success) return badRequest(reply, say(request).unknownArtifact);
 
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const content = await reader.artifactContent(
       project,
       params.data.runId,
       params.data.artifact,
     );
-    return content === null ? notFound(reply, 'no such artifact') : content;
+    return content === null ? notFound(reply, say(request).noSuchArtifact) : content;
   });
 
   /**
@@ -631,15 +659,15 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * `detail`, same trust boundary — a projection of nothing, a copy of the file.
    */
   app.get('/api/v1/runs/:runId/events', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const log = await reader.eventLog(scope.project, scope.runId);
-    return log === null ? notFound(reply, 'no such run') : log;
+    return log === null ? notFound(reply, say(request).noSuchRun) : log;
   });
 
   app.get('/api/v1/runs/:runId/telemetry', async (request, reply): Promise<RunTelemetryView | undefined> => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const store = new StateStore({
@@ -652,7 +680,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     try {
       state = await store.loadRun(scope.runId);
     } catch {
-      return notFound(reply, 'no such run');
+      return notFound(reply, say(request).noSuchRun);
     }
 
     const entries: TelemetryEntry[] = await collectTelemetry(store, state);
@@ -701,7 +729,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.get('/api/v1/runners/models', async (request, reply): Promise<RunnerModelsView[] | undefined> => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const config = await loadConfig({
       fs: options.fs,
@@ -724,7 +752,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
   app.get('/api/v1/runners', async (request, reply): Promise<RunnerView[] | undefined> => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const config = await loadConfig({
       fs: options.fs,
@@ -754,7 +782,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     '/api/v1/runners/health',
     async (request, reply): Promise<RunnerHealthView[] | undefined> => {
       const project = projectOf(request.query);
-      if (project === undefined) return notFound(reply, 'no such project');
+      if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
       const config = await loadConfig({
         fs: options.fs,
@@ -797,7 +825,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.get('/api/v1/agents', async (request, reply): Promise<RoleRouteView[] | undefined> => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const config = await loadConfig({
       fs: options.fs,
@@ -858,10 +886,10 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.get('/api/v1/doctor', async (request, reply): Promise<DoctorView | undefined> => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const query = DoctorQuerySchema.safeParse(request.query ?? {});
-    if (!query.success) return badRequest(reply, 'invalid doctor options');
+    if (!query.success) return badRequest(reply, say(request).invalidDoctorOptions);
 
     const config = await loadConfig({
       fs: options.fs,
@@ -880,6 +908,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       projectDir: project.path,
       promptsDir: options.promptsDir,
       installProbe: query.data.install === true,
+      say: sayFor(request.query),
     });
 
     return view;
@@ -900,10 +929,10 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.post('/api/v1/clean', async (request, reply): Promise<CleanView | undefined> => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const body = CleanRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid cleanup options');
+    if (!body.success) return badRequest(reply, say(request).invalidCleanupOptions);
 
     const git = await createGitCommand({
       processRunner: options.processRunner,
@@ -956,26 +985,26 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.get('/api/v1/config', async (request, reply): Promise<ConfigView | undefined> => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
-    return configReader.describe(project);
+    return configReader.describe(project, sayFor(request.query));
   });
 
   app.get('/api/v1/config/editor', async (request, reply) => {
     const query = ConfigEditorQuerySchema.safeParse(request.query ?? {});
-    if (!query.success) return badRequest(reply, 'invalid configuration target');
+    if (!query.success) return badRequest(reply, say(request).invalidConfigurationTarget);
 
     try {
       return editorView(await configEditor.describe(editorTarget(query.data)));
     } catch (error) {
-      return configEditorFailure(reply, error);
+      return configEditorFailure(reply, error, say(request));
     }
   });
 
   app.post('/api/v1/config/editor/validate', async (request, reply) => {
     const query = ConfigEditorQuerySchema.safeParse(request.query ?? {});
     const body = ConfigValidateRequestSchema.safeParse(request.body ?? {});
-    if (!query.success || !body.success) return badRequest(reply, 'invalid configuration request');
+    if (!query.success || !body.success) return badRequest(reply, say(request).invalidConfigurationRequest);
 
     try {
       const validation = await configEditor.validate({
@@ -985,14 +1014,14 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       if (!validation.valid) void reply.code(422);
       return validation;
     } catch (error) {
-      return configEditorFailure(reply, error);
+      return configEditorFailure(reply, error, say(request));
     }
   });
 
   app.patch('/api/v1/config/editor', async (request, reply) => {
     const query = ConfigEditorQuerySchema.safeParse(request.query ?? {});
     const body = ConfigApplyRequestSchema.safeParse(request.body ?? {});
-    if (!query.success || !body.success) return badRequest(reply, 'invalid configuration request');
+    if (!query.success || !body.success) return badRequest(reply, say(request).invalidConfigurationRequest);
 
     try {
       const result = await configEditor.apply({
@@ -1008,12 +1037,12 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       void reply.code(409);
       return {
         error: 'revision_conflict',
-        message: 'The configuration changed after it was loaded.',
-        action: 'Review the fresh state and retry your changes.',
+        message: say(request).configChangedAfterLoad,
+        action: say(request).reviewFreshAndRetry,
         view: editorView(result.view),
       };
     } catch (error) {
-      return configEditorFailure(reply, error);
+      return configEditorFailure(reply, error, say(request));
     }
   });
 
@@ -1021,15 +1050,15 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
   app.get('/api/v1/prompts/:prompt', async (request, reply) => {
     const params = PromptParamsSchema.safeParse(request.params);
-    if (!params.success) return badRequest(reply, 'unknown prompt');
+    if (!params.success) return badRequest(reply, say(request).unknownPrompt);
 
     const content = await prompts.read(params.data.prompt);
-    return content === null ? notFound(reply, 'no such prompt') : content;
+    return content === null ? notFound(reply, say(request).noSuchPrompt) : content;
   });
 
   app.get('/api/v1/analytics', async (request, reply): Promise<AnalyticsView | undefined> => {
     const query = AnalyticsQuerySchema.safeParse(request.query ?? {});
-    if (!query.success) return badRequest(reply, 'invalid analytics scope');
+    if (!query.success) return badRequest(reply, say(request).invalidAnalyticsScope);
 
     // The same scoping rule as `/runs`: no project named means the workspace.
     const scoped =
@@ -1039,7 +1068,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
             (project): project is RegisteredProject => project !== undefined,
           );
 
-    if (scoped.length === 0) return notFound(reply, 'no such project');
+    if (scoped.length === 0) return notFound(reply, say(request).noSuchProject);
 
     return analytics.aggregate(scoped, query.data.limit ?? DEFAULT_ANALYTICS_RUNS);
   });
@@ -1082,7 +1111,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   };
 
   /** The ports a use case needs, for one project. Never a client-supplied path. */
-  const depsFor = (project: RegisteredProject): RunActionDeps => ({
+  const depsFor = (project: RegisteredProject, say: Phrases): RunActionDeps => ({
     fs: options.fs,
     clock: options.clock,
     processRunner: options.processRunner,
@@ -1093,6 +1122,9 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     // Written into the execution lock, so a CLI refused by this server can see that
     // the server is what has the run.
     owner: 'server',
+    // §93.1: the reader's language reaches the use case with the request, so a refusal
+    // and the button that produced it are never in two languages.
+    say,
   });
 
   /** The lock, for the pre-flight read. Acquisition belongs to the use cases. */
@@ -1105,10 +1137,10 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     });
 
   app.get('/api/v1/runs/:runId/approval', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await describeApprovalGate(depsFor(scope.project), scope.runId);
+    const outcome = await describeApprovalGate(depsFor(scope.project, sayFor(request.query)), scope.runId);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     const gate = outcome.value;
@@ -1137,19 +1169,19 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    */
   app.post('/api/v1/runs', async (request, reply) => {
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const body = PlanRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'a feature needs a description');
+    if (!body.success) return badRequest(reply, say(request).featureNeedsDescription);
 
-    const deps = depsFor(project);
+    const deps = depsFor(project, sayFor(request.query));
     const created = await createFeatureRun(deps, body.data.description);
     if (!created.ok) return rejectAction(reply, created.error);
 
     const runId = created.value.runId;
     const { description, workflow, skipReview, noCache } = body.data;
 
-    return await startJob(reply, project, 'plan', runId, async () => {
+    return await startJob(reply, project, 'plan', runId, say(request), async () => {
       const outcome = await planFeature(deps, runId, description, {
         ...(workflow === undefined ? {} : { workflow }),
         ...(skipReview ? { skipReview: true } : {}),
@@ -1158,25 +1190,28 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       if (!outcome.ok) return { error: outcome.error };
 
       return {
-        summary: `Planned ${String(outcome.value.taskCount)} tasks${
-          outcome.value.reviewVerdict === undefined ? '' : `; review ${outcome.value.reviewVerdict}`
-        }.`,
+        summary: say(request).plannedTasks(
+          outcome.value.taskCount,
+          outcome.value.reviewVerdict === undefined
+            ? ''
+            : say(request).reviewVerdictSuffix(outcome.value.reviewVerdict),
+        ),
       };
     });
   });
 
   app.post('/api/v1/runs/:runId/plan', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const body = ResumePlanningRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid plan resume request');
+    if (!body.success) return badRequest(reply, say(request).invalidPlanResumeRequest);
 
-    const deps = depsFor(scope.project);
+    const deps = depsFor(scope.project, sayFor(request.query));
     const runId = scope.runId;
     const { from, skipReview, noCache } = body.data;
 
-    return await startJob(reply, scope.project, 'plan', runId, async () => {
+    return await startJob(reply, scope.project, 'plan', runId, say(request), async () => {
       const store = new StateStore({
         fs: options.fs,
         clock: options.clock,
@@ -1187,8 +1222,8 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
         return {
           error: {
             code: 'no_such_run',
-            message: `No such run ${runId}`,
-            action: 'Check the run id.',
+            message: say(request).noSuchRunShort(runId),
+            action: say(request).checkTheRunId,
           },
         };
       }
@@ -1201,24 +1236,27 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       if (!outcome.ok) return { error: outcome.error };
 
       return {
-        summary: `Planned ${String(outcome.value.taskCount)} tasks${
-          outcome.value.reviewVerdict === undefined ? '' : `; review ${outcome.value.reviewVerdict}`
-        }.`,
+        summary: say(request).plannedTasks(
+          outcome.value.taskCount,
+          outcome.value.reviewVerdict === undefined
+            ? ''
+            : say(request).reviewVerdictSuffix(outcome.value.reviewVerdict),
+        ),
       };
     });
   });
 
   app.post('/api/v1/runs/:runId/approve', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const body = ApproveRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid approve request');
+    if (!body.success) return badRequest(reply, say(request).invalidApproveRequest);
 
     // No hash crosses this boundary. The use case reads the plan on disk and
     // hashes it, so there is no version of this call that approves a plan the
     // person did not see (§90).
-    const outcome = await approve(depsFor(scope.project), scope.runId, {
+    const outcome = await approve(depsFor(scope.project, sayFor(request.query)), scope.runId, {
       force: body.data.force,
     });
 
@@ -1231,28 +1269,28 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.post('/api/v1/runs/:runId/reject', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const body = RejectRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid reject request');
+    if (!body.success) return badRequest(reply, say(request).invalidRejectRequest);
 
-    const outcome = await reject(depsFor(scope.project), scope.runId, body.data.reason);
+    const outcome = await reject(depsFor(scope.project, sayFor(request.query)), scope.runId, body.data.reason);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
     return actionResult(scope.runId, outcome.warnings);
   });
 
   app.post('/api/v1/runs/:runId/tasks/:taskId/retry', async (request, reply) => {
     const params = TaskParamsSchema.safeParse(request.params);
-    if (!params.success) return badRequest(reply, 'invalid run or task id');
+    if (!params.success) return badRequest(reply, say(request).invalidRunOrTaskId);
 
     const project = projectOf(request.query);
-    if (project === undefined) return notFound(reply, 'no such project');
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
 
     const body = RetryRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid retry request');
+    if (!body.success) return badRequest(reply, say(request).invalidRetryRequest);
 
-    const outcome = await retryTask(depsFor(project), params.data.runId, params.data.taskId, {
+    const outcome = await retryTask(depsFor(project, sayFor(request.query)), params.data.runId, params.data.taskId, {
       force: body.data.force,
       expectNoChange: body.data.expectNoChange,
     });
@@ -1277,6 +1315,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     project: RegisteredProject,
     kind: JobKind,
     runId: string,
+    t: Phrases['server'],
     work: () => Promise<JobResult>,
   ): Promise<ActionJobView | ActionErrorView> => {
     // Asked before the job starts, so a run another process is executing is refused
@@ -1287,7 +1326,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const held = await lockFor(project).describe(runId);
     if (held !== undefined) {
       reply.code(409);
-      return runBusy(held);
+      return runBusy(held, t);
     }
 
     const outcome = jobs.start({ kind, projectId: project.id, runId, work });
@@ -1296,10 +1335,17 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       reply.code(409);
       return {
         error: 'run_busy',
-        message: `${runId} is already ${
-          outcome.busy.kind === 'start' ? 'running' : outcome.busy.kind === 'review' ? 'being reviewed' : outcome.busy.kind === 'plan' ? 'planning' : 're-planning'
-        } in this server.`,
-        action: 'Wait for it to finish, or watch it on the run page.',
+        message: t.alreadyBusyHere(
+          runId,
+          outcome.busy.kind === 'start'
+            ? t.busyRunning
+            : outcome.busy.kind === 'review'
+              ? t.busyBeingReviewed
+              : outcome.busy.kind === 'plan'
+                ? t.busyPlanning
+                : t.busyReplanning,
+        ),
+        action: t.waitOrWatch,
         detail: { jobId: outcome.busy.id, kind: outcome.busy.kind },
       };
     }
@@ -1320,10 +1366,10 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * are: a pause that had to wait for the run to finish would be a no-op with extra steps.
    */
   app.post('/api/v1/runs/:runId/pause', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await pause(depsFor(scope.project), scope.runId);
+    const outcome = await pause(depsFor(scope.project, sayFor(request.query)), scope.runId);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     return actionResult(scope.runId, outcome.warnings, {
@@ -1334,10 +1380,10 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.post('/api/v1/runs/:runId/cancel', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await cancel(depsFor(scope.project), scope.runId);
+    const outcome = await cancel(depsFor(scope.project, sayFor(request.query)), scope.runId);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     return actionResult(scope.runId, outcome.warnings, {
@@ -1349,16 +1395,16 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.post('/api/v1/runs/:runId/resume', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const deps = depsFor(scope.project);
+    const deps = depsFor(scope.project, sayFor(request.query));
     const runId = scope.runId;
 
     // A job, because resuming executes the plan — minutes of work and spawned runners.
     // The refusals `resume` owns (not paused, cancelled, still executing) come back
     // through the job, exactly as `start`'s gates do.
-    return await startJob(reply, scope.project, 'start', runId, async () => {
+    return await startJob(reply, scope.project, 'start', runId, say(request), async () => {
       const outcome = await resume(deps, runId);
       if (!outcome.ok) return { error: outcome.error };
 
@@ -1372,13 +1418,13 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.post('/api/v1/runs/:runId/start', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const body = StartRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid start request');
+    if (!body.success) return badRequest(reply, say(request).invalidStartRequest);
 
-    const deps = depsFor(scope.project);
+    const deps = depsFor(scope.project, sayFor(request.query));
     const runId = scope.runId;
     const taskId = body.data.taskId;
 
@@ -1387,7 +1433,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     // well would mean two implementations of the same gate, one of which could
     // fall behind — so the 202 says "asked", not "will succeed", and the job says
     // which.
-    return await startJob(reply, scope.project, 'start', runId, async () => {
+    return await startJob(reply, scope.project, 'start', runId, say(request), async () => {
       const outcome = await start(deps, runId, taskId === undefined ? {} : { taskId });
       if (!outcome.ok) return { error: outcome.error };
 
@@ -1403,28 +1449,29 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   });
 
   app.post('/api/v1/runs/:runId/revise', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const body = ReviseRequestSchema.safeParse(request.body ?? {});
     if (!body.success) {
-      return badRequest(reply, 'a revision needs an instruction saying what should change');
+      return badRequest(reply, say(request).revisionNeedsInstruction);
     }
 
-    const deps = depsFor(scope.project);
+    const deps = depsFor(scope.project, sayFor(request.query));
     const runId = scope.runId;
     const instruction = body.data.instruction;
 
-    return await startJob(reply, scope.project, 'revise', runId, async () => {
+    return await startJob(reply, scope.project, 'revise', runId, say(request), async () => {
       const outcome = await revise(deps, runId, instruction);
       if (!outcome.ok) return { error: outcome.error };
 
       return {
-        summary: `Re-planned into ${String(outcome.value.taskCount)} tasks${
+        summary: say(request).replannedInto(
+          outcome.value.taskCount,
           outcome.value.reviewVerdict === undefined
             ? ''
-            : `; review ${outcome.value.reviewVerdict}`
-        }.`,
+            : say(request).reviewVerdictSuffix(outcome.value.reviewVerdict),
+        ),
       };
     });
   });
@@ -1439,17 +1486,17 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * it spawns runners and takes minutes. The lease is the use case's to take, as always.
    */
   app.post('/api/v1/runs/:runId/review', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     const body = ReviewRequestSchema.safeParse(request.body ?? {});
-    if (!body.success) return badRequest(reply, 'invalid review request');
+    if (!body.success) return badRequest(reply, say(request).invalidReviewRequest);
 
-    const deps = depsFor(scope.project);
+    const deps = depsFor(scope.project, sayFor(request.query));
     const runId = scope.runId;
     const fix = body.data.fix;
 
-    return await startJob(reply, scope.project, 'review', runId, async () => {
+    return await startJob(reply, scope.project, 'review', runId, say(request), async () => {
       const outcome = await review(deps, runId, fix ? { fix: true } : {});
       if (!outcome.ok) return { error: outcome.error };
 
@@ -1466,14 +1513,14 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
   app.get('/api/v1/jobs/:jobId', (request, reply) => {
     const params = JobParamsSchema.safeParse(request.params);
-    if (!params.success) return badRequest(reply, 'invalid job id');
+    if (!params.success) return badRequest(reply, say(request).invalidJobId);
 
     const job = jobs.get(params.data.jobId);
-    return job === undefined ? notFound(reply, 'no such job') : jobView(job);
+    return job === undefined ? notFound(reply, say(request).noSuchJob) : jobView(job);
   });
 
   app.get('/api/v1/runs/:runId/job', async (request, reply) => {
-    const scope = resolveRun(request, reply, projectOf);
+    const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
     // Null rather than 404: "nothing is running" is the normal answer, and a page
@@ -1484,7 +1531,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
   app.get('/api/v1/events', (request, reply) => {
     const query = EventsQuerySchema.safeParse(request.query ?? {});
-    if (!query.success) return badRequest(reply, 'invalid filter');
+    if (!query.success) return badRequest(reply, say(request).invalidFilter);
 
     const { projectId, runId } = query.data;
 
@@ -1531,7 +1578,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     // is the dashboard's own route, and the shell has to be served for it.
     app.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api/')) {
-        return reply.code(404).send({ error: 'not_found', message: 'no such endpoint' });
+        return reply.code(404).send({ error: 'not_found', message: say(request).noSuchEndpoint });
       }
       return reply.sendFile('index.html');
     });
@@ -1556,16 +1603,17 @@ function resolveRun(
   request: { params: unknown; query: unknown },
   reply: { code(status: number): { send(body: unknown): unknown } },
   projectOf: (raw: unknown) => RegisteredProject | undefined,
+  t: Phrases['server'],
 ): { project: RegisteredProject; runId: string } | undefined {
   const params = RunParamsSchema.safeParse(request.params);
   if (!params.success) {
-    badRequest(reply, 'invalid run id');
+    badRequest(reply, t.invalidRunId);
     return undefined;
   }
 
   const project = projectOf(request.query);
   if (project === undefined) {
-    notFound(reply, 'no such project');
+    notFound(reply, t.noSuchProject);
     return undefined;
   }
 
@@ -1618,20 +1666,25 @@ function jobView(job: ActionJob): ActionJobView {
  * the pre-flight 409 and the job's own refusal cannot describe the situation
  * differently.
  */
-function runBusy(held: LockRefusal): ActionErrorView {
+function runBusy(held: LockRefusal, t: Phrases['server']): ActionErrorView {
   const holder = held.holder;
 
   return {
     error: 'run_busy',
     message:
       holder === undefined
-        ? `${held.runId} is locked by another process.`
-        : `${held.runId} is already being ${
-            holder.operation === 'run' ? 'executed' : holder.operation === 'revise' ? 're-planned' : 'modified by a retry'
-          } by the ${holder.owner}${held.sameHost ? ` (pid ${String(holder.pid)})` : ` on ${holder.hostname}`}.`,
-    action: held.sameHost
-      ? 'Wait for the active execution to finish.'
-      : 'The lock was written by another machine, which this server will not judge.',
+        ? t.lockedByAnother(held.runId)
+        : t.beingByOwner(
+            held.runId,
+            holder.operation === 'run'
+              ? t.busyRunning
+              : holder.operation === 'revise'
+                ? t.busyReplanning
+                : t.busyRetrying,
+            holder.owner,
+            held.sameHost ? t.wherePid(String(holder.pid)) : t.whereHost(holder.hostname),
+          ),
+    action: held.sameHost ? t.waitForExecution : t.lockFromAnotherMachine,
     ...(holder === undefined
       ? {}
       : {
@@ -1728,6 +1781,7 @@ function editorView(view: ConfigEditView) {
 function configEditorFailure(
   reply: { code(status: number): { send(body: unknown): unknown } },
   error: unknown,
+  t: Phrases['server'],
 ): undefined {
   if (error instanceof ConfigEditorTargetError) {
     const status = error.code === 'project_not_found' ? 404 : 400;
@@ -1741,16 +1795,16 @@ function configEditorFailure(
   if (error instanceof ConfigSourceCodecError) {
     reply.code(422).send({
       error: 'config_invalid',
-      message: 'The configuration source cannot be edited safely.',
-      action: 'Correct the YAML source and retry.',
+      message: t.configNotEditable,
+      action: t.correctYamlRetry,
       diagnostics: [{ severity: 'error', code: `yaml_${error.code}`, path: [], message: error.message }],
     });
     return undefined;
   }
   reply.code(500).send({
     error: 'config_io_error',
-    message: 'The configuration could not be read or saved.',
-    action: 'Check filesystem access and retry.',
+    message: t.configUnreadable,
+    action: t.checkFsRetry,
   });
   return undefined;
 }

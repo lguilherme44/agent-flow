@@ -1,5 +1,6 @@
 import { RUN_STAGES, type RunEvent, type RunState, type RunStage, type TaskProgress } from '../contracts/index.js';
 import { buildDag, readyTasks, type DagNode, type TaskStates } from './dag.js';
+import { en, type Phrases } from './phrases/index.js';
 
 /**
  * The run as a person needs to see it — derived, never persisted (AD-48, I-26).
@@ -49,6 +50,14 @@ export interface ProjectionInput {
   readonly events?: readonly RunEvent[];
   /** When the newest review artifact was written, when one exists. */
   readonly reviewWrittenAt?: string;
+  /**
+   * The language the gate's sentence is written in.
+   *
+   * Optional, and the default is English — every caller in `src/cli` omits it, so a
+   * terminal cannot change language by accident. The server passes what the request
+   * asked for.
+   */
+  readonly say?: Phrases;
 }
 
 /** Stages a run must reach before it can be called finished. */
@@ -130,6 +139,8 @@ export function currentStage(events: readonly RunEvent[], state: RunState): RunS
 export function projectRun(input: ProjectionInput): RunProjection {
   const { state } = input;
   const events = input.events ?? [];
+  // English unless the caller asked otherwise, which is every caller in `src/cli`.
+  const say = input.say ?? en;
   const tasks = state.tasks;
 
   const progress = projectProgress(state);
@@ -155,7 +166,7 @@ export function projectRun(input: ProjectionInput): RunProjection {
       status: 'awaiting_human_approval',
       gate: {
         gate: 'approval',
-        action: 'Review the plan and run `agent-flow approve`',
+        action: say.gate.approval,
         tasks: [],
       },
     };
@@ -197,7 +208,7 @@ export function projectRun(input: ProjectionInput): RunProjection {
     return { ...base, status: 'correcting' };
   }
 
-  const gate = projectGate(tasks, resumable);
+  const gate = projectGate(tasks, resumable, say);
   if (gate !== undefined) return { ...base, status: 'blocked_on_human', gate };
 
   // Read from the log, not from the field — see `currentStage`.
@@ -312,6 +323,7 @@ export function isResumable(input: ProjectionInput): boolean {
 function projectGate(
   tasks: readonly TaskProgress[],
   resumable: boolean,
+  say: Phrases,
 ): RuntimeGate | undefined {
   if (resumable) return undefined;
 
@@ -319,7 +331,7 @@ function projectGate(
   if (review.length > 0) {
     return {
       gate: 'task_review',
-      action: `Review ${review.join(', ')}, then requeue with \`agent-flow retry\` or accept the outcome`,
+      action: say.gate.taskReview(review.join(', ')),
       tasks: review,
     };
   }
@@ -341,7 +353,7 @@ function projectGate(
   if (blocked.length > 0) {
     return {
       gate: 'agent_blocked',
-      action: `Answer what ${blocked.join(', ')} reported as blocking, then requeue`,
+      action: say.gate.agentBlocked(blocked.join(', ')),
       tasks: blocked,
     };
   }
@@ -361,12 +373,10 @@ function projectGate(
     const dependents = tasks
       .filter((task) => task.state === 'blocked' && task.blockReason === 'dependency')
       .map((task) => task.id);
-    const waiting =
-      dependents.length === 0 ? '' : ` ${dependents.join(', ')} are waiting on it.`;
+    const waiting = dependents.length === 0 ? '' : say.gate.waitingOn(dependents.join(', '));
     return {
       gate: 'task_failed',
-      action:
-        `Fix what stopped ${failed.join(', ')}, then \`agent-flow retry\` it.${waiting}`,
+      action: say.gate.taskFailed(failed.join(', '), waiting),
       tasks: failed,
     };
   }
@@ -375,7 +385,7 @@ function projectGate(
   if (tasks.length > 0 && incomplete.length === 0) {
     return {
       gate: 'final_acceptance',
-      action: 'Run `agent-flow review`, then accept and merge',
+      action: say.gate.finalAcceptance,
       tasks: [],
     };
   }

@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { setRequestLocale } from '../api';
+import { invalidate } from '../store';
 import { en } from './translations/en';
 import { ptBR } from './translations/pt-BR';
 import type { Dictionary } from './translations/en';
@@ -18,11 +20,16 @@ import type { Dictionary } from './translations/en';
  * languages: `1 task` / `2 tasks` is a suffix, and `1 tarefa` / `2 tarefas` agrees with a
  * word that a `{n} task(s)` template cannot see. Each dictionary writes its own sentence.
  *
- * **What this cannot translate, and says so plainly:** the prose the *server* sends.
- * The attention queue's `what` and `why`, a board card's reason, a delivery's `detail`,
- * the doctor's remediations and every refusal message are written in `src/core` and
- * `src/app` and printed verbatim by the CLI as well. Those are one decision away from
- * being localised too, and it is not this bundle's decision to make.
+ * **The server's half switches with it.** The attention queue's `what` and `why`, a board
+ * card's reason, a delivery's `detail`, the doctor's remediations and every refusal are
+ * written in `src/core` and `src/app`, which now take a phrase book of their own; the
+ * locale rides on every request as `?lang`, so the two halves of the screen can never be
+ * in different languages. That is why switching invalidates the whole store below —
+ * every cached answer was fetched in the language the reader has just left.
+ *
+ * **What no book translates, in either half:** a reviewer's finding, an SDD, a feature
+ * description, a message one agent sent another. Those are a model's words, and a
+ * renderer that rewrote them would be inventing evidence.
  */
 
 export type Locale = 'pt-BR' | 'en';
@@ -58,7 +65,13 @@ interface I18n {
 const Context = createContext<I18n | undefined>(undefined);
 
 export function I18nProvider({ locale: fixed, children }: { locale?: Locale; children: ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(() => fixed ?? initialLocale());
+  const [locale, setLocale] = useState<Locale>(() => {
+    const initial = fixed ?? initialLocale();
+    // Before the first fetch, not after it: a read that went out in the wrong language
+    // would be cached under a key that says otherwise.
+    setRequestLocale(initial);
+    return initial;
+  });
 
   useEffect(() => {
     // The document's language is an accessibility fact, not decoration: a screen reader
@@ -73,6 +86,14 @@ export function I18nProvider({ locale: fixed, children }: { locale?: Locale; chi
       t: DICTIONARIES[locale],
       setLocale: (next: Locale) => {
         setLocale(next);
+        /*
+          The server writes prose too — a gate's sentence, a refusal, the doctor's advice —
+          and it writes it in the language the request names. So the language is part of
+          every read's address: changing it changes the key, and the store fetches again
+          rather than repainting yesterday's answer in a new frame.
+        */
+        setRequestLocale(next);
+        invalidate(() => true);
         try {
           localStorage.setItem(STORAGE_KEY, next);
         } catch {

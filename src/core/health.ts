@@ -6,6 +6,7 @@ import {
   type HealthStatus,
   type WorkflowRole,
 } from '../contracts/index.js';
+import { en, type Phrases } from './phrases/index.js';
 
 /**
  * Environment health, computed over *routes* rather than runners (AD-15).
@@ -70,6 +71,7 @@ export function isUsable(runner: ObservedRunner): boolean {
 export function assessHealth(
   config: GlobalConfig,
   observed: readonly ObservedRunner[],
+  say: Phrases = en,
 ): HealthVerdict {
   const usable = new Set(observed.filter(isUsable).map((runner) => runner.id));
 
@@ -102,8 +104,8 @@ export function assessHealth(
     const [from, to] = substitution.split('→');
     degradations.push({
       kind: 'runner_unavailable_with_fallback',
-      reason: `runner "${String(from)}" is not usable`,
-      impact: `roles configured for "${String(from)}" will run on "${String(to)}" instead`,
+      reason: say.doctor.runnerNotUsable(String(from)),
+      impact: say.doctor.rolesWillRunOn(String(from), String(to)),
     });
   }
 
@@ -115,10 +117,8 @@ export function assessHealth(
   if (usableProviders.length === 1 && observed.length > 1) {
     degradations.push({
       kind: 'single_provider',
-      reason: `only "${String(usableProviders[0])}" is usable`,
-      impact:
-        'plan review and final review cannot be cross-provider; they will run same-provider ' +
-        'with a fresh context, which does not protect against a repeated wrong assumption',
+      reason: say.doctor.onlyOneUsable(String(usableProviders[0])),
+      impact: say.doctor.noCrossProviderReview,
     });
   }
 
@@ -142,10 +142,7 @@ export function assessHealth(
 
   const notes =
     unverified.length > 0
-      ? [
-          `authentication not verified for: ${unverified.join(', ')} ` +
-            '(use `doctor --deep` to check for real)',
-        ]
+      ? [say.doctor.authNotVerified(unverified.join(', '))]
       : [];
 
   return { status, routes, orphanRoles, degradations, notes };

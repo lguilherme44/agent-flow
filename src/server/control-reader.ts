@@ -1,3 +1,4 @@
+import { en, type Phrases } from '../core/phrases/index.js';
 import type { Clock } from '../ports/clock.js';
 import type {
   AttentionItem,
@@ -49,8 +50,9 @@ export class ControlReader {
   async snapshot(
     project: RegisteredProject,
     runId: string,
+    say?: Phrases,
   ): Promise<ControlSnapshotView | null> {
-    const run = await this.options.runs.runDetail(project, runId);
+    const run = await this.options.runs.runDetail(project, runId, say);
     if (run === null) return null;
 
     // Read together, not in sequence: the whole point of this method is one instant, and
@@ -61,7 +63,7 @@ export class ControlReader {
       this.options.runs.events(project, runId),
       this.options.collaboration.team(project, runId),
       this.options.collaboration.review(project, runId),
-      this.options.collaboration.delivery(project, runId),
+      this.options.collaboration.delivery(project, runId, say),
     ]);
 
     const taskList = tasks ?? [];
@@ -80,9 +82,10 @@ export class ControlReader {
       ...(team === null ? {} : { team }),
       ...(delivery === null ? {} : { delivery }),
       events,
+      ...(say === undefined ? {} : { say }),
     });
 
-    const cards = projectBoard(taskList, context, attention);
+    const cards = projectBoard(taskList, context, attention, say);
 
     return {
       run,
@@ -297,7 +300,7 @@ const DISABLED_DELIVERY: DeliveryView = {
   provider: 'none',
   checks: [],
   checkSummary: { total: 0, green: 0, red: 0, pending: 0 },
-  detail: 'no forge is configured, so this run delivers nowhere',
+  detail: en.delivery.noForgeConfigured,
 };
 
 function topPriority(items: readonly AttentionItem[]): AttentionItem['priority'] | undefined {

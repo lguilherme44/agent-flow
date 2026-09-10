@@ -11,6 +11,8 @@ import type {
 } from '../contracts/index.js';
 import { ATTENTION_PRIORITIES, BOARD_LANES } from '../contracts/index.js';
 
+import { en, type Phrases } from './phrases/index.js';
+
 /**
  * Where each task is, and why — the one function that decides it (M8 §5, T1).
  *
@@ -116,24 +118,24 @@ export function boardReason(
   task: TaskSummaryView,
   lane: BoardLane,
   context: BoardContext,
+  say: Phrases = en,
 ): BoardReason {
-  if (lane === 'done') return { text: 'completed', cause: 'none' };
+  if (lane === 'done') return { text: say.board.completed, cause: 'none' };
 
   if (lane === 'unknown') {
     return {
-      text: `state \`${task.state}\` is not one this build knows`,
+      text: say.board.unknownState(task.state),
       cause: 'unknown',
     };
   }
 
   if (lane === 'blocked') {
     if (task.state === 'failed') {
-      const attempt = task.attempts > 1 ? ` after ${task.attempts} attempts` : '';
-      return { text: `failed${attempt} — decide what to change, then requeue`, cause: 'failure' };
+      return { text: say.board.failed(task.attempts), cause: 'failure' };
     }
     if (task.state === 'interrupted') {
       return {
-        text: 'interrupted by a stopped run — resume to let recovery reconcile it',
+        text: say.board.interruptedByStop,
         cause: 'human',
       };
     }
@@ -151,14 +153,14 @@ export function boardReason(
       return {
         text:
           waiting.length > 0
-            ? `held back by ${waiting.join(', ')}`
-            : 'held back by an upstream failure',
+            ? say.board.heldBackBy(waiting.join(', '))
+            : say.board.heldByUpstreamFailure,
         cause: 'dependency',
         ...(waiting.length > 0 ? { waitsFor: waiting } : {}),
       };
     }
     return {
-      text: 'the agent reported the SDD does not answer something it needs',
+      text: say.board.agentReportedSdd,
       cause: 'human',
     };
   }
@@ -166,34 +168,34 @@ export function boardReason(
   if (lane === 'review') {
     const thread = context.threads.find((candidate) => candidate.taskId === task.id);
     if (thread === undefined) {
-      return { text: 'waiting for a review decision', cause: 'review' };
+      return { text: say.board.waitingForReviewDecision, cause: 'review' };
     }
     if (thread.openBlocking > 0) {
-      const plural = thread.openBlocking === 1 ? 'finding' : 'findings';
       return {
-        text: `changes requested — ${thread.openBlocking} blocking ${plural}`,
+        text: say.board.changesRequested(thread.openBlocking),
         cause: 'review',
       };
     }
     if (thread.freshness === 'stale') {
       return {
-        text: 'the review describes a tree this task has moved past',
+        text: say.board.reviewMovedPast,
         cause: 'review',
       };
     }
-    return { text: `in review, round ${thread.rounds}`, cause: 'review' };
+    return { text: say.board.inReviewRound(thread.rounds), cause: 'review' };
   }
 
   if (lane === 'in_progress') {
     if (task.awaitingIntegration === true) {
-      return { text: 'validated, waiting to be merged onto the integration branch', cause: 'integration' };
+      return { text: say.board.waitingToMerge, cause: 'integration' };
     }
     if (task.state === 'interrupted') {
-      return { text: 'interrupted — recovery will requeue it', cause: 'attempt' };
+      return { text: say.board.interruptedWillRequeue, cause: 'attempt' };
     }
-    const where = task.workspaceActive === true ? ' in its own worktree' : '';
-    const attempt = task.attempts > 1 ? `attempt ${task.attempts}` : 'running';
-    return { text: `${attempt}${where}`, cause: 'attempt' };
+    return {
+      text: say.board.running(task.attempts, task.workspaceActive === true),
+      cause: 'attempt',
+    };
   }
 
   if (lane === 'ready') {
@@ -201,16 +203,16 @@ export function boardReason(
     // The most recent deferral wins: a task deferred for capacity in one wave and for
     // ownership in the next is waiting on the second.
     const deferral = lastDeferral(context.deferrals, task.id);
-    if (deferral !== undefined) return deferralReason(deferral);
-    return { text: 'ready to start', cause: 'none' };
+    if (deferral !== undefined) return deferralReason(deferral, say);
+    return { text: say.board.readyToStart, cause: 'none' };
   }
 
   // backlog
   const waiting = context.waitingOn.get(task.id) ?? [];
   if (waiting.length > 0) {
-    return { text: `waiting on ${waiting.join(', ')}`, cause: 'dependency', waitsFor: waiting };
+    return { text: say.board.waitingOn(waiting.join(', ')), cause: 'dependency', waitsFor: waiting };
   }
-  return { text: 'planned, not ready to start', cause: 'none' };
+  return { text: say.board.plannedNotReady, cause: 'none' };
 }
 
 /**
@@ -224,6 +226,7 @@ export function projectBoard(
   tasks: readonly TaskSummaryView[],
   context: BoardContext,
   attention: readonly AttentionItem[] = [],
+  say: Phrases = en,
 ): BoardCardView[] {
   // The most urgent priority per task. Ranked explicitly rather than compared as strings:
   // `'P0' < 'P1'` happens to be true and would stop being true the day a `P10` exists.
@@ -245,7 +248,7 @@ export function projectBoard(
     return {
       task,
       lane,
-      reason: boardReason(task, lane, context),
+      reason: boardReason(task, lane, context, say),
       ...(assignment === undefined
         ? {}
         : { agentId: assignment.agentId, agentName: assignment.agentName }),
@@ -290,13 +293,15 @@ function lastDeferral(
   return undefined;
 }
 
-function deferralReason(deferral: WaveDeferralView): BoardReason {
+function deferralReason(deferral: WaveDeferralView, say: Phrases): BoardReason {
   if (deferral.reason === 'capacity') {
-    const who = deferral.agents.length > 0 ? deferral.agents.join(', ') : 'every eligible agent';
-    return { text: `held one wave — ${who} at capacity`, cause: 'capacity' };
+    const who =
+      deferral.agents.length > 0 ? deferral.agents.join(', ') : say.board.everyEligibleAgent;
+    return { text: say.board.heldOneWave(who), cause: 'capacity' };
   }
 
-  const area = deferral.patterns.length > 0 ? deferral.patterns.join(', ') : 'an exclusive area';
-  const holder = deferral.waitsFor === undefined ? '' : `, held by ${deferral.waitsFor}`;
-  return { text: `ownership conflict on ${area}${holder}`, cause: 'ownership' };
+  const area =
+    deferral.patterns.length > 0 ? deferral.patterns.join(', ') : say.board.anExclusiveArea;
+  const holder = deferral.waitsFor === undefined ? '' : say.board.heldBy(deferral.waitsFor);
+  return { text: say.board.ownershipConflict(area, holder), cause: 'ownership' };
 }

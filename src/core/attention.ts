@@ -1,3 +1,4 @@
+import { en, type Phrases } from './phrases/index.js';
 import type {
   AttentionItem,
   AttentionKind,
@@ -52,6 +53,14 @@ export interface AttentionInput {
   readonly delivery?: DeliveryView;
   /** Append-only, in order. Read for `since` only — never for a verdict. */
   readonly events: readonly RunEvent[];
+  /**
+   * The language every sentence below is written in. English when absent.
+   *
+   * The queue is browser-only — nothing in `src/cli` projects it — but the default is
+   * still English, so a caller that forgets gets the language the rest of the product
+   * speaks rather than whichever book happened to be imported first.
+   */
+  readonly say?: Phrases;
 }
 
 /** The ladder. One place, so evidence can move it. */
@@ -114,6 +123,7 @@ export function sortAttention(items: readonly AttentionItem[]): AttentionItem[] 
 /* ─── P0 — acting wrongly here loses work ──────────────────────────────────── */
 
 function integrityItems(input: AttentionInput): AttentionItem[] {
+  const say = input.say ?? en;
   const items: AttentionItem[] = [];
   const { runId } = input;
 
@@ -122,12 +132,12 @@ function integrityItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'remote_diverged',
         runId,
-        what: 'the remote branch moved under this run',
+        what: say.attention.remoteDiverged,
         // Publishing again would guess which history is right, and one of the two has
         // somebody's work in it. That is why this outranks a human gate.
         why: input.delivery.detail,
         since: input.delivery.syncedAt ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Inspect the remote', destructive: false },
+        action: { kind: 'inspect', label: say.attention.inspectRemote, destructive: false },
         focus: 'delivery',
       }),
     );
@@ -139,13 +149,13 @@ function integrityItems(input: AttentionInput): AttentionItem[] {
         kind: 'integration_conflict',
         runId,
         taskId: conflict.task,
-        what: `${conflict.task} could not be merged`,
+        what: say.attention.couldNotMerge(conflict.task),
         why:
           conflict.previouslyIntegrated === undefined
-            ? `conflicting paths: ${conflict.paths.join(', ')}`
-            : `${conflict.previouslyIntegrated} integrated first and moved the head; conflicting paths: ${conflict.paths.join(', ')}`,
+            ? say.attention.conflictingPaths(conflict.paths.join(', '))
+            : say.attention.integratedFirst(conflict.previouslyIntegrated, conflict.paths.join(', ')),
         since: lastEventAt(input.events, 'task_integration_conflict') ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: `Open ${conflict.task}`, destructive: false },
+        action: { kind: 'inspect', label: say.attention.open(conflict.task), destructive: false },
         focus: 'task',
       }),
     );
@@ -163,10 +173,10 @@ function integrityItems(input: AttentionInput): AttentionItem[] {
         kind: 'ownership_conflict',
         runId,
         taskId: deferral.taskId,
-        what: `${deferral.taskId} is held by an ownership conflict`,
+        what: say.attention.heldByOwnership(deferral.taskId),
         why: deferral.detail,
         since: lastEventAt(input.events, 'wave_deferred_for_ownership') ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Review the ownership areas', destructive: false },
+        action: { kind: 'inspect', label: say.attention.reviewOwnership, destructive: false },
         focus: 'team',
       }),
     );
@@ -178,6 +188,7 @@ function integrityItems(input: AttentionInput): AttentionItem[] {
 /* ─── P1 — a person is the only thing between the run and progress ─────────── */
 
 function humanGateItems(input: AttentionInput): AttentionItem[] {
+  const say = input.say ?? en;
   const items: AttentionItem[] = [];
   const { runId, runtime } = input;
 
@@ -186,10 +197,10 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'approval_required',
         runId,
-        what: 'the plan is waiting for a decision',
-        why: runtime.gate?.action ?? 'nothing runs until the gate opens',
+        what: say.attention.planWaiting,
+        why: runtime.gate?.action ?? say.attention.nothingRunsUntilGate,
         since: lastEventAt(input.events, 'approval_requested') ?? input.run.updatedAt,
-        action: { kind: 'approve', label: 'Review the plan', destructive: false },
+        action: { kind: 'approve', label: say.attention.reviewThePlan, destructive: false },
         focus: 'plan',
       }),
     );
@@ -202,11 +213,11 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
         kind: 'recovery_exhausted',
         runId,
         taskId: escalation.task,
-        what: `${escalation.task} exhausted automatic recovery`,
+        what: say.attention.exhaustedRecovery(escalation.task),
         // The escalation already carries exactly one human action, and it is never
         // "inspect logs" — C-22 spent a milestone on that. Repeating it here rather than
         // writing a new sentence keeps one answer to "what do I do".
-        why: `${escalation.failureClass}; ${escalation.attemptedRepairs.length} repair steps tried`,
+        why: say.attention.repairsTried(escalation.failureClass, escalation.attemptedRepairs.length),
         since: lastEventAt(input.events, 'recovery_exhausted') ?? input.run.updatedAt,
         action: { kind: 'retry', label: escalation.humanAction, destructive: false },
         focus: 'task',
@@ -228,10 +239,10 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
           kind: 'task_review_required',
           runId,
           taskId: task.id,
-          what: `${task.id} is waiting for a review decision`,
-          why: 'the attempt finished and nothing has accepted or requeued it',
+          what: say.attention.waitingForReview(task.id),
+          why: say.attention.nothingAcceptedIt,
           since: lastEventAt(input.events, 'task_finished', task.id) ?? input.run.updatedAt,
-          action: { kind: 'inspect', label: `Open ${task.id}`, destructive: false },
+          action: { kind: 'inspect', label: say.attention.open(task.id), destructive: false },
           focus: 'task',
         }),
       );
@@ -253,10 +264,10 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
           kind: 'agent_blocked',
           runId,
           taskId: task.id,
-          what: `${task.id} reported it is blocked`,
-          why: 'the SDD does not answer something the task needs; recovery does not release this',
+          what: say.attention.reportedBlocked(task.id),
+          why: say.attention.sddDoesNotAnswer,
           since: lastEventAt(input.events, 'task_blocked', task.id) ?? input.run.updatedAt,
-          action: { kind: 'inspect', label: `Read what ${task.id} asked`, destructive: false },
+          action: { kind: 'inspect', label: say.attention.readWhatAsked(task.id), destructive: false },
           focus: 'task',
         }),
       );
@@ -269,6 +280,7 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
 /* ─── P2 — something authoritative failed ──────────────────────────────────── */
 
 function failureItems(input: AttentionInput): AttentionItem[] {
+  const say = input.say ?? en;
   const items: AttentionItem[] = [];
   const { runId } = input;
 
@@ -279,13 +291,13 @@ function failureItems(input: AttentionInput): AttentionItem[] {
         kind: 'task_failed',
         runId,
         taskId: task.id,
-        what: `${task.id} failed`,
+        what: say.attention.taskFailed(task.id),
         why:
           task.attempts > 1
-            ? `${task.attempts} attempts, none of which satisfied the contract`
-            : 'the attempt did not satisfy the contract',
+            ? say.attention.attemptsNoneSatisfied(task.attempts)
+            : say.attention.attemptDidNotSatisfy,
         since: lastEventAt(input.events, 'task_failed', task.id) ?? input.run.updatedAt,
-        action: { kind: 'retry', label: `Requeue ${task.id}`, destructive: false },
+        action: { kind: 'retry', label: say.attention.requeue(task.id), destructive: false },
         focus: 'task',
       }),
     );
@@ -300,16 +312,15 @@ function failureItems(input: AttentionInput): AttentionItem[] {
 
   for (const thread of input.review?.threads ?? []) {
     if (thread.openBlocking === 0) continue;
-    const plural = thread.openBlocking === 1 ? 'finding' : 'findings';
     items.push(
       item({
         kind: 'blocking_finding_open',
         runId,
         taskId: thread.taskId,
-        what: `${thread.taskId} has ${thread.openBlocking} blocking ${plural}`,
-        why: thread.decision.blockedBy.join('; ') || 'the review requested changes',
+        what: say.attention.blockingFindings(thread.taskId, thread.openBlocking),
+        why: thread.decision.blockedBy.join('; ') || say.attention.reviewRequestedChanges,
         since: lastEventAt(input.events, 'review_completed', thread.taskId) ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Read the findings', destructive: false },
+        action: { kind: 'inspect', label: say.attention.readTheFindings, destructive: false },
         focus: 'review',
       }),
     );
@@ -321,13 +332,13 @@ function failureItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'remote_checks_red',
         runId,
-        what: `${summary.red} remote ${summary.red === 1 ? 'check' : 'checks'} failed`,
+        what: say.attention.remoteChecksFailed(summary.red),
         // The sentence carries the separation rather than relying on the reader to know
         // it. A remote check is an observation; the local workflow already approved or it
         // would not have published.
-        why: 'this is delivery, not local quality — the run\u2019s own gates are unaffected',
+        why: say.attention.deliveryNotLocalQuality,
         since: input.delivery.syncedAt ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Open the delivery', destructive: false },
+        action: { kind: 'inspect', label: say.attention.openTheDelivery, destructive: false },
         focus: 'delivery',
       }),
     );
@@ -338,14 +349,14 @@ function failureItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'delivery_failed',
         runId,
-        what: 'delivery to the forge failed',
+        what: say.attention.deliveryFailed,
         why: input.delivery.detail,
         since: input.delivery.syncedAt ?? input.run.updatedAt,
         // **Named as a command rather than offered as a button**, and that is M7's
         // boundary rather than a gap here: every *write* to a forge stays behind the CLI
         // so the local server never holds a token. An action a surface cannot perform is
         // worse than no action at all — it teaches people the queue is decorative.
-        action: { kind: 'forge_sync', label: 'Run `agent-flow forge sync`', destructive: false },
+        action: { kind: 'forge_sync', label: say.attention.runForgeSync, destructive: false },
         focus: 'delivery',
       }),
     );
@@ -363,21 +374,20 @@ function failureItems(input: AttentionInput): AttentionItem[] {
  * the code.
  */
 function gateItem(runId: string, gate: QualityGateResult, input: AttentionInput): AttentionItem {
+  const say = input.say ?? en;
   const notRun = gate.status === 'not_run';
   return item({
     kind: notRun ? 'required_gate_not_run' : 'required_gate_failed',
     runId,
     gateId: gate.gateId,
-    what: notRun
-      ? `required gate \`${gate.gateId}\` did not run`
-      : `required gate \`${gate.gateId}\` failed`,
+    what: notRun ? say.attention.gateDidNotRun(gate.gateId) : say.attention.gateFailed(gate.gateId),
     why:
       gate.detail ??
       (notRun
-        ? 'nothing recorded a result for it, which blocks exactly as a failure does'
-        : `exit ${gate.exitCode ?? 'non-zero'}`),
+        ? say.attention.nothingRecordedResult
+        : say.attention.exitCode(gate.exitCode === undefined ? 'non-zero' : String(gate.exitCode))),
     since: lastEventAt(input.events, 'quality_gate_evaluated') ?? input.run.updatedAt,
-    action: { kind: 'inspect', label: 'Open the quality gates', destructive: false },
+    action: { kind: 'inspect', label: say.attention.openQualityGates, destructive: false },
     focus: 'quality',
   });
 }
@@ -385,6 +395,7 @@ function gateItem(runId: string, gate: QualityGateResult, input: AttentionInput)
 /* ─── P3 — degraded, still moving ──────────────────────────────────────────── */
 
 function degradedItems(input: AttentionInput): AttentionItem[] {
+  const say = input.say ?? en;
   const items: AttentionItem[] = [];
   const { runId } = input;
 
@@ -393,10 +404,10 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'review_stale',
         runId,
-        what: 'the newest review describes a state this run has moved past',
-        why: 'a stage started after it was written, so its verdict is about a different tree',
+        what: say.attention.reviewMovedPast,
+        why: say.attention.stageStartedAfter,
         since: lastEventAt(input.events, 'stage_started') ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Open the review', destructive: false },
+        action: { kind: 'inspect', label: say.attention.openTheReview, destructive: false },
         focus: 'review',
       }),
     );
@@ -409,10 +420,10 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
         kind: 'review_stale',
         runId,
         taskId: thread.taskId,
-        what: `the review of ${thread.taskId} is stale`,
-        why: 'it names a tree the task has moved past, so its approval does not apply',
+        what: say.attention.reviewOfIsStale(thread.taskId),
+        why: say.attention.namesATreeMovedPast,
         since: lastEventAt(input.events, 'review_completed', thread.taskId) ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Open the review thread', destructive: false },
+        action: { kind: 'inspect', label: say.attention.openTheReviewThread, destructive: false },
         focus: 'review',
       }),
     );
@@ -423,10 +434,10 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'run_paused',
         runId,
-        what: 'an operator asked this run to stop',
-        why: 'no new task starts until it is resumed; the task in flight runs to its end',
+        what: say.attention.operatorAskedToStop,
+        why: say.attention.noNewTaskStarts,
         since: input.run.pauseRequestedAt,
-        action: { kind: 'resume', label: 'Resume the run', destructive: false },
+        action: { kind: 'resume', label: say.attention.resumeTheRun, destructive: false },
         focus: 'run',
       }),
     );
@@ -441,10 +452,10 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
         kind: 'capacity_starvation',
         runId,
         taskId,
-        what: `${taskId} is ready and nothing can take it`,
-        why: 'every member whose skills match is at maxConcurrentTasks',
+        what: say.attention.readyAndNobodyTakes(taskId),
+        why: say.attention.everyMemberAtCapacity,
         since: lastEventAt(input.events, 'wave_deferred_for_capacity') ?? input.run.updatedAt,
-        action: { kind: 'inspect', label: 'Open the team', destructive: false },
+        action: { kind: 'inspect', label: say.attention.openTheTeam, destructive: false },
         focus: 'team',
       }),
     );
@@ -455,12 +466,12 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'degradation_recorded',
         runId,
-        what: `this run is degraded: ${degradation.kind}`,
+        what: say.attention.runIsDegraded(degradation.kind),
         // Both halves. `reason` is what happened and `impact` is what it costs, and a
         // reader given only the first has to guess whether it matters.
-        why: `${degradation.reason} — ${degradation.impact}`,
+        why: say.attention.reasonAndImpact(degradation.reason, degradation.impact),
         since: degradation.detectedAt,
-        action: { kind: 'inspect', label: 'Open the run summary', destructive: false },
+        action: { kind: 'inspect', label: say.attention.openTheRunSummary, destructive: false },
         focus: 'run',
       }),
     );
@@ -472,6 +483,7 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
 /* ─── P4 — actionable, not urgent ──────────────────────────────────────────── */
 
 function informationalItems(input: AttentionInput): AttentionItem[] {
+  const say = input.say ?? en;
   const items: AttentionItem[] = [];
   const { runId, delivery } = input;
   if (delivery === undefined || delivery.state === 'disabled') return items;
@@ -481,10 +493,10 @@ function informationalItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'checks_pending',
         runId,
-        what: `${delivery.checkSummary.pending} remote checks have not reported`,
-        why: 'remote checks are an observation and never a local verdict',
+        what: say.attention.checksPending(delivery.checkSummary.pending),
+        why: say.attention.checksAreObservation,
         since: delivery.syncedAt ?? input.run.updatedAt,
-        action: { kind: 'forge_sync', label: 'Run `agent-flow forge sync`', destructive: false },
+        action: { kind: 'forge_sync', label: say.attention.runForgeSync, destructive: false },
         focus: 'delivery',
       }),
     );
@@ -497,10 +509,14 @@ function informationalItems(input: AttentionInput): AttentionItem[] {
       item({
         kind: 'delivery_not_published',
         runId,
-        what: 'this run has finished and nothing has been published',
+        what: say.attention.finishedNothingPublished,
         why: delivery.detail,
         since: input.run.updatedAt,
-        action: { kind: 'forge_publish', label: 'Run `agent-flow forge publish`', destructive: false },
+        action: {
+          kind: 'forge_publish',
+          label: say.attention.runForgePublish,
+          destructive: false,
+        },
         focus: 'delivery',
       }),
     );

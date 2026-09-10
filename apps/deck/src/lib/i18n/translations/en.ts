@@ -24,6 +24,8 @@ export const en = {
   common: {
     /** The em dash that stands for "no value". One place, so it never drifts. */
     none: '—',
+    /** A refusal with no sentence of its own — a crash, a proxy, a connection cut. */
+    statusFromServer: (status: string) => `${status} from the server`,
     cancel: 'Cancel',
     close: 'Close',
     clear: 'clear',
