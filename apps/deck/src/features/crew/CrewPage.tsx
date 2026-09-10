@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConfigEditorFieldView, ConfigEditorScope, ConfigEditorView, ConfigValidationView, ConfigView, ProjectView, RoleRouteView, RunnerHealthView, RunnerModelsView, RunnerTypeView } from '@contracts/index.js';
 import { ApiError, api, keys, type ConfigEditorOperation } from '../../lib/api';
 import { invalidate, useResource } from '../../lib/store';
-import { Empty, Skeleton } from '../../components/ui';
+import { Empty, NoProjectsYet, Skeleton } from '../../components/ui';
+import { useT } from '../../lib/i18n';
 import { blockedRunnerDependencies, configInvalidationPredicate, dynamicEntityPrefixes, effectNote, fieldInputValue, isFieldShown, operationForDynamicField, operationForField, operationsToRemoveDynamicEntity, originLabel, pathLabel, routedFieldPaths, sectionFields } from './crew-config';
 import { ChangeBar } from './ChangeBar';
 import { FieldControl } from './FieldControl';
@@ -11,6 +12,7 @@ import { RunnerGrid } from './RunnerGrid';
 
 /** The active crew and the configuration sources that resolve it. */
 export function CrewPage({ projectId }: { projectId?: string }) {
+  const t = useT();
   const projects = useResource(keys.projects(), api.projects);
   const [selectedProject, setSelectedProject] = useState(projectId);
   const [configScope, setConfigScope] = useState<ConfigEditorScope>('global');
@@ -30,32 +32,34 @@ export function CrewPage({ projectId }: { projectId?: string }) {
     if (selectedProject === undefined && projects.data?.[0] !== undefined) setSelectedProject(projects.data[0].id);
   }, [projects.data, selectedProject]);
 
-  if (projects.error !== undefined) return <main className="page"><Empty error>Projects could not be read.</Empty></main>;
-  if (projects.loading || project === undefined) return <main className="page"><Skeleton rows={6} /></main>;
+  if (projects.error !== undefined) return <main className="page"><Empty error>{t.common.couldNotReadProjects}</Empty></main>;
+  if (projects.loading) return <main className="page"><Skeleton rows={6} /></main>;
+  // Loading and having none are different answers, and one spinner used to serve both.
+  if (project === undefined) return <main className="page"><NoProjectsYet what={t.crew.configureVerb} /></main>;
 
   const unresolved = (roles.data ?? []).filter((role) => role.error !== undefined).length;
   return (
     <main className="page">
       <div className="page-head crew-head">
-        <div><span className="eyebrow">Crew</span><h1 className="page-head__title">Configure the active crew</h1><p className="page-head__sub">{roles.data?.length ?? 9} roles · {health.data?.length ?? '—'} runners resolved against {project.name}.{unresolved > 0 ? ` ${String(unresolved)} unresolved.` : ''}</p></div>
-        <label className="crew-control">Project<select className="input" value={project.id} onChange={(event) => setSelectedProject(event.target.value)}>{projects.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <div><span className="eyebrow">{t.nav.crew}</span><h1 className="page-head__title">{t.crew.title}</h1><p className="page-head__sub">{t.crew.resolvedAgainst(roles.data?.length ?? 9, health.data?.length, project.name)}{unresolved > 0 ? ` ${t.crew.unresolvedCount(unresolved)}` : ''}</p></div>
+        <label className="crew-control">{t.common.project}<select className="input" value={project.id} onChange={(event) => setSelectedProject(event.target.value)}>{projects.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       </div>
-      <div className="crew-scope" role="group" aria-label="Configuration scope">
+      <div className="crew-scope" role="group" aria-label={t.crew.scopeAria}>
         <ScopeButton
           scope="global"
           active={configScope}
           onPick={setConfigScope}
-          title="Global configuration"
+          title={t.crew.globalConfiguration}
           path={sources.data?.sources.globalPath}
-          note="Applies to every project on this machine"
+          note={t.crew.appliesEverywhere}
         />
         <ScopeButton
           scope="project"
           active={configScope}
           onPick={setConfigScope}
-          title={`This project · ${project.name}`}
+          title={t.crew.thisProject(project.name)}
           path={sources.data?.sources.projectPath}
-          note="Committed with the repository"
+          note={t.crew.committedWithRepo}
         />
       </div>
       <ConfigPanel key={`${configScope}/${project.id}`} scope={configScope} project={project} roles={roles} health={health} types={types} models={models} />
@@ -124,12 +128,13 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
   const requestSequence = useRef(0);
   // The role table owns runner, model and effort. Leaving them in the accordion too
   // would be two controls over one value, disagreeing for as long as one is stale.
+  const t = useT();
   const routed = useMemo(() => routedFieldPaths(roles.data ?? []), [roles.data]);
   const advancedFields = useMemo(
     () => (view?.fields ?? []).filter((field) => !routed.has(pathLabel(field.path)) && String(field.path[0]) !== 'runners'),
     [view, routed],
   );
-  const sections = useMemo(() => sectionFields(advancedFields), [advancedFields]);
+  const sections = useMemo(() => sectionFields(t, advancedFields), [t, advancedFields]);
 
   const validate = (next: ConfigEditorOperation[]): void => {
     setOperations(next); setMessage(undefined);
@@ -141,7 +146,7 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
       setValidation(result); setState('idle');
     }).catch((error: unknown) => {
       if (sequence !== requestSequence.current) return;
-      setMessage(error instanceof Error ? error.message : 'Configuration could not be validated.'); setState('idle');
+      setMessage(error instanceof Error ? error.message : t.crew.couldNotValidate); setState('idle');
     });
   };
 
@@ -162,25 +167,25 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
         ++requestSequence.current;
         setOperations([]);
         setValidation(undefined);
-        setState('conflict'); setMessage(`${error.message} Review the fresh server state before trying again.`); return;
+        setState('conflict'); setMessage(`${error.message} ${t.crew.reviewFreshState}`); return;
       }
-      setState('idle'); setMessage(error instanceof Error ? error.message : 'Configuration could not be saved.');
+      setState('idle'); setMessage(error instanceof Error ? error.message : t.crew.couldNotSave);
     });
   };
 
-  if (resource.error !== undefined) return <section className="section"><Empty error>Configuration could not be read.</Empty></section>;
+  if (resource.error !== undefined) return <section className="section"><Empty error>{t.crew.couldNotRead}</Empty></section>;
   if (resource.loading || view === undefined) return <section className="section"><Skeleton rows={6} /></section>;
   return (
     <section className="section crew-editor" aria-labelledby="configuration-editor">
-      <div className="section__head"><div><h2 id="configuration-editor" className="eyebrow" style={{ margin: 0 }}>{scope} source</h2><span className="section__count">{view.exists ? 'source present' : 'source will be created'} · revision {view.revision.slice(0, 18)}…</span></div></div>
-      {scope === 'project' ? <div className="notice" data-tone="warn" role="status">Saving changes the project's working tree. Review and commit the YAML yourself.</div> : null}
-      {view.unknownKeys.length > 0 ? <div className="notice" data-tone="idle" role="status">{view.unknownKeys.length} unknown key(s) are preserved but hidden.</div> : null}
+      <div className="section__head"><div><h2 id="configuration-editor" className="eyebrow" style={{ margin: 0 }}>{t.crew.scopeSource(scope === 'global' ? t.crew.scopeGlobal : t.crew.scopeProject)}</h2><span className="section__count">{view.exists ? t.crew.sourcePresent : t.crew.sourceWillBeCreated} · {t.crew.revision(view.revision.slice(0, 18))}</span></div></div>
+      {scope === 'project' ? <div className="notice" data-tone="warn" role="status">{t.crew.savingTouchesTree}</div> : null}
+      {view.unknownKeys.length > 0 ? <div className="notice" data-tone="idle" role="status">{t.crew.unknownKeys(view.unknownKeys.length)}</div> : null}
       {message === undefined ? null : <div className="empty empty--error" role="alert">{message}</div>}
-      {validation?.diagnostics.map((diagnostic) => <div key={`${diagnostic.code}/${pathLabel(diagnostic.path)}`} className="empty empty--error" role="alert"><strong>{pathLabel(diagnostic.path) || 'Configuration'}:</strong> {diagnostic.message}</div>)}
-      <div className="crew-tabs" role="tablist" aria-label="Configuration area">
-        <button type="button" role="tab" aria-selected={tab === 'crew'} onClick={() => setTab('crew')}>Crew</button>
+      {validation?.diagnostics.map((diagnostic) => <div key={`${diagnostic.code}/${pathLabel(diagnostic.path)}`} className="empty empty--error" role="alert"><strong>{pathLabel(diagnostic.path) || t.crew.configurationWord}:</strong> {diagnostic.message}</div>)}
+      <div className="crew-tabs" role="tablist" aria-label={t.crew.areaAria}>
+        <button type="button" role="tab" aria-selected={tab === 'crew'} onClick={() => setTab('crew')}>{t.nav.crew}</button>
         <button type="button" role="tab" aria-selected={tab === 'advanced'} onClick={() => setTab('advanced')}>
-          Advanced <span className="crew-tabs__count">{advancedFields.length}</span>
+          {t.crew.advanced} <span className="crew-tabs__count">{advancedFields.length}</span>
         </button>
       </div>
       {tab === 'crew' ? <>
@@ -188,16 +193,19 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
         <RoutingEditor view={view} roles={roles} types={types.data} models={models.data} operations={operations} onChange={updateField} onOperations={validate} />
       </> : <>
       <div className="crew-filter">
-        <span>{advancedFields.filter(({ explicitValue }) => explicitValue !== undefined).length} of {advancedFields.length} fields are set in this source.</span>
-        <label className="crew-filter__toggle"><input type="checkbox" checked={showInherited} onChange={(event) => setShowInherited(event.target.checked)} />Show inherited</label>
+        <span>{t.crew.fieldsSetHere(advancedFields.filter(({ explicitValue }) => explicitValue !== undefined).length, advancedFields.length)}</span>
+        <label className="crew-filter__toggle"><input type="checkbox" checked={showInherited} onChange={(event) => setShowInherited(event.target.checked)} />{t.crew.showInherited}</label>
       </div>
       <DynamicConfiguration view={view} operations={operations} onChange={validate} />
-      <div className="crew-sections">{[...sections].map(([section, fields]) => {
+      <div className="crew-sections">{[...sections].map(([head, section]) => {
+        const fields = section.fields;
         const shown = fields.filter((field) => isFieldShown(field, pendingFor(field, operations) !== undefined, showInherited));
-        return <details className="panel crew-section" key={section} open={section === 'Runners' || section === 'Parallelism'}>
-          <summary><h3>{section}</h3><span>{shown.length === fields.length ? `${String(fields.length)} fields` : `${String(shown.length)} of ${String(fields.length)} fields`}</span></summary>
+        // Opened by the configuration's own key, never by the heading: the heading is
+        // language and the key is not.
+        return <details className="panel crew-section" key={head} open={head === 'runners' || head === 'parallelism'}>
+          <summary><h3>{section.name}</h3><span>{shown.length === fields.length ? t.crew.fieldCount(fields.length) : t.crew.fieldsOf(shown.length, fields.length)}</span></summary>
           {shown.length === 0
-            ? <p className="crew-section__empty">All {fields.length} fields here inherit their value. <button type="button" className="btn btn--sm" onClick={() => setShowInherited(true)}>Show inherited</button></p>
+            ? <p className="crew-section__empty">{t.crew.allInherit(fields.length)} <button type="button" className="btn btn--sm" onClick={() => setShowInherited(true)}>{t.crew.showInherited}</button></p>
             : <div className="crew-fields">{shown.map((field) => <ConfigField key={pathLabel(field.path)} field={field} operations={operations} onChange={updateField} />)}</div>}
         </details>;
       })}</div>
@@ -217,6 +225,7 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
 }
 
 function DynamicConfiguration({ view, operations, onChange }: { view: ConfigEditorView; operations: readonly ConfigEditorOperation[]; onChange: (operations: ConfigEditorOperation[]) => void }) {
+  const t = useT();
   const editable = view.dynamicFields.filter((field) => field.editable);
   const [selectedPath, setSelectedPath] = useState(editable[0]?.path.join('.') ?? '');
   const [identifiers, setIdentifiers] = useState<string[]>([]);
@@ -232,36 +241,37 @@ function DynamicConfiguration({ view, operations, onChange }: { view: ConfigEdit
     } catch { /* required identifiers keep the action disabled */ }
   };
   return <details className="panel crew-section crew-dynamic">
-    <summary><h3>Dynamic configuration</h3><span>{editable.length} field templates</span></summary>
+    <summary><h3>{t.crew.dynamicConfiguration}</h3><span>{t.crew.fieldTemplates(editable.length)}</span></summary>
     <div className="dynamic-create">
-      <label>Known field<select className="input mono" value={selectedPath} onChange={(event) => { setSelectedPath(event.target.value); setIdentifiers([]); setRawValue(''); }}><option value="">Select a field</option>{editable.map((field) => <option key={field.path.join('.')} value={field.path.join('.')}>{field.path.join('.')}</option>)}</select></label>
-      {selected?.path.flatMap((part, index) => part === '*' ? [<label key={index}>Identifier {String(selected.path.slice(0, index).filter((item) => item !== '*').at(-1) ?? 'entry')}<input className="input mono" value={identifiers[selected.path.slice(0, index + 1).filter((item) => item === '*').length - 1] ?? ''} onChange={(event) => { const wildcardIndex = selected.path.slice(0, index + 1).filter((item) => item === '*').length - 1; setIdentifiers((current) => { const next = [...current]; next[wildcardIndex] = event.target.value; return next; }); }} /></label>] : [])}
-      <label>Value<input className="input mono" value={rawValue} onChange={(event) => setRawValue(event.target.value)} /></label>
-      <button type="button" className="btn" disabled={selected === undefined || identifiers.length < (selected?.path.filter((part) => part === '*').length ?? 0) || identifiers.some((id) => id.trim() === '')} onClick={add}>Add configuration field</button>
+      <label>{t.crew.knownField}<select className="input mono" value={selectedPath} onChange={(event) => { setSelectedPath(event.target.value); setIdentifiers([]); setRawValue(''); }}><option value="">{t.crew.selectAField}</option>{editable.map((field) => <option key={field.path.join('.')} value={field.path.join('.')}>{field.path.join('.')}</option>)}</select></label>
+      {selected?.path.flatMap((part, index) => part === '*' ? [<label key={index}>{t.crew.identifierFor(String(selected.path.slice(0, index).filter((item) => item !== '*').at(-1) ?? t.crew.entryWord))}<input className="input mono" value={identifiers[selected.path.slice(0, index + 1).filter((item) => item === '*').length - 1] ?? ''} onChange={(event) => { const wildcardIndex = selected.path.slice(0, index + 1).filter((item) => item === '*').length - 1; setIdentifiers((current) => { const next = [...current]; next[wildcardIndex] = event.target.value; return next; }); }} /></label>] : [])}
+      <label>{t.crew.valueWord}<input className="input mono" value={rawValue} onChange={(event) => setRawValue(event.target.value)} /></label>
+      <button type="button" className="btn" disabled={selected === undefined || identifiers.length < (selected?.path.filter((part) => part === '*').length ?? 0) || identifiers.some((id) => id.trim() === '')} onClick={add}>{t.crew.addConfigurationField}</button>
     </div>
-    {entities.length === 0 ? null : <div className="dynamic-remove"><strong>Configured entries</strong>{entities.map((prefix) => {
+    {entities.length === 0 ? null : <div className="dynamic-remove"><strong>{t.crew.configuredEntries}</strong>{entities.map((prefix) => {
       const operationsForEntity = operationsToRemoveDynamicEntity(prefix, view.fields);
       const runnerId = prefix[0] === 'runners' && prefix.length === 2 ? String(prefix[1]) : undefined;
       const dependencies = runnerId === undefined ? [] : blockedRunnerDependencies(runnerId, view.fields);
-      const removeLabel = runnerId === undefined ? `Remove ${pathLabel(prefix)}` : `Remove runner ${runnerId}`;
-      return <div key={pathLabel(prefix)}><code>{pathLabel(prefix)}</code><button type="button" className="btn btn--danger btn--sm" aria-label={removeLabel} disabled={operationsForEntity.length === 0 || dependencies.length > 0} onClick={() => onChange([...operations, ...operationsForEntity])}>{removeLabel}</button>{dependencies.length === 0 ? null : <small>Referenced by {dependencies.join(', ')}</small>}</div>;
+      const removeLabel = runnerId === undefined ? t.crew.removeEntity(pathLabel(prefix)) : t.crew.removeRunner(runnerId);
+      return <div key={pathLabel(prefix)}><code>{pathLabel(prefix)}</code><button type="button" className="btn btn--danger btn--sm" aria-label={removeLabel} disabled={operationsForEntity.length === 0 || dependencies.length > 0} onClick={() => onChange([...operations, ...operationsForEntity])}>{removeLabel}</button>{dependencies.length === 0 ? null : <small>{t.crew.referencedBy(dependencies.join(', '))}</small>}</div>;
     })}</div>}
   </details>;
 }
 
 function ConfigField({ field, operations, onChange }: { field: ConfigEditorFieldView; operations: readonly ConfigEditorOperation[]; onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void }) {
+  const t = useT();
   const pending = pendingFor(field, operations);
   const raw = pending?.kind === 'set' ? Array.isArray(pending.value) ? pending.value.join(', ') : String(pending.value) : pending?.kind === 'unset' ? '' : fieldInputValue(field);
   const inherited = field.explicitValue === undefined && pending === undefined;
   const label = pathLabel(field.path);
-  const timing = effectNote(field.effect);
+  const timing = effectNote(t, field.effect);
   return <div className="crew-field" data-inherited={inherited}>
     <label htmlFor={`config-${label}`}><code>{label}</code></label>
     <div className="crew-field__input">
       <FieldControl id={`config-${label}`} field={field} raw={raw} inherited={inherited} onChange={(value, inherit) => onChange(field, value, inherit)} />
-      {field.explicitValue === undefined ? null : <button type="button" className="btn btn--sm" disabled={!field.editable} onClick={() => onChange(field, '', true)}>Inherit</button>}
+      {field.explicitValue === undefined ? null : <button type="button" className="btn btn--sm" disabled={!field.editable} onClick={() => onChange(field, '', true)}>{t.crew.inheritButton}</button>}
     </div>
-    <small>{originLabel(field, inherited)}{timing === undefined ? '' : ` · ${timing}`}</small>
+    <small>{originLabel(t, field, inherited)}{timing === undefined ? '' : ` · ${timing}`}</small>
   </div>;
 }
 

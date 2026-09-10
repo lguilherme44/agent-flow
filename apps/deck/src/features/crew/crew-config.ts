@@ -1,13 +1,14 @@
 import type { ConfigEditorDynamicFieldView, ConfigEditorFieldView } from '@contracts/index.js';
 import type { ConfigEditorOperation } from '../../lib/api';
+import type { Dictionary } from '../../lib/i18n';
 
-const SECTION_NAMES: Record<string, string> = {
-  runners: 'Runners', roles: 'Routing', fallback: 'Fallback', teams: 'Teams',
-  project: 'Project', commands: 'Commands', paths: 'Paths', validationCommands: 'Validation commands',
-  parallelism: 'Parallelism', retry: 'Retry', git: 'Git', approval: 'Approval', recovery: 'Recovery',
-  execution: 'Execution', ui: 'UI', utilityModel: 'Utility model', collaboration: 'Collaboration',
-  quality: 'Quality', review: 'Review', forge: 'Forge', rules: 'Rules', version: 'General',
-};
+/*
+  Pure, and it takes its language as an argument.
+
+  Every function below that produces a *sentence* now receives the dictionary. The
+  alternative — a module-level locale — would make `sectionFields` a function of when it
+  ran, and this module is the one the crew screen folds its whole form with.
+*/
 
 export function pathLabel(path: readonly (string | number)[]): string {
   return path.map(String).join('.');
@@ -22,8 +23,8 @@ export function fieldInputValue(field: ConfigEditorFieldView): string {
 }
 
 /** A value as a person reads it. `undefined` is a state, not an empty string. */
-export function displayValue(value: unknown): string {
-  if (value === undefined) return 'not set';
+export function displayValue(t: Dictionary, value: unknown): string {
+  if (value === undefined) return t.crew.notSet;
   if (Array.isArray(value)) return value.join(', ');
   return typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
 }
@@ -109,11 +110,11 @@ export function listItems(value: unknown): string[] {
  * The layer is the useful half of a configuration screen: "maxTasks is 1" invites an edit
  * here, "maxTasks is 1, inherited from global" says the edit belongs somewhere else.
  */
-export function originLabel(field: ConfigEditorFieldView, inherited: boolean): string {
-  if (!field.editable) return 'Global only';
+export function originLabel(t: Dictionary, field: ConfigEditorFieldView, inherited: boolean): string {
+  if (!field.editable) return t.crew.globalOnly;
   return inherited
-    ? `Inherited from ${field.origin ?? 'default'}`
-    : `Explicit in ${field.origin ?? 'this source'}`;
+    ? t.crew.inheritedFrom(field.origin ?? t.crew.defaultSource)
+    : t.crew.explicitIn(field.origin ?? t.crew.thisSource);
 }
 
 /**
@@ -122,9 +123,9 @@ export function originLabel(field: ConfigEditorFieldView, inherited: boolean): s
  * Nearly every field takes effect on the next execution context, so saying it under all
  * of them said nothing under any of them. The two that behave differently keep their note.
  */
-export function effectNote(effect: ConfigEditorFieldView['effect']): string | undefined {
-  if (effect === 'server_restart') return 'needs a server restart';
-  if (effect === 'next_run') return 'applies to the next run';
+export function effectNote(t: Dictionary, effect: ConfigEditorFieldView['effect']): string | undefined {
+  if (effect === 'server_restart') return t.crew.needsRestart;
+  if (effect === 'next_run') return t.crew.appliesNextRun;
   return undefined;
 }
 
@@ -179,14 +180,26 @@ export function dynamicEntityPrefixes(fields: readonly ConfigEditorFieldView[], 
   return [...prefixes.values()].sort((left, right) => pathLabel(left).localeCompare(pathLabel(right)));
 }
 
-export function sectionFields(fields: readonly ConfigEditorFieldView[]): ReadonlyMap<string, readonly ConfigEditorFieldView[]> {
-  const sections = new Map<string, ConfigEditorFieldView[]>();
+/**
+ * The advanced accordion's sections, keyed by the configuration's own top-level key.
+ *
+ * **Keyed by the key, labelled by the dictionary.** It used to be keyed by the display
+ * name, and the caller decided which sections open by default with `section === 'Runners'
+ * || section === 'Parallelism'` — a comparison against English that stopped matching the
+ * moment the heading became `Runners` and `Paralelismo`. Two sections quietly stopped
+ * opening, in one language only.
+ */
+export function sectionFields(
+  t: Dictionary,
+  fields: readonly ConfigEditorFieldView[],
+): ReadonlyMap<string, { readonly name: string; readonly fields: readonly ConfigEditorFieldView[] }> {
+  const names: Readonly<Record<string, string | undefined>> = t.crew.sections;
+  const sections = new Map<string, { name: string; fields: ConfigEditorFieldView[] }>();
   for (const field of fields) {
     const head = String(field.path[0] ?? 'general');
-    const name = SECTION_NAMES[head] ?? head;
-    const values = sections.get(name) ?? [];
-    values.push(field);
-    sections.set(name, values);
+    const section = sections.get(head) ?? { name: names[head] ?? head, fields: [] };
+    section.fields.push(field);
+    sections.set(head, section);
   }
   return sections;
 }
@@ -203,10 +216,10 @@ export function blockedRunnerDependencies(runnerId: string, fields: readonly Con
     .map(({ path }) => pathLabel(path));
 }
 
-export function effectSummary(effects: readonly ConfigEditorFieldView['effect'][]): string {
-  if (effects.includes('server_restart')) return 'after a server restart';
-  if (effects.includes('next_run')) return 'to the next run';
-  return 'to the next execution context';
+export function effectSummary(t: Dictionary, effects: readonly ConfigEditorFieldView['effect'][]): string {
+  if (effects.includes('server_restart')) return t.crew.afterRestart;
+  if (effects.includes('next_run')) return t.crew.toNextRun;
+  return t.crew.toNextContext;
 }
 
 export function configInvalidationPredicate(scope: 'global' | 'project', projectId: string): (key: string) => boolean {

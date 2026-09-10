@@ -3,6 +3,7 @@ import type { PipelineStage, StageLogView } from '@contracts/index.js';
 import { api, keys, type RunAddress } from '../../lib/api';
 import { useResource } from '../../lib/store';
 import { Empty, Skeleton } from '../../components/ui';
+import { useT, word } from '../../lib/i18n';
 
 /**
  * One stage's own log, as the stage runner wrote it (§95).
@@ -34,6 +35,7 @@ export function StageLog({
   readonly stage?: PipelineStage;
   readonly onStageChange?: (stage: PipelineStage) => void;
 }) {
+  const t = useT();
   const [internalStage, setInternalStage] = useState<PipelineStage>('planning');
   const stage = controlledStage ?? internalStage;
 
@@ -47,24 +49,22 @@ export function StageLog({
   return (
     <div className="stage-log">
       <label className="stage-log__pick">
-        <span className="visually-hidden">Stage log</span>
+        <span className="visually-hidden">{t.stageLog.label}</span>
         <select className="input mono" value={stage} onChange={(event) => handleStageChange(event.target.value as PipelineStage)}>
-          {STAGES.map((name) => <option key={name} value={name}>{name}</option>)}
+          {STAGES.map((name) => <option key={name} value={name}>{word(t, name)}</option>)}
         </select>
       </label>
       {log.error !== undefined
-        ? <Empty error>This stage log could not be read.</Empty>
+        ? <Empty error>{t.stageLog.couldNotRead}</Empty>
         : log.loading
           ? <Skeleton rows={4} />
           : log.data?.present !== true
-            ? <Empty hint={log.data?.perTask === true
-              ? 'It runs once per task, so its logs are on the task panel — one per attempt.'
-              : 'Nothing has been written for this stage in this run.'}>
-              No log for {stage}.
+            ? <Empty hint={log.data?.perTask === true ? t.stageLog.perTask : t.stageLog.nothingWritten}>
+              {t.stageLog.noLogFor(word(t, stage))}
             </Empty>
             : <>
               {log.data.truncated
-                ? <p className="stage-log__cut">Showing the newest {log.data.lines.length} of {log.data.total} lines.</p>
+                ? <p className="stage-log__cut">{t.stageLog.newestOf(log.data.lines.length, log.data.total)}</p>
                 : null}
               <pre className="stage-log__body">{log.data.lines.join('\n')}</pre>
             </>}

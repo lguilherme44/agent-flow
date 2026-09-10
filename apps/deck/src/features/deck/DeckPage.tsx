@@ -3,11 +3,13 @@ import type { AttentionItem, ControlSnapshotView, ProjectView, StageViewResponse
 import { api, keys } from '../../lib/api';
 import { useResource, useResources } from '../../lib/store';
 import { formatRelative } from '../../lib/time';
-import { deliveryTone, priorityTone, runtimeTone, words } from '../../lib/tone';
+import { deliveryTone, priorityTone, runtimeTone } from '../../lib/tone';
+import { useT, word, type Dictionary } from '../../lib/i18n';
 import { useNow } from '../../lib/use-now';
 import { Chip, Empty, Meter, Pri, Skeleton, Tape } from '../../components/ui';
 import { href, onLinkClick } from '../../app/router';
 import { NewFeatureDialog } from './NewFeatureDialog';
+import { RegisterProjectDialog } from './RegisterProjectDialog';
 
 /** Runtime statuses after which a project is not moving. */
 const STILL = new Set(['complete', 'failed', 'cancelled']);
@@ -25,11 +27,13 @@ const QUEUE_FOLD = 6;
  * the pipeline tape the run page draws large.
  */
 export function DeckPage() {
+  const t = useT();
   const workspace = useResource(keys.workspace(), api.workspace, { refreshMs: 30_000 });
   const projects = useResource(keys.projects(), api.projects, { refreshMs: 60_000 });
   const now = useNow(true, 15_000);
   const [unfolded, setUnfolded] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [registering, setRegistering] = useState(false);
 
   const rows = workspace.data?.projects ?? [];
   const byId = useMemo(() => new Map((projects.data ?? []).map((project) => [project.id, project])), [projects.data]);
@@ -83,37 +87,46 @@ export function DeckPage() {
     <main className="page">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Workspace</span>
+          <span className="eyebrow">{t.deck.workspace}</span>
           <h1 className="page-head__title">
-            {rows.length} project{rows.length === 1 ? '' : 's'}
+            {t.deck.projectCount(rows.length)}
           </h1>
           <p className="page-head__sub">
             {workspace.data === undefined
-              ? 'Reading the workspace…'
-              : `Observed ${formatRelative(workspace.data.observedAt, now)} · ${String(moving.length)} moving · ${String(totalAttention)} item${totalAttention === 1 ? '' : 's'} waiting on a person`}
+              ? t.deck.readingWorkspace
+              : t.deck.observed(formatRelative(workspace.data.observedAt, now, t.time), moving.length, totalAttention)}
           </p>
         </div>
-        <div className="deck-summary" aria-label="Workspace summary">
+        <div className="deck-summary" aria-label={t.deck.summaryAria}>
           <button type="button" className="btn btn--primary" onClick={() => setCreating(true)} disabled={(projects.data?.length ?? 0) === 0} style={{ alignSelf: 'center' }}>
-            New feature
+            {t.deck.newFeature}
+          </button>
+          {/*
+            Enabled, at last (7.6). It was a disabled button for two milestones because
+            "adding one means writing to the registry, and no route does" — the obstacle
+            was really that a directory with no `.agent-flow/` had no id for a request to
+            name, and the workspace walk now issues one.
+          */}
+          <button type="button" className="btn btn--ghost" onClick={() => setRegistering(true)} style={{ alignSelf: 'center' }}>
+            {t.common.noProjectsHintAction}
           </button>
           <div className="stat">
             <span className="stat__value" data-tone={moving.length > 0 ? 'live' : undefined}>
               {moving.length}
             </span>
-            <span className="stat__label">moving</span>
+            <span className="stat__label">{t.deck.moving}</span>
           </div>
           <div className="stat">
             <span className="stat__value" data-tone={totalAttention > 0 ? 'warn' : 'ok'}>
               {totalAttention}
             </span>
-            <span className="stat__label">need you</span>
+            <span className="stat__label">{t.deck.needYou}</span>
           </div>
           <div className="stat">
             <span className="stat__value" data-tone="ghost">
               {idle.length}
             </span>
-            <span className="stat__label">idle</span>
+            <span className="stat__label">{t.deck.idle}</span>
           </div>
         </div>
       </div>
@@ -121,16 +134,16 @@ export function DeckPage() {
       <section className="section" aria-labelledby="needs-you">
         <div className="section__head">
           <h2 id="needs-you" className="eyebrow" style={{ margin: 0 }}>
-            Needs you
+            {t.deck.needsYou}
           </h2>
           <span className="section__count">
-            {totalAttention} item{totalAttention === 1 ? '' : 's'}
-            {wanting.length > 1 ? ` · ${String(wanting.length)} projects` : ''}
+            {t.deck.itemCount(totalAttention)}
+            {wanting.length > 1 ? ` · ${t.deck.projectsCount(wanting.length)}` : ''}
           </span>
         </div>
         {workspace.error !== undefined ? (
-          <Empty error hint="The queue is a projection over the runs on disk; when the server cannot read it, nothing is shown rather than something stale.">
-            The attention queue could not be read.
+          <Empty error hint={t.deck.queueHint}>
+            {t.deck.queueCouldNotRead}
           </Empty>
         ) : workspace.loading || (queue.length === 0 && queueLoading) ? (
           <Skeleton rows={2} />
@@ -140,12 +153,12 @@ export function DeckPage() {
               <span className="ticket__mark" aria-hidden="true">
                 ●
               </span>
-              Nothing needs a person right now. Every gate is open, every required check answered.
+              {t.deck.nothingNeedsYou}
             </div>
           </div>
         ) : (
           <>
-            <div className="queue" role="list" aria-label="Attention queue">
+            <div className="queue" role="list" aria-label={t.deck.queueAria}>
               {shown.map(({ item, projectId, projectName }) => (
                 // `item.id` is stable but not unique: three degradations on one run share
                 // `degradation_recorded`. A duplicate React key renders extra rows out of
@@ -177,13 +190,13 @@ export function DeckPage() {
                   <span className="btn btn--sm" aria-hidden="true">
                     {item.action.label} →
                   </span>
-                  <span className="ticket__since">{formatRelative(item.since, now)}</span>
+                  <span className="ticket__since">{formatRelative(item.since, now, t.time)}</span>
                 </a>
               ))}
             </div>
             {queue.length > QUEUE_FOLD ? (
               <button type="button" className="btn btn--ghost btn--sm" style={{ alignSelf: 'flex-start' }} onClick={() => setUnfolded((value) => !value)}>
-                {unfolded ? 'Show the first six' : `Show all ${String(queue.length)}`}
+                {unfolded ? t.deck.showFirstSix : t.deck.showAll(queue.length)}
               </button>
             ) : null}
           </>
@@ -193,41 +206,42 @@ export function DeckPage() {
       <section className="section" aria-labelledby="projects">
         <div className="section__head">
           <h2 id="projects" className="eyebrow" style={{ margin: 0 }}>
-            Projects
+            {t.common.projects}
           </h2>
           <span className="section__count">
-            {moving.length} of {rows.length} moving
+            {t.deck.movingOf(moving.length, rows.length)}
           </span>
         </div>
         {workspace.error !== undefined ? (
-          <Empty error>The workspace could not be read.</Empty>
+          <Empty error>{t.deck.workspaceCouldNotRead}</Empty>
         ) : workspace.loading ? (
           <Skeleton rows={4} />
         ) : (
           <div className="lanes">
             <div className="lanes__head" aria-hidden="true">
-              <span>project</span>
-              <span>feature</span>
-              <span>runtime</span>
-              <span>pipeline</span>
-              <span>tasks</span>
-              <span>attention</span>
-              <span>seats · forge</span>
-              <span>activity</span>
+              <span>{t.deck.colProject}</span>
+              <span>{t.deck.colFeature}</span>
+              <span>{t.deck.colRuntime}</span>
+              <span>{t.deck.colPipeline}</span>
+              <span>{t.deck.colTasks}</span>
+              <span>{t.deck.colAttention}</span>
+              <span>{t.deck.colSeats}</span>
+              <span>{t.deck.colActivity}</span>
             </div>
             {ordered.map((row) => (
-              <ProjectLane key={row.projectId} row={row} project={byId.get(row.projectId)} now={now} />
+              <ProjectLane key={row.projectId} row={row} project={byId.get(row.projectId)} now={now} t={t} />
             ))}
           </div>
         )}
       </section>
 
       <NewFeatureDialog open={creating} onClose={() => setCreating(false)} projects={projects.data ?? []} rows={rows} />
+      <RegisterProjectDialog open={registering} onClose={() => setRegistering(false)} />
     </main>
   );
 }
 
-function ProjectLane({ row, project, now }: { row: WorkspaceProjectView; project: ProjectView | undefined; now: number }) {
+function ProjectLane({ row, project, now, t }: { row: WorkspaceProjectView; project: ProjectView | undefined; now: number; t: Dictionary }) {
   const address = { projectId: row.projectId, runId: row.runId ?? '' };
   const stages = useResource<StageViewResponse[]>(row.runId === undefined ? null : keys.stages(address), () => api.stages(address));
   const idle = row.runId === undefined;
@@ -238,30 +252,30 @@ function ProjectLane({ row, project, now }: { row: WorkspaceProjectView; project
       <div className="lane__name">
         <span className="lane__project">{project?.name ?? row.name}</span>
         <span className="lane__run">
-          {row.runId ?? (project?.runCount === undefined ? 'no run' : `${String(project.runCount)} run${project.runCount === 1 ? '' : 's'} · none active`)}
+          {row.runId ?? (project?.runCount === undefined ? t.deck.noRun : t.deck.runsNoneActive(project.runCount))}
           {project?.stack === undefined ? '' : ` · ${project.stack}`}
         </span>
       </div>
       <div className="lane__feature">
         {idle ? (
-          <span className="lane__feature-text faint">{project?.lastRun === undefined ? 'Nothing has run here yet.' : `Last: ${project.lastRun.feature}`}</span>
+          <span className="lane__feature-text faint">{project?.lastRun === undefined ? t.deck.nothingRanHere : t.deck.last(project.lastRun.feature)}</span>
         ) : (
-          <span className="lane__feature-text">{row.feature ?? '—'}</span>
+          <span className="lane__feature-text">{row.feature ?? t.common.none}</span>
         )}
       </div>
       <div className="lane__cell">
         {idle ? (
           project?.lastRun === undefined ? (
             <Chip tone="ghost" plain>
-              idle
+              {word(t, 'idle')}
             </Chip>
           ) : (
             <Chip tone={project.lastRun.status === 'completed' ? 'ok' : project.lastRun.status === 'failed' ? 'bad' : 'ghost'} plain>
-              last {words(project.lastRun.status)}
+              {t.deck.lastStatus(word(t, project.lastRun.status))}
             </Chip>
           )
         ) : (
-          <Chip tone={runtimeTone(row.runtime)}>{words(row.runtime ?? row.status)}</Chip>
+          <Chip tone={runtimeTone(row.runtime)}>{word(t, row.runtime ?? row.status)}</Chip>
         )}
       </div>
       <div className="lane__cell">
@@ -269,13 +283,13 @@ function ProjectLane({ row, project, now }: { row: WorkspaceProjectView; project
       </div>
       <div className="lane__cell">
         {idle ? (
-          <span className="lane__v faint">—</span>
+          <span className="lane__v faint">{t.common.none}</span>
         ) : (
           <>
             <Meter done={done} total={row.taskCount} tone={row.blockedCount > 0 ? 'warn' : 'ok'} />
             <span className="lane__v">
               {done}/{row.taskCount}
-              {row.blockedCount > 0 ? <span style={{ color: 'var(--warn)' }}>{` · ${String(row.blockedCount)} blocked`}</span> : null}
+              {row.blockedCount > 0 ? <span style={{ color: 'var(--warn)' }}>{` · ${t.deck.blockedCount(row.blockedCount)}`}</span> : null}
             </span>
           </>
         )}
@@ -287,24 +301,24 @@ function ProjectLane({ row, project, now }: { row: WorkspaceProjectView; project
             <span style={{ color: `var(--${priorityTone(row.topPriority)})` }}>{row.attentionCount}</span>
           </span>
         ) : (
-          <span className="lane__v faint">{idle ? '—' : 'none'}</span>
+          <span className="lane__v faint">{idle ? t.common.none : word(t, 'none')}</span>
         )}
       </div>
       <div className="lane__cell">
-        <span className="lane__v">{row.teamLoad === undefined ? '—' : `${String(row.teamLoad.running)}/${String(row.teamLoad.capacity)} seats`}</span>
+        <span className="lane__v">{row.teamLoad === undefined ? t.common.none : t.deck.seats(row.teamLoad.running, row.teamLoad.capacity)}</span>
         <span className="lane__v" data-tone={row.delivery === undefined ? undefined : deliveryTone(row.delivery)}>
-          {row.delivery === undefined || row.delivery === 'disabled' ? 'no forge' : words(row.delivery)}
+          {row.delivery === undefined || row.delivery === 'disabled' ? t.deck.noForge : word(t, row.delivery)}
         </span>
       </div>
       <div className="lane__cell">
-        <span className="lane__v">{formatRelative(row.lastActivityAt ?? project?.lastRun?.updatedAt, now)}</span>
+        <span className="lane__v">{formatRelative(row.lastActivityAt ?? project?.lastRun?.updatedAt, now, t.time)}</span>
       </div>
     </>
   );
 
   if (idle) {
     return (
-      <a className="lane lane--idle" href={href({ name: 'runs', projectId: row.projectId })} onClick={onLinkClick} aria-label={`${project?.name ?? row.name}: no active run`}>
+      <a className="lane lane--idle" href={href({ name: 'runs', projectId: row.projectId })} onClick={onLinkClick} aria-label={t.deck.noActiveRun(project?.name ?? row.name)}>
         {inner}
       </a>
     );

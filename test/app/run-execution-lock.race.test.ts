@@ -43,6 +43,22 @@ afterAll(async () => {
   await rm(harness.dir, { recursive: true, force: true });
 });
 
+/**
+ * Waits until some other process is holding the lock, rather than guessing when.
+ *
+ * A generation file exists exactly while somebody holds it — the first test asserts that
+ * none is left behind afterwards — so its presence is the handshake. Bounded, because a
+ * child that dies before acquiring must fail an assertion rather than hang the suite.
+ */
+async function heldByAnother(projectDir: string, timeoutMs = 20_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await harness.generations(projectDir)).length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`no process took the lock within ${String(timeoutMs)}ms`);
+}
+
 function inProcessLock(projectDir: string): RunExecutionLock {
   return new RunExecutionLock({
     fs: new NodeFileSystem(),
@@ -51,6 +67,36 @@ function inProcessLock(projectDir: string): RunExecutionLock {
     projectDir,
   });
 }
+
+describe('the exclusion detector can see what it forbids', () => {
+  // The count assertion used to stand next to these and is gone: it was a statement about
+  // the scheduler, not about the lock. That leaves `overlaps` and `maxSimultaneous`
+  // carrying the whole claim, and a detector that returned "no overlap" for everything
+  // would make the test above pass forever on a lock that does nothing.
+  const interval = (pid: number, from: number, to: number) => ({ pid, from, to });
+
+  it('reports two holders whose intervals cross', () => {
+    const crossing = [interval(1, 0, 100), interval(2, 50, 150)];
+
+    expect(overlaps(crossing)).not.toEqual([]);
+    expect(maxSimultaneous(crossing)).toBe(2);
+  });
+
+  it('reports nothing for holders that merely follow one another', () => {
+    const sequential = [interval(1, 0, 100), interval(2, 100, 200)];
+
+    expect(overlaps(sequential)).toEqual([]);
+    expect(maxSimultaneous(sequential)).toBe(1);
+  });
+
+  it('treats a holder that never released as holding until the end of time', () => {
+    // The conservative reading `heldIntervals` documents: no RELEASED line means the
+    // process abandoned the lock, and anything acquired afterwards overlaps it.
+    const abandoned = [interval(1, 0, Number.POSITIVE_INFINITY), interval(2, 10, 20)];
+
+    expect(overlaps(abandoned)).not.toEqual([]);
+  });
+});
 
 describe('two real processes, one run', () => {
   it('lets exactly one of eight concurrent processes in', async () => {
@@ -73,12 +119,24 @@ describe('two real processes, one run', () => {
     const held = heldIntervals(results);
     const refused = results.filter((result) => result.stdout.startsWith('REFUSED'));
 
-    // Exactly one gets in, and the other seven are told who has it. Legitimate as a
-    // count now: every contender had finished starting up and was waiting on GO, so
-    // all eight were genuinely contending when the first one won.
-    expect(held).toHaveLength(1);
-    expect(refused).toHaveLength(7);
-    // The property itself, which held even when the count above did not.
+    // Everybody answered, and somebody got in. **Not "exactly one got in"** — that
+    // assertion was here, and it was wrong for a reason this file had already written
+    // down two paragraphs above without following it through.
+    //
+    // The barrier removes the *start-up* assumption: all eight are inside `acquire()`
+    // when GO fires. It does not remove the *scheduling* one. The winner holds for
+    // 250 ms of wall clock, and a contender the OS deschedules for longer than that
+    // wakes, finds the lock free, and takes it — a second acquisition that is perfectly
+    // correct. Measured: two acquisitions in one gate run on a loaded Windows box, with
+    // `overlaps` empty, which is this file's own recorded finding ("the distribution was
+    // 1, 2, 3 and 4 acquisitions across 25 rounds — and `overlaps` was empty in every
+    // one of them, because nothing was ever wrong").
+    //
+    // A count would only ever catch "the winner released too early", which is not a
+    // property of the lock. What the lock promises is below, and it is asserted exactly.
+    expect(held.length + refused.length).toBe(8);
+    expect(held.length).toBeGreaterThanOrEqual(1);
+    // The property itself, and the only one that distinguishes a lock from a no-op.
     expect(overlaps(held)).toEqual([]);
     // At most one holder at any instant, stated directly rather than inferred.
     expect(maxSimultaneous(held)).toBe(1);
@@ -132,10 +190,16 @@ describe('two real processes, one run', () => {
   it('refuses a second process while the first is still holding', async () => {
     const projectDir = harness.project();
 
-    const first = harness.attempt(projectDir, 900);
-    // Long enough for the first to have the lock, short enough to still be inside its
-    // hold window.
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Held long enough that the observation below cannot fall off the end of it, and the
+    // second attempt is not started until the lock file is *actually* on disk.
+    //
+    // It used to sleep 300 ms and hope. Measured under a loaded gate: the first child —
+    // a fresh Node process running a bundled script — had not acquired yet, so the second
+    // one took the lock legitimately, and the assertion read that as an exclusion failure.
+    // Same class of assumption the barrier in the test above exists to remove, still
+    // present here; waiting for the file removes it rather than widening the window.
+    const first = harness.attempt(projectDir, 4_000);
+    await heldByAnother(projectDir);
     const second = await harness.attempt(projectDir, 0);
 
     expect(second.stdout).toMatch(/^REFUSED/);

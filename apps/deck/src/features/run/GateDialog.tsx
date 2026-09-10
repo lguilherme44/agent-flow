@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ApprovalGateView } from '@contracts/index.js';
 import { ApiError, api, type RunAddress } from '../../lib/api';
 import { invalidate } from '../../lib/store';
-import { severityTone, words } from '../../lib/tone';
+import { severityTone } from '../../lib/tone';
+import { useT, word } from '../../lib/i18n';
 import { Chip, Notice } from '../../components/ui';
 
 /**
@@ -19,6 +20,7 @@ import { Chip, Notice } from '../../components/ui';
  */
 export function GateDialog({ address, gate, open, onClose, initialTab = 'decide' }: { address: RunAddress; gate: ApprovalGateView | undefined; open: boolean; onClose: () => void; initialTab?: 'decide' | 'revise' }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const t = useT();
   const [tab, setTab] = useState<'decide' | 'revise'>(initialTab);
   const [reason, setReason] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -66,68 +68,68 @@ export function GateDialog({ address, gate, open, onClose, initialTab = 'decide'
     <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby="gate-title">
       <div className="dialog__head">
         <h2 id="gate-title" className="dialog__title">
-          Approval gate · {address.runId}
+          {t.gate.title(address.runId)}
         </h2>
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onClose} aria-label="Close">
+        <button type="button" className="btn btn--ghost btn--sm" onClick={onClose} aria-label={t.common.close}>
           Esc
         </button>
       </div>
       <div className="tabs" role="tablist">
         <button type="button" role="tab" className="tab" aria-selected={tab === 'decide'} onClick={() => setTab('decide')}>
-          Decide
+          {t.gate.decide}
         </button>
         <button type="button" role="tab" className="tab" aria-selected={tab === 'revise'} onClick={() => setTab('revise')}>
-          Ask for a revision
+          {t.gate.askRevision}
         </button>
       </div>
 
       <div className="dialog__body">
         {gate === undefined ? (
-          <p className="muted">The gate could not be read for this run.</p>
+          <p className="muted">{t.gate.couldNotRead}</p>
         ) : tab === 'decide' ? (
           <>
             <div className="facts-grid" style={{ marginTop: 0 }}>
               <div className="fact">
-                <span className="fact__k">plan hash</span>
+                <span className="fact__k">{t.gate.planHash}</span>
                 <span className="fact__v">{gate.planHash}</span>
               </div>
               <div className="fact">
-                <span className="fact__k">tasks</span>
+                <span className="fact__k">{t.gate.tasks}</span>
                 <span className="fact__v">{gate.taskCount}</span>
               </div>
               <div className="fact">
-                <span className="fact__k">sdd digest</span>
-                <span className="fact__v">{gate.sddDigest ?? '—'}</span>
+                <span className="fact__k">{t.gate.sddDigest}</span>
+                <span className="fact__v">{gate.sddDigest ?? t.common.none}</span>
               </div>
               <div className="fact">
-                <span className="fact__k">gate</span>
+                <span className="fact__k">{t.gate.gate}</span>
                 <span className="fact__v" data-tone={gate.approved ? 'ok' : gate.canApprove ? 'warn' : 'bad'}>
-                  {gate.approved ? 'approved' : gate.canApprove ? 'open' : `refused · ${words(gate.refusal?.kind)}`}
+                  {gate.approved ? word(t, 'approved') : gate.canApprove ? t.gate.open : t.gate.refusedBecause(word(t, gate.refusal?.kind))}
                 </span>
               </div>
             </div>
 
             {review === undefined ? (
-              <Notice tone="ghost" k="review">
-                No plan review exists for this plan.
+              <Notice tone="ghost" k={t.gate.reviewKey}>
+                {t.gate.noPlanReview}
               </Notice>
             ) : (
               <div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
-                  <Chip tone={review.verdict === 'approved' || review.verdict === 'approve' ? 'ok' : 'bad'}>{words(review.verdict)}</Chip>
+                  <Chip tone={review.verdict === 'approved' || review.verdict === 'approve' ? 'ok' : 'bad'}>{word(t, review.verdict)}</Chip>
                   <Chip tone="idle" plain>
-                    {words(review.independence)}
+                    {t.gate.independence(review.independence)}
                   </Chip>
                   <Chip tone={review.coversThisPlan ? 'ok' : 'warn'} plain>
-                    {review.coversThisPlan ? 'covers this plan' : 'about an older plan'}
+                    {review.coversThisPlan ? t.gate.coversThisPlan : t.gate.olderPlan}
                   </Chip>
                   <Chip tone={review.freshness === 'current' ? 'ok' : review.freshness === 'stale' ? 'warn' : 'ghost'} plain>
-                    {review.freshness}
+                    {word(t, review.freshness)}
                   </Chip>
                 </div>
                 {review.findings.length === 0 ? (
                   <p className="muted" style={{ margin: 0 }}>
-                    No findings.
+                    {t.gate.noFindings}
                   </p>
                 ) : (
                   <div>
@@ -148,7 +150,7 @@ export function GateDialog({ address, gate, open, onClose, initialTab = 'decide'
 
             {gate.warnings.length > 0 ? (
               <div>
-                <span className="eyebrow">Before you decide</span>
+                <span className="eyebrow">{t.gate.beforeYouDecide}</span>
                 <ul className="warnlist" style={{ marginTop: 6 }}>
                   {gate.warnings.map((warning, index) => (
                     <li key={index}>{warning}</li>
@@ -159,11 +161,11 @@ export function GateDialog({ address, gate, open, onClose, initialTab = 'decide'
 
             {gate.degradations.length > 0 ? (
               <div>
-                <span className="eyebrow">Degradations on this run</span>
+                <span className="eyebrow">{t.gate.degradations}</span>
                 <ul className="warnlist" style={{ marginTop: 6 }}>
                   {gate.degradations.map((degradation, index) => (
                     <li key={index}>
-                      <b>{words(degradation.kind)}</b> — {degradation.reason}
+                      <b>{word(t, degradation.kind)}</b> — {degradation.reason}
                     </li>
                   ))}
                 </ul>
@@ -171,19 +173,19 @@ export function GateDialog({ address, gate, open, onClose, initialTab = 'decide'
             ) : null}
 
             <label style={{ display: 'grid', gap: 6 }}>
-              <span className="eyebrow">Reason, if rejecting</span>
-              <textarea className="textarea" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Optional. Recorded on the run." />
+              <span className="eyebrow">{t.gate.reasonIfRejecting}</span>
+              <textarea className="textarea" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t.gate.reasonPlaceholder} />
             </label>
           </>
         ) : (
           <label style={{ display: 'grid', gap: 6 }}>
-            <span className="eyebrow">What should change</span>
-            <textarea className="textarea" value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Free text for the planner. Invalidates any approval first, and spends one of the run's revision cycles." style={{ minHeight: 140 }} />
+            <span className="eyebrow">{t.gate.whatShouldChange}</span>
+            <textarea className="textarea" value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={t.gate.instructionPlaceholder} style={{ minHeight: 140 }} />
           </label>
         )}
 
         {outcome === undefined ? null : (
-          <Notice tone={outcome.tone} k={outcome.tone === 'ok' ? 'done' : 'refused'}>
+          <Notice tone={outcome.tone} k={outcome.tone === 'ok' ? t.gate.done : t.common.refused}>
             {outcome.text}
           </Notice>
         )}
@@ -192,27 +194,27 @@ export function GateDialog({ address, gate, open, onClose, initialTab = 'decide'
       <div className="dialog__foot">
         {tab === 'decide' ? (
           <>
-            <button type="button" className="btn btn--danger" disabled={busy !== undefined || gate === undefined || gate.approved} onClick={() => void act('reject', () => api.reject(address, reason), 'Rejected. The run is closed; its artifacts stay.')}>
-              {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+            <button type="button" className="btn btn--danger" disabled={busy !== undefined || gate === undefined || gate.approved} onClick={() => void act('reject', () => api.reject(address, reason), t.gate.rejected)}>
+              {busy === 'reject' ? t.gate.rejecting : t.gate.reject}
             </button>
             {canForce ? (
               confirmForce ? (
-                <button type="button" className="btn btn--danger" disabled={busy !== undefined} onClick={() => void act('force', () => api.approve(address, true), 'Approved over the refusal. Recorded as a forced approval.')}>
-                  {busy === 'force' ? 'Forcing…' : 'Yes, force it — recorded as a degradation'}
+                <button type="button" className="btn btn--danger" disabled={busy !== undefined} onClick={() => void act('force', () => api.approve(address, true), t.gate.forcedOk)}>
+                  {busy === 'force' ? t.gate.forcing : t.gate.forceConfirm}
                 </button>
               ) : (
                 <button type="button" className="btn" disabled={busy !== undefined} onClick={() => setConfirmForce(true)}>
-                  Approve anyway…
+                  {t.gate.approveAnyway}
                 </button>
               )
             ) : null}
-            <button type="button" className="btn btn--primary" disabled={busy !== undefined || gate === undefined || !gate.canApprove || gate.approved} onClick={() => void act('approve', () => api.approve(address, false), 'Approved. The gate is open for this plan.')}>
-              {busy === 'approve' ? 'Approving…' : 'Approve plan'}
+            <button type="button" className="btn btn--primary" disabled={busy !== undefined || gate === undefined || !gate.canApprove || gate.approved} onClick={() => void act('approve', () => api.approve(address, false), t.gate.approvedOk)}>
+              {busy === 'approve' ? t.gate.approving : t.gate.approvePlan}
             </button>
           </>
         ) : (
-          <button type="button" className="btn btn--primary" disabled={busy !== undefined || instruction.trim().length === 0} onClick={() => void act('revise', () => api.revise(address, instruction.trim()), 'Asked. Re-planning runs as a job; progress arrives on the recorder.')}>
-            {busy === 'revise' ? 'Asking…' : 'Send for revision'}
+          <button type="button" className="btn btn--primary" disabled={busy !== undefined || instruction.trim().length === 0} onClick={() => void act('revise', () => api.revise(address, instruction.trim()), t.gate.revisionAsked)}>
+            {busy === 'revise' ? t.gate.asking : t.gate.sendForRevision}
           </button>
         )}
       </div>

@@ -6,12 +6,17 @@ import { DeckPage } from '../features/deck/DeckPage';
 import { RunPage } from '../features/run/RunPage';
 import { RunsPage } from '../features/runs/RunsPage';
 import { CrewPage } from '../features/crew/CrewPage';
+import { DoctorPage } from '../features/doctor/DoctorPage';
+import { CleanPage } from '../features/clean/CleanPage';
+import { AnalyticsPage } from '../features/analytics/AnalyticsPage';
 import { Empty } from '../components/ui';
+import { useT } from '../lib/i18n';
 import { Shell } from './Shell';
 import { href, onLinkClick, useRoute } from './router';
 
 export function App() {
   const route = useRoute();
+  const t = useT();
   // One stream for the whole workspace. Filtering by project would mean reopening it on
   // every navigation, and the deck page wants everything anyway.
   const connection = useLive();
@@ -22,6 +27,9 @@ export function App() {
       {route.name === 'deck' ? <DeckPage /> : null}
       {route.name === 'runs' ? <RunsPage {...(route.projectId === undefined ? {} : { projectId: route.projectId })} /> : null}
       {route.name === 'crew' ? <CrewPage {...(route.projectId === undefined ? {} : { projectId: route.projectId })} /> : null}
+      {route.name === 'doctor' ? <DoctorPage {...(route.projectId === undefined ? {} : { projectId: route.projectId })} /> : null}
+      {route.name === 'clean' ? <CleanPage {...(route.projectId === undefined ? {} : { projectId: route.projectId })} /> : null}
+      {route.name === 'analytics' ? <AnalyticsPage {...(route.projectId === undefined ? {} : { projectId: route.projectId })} /> : null}
       {route.name === 'run' ? (
         <RunPage
           key={`${route.projectId}/${route.runId}`}
@@ -36,11 +44,14 @@ export function App() {
           <Empty
             hint={
               <a href={href({ name: 'deck' })} onClick={onLinkClick} style={{ textDecoration: 'underline' }}>
-                Back to the deck
+                {t.missing.backToDeck}
               </a>
             }
           >
-            Nothing lives at <code>{route.path}</code>. A run is addressed with its project: <code>/p/&lt;project&gt;/runs/&lt;run&gt;</code>.
+            {t.missing.before}
+            <code>{route.path}</code>
+            {t.missing.after}
+            <code>/p/&lt;project&gt;/runs/&lt;run&gt;</code>.
           </Empty>
         </main>
       ) : null}

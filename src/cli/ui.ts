@@ -10,8 +10,7 @@ import { NodeHost } from '../adapters/host/node-host.js';
 import {
   DEFAULT_WORKSPACE_DEPTH,
   MAX_WORKSPACE_DEPTH,
-  discoverProjects,
-  registryOf,
+  discoveredRegistry,
 } from '../server/project-registry.js';
 import { loadConfig } from '../config/loader.js';
 import type { FileSystem } from '../ports/index.js';
@@ -95,12 +94,21 @@ export async function runUiCommand(
       projectDir: workspace,
     });
 
-    const discovered = await discoverProjects({ fs, roots: [workspace], depth });
+    // A registry that can look again (7.6). The workspace used to be walked once, which
+    // was right while registering a project meant stopping the server; it stops being
+    // right the moment the Deck can register one, because the write would succeed and the
+    // list would still be missing it.
+    const registry = discoveredRegistry({ fs, roots: [workspace], depth });
+    const discovered = await registry.rescan();
 
-    if (discovered.projects.length === 0) {
+    // Only when there is nothing at all. A workspace holding repositories that have never
+    // been through `init` is now a workspace worth opening: the Deck can register them,
+    // which is the whole point of 7.6, and refusing to start would send the operator back
+    // to the terminal to do the thing the screen exists to do.
+    if (discovered.projects.length === 0 && discovered.candidates.length === 0) {
       process.stderr.write(
         [
-          `No Agent Flow project found under ${workspace}.`,
+          `No Agent Flow project or Git repository found under ${workspace}.`,
           '',
           'Run `agent-flow init` in a repository first, or point the UI at a',
           'directory that contains one:',
@@ -120,8 +128,6 @@ export async function runUiCommand(
       );
       return ExitCode.GATE_NOT_SATISFIED;
     }
-
-    const registry = registryOf(discovered.projects);
 
     const web = resolveWebDir(options.classic === true ? 'classic' : 'deck');
     const webDir = web?.path;
@@ -157,6 +163,17 @@ export async function runUiCommand(
       ...discovered.projects.map((project) => `  ${project.id.padEnd(24)}${project.path}`),
       '',
     ];
+
+    if (discovered.candidates.length > 0) {
+      // Said here because otherwise the only way to learn they exist is to open the Deck
+      // and find the dialog — and somebody who started the server expecting five projects
+      // and got three needs to know the other two are one click away, not missing.
+      lines.push(
+        `${String(discovered.candidates.length)} repositor${discovered.candidates.length === 1 ? 'y has' : 'ies have'} never been through \`init\` and can be registered from the Deck:`,
+        ...discovered.candidates.map((candidate) => `  ${candidate.id.padEnd(24)}${candidate.path}`),
+        '',
+      );
+    }
 
     if (discovered.skipped.length > 0) {
       // Named rather than dropped in silence. A workspace of symlinks into

@@ -7,7 +7,7 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { TaskWorkspaces } from '../../src/app/task-workspaces.js';
 import type { EffectiveConfig, RunState } from '../../src/contracts/index.js';
-import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
+import { BORN_DIRTY_FILE, bornDirty, makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
 
 /**
  * M2-04 §8: an attempt gets a prepared, verified-clean worktree, or it does not
@@ -284,16 +284,11 @@ describe('the install, and what it may leave behind (§8.2, §8.3)', () => {
 
 describe('a checkout born dirty (§8.3, phase "checkout")', () => {
   it('refuses before the install runs', async () => {
-    // `.gitattributes` with a filter that rewrites content on checkout: the file
-    // in the working tree no longer matches the index, so a *fresh* checkout is
-    // dirty. This is the case the two assertions exist separately for.
+    // The file in the working tree does not match the index, so a *fresh* checkout
+    // is dirty. This is the case the two assertions exist separately for, and the
+    // fixture arranges it without spawning anything — `bornDirty` says why.
     repo = await makeTempRepoWithCommit();
-    repo.write('.gitattributes', '*.txt filter=dirtier\n');
-    repo.write('content.txt', 'original\n');
-    repo.commitAll('a filtered file');
-    // Configured after the commit so the index holds the unfiltered content.
-    repo.userGit(['config', 'filter.dirtier.smudge', 'sed s/original/smudged/']);
-    repo.userGit(['config', 'filter.dirtier.clean', 'cat']);
+    bornDirty(repo);
     const base = repo.head();
 
     const marker = join(repo.home, 'install-ran');
@@ -307,7 +302,7 @@ describe('a checkout born dirty (§8.3, phase "checkout")', () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.failure.phase).toBe('checkout');
-    expect(outcome.failure.changes).toContain('content.txt');
+    expect(outcome.failure.changes).toContain(BORN_DIRTY_FILE);
     // The install never ran: `checkout` refuses before it is reached.
     expect(existsSync(marker)).toBe(false);
   });

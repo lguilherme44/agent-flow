@@ -1211,3 +1211,214 @@ select[data-unknown='true'] {
   color: var(--ink-3);
   font-size: var(--fs-0);
 }
+
+/* ── Doctor: can this machine work? ───────────────────────────────────────── */
+
+.doctor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+/* The verdict, sized like the one line most readers keep. */
+.doctor-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r-2);
+  background: var(--bg-2);
+}
+.doctor-verdict[data-tone='ok'] {
+  border-left-color: var(--ok);
+}
+.doctor-verdict[data-tone='warn'] {
+  border-left-color: var(--warn);
+}
+.doctor-verdict[data-tone='bad'] {
+  border-left-color: var(--bad);
+}
+.doctor-verdict__word {
+  font-size: var(--fs-5);
+  letter-spacing: 0.04em;
+}
+.doctor-verdict__why {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+.doctor-verdict__why p {
+  margin: 0;
+  font-size: var(--fs-2);
+}
+
+.doctor-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.doctor-section__head h2 {
+  margin: 0;
+  font-size: var(--fs-3);
+}
+.doctor-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-1);
+}
+
+.doctor-list {
+  display: grid;
+  gap: var(--s-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Name, what it says, and the one word that classifies it. */
+.doctor-row {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr) auto;
+  gap: var(--s-2) var(--s-3);
+  align-items: baseline;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-1);
+}
+.doctor-row--bad {
+  border-color: var(--bad);
+}
+.doctor-row__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/*
+  A qualifier under the name, not welded to it.
+  `<small>` is inline, so the first team row read `Backendpinned-model-id · configured`
+  and wrapped mid-phrase — in the screenshot, not in any assertion: every test matched a
+  substring and a substring is exactly what a missing space still contains.
+*/
+.doctor-row__name small {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+}
+.doctor-row__value {
+  color: var(--ink-2);
+  font-size: var(--fs-2);
+  overflow-wrap: anywhere;
+}
+.doctor-row__warn {
+  color: var(--warn);
+  font-style: normal;
+}
+
+.doctor-finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+  margin: 0;
+  font-size: var(--fs-2);
+}
+.doctor-paths {
+  margin: 0;
+  padding-left: var(--s-5);
+  font-size: var(--fs-1);
+}
+
+@media (max-width: 720px) {
+  .doctor-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .doctor-row__value {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ── Clean: what would go, before anything goes ───────────────────────────── */
+
+.clean-options {
+  display: grid;
+  gap: var(--s-2);
+  max-width: 46rem;
+}
+.clean-options .field {
+  max-width: 12rem;
+}
+
+.clean-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: start;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-1);
+  cursor: pointer;
+}
+.clean-toggle b {
+  display: block;
+  font-weight: 600;
+}
+.clean-toggle small {
+  display: block;
+}
+/* The one option that deletes work never looks like the others (§20.4). */
+.clean-toggle[data-danger='true'] {
+  border-color: var(--bad);
+}
+
+.clean-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding-top: var(--s-3);
+}
+
+/* ── Telemetry & analytics: time, counts, outcomes — never money ──────────── */
+
+.telemetry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+.telemetry__totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-5);
+}
+
+/* Name, a bar to the run's own total, then the counts behind it. */
+.telemetry-row {
+  display: grid;
+  grid-template-columns: 12rem minmax(8rem, 1fr) auto;
+  gap: var(--s-2) var(--s-3);
+  align-items: center;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-1);
+}
+
+.analytics-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: flex-end;
+}
+.analytics-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+@media (max-width: 720px) {
+  .telemetry-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

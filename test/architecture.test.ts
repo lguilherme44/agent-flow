@@ -416,7 +416,11 @@ describe('nothing a model wrote reaches a shell (V-01)', () => {
     // clean, reports what it saw, and removes the worktree in a `finally`. It prepares
     // nothing anybody will run work in — the question it answers is about the command
     // itself, which is why it has to run it outside the sequence that trusts it.
-    const OWNS_SEQUENCE = ['src/app/workspace-preparation.ts', 'src/cli/doctor.ts'];
+    //
+    // The probe lives in `app/diagnostics.ts` rather than in the command that prints it,
+    // because `GET /api/v1/doctor` asks the same question and a second implementation of
+    // 'does this install dirty a fresh checkout' is exactly what this rule exists to stop.
+    const OWNS_SEQUENCE = ['src/app/workspace-preparation.ts', 'src/app/diagnostics.ts'];
 
     const offenders: string[] = [];
     for (const file of sourceFiles('src')) {
@@ -715,7 +719,7 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     const PREPARES = [
       'src/app/task-workspaces.ts',
       'src/app/integrator.ts',
-      'src/cli/doctor.ts',
+      'src/app/diagnostics.ts',
     ];
     // `unlock` and `prune` join `doctor`'s list for the Integrator, and only for
     // the recreation path: a locked registration whose directory is gone is not
@@ -731,11 +735,11 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // *derived* from run state and then intersected with what Git registered under
     // Agent Flow's own root, so a foreign worktree cannot be named at all (§20.2).
     const RECLAIMS = [
-      'src/cli/doctor.ts',
+      'src/app/diagnostics.ts',
       'src/app/integrator.ts',
       'src/app/namespace-reclaim.ts',
     ];
-    const REMOVES = ['src/cli/doctor.ts', 'src/app/namespace-reclaim.ts'];
+    const REMOVES = ['src/app/diagnostics.ts', 'src/app/namespace-reclaim.ts'];
     // M2-05: the operations of the §11.2 sequence, in the one module that owns
     // it. Splitting them would give two answers to "which tree was validated",
     // and only one of them would be the one bound to a receipt.
@@ -984,7 +988,7 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
     // integration branch already holds or something the user asked for by name. The
     // thing that would be *work* is the branch, and that is cleaned by a different
     // rule behind a different flag (§20.4).
-    const FORCES = ['src/cli/doctor.ts', 'src/app/namespace-reclaim.ts'];
+    const FORCES = ['src/app/diagnostics.ts', 'src/app/namespace-reclaim.ts'];
     // Scoped to a worktree removal on purpose. `force: true` is ordinary and
     // correct on a filesystem call — `node-file-system.ts` and `node-host.ts`
     // both pass it to `fs.rm` — and a rule that flagged those would be noise
@@ -1001,7 +1005,7 @@ describe('a configured task limit is resolved, never used raw (M2-00.3)', () => 
 
     // And the positive control: the rule is worth nothing if the pattern it
     // searches for no longer matches the one call it is meant to allow.
-    expect(FORCED_REMOVAL.test(codeOnly(read(join(ROOT, 'src/cli/doctor.ts')).text))).toBe(true);
+    expect(FORCED_REMOVAL.test(codeOnly(read(join(ROOT, 'src/app/diagnostics.ts')).text))).toBe(true);
 
     // One `--force`, never two. Git needs it twice to remove a *locked* worktree,
     // and the lock is what protects a workspace an agent may be writing into
@@ -1943,14 +1947,28 @@ describe('a workspace has one registry (UI-29, §93)', () => {
   });
 
   it('builds every registry through the same constructor', () => {
-    // `registryOf` is the only way to make one, so an id can only exist if this
-    // module issued it.
+    // Two constructors, one module, and an id can only exist if that module issued it.
+    // `registryOf` takes a list, for a server told exactly what to serve; 7.6 added
+    // `discoveredRegistry`, which walks and can walk *again* — the workspace stopped
+    // being a startup snapshot the moment the Deck could register a project into it.
+    //
+    // The rule is over both names rather than the first one, because a rule that named
+    // only `registryOf` would have gone quiet the moment a second way to build one
+    // appeared — which is exactly what happened, and what this line now prevents.
+    const CONSTRUCTORS = /\b(registryOf|discoveredRegistry)\s*\(/;
+
     const users = sourceFiles('src')
       .map(read)
-      .filter(({ text }) => /\bregistryOf\s*\(/.test(codeOnly(text)))
+      .filter(({ text }) => CONSTRUCTORS.test(codeOnly(text)))
       .map(({ path }) => path);
 
     expect(users.sort()).toEqual(['src/cli/ui.ts', 'src/server/project-registry.ts']);
+
+    // And the control: both constructors really are declared in that one module, so the
+    // list above is short because there is one owner and not because a name went stale.
+    const owner = codeOnly(read(join(ROOT, 'src/server/project-registry.ts')).text);
+    expect(owner).toMatch(/export function registryOf\s*\(/);
+    expect(owner).toMatch(/export function discoveredRegistry\s*\(/);
   });
 
   it('resolves symlinks before deciding a directory is inside the workspace', () => {
@@ -2051,17 +2069,28 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
       // Reading rather than acquiring is the whole distinction — taking the lease to
       // decide whether a run may be deleted would make housekeeping compete with the
       // scheduler, and the honest answer there is "somebody is working on this one".
+      //
+      // 7.7 moved that read out of the terminal: the Deck has to show what a cleanup
+      // *would* remove before removing it, and both surfaces now call this one function.
+      'src/app/workspace-cleanup.ts',
+      // The two adapters construct the lock and hand it over. Neither reads it, and
+      // neither may: see the assertions below.
       'src/cli/clean.ts',
       // The server reads the lock for a pre-flight conflict answer; it never takes it.
       'src/server/server.ts',
     ]);
 
-    // Neither reader acquires. `withExecutionLock` remains the only acquisition, so
-    // the CLI and the HTTP API cannot hold different locks or forget to hold one.
-    for (const reader of ['src/server/server.ts', 'src/cli/clean.ts']) {
-      const code = codeOnly(read(join(ROOT, reader)).text);
-      expect(code, reader).toContain('.describe(');
-      expect(code, `${reader} acquires the lock itself`).not.toContain('.acquire(');
+    // The read lives in the use case, once. `withExecutionLock` remains the only
+    // acquisition, so the CLI and the HTTP API cannot hold different locks or forget to
+    // hold one — and neither can answer "is somebody executing this" its own way.
+    const cleanup = codeOnly(read(join(ROOT, 'src/app/workspace-cleanup.ts')).text);
+    expect(cleanup, 'the cleanup use case no longer inspects the lock').toContain('.describe(');
+    expect(cleanup, 'the cleanup use case acquires the lock itself').not.toContain('.acquire(');
+
+    for (const adapter of ['src/server/server.ts', 'src/cli/clean.ts']) {
+      const code = codeOnly(read(join(ROOT, adapter)).text);
+      expect(code, `${adapter} acquires the lock itself`).not.toContain('.acquire(');
+      expect(code, `${adapter} inspects the lock instead of delegating`).not.toContain('lock.describe(');
     }
   });
 
@@ -4399,6 +4428,50 @@ describe('no provider name decides a model question in the browser (Issue #21)',
 
   const isTest = (path: string): boolean => /\.test\.tsx?$/.test(path);
 
+  /**
+   * The two dictionaries, which hold prose and cannot hold a decision.
+   *
+   * Deck's `doctor` panel has always printed "an openai-compatible runner could serve it"
+   * — the server's own advice about a stage that opens no file, and a runner *type* rather
+   * than a vendor. It was JSX text, which this rule does not read, and it became a string
+   * the day the screen learned a second language. The sentence did not change; the
+   * quotation marks around it did.
+   *
+   * Exempt as *files*, and the exemption is bounded by the rule directly below: a
+   * dictionary is a table of values, and a table that started asking which provider it was
+   * looking at would fail that one.
+   */
+  const DICTIONARIES = new Set([
+    'apps/deck/src/lib/i18n/translations/en.ts',
+    'apps/deck/src/lib/i18n/translations/pt-BR.ts',
+  ]);
+
+  it('compares against no provider in either dictionary, which is what the exemption is worth', () => {
+    /*
+      Prose may name a runner type; nothing here may *ask* which one it is.
+
+      Narrowed to a comparison against a **provider**, not against any string, because a
+      dictionary legitimately branches on words: `taskFinished` in pt-BR reads the task's
+      status to agree with it — `TASK-004 concluída` against `TASK-004 interrompida` — and
+      that is a fact about Portuguese, not a decision about the run. Which vendor is on
+      the other end is the decision this describe exists to forbid.
+    */
+    const offenders: string[] = [];
+    for (const path of DICTIONARIES) {
+      for (const line of read(join(ROOT, path)).text.split('\n')) {
+        const compared = /(?:===|!==)\s*(['"`][^'"`]*['"`])/.exec(line);
+        if (compared !== null && PROVIDER.test(compared[1] ?? '')) offenders.push(`${path}: ${line.trim()}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+    // The instrument can see its own subject: a planted comparison is caught.
+    expect(PROVIDER.test("'claude'")).toBe(true);
+    expect(/(?:===|!==)\s*(['"`][^'"`]*['"`])/.exec("runner === 'claude'")?.[1]).toBe("'claude'");
+    // And the legitimate one is not.
+    expect(PROVIDER.test("'completed'")).toBe(false);
+  });
+
   it('names no provider in any production file under apps/web/src', () => {
     // **`withoutComments`, not `codeOnly`.** `codeOnly` blanks string literals, so a rule
     // written against it looking for `=== 'agy'` reads `=== ''` and passes by looking at
@@ -4415,7 +4488,7 @@ describe('no provider name decides a model question in the browser (Issue #21)',
 
     for (const file of browserFiles()) {
       const { path, text } = read(file);
-      if (isTest(path)) continue;
+      if (isTest(path) || DICTIONARIES.has(path)) continue;
 
       for (const literal of withoutComments(text).match(LITERALS) ?? []) {
         if (PROVIDER.test(literal)) offenders.push(`${path}: ${literal}`);
@@ -4769,6 +4842,28 @@ describe('the suite sorts itself into two lanes, and can still see the slow one'
 
     expect(spawners.length).toBeGreaterThan(15);
     expect(spawners.filter((file) => !LANE.includes(file))).toEqual([]);
+  });
+
+  it('puts a test that spawns through a helper beside it in the slow lane', () => {
+    // This rule and the predicate were blind in the same place, which is how the single
+    // most process-heavy file in the suite — eight Node processes and an esbuild bundle —
+    // sat in the tight lane for two milestones and failed twice in one gate on a loaded
+    // machine. Neither `.integration.` in its name, nor the fixture, nor
+    // `NodeProcessRunner`: it reaches `node:child_process` through the harness next to it.
+    const helpers = ALL.filter((file) => {
+      const dir = file.slice(0, file.lastIndexOf('/'));
+      return importSpecifiers(readFileSync(join(ROOT, file), 'utf8'))
+        .filter((specifier) => specifier.startsWith('.'))
+        .some((specifier) => {
+          const candidate = join(ROOT, dir, specifier.replace(/\.js$/, '.ts'));
+          if (!existsSync(candidate)) return false;
+          return importSpecifiers(readFileSync(candidate, 'utf8')).includes('node:child_process');
+        });
+    });
+
+    // A rule that cannot see its subject passes forever, and this one has exactly one.
+    expect(helpers).toContain('test/app/run-execution-lock.race.test.ts');
+    expect(helpers.filter((file) => !LANE.includes(file))).toEqual([]);
   });
 
   it('sorts on imports, not on prose — this file is the control', () => {

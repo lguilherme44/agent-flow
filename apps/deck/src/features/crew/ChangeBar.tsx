@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ConfigEditorChangeView, ConfigEditorScope, ConfigValidationView } from '@contracts/index.js';
 import type { ConfigEditorOperation } from '../../lib/api';
+import { useT } from '../../lib/i18n';
 import { cliCommandFor, displayValue, effectSummary, pathLabel } from './crew-config';
 
 /**
@@ -27,35 +28,36 @@ export function ChangeBar({ scope, projectPath, operations, validation, state, a
   readonly onDiscard: () => void;
   readonly onSave: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const changes = validation?.changes ?? [];
   const count = operations.length;
-  const status = state === 'validating' ? 'Validating…'
-    : state === 'saving' ? 'Saving…'
-      : state === 'saved' ? 'Saved.'
-        : state === 'conflict' ? 'Conflict.'
+  const status = state === 'validating' ? t.crew.validating
+    : state === 'saving' ? t.crew.saving
+      : state === 'saved' ? t.crew.saved
+        : state === 'conflict' ? t.crew.conflict
           : '';
   return (
     <div className="crew-actions" data-dirty={count > 0}>
       <div className="crew-actions__row">
         <span className="crew-actions__count" aria-live="polite">
-          {count === 0 ? status || 'No unsaved changes' : <><b className="mono">{count}</b> unsaved change{count === 1 ? '' : 's'}{status === '' ? '' : ` · ${status}`}</>}
+          {count === 0 ? status || t.crew.noUnsaved : <><b className="mono">{count}</b> {t.crew.unsavedChanges(count)}{status === '' ? '' : ` · ${status}`}</>}
         </span>
         {changes.length === 0
           ? null
-          : <span className="tag">takes effect {effectSummary(changes.map(({ effect }) => effect))}</span>}
+          : <span className="tag">{t.crew.takesEffect(effectSummary(t, changes.map(({ effect }) => effect)))}</span>}
         <span className="crew-actions__spacer" />
         <button type="button" className="btn btn--ghost btn--sm" disabled={count === 0} aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? 'Hide diff' : 'Show diff'}
+          {open ? t.crew.hideDiff : t.crew.showDiff}
         </button>
-        <button type="button" className="btn" disabled={count === 0} onClick={onDiscard}>Discard</button>
+        <button type="button" className="btn" disabled={count === 0} onClick={onDiscard}>{t.crew.discard}</button>
         <button
           type="button"
           className="btn btn--primary"
           disabled={validation?.valid !== true || state === 'saving' || state === 'validating'}
           onClick={onSave}
         >
-          Save configuration
+          {t.crew.save}
         </button>
       </div>
       {open && count > 0
@@ -64,11 +66,11 @@ export function ChangeBar({ scope, projectPath, operations, validation, state, a
             <ChangeLine key={pathLabel(operation.path)} scope={scope} operation={operation} change={changes.find((entry) => pathLabel(entry.path) === pathLabel(operation.path))} />
           ))}
           {scope === 'project'
-            ? <p className="crew-diff__note crew-diff__note--quiet">Project scope is the CLI's working directory, so run these from <code>{projectPath}</code>.</p>
+            ? <p className="crew-diff__note crew-diff__note--quiet">{t.crew.projectScopeNote}<code>{projectPath}</code>.</p>
             : null}
           {activeRunId === null
             ? null
-            : <p className="crew-diff__note">Run {activeRunId} is in flight and keeps the execution context it started with.</p>}
+            : <p className="crew-diff__note">{t.crew.runInFlight(activeRunId)}</p>}
         </div>
         : null}
     </div>
@@ -80,15 +82,16 @@ function ChangeLine({ scope, operation, change }: {
   readonly operation: ConfigEditorOperation;
   readonly change: ConfigEditorChangeView | undefined;
 }) {
+  const t = useT();
   const label = pathLabel(operation.path);
   const after = operation.kind === 'unset' ? undefined : operation.value;
   return (
     <div className="crew-diff__entry">
       {change === undefined
-        ? <div className="crew-diff__same"><code>{label}</code>: {displayValue(after)} — no change to the effective value</div>
+        ? <div className="crew-diff__same"><code>{label}</code>: {displayValue(t, after)} {t.crew.noEffectiveChange}</div>
         : <>
-          <div className="crew-diff__del">- {label}: {displayValue(change.before)}</div>
-          <div className="crew-diff__add">+ {label}: {displayValue(change.after)}</div>
+          <div className="crew-diff__del">- {label}: {displayValue(t, change.before)}</div>
+          <div className="crew-diff__add">+ {label}: {displayValue(t, change.after)}</div>
         </>}
       <div className="crew-diff__cli">$ {cliCommandFor(scope, operation)}</div>
     </div>

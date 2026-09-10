@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerModelsView, RunnerTypeView } from '@contracts/index.js';
 import type { ConfigEditorOperation } from '../../lib/api';
 import { Empty, Skeleton } from '../../components/ui';
+import { level, useT, type Dictionary } from '../../lib/i18n';
 import { displayValue, pathLabel, roleNeeds, runnerIdsOf } from './crew-config';
 import { FieldControl } from './FieldControl';
 
@@ -27,21 +28,22 @@ export function RoutingEditor({ view, roles, types, models, operations, onChange
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
 }) {
+  const t = useT();
   const runners = runnerIdsOf(view.fields);
   return (
     <section className="crew-roles" aria-labelledby="role-routing">
       <div className="section__head">
-        <h3 id="role-routing" className="eyebrow" style={{ margin: 0 }}>Roles</h3>
-        <span className="section__count">{roles.data?.length ?? 9} posts · {runners.length} runners declared</span>
+        <h3 id="role-routing" className="eyebrow" style={{ margin: 0 }}>{t.crew.roles}</h3>
+        <span className="section__count">{t.crew.postsAndRunners(roles.data?.length ?? 9, runners.length)}</span>
       </div>
       {roles.error !== undefined
-        ? <Empty error>Routing could not be read.</Empty>
+        ? <Empty error>{t.crew.routingCouldNotRead}</Empty>
         : roles.loading
           ? <Skeleton rows={4} />
           : <>
             <AssignAll view={view} roles={roles.data ?? []} types={types} runners={runners} operations={operations} onOperations={onOperations} />
             <div className="table-wrap"><table className="table crew-roles__table">
-            <thead><tr><th>role</th><th>needs</th><th>runner</th><th>model</th><th>effort</th><th>resolves to</th></tr></thead>
+            <thead><tr><th>{t.crew.colRole}</th><th>{t.crew.colNeeds}</th><th>{t.inspector.runner}</th><th>{t.inspector.model}</th><th>{t.crew.colEffort}</th><th>{t.crew.colResolves}</th></tr></thead>
             <tbody>{(roles.data ?? []).map((role) => (
               <RoutingRow key={role.role} role={role} view={view} runners={runners} models={models} operations={operations} onChange={onChange} />
             ))}</tbody>
@@ -72,6 +74,7 @@ function AssignAll({ view, roles, types, runners, operations, onOperations }: {
   readonly operations: readonly ConfigEditorOperation[];
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
 }) {
+  const t = useT();
   const [pick, setPick] = useState('');
   const capabilities = runnerCapabilities(view.fields, types, pick);
   const eligible = roles.filter((role) => refusalFor(role, capabilities) === undefined);
@@ -89,18 +92,18 @@ function AssignAll({ view, roles, types, runners, operations, onOperations }: {
   };
   return (
     <div className="crew-bulk">
-      <label htmlFor="assign-all">Assign every role to</label>
+      <label htmlFor="assign-all">{t.crew.assignEveryRole}</label>
       <select id="assign-all" className="input mono" value={pick} onChange={(event) => setPick(event.target.value)}>
-        <option value="">Choose a runner</option>
+        <option value="">{t.crew.chooseRunner}</option>
         {runners.map((id) => <option key={id} value={id}>{id}</option>)}
       </select>
       <button type="button" className="btn btn--sm" disabled={pick === '' || eligible.length === 0} onClick={assign}>
-        Apply to {eligible.length} role{eligible.length === 1 ? '' : 's'}
+        {t.crew.applyToRoles(eligible.length)}
       </button>
       {pick !== '' && skipped > 0
         ? <small>
-            {skipped} left as {skipped === 1 ? 'it is' : 'they are'}: {pick}{' '}
-            {reasons.map((reason) => REFUSAL_TEXT[reason]).join('; and it ')}.
+            {t.crew.leftAsIs(skipped, pick)}{' '}
+            {reasons.map((reason) => refusalText(t, reason)).join(t.crew.andItJoin)}.
           </small>
         : null}
     </div>
@@ -135,10 +138,9 @@ function refusalFor(
 }
 
 /** What each reason means for the posts it blocks, in the words the row headings use. */
-const REFUSAL_TEXT: Readonly<Record<'no working directory' | 'no read-only mode', string>> = {
-  'no working directory': 'has no working directory, so it cannot serve a role that opens files',
-  'no read-only mode': 'has no read-only mode, so it cannot serve a role that must not write',
-};
+function refusalText(t: Dictionary, reason: 'no working directory' | 'no read-only mode'): string {
+  return reason === 'no working directory' ? t.crew.refusalNoWorkdir : t.crew.refusalNoReadOnly;
+}
 
 function RoutingRow({ role, view, runners, models, operations, onChange }: {
   readonly role: RoleRouteView;
@@ -148,6 +150,7 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
 }) {
+  const t = useT();
   const pending = operations.some((operation) => pathLabel(operation.path).startsWith(`${pathLabel(role.configKeys)}.`));
   // The models offered are the ones the runner *this row points at* reported. Offering
   // every runner's models here would suggest a Gemini id for a role routed to Claude.
@@ -156,13 +159,14 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
   return (
     <tr data-pending={pending} data-unresolved={role.error !== undefined}>
       <td>
+        {/* The role id is the configuration key this row edits. Never translated. */}
         <span className="crew-roles__name mono">{role.role}</span>
         <small>{role.prompts.join(', ')}</small>
       </td>
       <td>
         <span className="tag-list">
-          <span className="tag" data-writes={role.requiresWorkingDirectory && !role.requiresReadOnly}>{roleNeeds(role)}</span>
-          {role.requiresNativeStructuredOutput ? <span className="tag">structured</span> : null}
+          <span className="tag" data-writes={role.requiresWorkingDirectory && !role.requiresReadOnly}>{t.crew.needs[roleNeeds(role)]}</span>
+          {role.requiresNativeStructuredOutput ? <span className="tag">{t.crew.structured}</span> : null}
         </span>
       </td>
       <RoutingCell role={role} view={view} leaf="runner" options={runners} operations={operations} onChange={onChange} />
@@ -171,13 +175,13 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
       <td className="crew-roles__resolved">
         {role.error === undefined
           ? <>
-            <span className="mono">{role.resolved?.runner ?? '—'}{role.resolved?.model === undefined ? '' : ` · ${role.resolved.model}`}</span>
+            <span className="mono">{role.resolved?.runner ?? t.common.none}{role.resolved?.model === undefined ? '' : ` · ${role.resolved.model}`}</span>
             {role.resolved?.reasoningClamped === true
-              ? <small>effort {role.configured.reasoning} ran as {role.resolved.reasoning} — the runner's ceiling</small>
+              ? <small>{t.crew.clampedEffort(level(t, role.configured.reasoning), level(t, role.resolved.reasoning))}</small>
               : null}
           </>
           : <span className="crew-roles__error">{role.error.message}</span>}
-        {pending ? <small className="crew-roles__pending">unsaved — resolves again after saving</small> : null}
+        {pending ? <small className="crew-roles__pending">{t.crew.unsavedResolves}</small> : null}
       </td>
     </tr>
   );
@@ -190,9 +194,9 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
  * already configured with, which is the shipped default and deliberate (AD-13). Saying
  * "inherits not set" under it described the schema instead of the behaviour.
  */
-function originNote(field: ConfigEditorFieldView, inherited: boolean): string {
-  if (!inherited) return `set in ${field.origin ?? 'this source'}`;
-  return field.effectiveValue === undefined ? 'the runner decides' : `inherits ${displayValue(field.effectiveValue)}`;
+function originNote(t: Dictionary, field: ConfigEditorFieldView, inherited: boolean): string {
+  if (!inherited) return t.crew.setIn(field.origin ?? t.crew.thisSource);
+  return field.effectiveValue === undefined ? t.crew.runnerDecides : t.crew.inherits(displayValue(t, field.effectiveValue));
 }
 
 /** One editable leaf of a role's route, addressed by the path the server published. */
@@ -205,9 +209,10 @@ function RoutingCell({ role, view, leaf, options, suggestions, operations, onCha
   readonly operations: readonly ConfigEditorOperation[];
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
 }) {
+  const t = useT();
   const label = pathLabel([...role.configKeys, leaf]);
   const field = view.fields.find((entry) => pathLabel(entry.path) === label);
-  if (field === undefined) return <td className="faint">not editable here</td>;
+  if (field === undefined) return <td className="faint">{t.crew.notEditableHere}</td>;
 
   const operation = [...operations].reverse().find((entry) => pathLabel(entry.path) === label);
   const raw = operation?.kind === 'set'
@@ -229,7 +234,7 @@ function RoutingCell({ role, view, leaf, options, suggestions, operations, onCha
         {...(suggestions === undefined ? {} : { suggestions })}
         onChange={(value, inherit) => onChange(field, value, inherit)}
       />
-      <small className="crew-roles__origin">{originNote(field, inherited)}</small>
+      <small className="crew-roles__origin">{originNote(t, field, inherited)}</small>
     </td>
   );
 }

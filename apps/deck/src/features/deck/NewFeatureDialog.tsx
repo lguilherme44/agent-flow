@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectView, WorkspaceProjectView } from '@contracts/index.js';
 import { ApiError, api } from '../../lib/api';
 import { invalidate } from '../../lib/store';
-import { words } from '../../lib/tone';
+import { useT, word } from '../../lib/i18n';
 import { Notice } from '../../components/ui';
 import { href, navigate } from '../../app/router';
 
@@ -37,6 +37,7 @@ export function NewFeatureDialog({
   initialProjectId?: string | undefined;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const t = useT();
   const [projectId, setProjectId] = useState<string>(initialProjectId ?? projects[0]?.id ?? '');
   const [description, setDescription] = useState('');
   const [workflow, setWorkflow] = useState<string>('');
@@ -88,9 +89,9 @@ export function NewFeatureDialog({
     <dialog ref={ref} className="dialog" onClose={onClose} aria-labelledby="new-feature-title">
       <div className="dialog__head">
         <h2 id="new-feature-title" className="dialog__title">
-          New feature
+          {t.deck.newFeature}
         </h2>
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onClose} aria-label="Close">
+        <button type="button" className="btn btn--ghost btn--sm" onClick={onClose} aria-label={t.common.close}>
           Esc
         </button>
       </div>
@@ -104,7 +105,7 @@ export function NewFeatureDialog({
       >
         {projects.length > 1 ? (
           <label className="field">
-            <span className="eyebrow">Project</span>
+            <span className="eyebrow">{t.common.project}</span>
             <select className="input select" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
               {projects.map((entry) => (
                 <option key={entry.id} value={entry.id}>
@@ -116,26 +117,24 @@ export function NewFeatureDialog({
           </label>
         ) : (
           <div className="field">
-            <span className="eyebrow">Project</span>
+            <span className="eyebrow">{t.common.project}</span>
             <span className="mono">{project?.name ?? projectId}</span>
           </div>
         )}
 
         {inFlight && row !== undefined ? (
-          <Notice tone="warn" k="in flight">
-            <b>{row.runId}</b> is this project&apos;s current run ({words(row.runtime)}). A new feature becomes the
-            current run, which is what <code>approve</code>, <code>run</code> and <code>status</code> follow. The old run
-            stays on disk and in History.
+          <Notice tone="warn" k={t.newFeature.inFlight}>
+            <b>{row.runId}</b> {t.newFeature.currentRun(word(t, row.runtime))}
           </Notice>
         ) : null}
 
         <label className="field">
-          <span className="eyebrow">What should it do</span>
+          <span className="eyebrow">{t.newFeature.whatShouldItDo}</span>
           <textarea
             className="textarea"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="A sentence is enough; a paragraph is better. Name the behaviour, the files if you know them, and what must not change."
+            placeholder={t.newFeature.descriptionPlaceholder}
             style={{ minHeight: 160 }}
             maxLength={8000}
             autoFocus
@@ -147,12 +146,12 @@ export function NewFeatureDialog({
 
         <div className="field-row">
           <label className="field">
-            <span className="eyebrow">Workflow</span>
+            <span className="eyebrow">{t.newFeature.workflow}</span>
             <select className="input select" value={workflow} onChange={(event) => setWorkflow(event.target.value)}>
-              <option value="">let the classifier decide</option>
+              <option value="">{t.newFeature.letClassifierDecide}</option>
               {WORKFLOWS.map((entry) => (
                 <option key={entry} value={entry}>
-                  {entry}
+                  {word(t, entry)}
                 </option>
               ))}
             </select>
@@ -160,14 +159,13 @@ export function NewFeatureDialog({
           <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 8 }}>
             <input type="checkbox" checked={skipReview} onChange={(event) => setSkipReview(event.target.checked)} />
             <span className="muted" style={{ fontSize: 12 }}>
-              stop before the plan review
+              {t.newFeature.stopBeforeReview}
             </span>
           </label>
         </div>
 
         <p className="faint" style={{ margin: 0, fontSize: 12, lineHeight: 1.5 }}>
-          Planning spends model calls — discovery, impact, SDD, plan, review — and stops at a plan.
-          Nothing is implemented before you approve it. The same use case <code>agent-flow feature</code> runs.
+          {t.newFeature.costNotice}
         </p>
 
         {refusal === undefined ? null : (
@@ -179,10 +177,10 @@ export function NewFeatureDialog({
 
         <div className="dialog__foot" style={{ padding: 0, borderTop: 'none' }}>
           <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button type="submit" className="btn btn--primary" disabled={!ready}>
-            {busy ? 'Creating the run…' : 'Plan it'}
+            {busy ? t.newFeature.creating : t.newFeature.planIt}
           </button>
         </div>
       </form>

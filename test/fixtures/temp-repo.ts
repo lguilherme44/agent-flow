@@ -164,3 +164,73 @@ export async function makeTempRepoWithCommit(): Promise<TempRepo> {
   repo.commitAll('base');
   return repo;
 }
+
+/**
+ * The name of the file `bornDirty` leaves modified in every fresh checkout.
+ *
+ * Exported so a test can assert the refusal names it without spelling the string twice.
+ */
+export const BORN_DIRTY_FILE = 'content.txt';
+
+/**
+ * A repository whose *fresh* checkout is dirty before anything has run in it.
+ *
+ * The case §8.3 and §8.4 both need: a working tree that does not match the index the
+ * instant Git finishes writing it, so "the install dirtied the tree" and "the checkout
+ * was already dirty" can be told apart.
+ *
+ * **No external filter, and that is the whole point of this helper.** Both call sites
+ * used to do it with `.gitattributes` plus `filter.dirtier.smudge = sed s/original/…/`,
+ * and that fixture is silently conditional on `sed` starting. Measured, because the gate
+ * failed on it once and the message blamed the probe:
+ *
+ * ```
+ * error: cannot fork to run external filter 'this-command-does-not-exist'
+ * $ git status --porcelain     # (nothing)
+ * ```
+ *
+ * A non-required filter that cannot start is *ignored* — Git warns on stderr, writes the
+ * unfiltered blob, and reports the checkout clean. So under a loaded parallel lane, where
+ * a spawn can fail, the fixture stopped producing the condition under test and the
+ * assertion failed as though the product had regressed.
+ *
+ * What replaces it is Git's own line-ending asymmetry, which spawns nothing. The blob is
+ * committed with CRLF *before* `.gitattributes` declares the path `text`; from then on
+ * checkout writes those bytes unchanged while `git status` cleans them to LF before
+ * comparing — so the file is modified in every fresh worktree, on Windows and on Linux.
+ *
+ * **The second commit stages one path, and that is not tidiness.** The first version used
+ * `commitAll`, and the gate failed on it exactly as the filter had. Measured:
+ *
+ * ```
+ * $ git add -A && git commit -m 'declare text'      # content.txt looked stat-dirty
+ * $ git cat-file -p :content.txt | od -c
+ * 0000000   o   r   i   g   i   n   a   l  \n       # renormalised, and the premise gone
+ * ```
+ *
+ * `add -A` re-reads a file whose stat looks dirty, applies the attribute *it has just
+ * declared*, and stages the normalisation — so whether the index kept its CRLF depended
+ * on how the clock fell between two commits. Staging `.gitattributes` by name cannot
+ * touch the other file.
+ *
+ * And the premise is **asserted** rather than assumed, because both of this fixture's
+ * failures reached the suite as "the product regressed" when the truth was "the fixture
+ * produced nothing to test".
+ */
+export function bornDirty(repo: TempRepo): void {
+  repo.write(BORN_DIRTY_FILE, 'original\r\n');
+  repo.commitAll('a file committed with CRLF');
+
+  // Declared after the commit, and staged by name: `add -A` here would renormalise the
+  // file this fixture exists to leave un-normalised.
+  repo.write('.gitattributes', '*.txt text\n');
+  repo.userGit(['add', '.gitattributes']);
+  repo.userGit(['commit', '--quiet', '--no-verify', '-m', 'declare *.txt text']);
+
+  const staged = repo.userGit(['cat-file', '-p', `:${BORN_DIRTY_FILE}`]);
+  if (!staged.includes('\r\n')) {
+    throw new Error(
+      `bornDirty: the index no longer holds CRLF for ${BORN_DIRTY_FILE}, so a fresh checkout would be clean and the test below would be asserting nothing.`,
+    );
+  }
+}

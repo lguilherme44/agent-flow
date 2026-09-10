@@ -1188,3 +1188,80 @@ input[type='checkbox'] {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ── Team: who did the work, and why this task went to that agent (7.8) ───── */
+
+/*
+  The load beside the word. `2/2` says "raise the capacity or wait" and a full bar says
+  neither, so the fraction is the figure and the chip carries the status the server chose.
+*/
+.team-load {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  white-space: nowrap;
+}
+
+/*
+  The candidate ranking (§38). A table rather than rows, because every column is a number
+  meant to be compared down its own axis — which is the whole reason the ranking is here
+  and not a sentence.
+*/
+.ranking {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-1);
+}
+.ranking th {
+  padding: 0 var(--s-2) var(--s-1);
+  color: var(--ink-3);
+  font-size: var(--fs-0);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: right;
+}
+.ranking th:first-child {
+  text-align: left;
+}
+.ranking td {
+  padding: var(--s-1) var(--s-2);
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  text-align: right;
+  vertical-align: baseline;
+}
+.ranking td:first-child {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+/* The one that got it, and the ones that were ruled out. Never colour alone (§97): the
+   winner is the only bold name, and an excluded row carries the reason in words. */
+.ranking tr[data-held='true'] td {
+  color: var(--ink);
+}
+.ranking tr[data-excluded='true'] td {
+  color: var(--ink-3);
+}
+
+/* ── Collaboration: what the agents said to each other (7.8, M4-07) ───────── */
+
+.message {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.message + .message {
+  border-top: 1px solid var(--line);
+}
+/* The closed state's one line: where the conversation stands, and no more than that. */
+.message--latest {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s-2);
+}
+.message__body {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

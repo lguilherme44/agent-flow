@@ -3,6 +3,7 @@ import type { Timeline } from '../../lib/replay';
 import { describe } from '../../lib/sentence';
 import { formatClock, formatDay } from '../../lib/time';
 import { Empty } from '../../components/ui';
+import { useT } from '../../lib/i18n';
 
 /**
  * The log, newest first, said in sentences.
@@ -29,6 +30,8 @@ export function Feed({
   runId?: string;
   onOpenStageLog?: (stage: string) => void;
 }) {
+  // `t` is the playhead instant in this component's props; the dictionary is `dict`.
+  const dict = useT();
   const [needle, setNeedle] = useState('');
   const [onlySelected, setOnlySelected] = useState(false);
   const [expandedIndices, setExpandedIndices] = useState<ReadonlySet<number>>(new Set());
@@ -45,14 +48,14 @@ export function Feed({
 
   const rows = useMemo(() => {
     const q = needle.trim().toLowerCase();
-    const list = [...timeline.events].reverse().map((event) => ({ event, said: describe(event) }));
+    const list = [...timeline.events].reverse().map((event) => ({ event, said: describe(event, dict) }));
     return list.filter(({ event, said }) => {
       const task = (event.detail['task'] ?? event.detail['taskId']) as string | undefined;
       if (onlySelected && selected !== undefined && task !== selected) return false;
       if (q === '') return true;
       return `${event.type} ${said.title} ${said.detail ?? ''} ${task ?? ''}`.toLowerCase().includes(q);
     });
-  }, [timeline.events, needle, onlySelected, selected]);
+  }, [timeline.events, needle, onlySelected, selected, dict]);
 
   const current = useMemo(() => {
     let newest: number | undefined;
@@ -75,21 +78,21 @@ export function Feed({
     pane.scrollTop += rowRect.top - paneRect.top - pane.clientHeight / 2 + rowRect.height / 2;
   }, [current, live]);
 
-  if (timeline.events.length === 0) return <Empty hint="The audit log fills as the run moves.">Nothing has been written yet.</Empty>;
+  if (timeline.events.length === 0) return <Empty hint={dict.feed.fillsAsItMoves}>{dict.feed.nothingYet}</Empty>;
 
   let lastDay = '';
   return (
     <div className="feed">
       <div className="filters" style={{ marginBottom: 8 }}>
-        <input className="input" style={{ width: '100%', flex: 1 }} placeholder="Filter lines…" value={needle} onChange={(event) => setNeedle(event.target.value)} aria-label="Filter log lines" />
+        <input className="input" style={{ width: '100%', flex: 1 }} placeholder={dict.feed.filterPlaceholder} value={needle} onChange={(event) => setNeedle(event.target.value)} aria-label={dict.feed.filterAria} />
         {selected === undefined ? null : (
           <button type="button" className="toggle" aria-pressed={onlySelected} onClick={() => setOnlySelected((value) => !value)}>
-            {selected} only
+            {dict.feed.onlyThis(selected)}
           </button>
         )}
       </div>
       {rows.map(({ event, said }) => {
-        const day = formatDay(event.at_ms);
+        const day = formatDay(event.at_ms, dict.time);
         const separator = day !== lastDay ? <div className="feed__day">{day}</div> : null;
         lastDay = day;
         const task = (event.detail['task'] ?? event.detail['taskId']) as string | undefined;
@@ -133,7 +136,7 @@ export function Feed({
                         toggleExpand(event.index);
                       }}
                     >
-                      {isExpanded ? 'less' : 'details'}
+                      {isExpanded ? dict.feed.less : dict.feed.details}
                     </button>
                   ) : null}
                 </div>
@@ -144,14 +147,14 @@ export function Feed({
               <div className="feed__failure-box">
                 <div className="feed__failure-meta">
                   {failureClass ? <span className="chip" data-tone="bad">{failureClass}</span> : null}
-                  {deniedCommand ? <span className="chip" data-tone="warn">denied tool: {deniedCommand}</span> : null}
+                  {deniedCommand ? <span className="chip" data-tone="warn">{dict.feed.deniedTool(deniedCommand)}</span> : null}
                   {stage && onOpenStageLog ? (
                     <button
                       type="button"
                       className="btn btn--sm btn--ghost"
                       onClick={() => onOpenStageLog(stage)}
                     >
-                      open {stage} log
+                      {dict.feed.openStageLog(stage)}
                     </button>
                   ) : null}
                 </div>
@@ -167,7 +170,7 @@ export function Feed({
                 ) : null}
                 {stage && runId ? (
                   <div className="feed__failure-hint">
-                    Log on disk: .agent-flow/runs/{runId}/logs/{stage}.log
+                    {dict.feed.logOnDisk} .agent-flow/runs/{runId}/logs/{stage}.log
                   </div>
                 ) : null}
               </div>

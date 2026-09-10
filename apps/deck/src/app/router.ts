@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Four screens, and every address carries what a reload needs.
+ * Seven screens, and every address carries what a reload needs.
  *
  * A run is always addressed with its project — `/p/<project>/runs/<run>` — because run
  * ids restart at 001 per project per year, and a link that named only the run would open
@@ -15,6 +15,9 @@ export type Route =
   | { readonly name: 'runs'; readonly projectId?: string }
   | { readonly name: 'run'; readonly projectId: string; readonly runId: string; readonly task?: string; readonly at?: string }
   | { readonly name: 'crew'; readonly projectId?: string }
+  | { readonly name: 'doctor'; readonly projectId?: string }
+  | { readonly name: 'clean'; readonly projectId?: string }
+  | { readonly name: 'analytics'; readonly projectId?: string }
   | { readonly name: 'missing'; readonly path: string };
 
 export function parseRoute(pathname: string, search: string): Route {
@@ -30,6 +33,18 @@ export function parseRoute(pathname: string, search: string): Route {
 
   if (segments[0] === 'crew' && segments.length === 1) {
     return project === undefined ? { name: 'crew' } : { name: 'crew', projectId: project };
+  }
+
+  if (segments[0] === 'doctor' && segments.length === 1) {
+    return project === undefined ? { name: 'doctor' } : { name: 'doctor', projectId: project };
+  }
+
+  if (segments[0] === 'clean' && segments.length === 1) {
+    return project === undefined ? { name: 'clean' } : { name: 'clean', projectId: project };
+  }
+
+  if (segments[0] === 'analytics' && segments.length === 1) {
+    return project === undefined ? { name: 'analytics' } : { name: 'analytics', projectId: project };
   }
 
   const runExtras = (): { task?: string; at?: string } => {
@@ -63,6 +78,12 @@ export function href(route: Route): string {
       return route.projectId === undefined ? '/runs' : `/runs?project=${encodeURIComponent(route.projectId)}`;
     case 'crew':
       return route.projectId === undefined ? '/crew' : `/crew?project=${encodeURIComponent(route.projectId)}`;
+    case 'doctor':
+      return route.projectId === undefined ? '/doctor' : `/doctor?project=${encodeURIComponent(route.projectId)}`;
+    case 'clean':
+      return route.projectId === undefined ? '/clean' : `/clean?project=${encodeURIComponent(route.projectId)}`;
+    case 'analytics':
+      return route.projectId === undefined ? '/analytics' : `/analytics?project=${encodeURIComponent(route.projectId)}`;
     case 'run': {
       const params = new URLSearchParams();
       if (route.task !== undefined) params.set('task', route.task);

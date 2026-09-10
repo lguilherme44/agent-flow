@@ -1,8 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ArtifactContentView, ArtifactView, DeliveryView, ReviewView } from '@contracts/index.js';
+import type { ArtifactContentView, ArtifactView, AttentionFocus, DeliveryView, ReviewView } from '@contracts/index.js';
 import { clearStore } from '../../lib/store';
-import { Outcome, type OutcomeTab } from './Outcome';
+import { Outcome, tabForFocus, type OutcomeTab } from './Outcome';
+import { ptBR as t } from '../../lib/i18n';
 
 /**
  * The three answers a person wants after a run, on the surface `ui` opens.
@@ -141,7 +142,7 @@ describe('the review a person reads after the run', () => {
     fireEvent.click(head);
 
     expect(await screen.findByText(/drops the last occurrence/)).toBeInTheDocument();
-    expect(screen.getByText('high')).toBeInTheDocument();
+    expect(screen.getByText(t.words.high)).toBeInTheDocument();
     expect(screen.getByText(/Include the endpoint when the rule declares COUNT/)).toBeInTheDocument();
     // The file the reviewer pointed at, which is what makes a finding actionable.
     expect(screen.getByText('src/core/recurrence.ts')).toBeInTheDocument();
@@ -151,26 +152,26 @@ describe('the review a person reads after the run', () => {
     panel('review');
 
     expect(await screen.findByText('lint')).toBeInTheDocument();
-    const notRun = screen.getByText('not run');
+    const notRun = screen.getByText(t.words.not_run);
     expect(notRun).toBeInTheDocument();
     // The tone is the whole claim: `not_run` shown in the passing colour is the defect
     // I-24 exists to forbid, and it is a `data-tone`, not a word.
     expect(notRun.closest('.gate')).toHaveAttribute('data-tone', 'idle');
     expect(screen.getByText('no lint command is configured')).toBeInTheDocument();
-    expect(screen.getByText('passed').closest('.gate')).toHaveAttribute('data-tone', 'ok');
+    expect(screen.getByText(t.words.passed).closest('.gate')).toHaveAttribute('data-tone', 'ok');
   });
 
   it('warns when the newest review no longer describes the run (C-20)', async () => {
     panel('review', 'superseded');
 
-    expect(await screen.findByText(/describes a state the run has already left/)).toBeInTheDocument();
+    expect(await screen.findByText(t.outcome.supersededReview)).toBeInTheDocument();
   });
 
   it('does not warn when the review is current', async () => {
     panel('review', 'current');
 
     await screen.findByRole('button', { name: /TASK-004/ });
-    expect(screen.queryByText(/already left/)).not.toBeInTheDocument();
+    expect(screen.queryByText(t.outcome.supersededReview)).not.toBeInTheDocument();
   });
 
   it('separates a run that reviewed nothing from a reviewer that found nothing', async () => {
@@ -179,15 +180,15 @@ describe('the review a person reads after the run', () => {
     stub({ review: { ...review, reviewed: false, threads: [], gates: [], totals: { ...review.totals, reviews: 0 } } });
     panel('review');
 
-    expect(await screen.findByText('This run reviewed nothing.')).toBeInTheDocument();
-    expect(screen.queryByText(/No findings/)).not.toBeInTheDocument();
+    expect(await screen.findByText(t.outcome.reviewedNothing)).toBeInTheDocument();
+    expect(screen.queryByText(t.gate.noFindings)).not.toBeInTheDocument();
   });
 
   it('says the review could not be read rather than showing an empty one', async () => {
     stub({ review: { message: 'no such run' }, reviewStatus: 404 });
     panel('review');
 
-    expect(await screen.findByText(/could not be read/)).toBeInTheDocument();
+    expect(await screen.findByText(t.outcome.reviewCouldNotRead)).toBeInTheDocument();
   });
 });
 
@@ -201,12 +202,14 @@ describe('where the run went', () => {
   it('names the pull request, the branch and the check that went red', async () => {
     panel('delivery');
 
-    const pr = await screen.findByRole('link', { name: /pull request #31/ });
+    const pr = await screen.findByRole('link', { name: new RegExp(t.outcome.pullRequest(31)) });
     expect(pr).toHaveAttribute('href', 'https://forge.test/pr/31');
     expect(screen.getByText('agent-flow/AF-2026-001')).toBeInTheDocument();
     expect(screen.getByText('e2e')).toBeInTheDocument();
     expect(screen.getByText('failure').closest('.check')).toHaveAttribute('data-tone', 'bad');
     expect(screen.getByText('success').closest('.check')).toHaveAttribute('data-tone', 'ok');
+    // Those two are the forge's own words, round-tripped: `word()` renders a token it has
+    // not learned unchanged, which is what keeps a provider's vocabulary readable.
     // The sentence, not the state name. `checks_red` alone sends a person to the source.
     expect(screen.getByText(/failing check on the published commit/)).toBeInTheDocument();
   });
@@ -226,7 +229,7 @@ describe('where the run went', () => {
     panel('delivery');
 
     expect(await screen.findByText('No forge is configured for this project.')).toBeInTheDocument();
-    expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument();
+    expect(screen.queryByText(t.outcome.deliveryCouldNotRead)).not.toBeInTheDocument();
   });
 });
 
@@ -260,5 +263,60 @@ describe('what the run wrote down', () => {
     const body = await screen.findByText(/Recurring bookings generate occurrences/);
     expect(body.tagName).toBe('PRE');
     expect(body.querySelector('h1')).toBeNull();
+  });
+});
+
+describe('where an attention item lands', () => {
+  beforeEach(() => clearStore());
+  afterEach(() => vi.unstubAllGlobals());
+
+  /**
+   * The projection emits a *surface*, and this is the browser turning it into a tab.
+   *
+   * Written when `team` got one. It had been emitted since M8 and fell through a
+   * `default: return undefined`, so the row said "no member could take this task", moved
+   * the task selection, and showed nothing that answered it — a field nobody reads fails
+   * no compiler and no assertion.
+   */
+  const LANDS: Record<AttentionFocus, OutcomeTab | undefined> = {
+    review: 'review',
+    quality: 'review',
+    delivery: 'delivery',
+    team: 'team',
+    run: undefined,
+    plan: undefined,
+    task: undefined,
+  };
+
+  for (const [focus, tab] of Object.entries(LANDS) as [AttentionFocus, OutcomeTab | undefined][]) {
+    it(`${focus} opens ${tab ?? 'nothing — the answer is above this panel'}`, () => {
+      expect(tabForFocus(focus)).toBe(tab);
+    });
+  }
+
+  it('offers a tab for every surface that has one, and each name is a real tab', async () => {
+    // The other half: a mapping may not point at a tab the panel does not render. Read
+    // off the DOM rather than the type, because the type is what the panel *claims*.
+    stub();
+    render(<Outcome address={address} tab="review" onTab={() => undefined} reviewFreshness={undefined} />);
+
+    const shown = await screen.findAllByRole('tab');
+    /*
+      Read off the DOM in the language the panel is in: the tab *names* are translated and
+      the tab *ids* are not, so the two are matched through the dictionary rather than by
+      hoping they still spell the same.
+    */
+    const named: Record<OutcomeTab, string> = {
+      review: t.outcome.review,
+      delivery: t.outcome.delivery,
+      artifacts: t.outcome.artifacts,
+      telemetry: t.outcome.telemetryTab,
+      team: t.outcome.team,
+      collaboration: t.outcome.collaboration,
+    };
+    const labels = shown.map((element) => element.textContent);
+    for (const tab of Object.values(LANDS)) {
+      if (tab !== undefined) expect(labels).toContain(named[tab]);
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useT } from '../../lib/i18n';
 
 /**
  * The one action on this page that cannot be undone by doing the opposite.
@@ -19,6 +20,7 @@ export function ConfirmCancel({ runId, open, onDismiss, onConfirm }: {
   readonly onConfirm: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const t = useT();
 
   useEffect(() => {
     const dialog = ref.current;
@@ -29,17 +31,12 @@ export function ConfirmCancel({ runId, open, onDismiss, onConfirm }: {
 
   return (
     <dialog ref={ref} className="dialog" onClose={onDismiss} aria-labelledby="cancel-title">
-      <h2 id="cancel-title" className="dialog__title">Cancel {runId}?</h2>
-      <p>
-        Nothing further starts, and a task already in flight is left where it is. A cancelled
-        run is terminal — it cannot be resumed, and continuing this work means a new run.
-      </p>
-      <p className="faint">
-        Its evidence, its integration branch and its worktrees all stay on disk.
-      </p>
+      <h2 id="cancel-title" className="dialog__title">{t.cancelRun.title(runId)}</h2>
+      <p>{t.cancelRun.what}</p>
+      <p className="faint">{t.cancelRun.survives}</p>
       <div className="dialog__actions">
-        <button type="button" className="btn" onClick={onDismiss}>Keep running</button>
-        <button type="button" className="btn btn--danger" onClick={onConfirm}>Cancel the run</button>
+        <button type="button" className="btn" onClick={onDismiss}>{t.cancelRun.keep}</button>
+        <button type="button" className="btn btn--danger" onClick={onConfirm}>{t.cancelRun.confirm}</button>
       </div>
     </dialog>
   );

@@ -17,14 +17,17 @@ working, and Deck understands the old `/runs/<run>?project=<id>` links. The serv
 know which one it is serving — both read the endpoints listed at the end of this page, and
 both write through the same five use cases.
 
-Deck has four screens and one idea:
+Deck has seven screens and one idea:
 
 | Route | |
 |---|---|
 | `/` | **The deck.** What needs a person, across every project, in the server's order — priority, then age — folded to six rows. Then one lane per project: runtime, the pipeline as ten cells, tasks, attention, seats, forge, last activity. |
-| `/p/<project>/runs/<run>` | **The recorder.** The run as a strip of time: the clock, the ten stages drawn to true duration, the run's own marks, one lane per task with a bar per attempt. Drag the playhead and the graph, the task panel and the log show what the audit trail said was true at that instant; let go at the right edge and the server's answer takes over. `?task=` and `?at=` ride in the address, so a moment in a run is a link. |
+| `/p/<project>/runs/<run>` | **The recorder.** The run as a strip of time: the clock, the ten stages drawn to true duration, the run's own marks, one lane per task with a bar per attempt. Drag the playhead and the graph, the task panel and the log show what the audit trail said was true at that instant; let go at the right edge and the server's answer takes over. `?task=` and `?at=` ride in the address, so a moment in a run is a link. Under it, **the run's record** in six tabs: Review, Delivery, Artifacts, Telemetry, Team, Collaboration. |
 | `/runs` | History, filtered locally. |
 | `/crew` | What each of the nine roles would run, and whether the runners can. |
+| `/analytics` | **Where the time goes.** Duration per stage, per runner, per role, how runs ended and how their tasks did, over a bounded window of recent runs — and the window is stated, because a chart that silently described twenty of two hundred would be lying about its own subject. No monetary figure appears, at any level. |
+| `/clean` | **What a run left behind, and what would go.** The preview is the same function as the act — `POST /clean` with `dryRun` runs it and writes nothing — so what the page shows is what the next call does. Nothing is reclaimed before a preview, and a preview dies the moment its options change. |
+| `/doctor` | **Can this machine work?** The verdict, Node and Git against the worktree floor, the §8.4 install probe, each role's declared capabilities, what actually serves each stage, and the one action per problem. Shallow always — no runner is invoked, so opening it costs nothing. |
 
 **The recorder decides nothing.** It reads `GET /runs/:id/events` — the audit log, in bulk
 — and folds it into bars and marks in `apps/deck/src/lib/replay.ts`. Every bar is a line of
@@ -37,6 +40,38 @@ the previous dashboard to the same standard now scans both bundles.
 
 Deck is built from scratch: its own tokens, six tones, two typefaces, no component library.
 `apps/deck/DESIGN.md` says why each choice was made.
+
+### Two languages, and it opens in Portuguese
+
+Every string Deck writes lives in `apps/deck/src/lib/i18n/translations/`, one file per
+language. `en.ts` is the contract — `Dictionary` is `typeof en`, and `pt-BR.ts` is
+annotated with it, so a key that is missing, renamed or extra is a **compile error**
+rather than a screen that falls back to English in one corner.
+
+A count reaches a sentence as an **argument**, not as a `{n}` placeholder, because the
+two languages disagree about what a count changes: `1 task` → `2 tasks` is a suffix, and
+`1 tarefa` → `2 tarefas` agrees with a noun the template cannot see. The same reason
+splits the word tables: `words` is the standalone vocabulary a chip shows, `levels` is
+effort and risk (*esforço alto*, not *esforço alta*), and `authState` is a runner's
+credentials (*autenticação desconhecida*). English spells all three the same, which is
+exactly why the split has to be visible where both languages can see it.
+
+**Identifiers are never translated.** A role id, a runner id, a task id and a branch name
+are what somebody types in `config.yaml` and what the terminal takes back — the
+capabilities table prints `verification` as `verification`, while the stage of the same
+name is *verificação* in the routing table below it, because one is a key and the other
+is vocabulary.
+
+The choice is two buttons in the header, each labelled in its own language, and it is
+remembered in `localStorage` per browser. `<html lang>` follows it, because a screen
+reader picks its voice from that attribute.
+
+**What this cannot translate, and does not pretend to.** The prose the *server* sends —
+the attention queue's `what` and `why`, a board card's reason, a delivery's `detail`, the
+doctor's remediations, every refusal message — is written in `src/core` and `src/app` and
+printed verbatim by the CLI too. Deck renders those; it does not author them. Localising
+them means giving the core a key-and-parameters vocabulary, which is a decision about the
+CLI as much as about the browser and has not been made.
 
 The dashboard is a *view and a set of state transitions*, not a second copy of the
 workflow. Every read comes from the server; every write calls the same use case
@@ -373,10 +408,29 @@ for X — the same defect this document spends a section on further up.
   question this entry raises is answered by the config editor — the scope is chosen
   explicitly, validated, and applied against an expected revision — and Deck's `/crew`
   page is where that happens. See [`config-write-design.md`](config-write-design.md).
-- **Adding a project** — still true. The button exists, disabled, because §68 lists it.
-  Adding one means writing to the registry, and no route does.
-- **`doctor`, `clean`** — still true, and true of Deck too. There is no HTTP route for
-  either, so "can this machine work" is a question only the CLI can be asked.
+- **Adding a project** — closed. `GET /api/v1/projects/candidates` lists the repositories
+  under the workspace that have never been through `init`, and `POST /api/v1/projects`
+  registers one by the id that listing issued. The obstacle was never the registry — it is
+  a walk, not a file — it was that a directory with no `.agent-flow/` had no id for a
+  request to name (§93). The walk issues one now, under the same roots, depth and
+  containment rule, so no path arrives from the client here either. The write is
+  `app/init-project.ts`'s `registerProject`, the same use case `agent-flow init` runs,
+  AR-01 gate included: it refuses while a run is active and its planningBase could be
+  invalidated, and records the override on the run when forced.
+- **`clean`** — closed. `POST /api/v1/clean` reclaims old run state and the Git namespace
+  that goes with it, and takes `dryRun` so the frightening half can be *asked* before it is
+  done. What may be deleted is still `app/namespace-reclaim.ts`'s decision — derived paths,
+  intersected with what Git registered under Agent Flow's own root — and which runs are
+  candidates moved out of the CLI into `app/workspace-cleanup.ts`, so the terminal and the
+  screen cannot disagree about what a cleanup is.
+- **`doctor`** — closed. `GET /api/v1/doctor` serves the same report the terminal prints,
+  because it is the same function: `app/diagnostics.ts` decides and both surfaces render.
+  The install probe is opt-in on the route (`?install=true`) and a button on the page,
+  because it is minutes long: the first version ran it before answering and the browser
+  gave up before the page painted. The route is always shallow — `--deep` spends quota on every runner, and a page that
+  could ask for it would ask on every refresh. It also reads no environment (§93), so it
+  says `readsEnvironment: false` and the page qualifies auth rather than repeating a false
+  negative as a finding.
 
 ### What an isolated run shows
 
@@ -441,6 +495,8 @@ GET /api/v1/jobs/:jobId
 GET /api/v1/runners
 GET /api/v1/runners/health
 GET /api/v1/agents
+GET /api/v1/doctor                                ?projectId&install   the whole `doctor` report; shallow always, and the §8.4 install probe only with install=true
+GET /api/v1/projects/candidates                                repositories under the workspace that have never been through `init`
 GET /api/v1/config
 GET /api/v1/prompts
 GET /api/v1/prompts/:prompt
@@ -451,6 +507,8 @@ GET /api/v1/events                                ?projectId&runId   (SSE)
 Write:
 
 ```
+POST /api/v1/projects                             { candidateId, force? } → 201   `init`, by an id the listing issued
+POST /api/v1/clean                       ?projectId  { keep?, force?, cache?, worktrees?, branches?, dryRun? }   `clean`; dryRun writes nothing
 POST /api/v1/runs/:runId/approve                  { force? }
 POST /api/v1/runs/:runId/reject                   { reason? }
 POST /api/v1/runs/:runId/revise                   { instruction }    → 202
@@ -482,13 +540,15 @@ Every answer comes out of the same projections the *prompt* was built from. Noth
 browser folds a log or decides a status — a component that re-derived one would be the one
 that drifts, because the real answer is not on screen.
 
-The panel shares the **Team** tab, and it is **not rendered at all** when there is nothing
-in it — nor is the tab, when neither it nor the team has anything to say. Team comes first
-there because it answers "who is doing this", which is the context that makes an open
+In **Deck** it is its own tab, beside Team, in the run's record. In the previous dashboard
+the two share the **Team** tab and neither is rendered when there is nothing in it — nor is
+the tab. That difference is deliberate and it is about the row, not about the data: that
+page stacked eight panels and a permanent empty box teaches people to skip the row it lives
+in, while Deck's record is one row of six words, where hiding two would make the row's
+shape depend on the run and turn "where did Collaboration go" into a question. Either way
+Team comes first, because it answers "who is doing this" — the context that makes an open
 thread legible: "executor.normal is blocked" reads differently once the screen has said
-which member that is. A project that has not enabled collaboration sees exactly what it saw
-before M4; an always-empty box for a feature that ships off would be on every dashboard
-forever.
+which member that is.
 
 Bounded like `Artifacts` already was — the top few of each section, with the footer
 carrying the totals — and ordered by what nothing mechanical settles:
@@ -507,6 +567,40 @@ rendering it as anything else would make a peer's output part of this page's DOM
 
 `enabled` and "anything was said" are reported separately, and the empty state depends on
 which: *off* invites the operator to turn it on, and *on, and quiet* does not.
+
+---
+
+## Who did the work, and why that one
+
+`GET /runs/:runId/team` returns the configured members with what each holds, the
+assignments with the **ranking each one won**, the tasks a wave would not take, and the
+totals — including how often each filter ruled a candidate out (§41).
+
+**The browser renders this and computes none of it** (M5-ACC-15, I-33). A member is
+`working` because a task the run says is running was assigned to it; a candidate's score,
+its skill match and the filter that excluded it were all computed by `core/team/policy.ts`
+at the instant the task started and read back out of the audit log. A dashboard that
+ranked its own candidates would be a second assignment authority, and the first time it
+disagreed with the run the operator would be looking at a decision nobody made.
+
+The ranking is behind a disclosure, one per task: the closed line is who holds it and the
+one-sentence reason the policy recorded, because that is what a person reading a task
+wants. "Why not the other one" is a real question and a rare one (I-34), and a table of
+every candidate in a header is how an inspector becomes a departures board.
+
+`configured` is whether a `teams:` block exists, **not** whether anything was assigned. A
+legacy run is `configured: false` with no members, which is a different empty state from a
+configured team that has not started — one invites configuration and the other does not.
+The third case is real too and says so: a block that resolved to nobody.
+
+A member's `model` is **configuration read at request time**, and the screen labels it
+`configured` for that reason. Drawn in the same words as a task's *persisted* model it
+would recreate exactly the confusion Issue #21 removed.
+
+An attention item whose `focus` is `team` opens this tab. The core emits a *surface* and
+refuses to emit a route, and the browser's map from one to the other is a record keyed by
+the focus union rather than a switch with a `default` — because `team` spent two
+milestones falling through such a default onto nothing.
 
 ---
 

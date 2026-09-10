@@ -1,21 +1,19 @@
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
-import { findActiveRun, initProject, projectRelativePaths } from '../app/init-project.js';
+import { registerProject } from '../app/init-project.js';
 import { StateStore } from '../app/state-store.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import type { GlobalOptions } from './index.js';
 
-/** `agent-flow init` — prepare a repository. Never clobbers anything (§7.7). */
 /**
- * Install commands that rewrite a lockfile rather than respect one.
+ * `agent-flow init` — prepare a repository. Never clobbers anything (§7.7).
  *
- * Only the forms `stack-detection.ts` actually emits, and only the ones whose behaviour
- * has been observed. A pattern that guessed at other managers' flags would be the kind of
- * unprobed claim `installCommand`'s own comment refuses to make.
+ * The judgements moved to `app/init-project.ts` when the Deck grew a way to register a
+ * project (7.6): a warning that existed only as a line printed here would have been
+ * missing from the browser, on the one surface where a person cannot see the command that
+ * was chosen for them.
  */
-const DIRTIES_THE_TREE = /^(npm|pnpm|yarn) install\b/;
-
 export async function runInitCommand(
   options: { force?: boolean },
   globals: GlobalOptions,
@@ -25,11 +23,15 @@ export async function runInitCommand(
   try {
     const store = new StateStore({ fs, clock: new SystemClock(), projectDir: globals.cwd });
 
-    // AR-01, C-02. Before `initProject`, because "it writes nothing" is half the contract
-    // and a gate that runs after the write is not a gate.
-    const active = await findActiveRun(store);
+    const outcome = await registerProject({
+      store,
+      fs,
+      projectDir: globals.cwd,
+      ...(options.force === undefined ? {} : { force: options.force }),
+    });
 
-    if (active !== undefined && options.force !== true) {
+    if (!outcome.ok) {
+      const active = outcome.active;
       process.stderr.write(
         [
           `Run ${active.runId} is still active (${active.status}).`,
@@ -48,25 +50,7 @@ export async function runInitCommand(
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const result = await initProject({
-      fs,
-      projectDir: globals.cwd,
-      ...(options.force === undefined ? {} : { force: options.force }),
-    });
-
-    // After the write rather than before it: the event says what happened, and an event
-    // recording an override that then failed would be a lie the audit trail keeps.
-    if (active !== undefined) {
-      await store.appendEvent(active.runId, 'init_during_active_run', {
-        forced: true,
-        status: active.status,
-        ...(active.planningBase === undefined ? {} : { planningBase: active.planningBase }),
-        // Project-relative, never absolute (§21.3). What matters afterwards is which files
-        // moved under this run, not where this machine keeps its home directory.
-        created: projectRelativePaths(globals.cwd, result.created),
-        updated: projectRelativePaths(globals.cwd, result.updated),
-      });
-    }
+    const { result, active } = outcome;
 
     const lines: string[] = [
       `Detected: ${result.stack.type} (${result.stack.name})`,
@@ -81,13 +65,27 @@ export async function runInitCommand(
       lines.push('', 'Nothing existing was overwritten. Use --force to replace it.');
     }
 
-    const commands = Object.entries(result.stack.commands).filter(([, value]) => value);
-    if (commands.length === 0) {
-      lines.push(
-        '',
-        'No validation commands were detected. Add them to .agent-flow/config.yaml —',
-        'agent-flow runs them itself, so an invented command fails for the wrong reason.',
-      );
+    // The findings `initProject` made, as sentences. The judgement is not repeated here:
+    // the Deck renders the same warnings from the same field, and two copies of "this
+    // install command will refuse every task" would eventually disagree about which
+    // commands do that.
+    for (const warning of result.warnings) {
+      if (warning.kind === 'no_validation_commands') {
+        lines.push(
+          '',
+          'No validation commands were detected. Add them to .agent-flow/config.yaml —',
+          'agent-flow runs them itself, so an invented command fails for the wrong reason.',
+        );
+      }
+      if (warning.kind === 'install_dirties_tree') {
+        lines.push(
+          '',
+          `Warning: \`${warning.command}\` writes a lockfile this repository does not track yet.`,
+          'Every task will be refused at the setup check until it is committed — the tree',
+          'has to be identical before and after install, or an attempt cannot say what it',
+          'changed. Run it once and commit the lockfile before the first feature.',
+        );
+      }
     }
 
     if (active !== undefined) {
@@ -95,33 +93,6 @@ export async function runInitCommand(
         '',
         `Warning: run ${active.runId} is active and its planningBase may no longer`,
         'match HEAD once you commit these files. This was recorded on the run.',
-      );
-    }
-
-    /**
-     * The wall this project will walk into on its first run, said before it does (PRI-25).
-     *
-     * `stack-detection.ts` already knows: it prefers `npm ci` precisely because
-     * `npm install` rewrites `package-lock.json`, which fails the post-setup cleanliness
-     * assertion and makes worktree mode refuse every task. It falls back to `npm install`
-     * when there is no lockfile to respect — correctly, since `npm ci` refuses without one.
-     *
-     * So a project with no committed lockfile is handed a command that is known to break
-     * it, and nothing said so. A live run found out the expensive way: planning completed,
-     * four tasks were dispatched, and every one was refused at the setup check — after the
-     * planning had been paid for.
-     *
-     * Named here rather than in `doctor` because `init` is where the command is chosen and
-     * because the remedy is one commit away while the operator is still in this directory.
-     */
-    const install = result.stack.commands.install;
-    if (install !== undefined && DIRTIES_THE_TREE.test(install)) {
-      lines.push(
-        '',
-        `Warning: \`${install}\` writes a lockfile this repository does not track yet.`,
-        'Every task will be refused at the setup check until it is committed — the tree',
-        'has to be identical before and after install, or an attempt cannot say what it',
-        'changed. Run it once and commit the lockfile before the first feature.',
       );
     }
 

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigEditorView, ProjectView, RoleRouteView, RunnerTypeView } from '@contracts/index.js';
 import { clearStore } from '../../lib/store';
 import { CrewPage } from './CrewPage';
+import { ptBR as t } from '../../lib/i18n';
 
 const revision = `sha256:${'a'.repeat(64)}`;
 const projects: ProjectView[] = [
@@ -102,35 +103,35 @@ describe('CrewPage configuration workflow', () => {
 
   it('names the file each scope writes, and folds inherited values away until asked', async () => {
     render(<CrewPage projectId="flowcanvas" />);
-    expect(await screen.findByLabelText('Project')).toHaveValue('flowcanvas');
+    expect(await screen.findByLabelText(t.common.project)).toHaveValue('flowcanvas');
     // A scope is a file, and one of the two gets committed with the repository.
     expect(await screen.findByText('/home/dev/.agent-flow/config.yaml')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /This project/ }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(t.crew.thisProject('')) }));
     expect(await screen.findByText('/wk/flowcanvas/.agent-flow/config.yaml')).toBeInTheDocument();
 
     // The runner a role points at cannot be removed while that reference stands.
-    expect(await screen.findByRole('button', { name: 'Remove runner moe' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: t.crew.removeRunner('moe') })).toBeDisabled();
     // The count is what the card shows; the paths themselves are its title.
-    expect(screen.getByText(/Referenced by 1 route/)).toHaveAttribute('title', 'roles.architect.runner');
+    expect(screen.getByText(t.crew.referencedByRoutes(1))).toHaveAttribute('title', 'roles.architect.runner');
 
-    fireEvent.click(await screen.findByRole('tab', { name: /Advanced/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: new RegExp(t.crew.advanced) }));
     // Runners and the three routed leaves belong to the Crew tab, so they are not counted
     // among the machine settings this half is about.
-    expect(await screen.findByText(/3 of 4 fields are set in this source/)).toBeInTheDocument();
+    expect(await screen.findByText(t.crew.fieldsSetHere(3, 4))).toBeInTheDocument();
     expect(screen.queryByLabelText('parallelism.maxTasks')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Show inherited'));
-    expect(await screen.findByText(/Inherited from global/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(t.crew.showInherited));
+    expect(await screen.findByText(new RegExp(t.crew.inheritedFrom('global')))).toBeInTheDocument();
     expect(screen.getByLabelText('parallelism.maxTasks')).toHaveAttribute('placeholder', '2');
-    expect(screen.getAllByText(/Global only/)).toHaveLength(2);
-    expect(screen.getByRole('heading', { name: 'Teams' })).toBeInTheDocument();
+    expect(screen.getAllByText(new RegExp(t.crew.globalOnly))).toHaveLength(2);
+    expect(screen.getByRole('heading', { name: t.crew.sections.teams })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'agent-flow' } });
-    await waitFor(() => expect(screen.getByLabelText('Project')).toHaveValue('agent-flow'));
+    fireEvent.change(screen.getByLabelText(t.common.project), { target: { value: 'agent-flow' } });
+    await waitFor(() => expect(screen.getByLabelText(t.common.project)).toHaveValue('agent-flow'));
   });
 
   it('gives each value the control its declared type deserves, and writes the typed value', async () => {
     render(<CrewPage />);
-    await screen.findByLabelText('Project');
+    await screen.findByLabelText(t.common.project);
 
     const enabled = await screen.findByLabelText('runners.moe.enabled');
     expect(enabled).toHaveAttribute('role', 'switch');
@@ -168,7 +169,7 @@ describe('CrewPage configuration workflow', () => {
     // The value stays selected and is marked: falling back to the empty option would
     // render `ghost` as "inherit" and the next save would delete the line.
     expect(runner).toHaveValue('ghost');
-    expect(screen.getByRole('option', { name: 'ghost — not declared' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: t.crew.notDeclared('ghost') })).toBeInTheDocument();
     expect(screen.getByText("Runner 'ghost' is not configured.")).toBeInTheDocument();
   });
 
@@ -177,7 +178,7 @@ describe('CrewPage configuration workflow', () => {
     await screen.findByLabelText('roles.architect.runner');
     expect(screen.getAllByLabelText('roles.architect.runner')).toHaveLength(1);
     expect(screen.getByLabelText('roles.architect.runner').closest('.crew-roles')).not.toBeNull();
-    expect(screen.getByText(/effort high ran as medium/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(t.crew.clampedEffort(t.levels.high, t.levels.medium)))).toBeInTheDocument();
   });
 
   it('offers the models the routed runner reported, without closing the field', async () => {
@@ -211,19 +212,19 @@ describe('CrewPage configuration workflow', () => {
    */
   it('names the read-only refusal as a read-only refusal', async () => {
     render(<CrewPage />);
-    const pick = await screen.findByLabelText('Assign every role to');
+    const pick = await screen.findByLabelText(t.crew.assignEveryRole);
 
     fireEvent.change(pick, { target: { value: 'gem' } });
 
     // `architect` needs read-only, which this runner has not; `executor.trivial` writes.
-    expect(screen.getByRole('button', { name: 'Apply to 1 role' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: t.crew.applyToRoles(1) })).toBeEnabled();
     // The whole sentence, because `no read-only mode` also appears as a tag on the runner
     // card — and a query that matched either would pass on the card alone, which is the
     // element that was already right.
     expect(
-      screen.getByText(/gem has no read-only mode, so it cannot serve a role that must not write/),
+      screen.getByText(new RegExp(`gem ${t.crew.refusalNoReadOnly}`)),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/no working directory/)).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(t.crew.refusalNoWorkdir))).not.toBeInTheDocument();
   });
 
   /**
@@ -237,32 +238,31 @@ describe('CrewPage configuration workflow', () => {
    */
   it('warns when a runner is switched off with routes still pointing at it', async () => {
     render(<CrewPage />);
-    await screen.findByLabelText('Assign every role to');
+    await screen.findByLabelText(t.crew.assignEveryRole);
 
     // `moe` is enabled and `architect` points at it: a plain reference, stated quietly.
-    expect(screen.getByText(/Referenced by 1 route/)).toBeInTheDocument();
+    expect(screen.getByText(t.crew.referencedByRoutes(1))).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('switch', { name: /runners\.moe\.enabled/ }));
 
-    expect(screen.getByText(/1 route still points here/)).toBeInTheDocument();
-    expect(screen.getByText(/cannot run until/)).toBeInTheDocument();
+    expect(screen.getByText(t.crew.brokenBySwitch(1))).toBeInTheDocument();
   });
 
   it('assigns every role at once, and leaves out the ones the runner cannot serve', async () => {
     render(<CrewPage />);
-    const pick = await screen.findByLabelText('Assign every role to');
+    const pick = await screen.findByLabelText(t.crew.assignEveryRole);
 
     // `moe` is codex-cli: a working directory, so it can take the executor too.
     fireEvent.change(pick, { target: { value: 'moe' } });
-    expect(screen.getByRole('button', { name: 'Apply to 2 roles' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: t.crew.applyToRoles(2) })).toBeEnabled();
 
     // An endpoint has no working directory. The resolver refuses it for a role that
     // opens files, so the button offers the roles it can actually take and says why.
     fireEvent.change(pick, { target: { value: 'endpoint' } });
-    expect(screen.getByRole('button', { name: 'Apply to 1 role' })).toBeEnabled();
-    expect(screen.getByText(/no working directory/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t.crew.applyToRoles(1) })).toBeEnabled();
+    expect(screen.getByText(new RegExp(t.crew.refusalNoWorkdir))).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to 1 role' }));
+    fireEvent.click(screen.getByRole('button', { name: t.crew.applyToRoles(1) }));
     await waitFor(() => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/config/editor/validate'));
       const body = JSON.parse(String(call?.[1]?.body)) as { operations: unknown[] };
@@ -272,12 +272,12 @@ describe('CrewPage configuration workflow', () => {
 
   it('restores inheritance by submitting an unset operation for the local node', async () => {
     render(<CrewPage projectId="flowcanvas" />);
-    await screen.findByLabelText('Project');
-    fireEvent.click(screen.getByRole('button', { name: /This project/ }));
-    fireEvent.click(await screen.findByRole('tab', { name: /Advanced/ }));
+    await screen.findByLabelText(t.common.project);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(t.crew.thisProject('')) }));
+    fireEvent.click(await screen.findByRole('tab', { name: new RegExp(t.crew.advanced) }));
     const teamInput = await screen.findByLabelText('teams.reviewers.name');
     const inherit = teamInput.closest('.crew-field')?.querySelector('button');
-    expect(inherit).toHaveTextContent('Inherit');
+    expect(inherit).toHaveTextContent(t.crew.inheritButton);
     fireEvent.click(inherit!);
     await waitFor(() => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/config/editor/validate'));
@@ -288,15 +288,15 @@ describe('CrewPage configuration workflow', () => {
 
   it('declares a runner from the types the server supports, type first', async () => {
     render(<CrewPage projectId="flowcanvas" />);
-    await screen.findByLabelText('Project');
-    fireEvent.click(await screen.findByRole('button', { name: /Add runner/ }));
+    await screen.findByLabelText(t.common.project);
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(t.crew.addRunner) }));
 
     // Nothing is offered until the type is known: the type decides which keys exist.
     fireEvent.change(screen.getByLabelText('id'), { target: { value: 'local' } });
     expect(screen.queryByLabelText(/baseUrl/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('type'), { target: { value: 'openai-compatible' } });
 
-    const add = screen.getByRole('button', { name: 'Add runner' });
+    const add = screen.getByRole('button', { name: t.crew.addRunner });
     expect(add).toBeDisabled();
     fireEvent.change(screen.getByLabelText('baseUrl *'), { target: { value: 'http://127.0.0.1:8080/v1' } });
     fireEvent.change(screen.getByLabelText('apiKeyEnv'), { target: { value: 'LOCAL_LLM_API_KEY' } });
@@ -320,8 +320,8 @@ describe('CrewPage configuration workflow', () => {
     // configuration it describes.
     expect(card).toHaveTextContent(/configured/i);
     // `codex-cli` is a type the server declares; the card can therefore say what it does.
-    expect(card).toHaveTextContent('works in the repo');
-    expect(screen.getByRole('button', { name: 'Remove runner moe' })).toBeDisabled();
+    expect(card).toHaveTextContent(t.crew.worksInRepo);
+    expect(screen.getByRole('button', { name: t.crew.removeRunner('moe') })).toBeDisabled();
   });
 
   it('creates a generic nested dynamic entry from the server catalog', async () => {
@@ -340,13 +340,13 @@ describe('CrewPage configuration workflow', () => {
       return response({});
     });
     render(<CrewPage />);
-    fireEvent.click(await screen.findByRole('tab', { name: /Advanced/ }));
-    fireEvent.click(await screen.findByText('Dynamic configuration'));
-    fireEvent.change(screen.getByLabelText('Known field'), { target: { value: 'teams.*.members.*.runner' } });
-    fireEvent.change(screen.getByLabelText('Identifier teams'), { target: { value: 'delivery' } });
-    fireEvent.change(screen.getByLabelText('Identifier members'), { target: { value: 'builder' } });
-    fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'local' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add configuration field' }));
+    fireEvent.click(await screen.findByRole('tab', { name: new RegExp(t.crew.advanced) }));
+    fireEvent.click(await screen.findByText(t.crew.dynamicConfiguration));
+    fireEvent.change(screen.getByLabelText(t.crew.knownField), { target: { value: 'teams.*.members.*.runner' } });
+    fireEvent.change(screen.getByLabelText(t.crew.identifierFor('teams')), { target: { value: 'delivery' } });
+    fireEvent.change(screen.getByLabelText(t.crew.identifierFor('members')), { target: { value: 'builder' } });
+    fireEvent.change(screen.getByLabelText(t.crew.valueWord), { target: { value: 'local' } });
+    fireEvent.click(screen.getByRole('button', { name: t.crew.addConfigurationField }));
 
     await waitFor(() => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/config/editor/validate'));
@@ -368,11 +368,11 @@ describe('CrewPage configuration workflow', () => {
       return response({});
     });
     render(<CrewPage />);
-    await screen.findByLabelText('Project');
-    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
+    await screen.findByLabelText(t.common.project);
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(t.crew.advanced) }));
     fireEvent.change(await screen.findByLabelText('parallelism.maxTasks'), { target: { value: '0' } });
     expect(await screen.findByRole('alert')).toHaveTextContent('Must be positive.');
-    expect(screen.getByRole('button', { name: 'Save configuration' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.crew.save })).toBeDisabled();
   });
 
   it('keeps fresh server state visible after a stale 409 instead of overwriting it', async () => {
@@ -391,22 +391,22 @@ describe('CrewPage configuration workflow', () => {
       return response({});
     });
     render(<CrewPage />);
-    await screen.findByLabelText('Project');
-    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
+    await screen.findByLabelText(t.common.project);
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(t.crew.advanced) }));
     fireEvent.change(await screen.findByLabelText('parallelism.maxTasks'), { target: { value: '3' } });
-    await screen.findByText(/takes effect/);
-    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await screen.findByText(new RegExp(t.crew.takesEffect('')));
+    fireEvent.click(screen.getByRole('button', { name: t.crew.save }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/changed after it was loaded/i);
-    expect(screen.getByText(/fresh server state/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save configuration' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }));
+    expect(screen.getByText(new RegExp(t.crew.reviewFreshState))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t.crew.save })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: t.crew.save }));
     expect(vi.mocked(fetch).mock.calls.filter(([input, request]) => String(input).includes('/config/editor') && request?.method === 'PATCH')).toHaveLength(1);
   });
 
   it('reports loading and read errors accessibly', async () => {
     vi.mocked(fetch).mockImplementation((input) => String(input).endsWith('/projects') ? Promise.reject(new Error('offline')) : response([]));
     render(<CrewPage />);
-    expect(screen.getByLabelText('loading')).toBeInTheDocument();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/projects could not be read/i);
+    expect(screen.getByLabelText(t.common.loading)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(t.common.couldNotReadProjects);
   });
 });

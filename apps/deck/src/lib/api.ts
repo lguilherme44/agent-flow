@@ -10,6 +10,12 @@ import type {
   RunEventLogView,
   RunSummaryView,
   ConfigView,
+  AnalyticsView,
+  CleanView,
+  DoctorView,
+  RunTelemetryView,
+  ProjectCandidateView,
+  ProjectRegisteredView,
   PipelineStage,
   RunStage,
   RunnerHealthView,
@@ -28,6 +34,8 @@ import type {
   ArtifactName,
   DeliveryView,
   ReviewView,
+  TeamView,
+  CollaborationView,
 } from '@contracts/index.js';
 
 /**
@@ -135,13 +143,29 @@ async function parse<T>(response: Response, acceptedErrorStatuses: readonly numb
  */
 const READ_TIMEOUT_MS = 20_000;
 
-export async function getJson<T>(path: string, query: Query = {}): Promise<T> {
+/**
+ * A read that is deliberately slow, and therefore deliberately asked for.
+ *
+ * One call earns this: `doctor` with `install=true` checks out a throwaway copy and runs
+ * the project's own install. Minutes on a large repository, and the *default* deadline
+ * above is right to refuse that — a page must never sit on it by accident. What this
+ * bound protects is the case where somebody pressed the button and is waiting on purpose.
+ */
+const DELIBERATE_TIMEOUT_MS = 10 * 60_000;
+
+export async function getJson<T>(
+  path: string,
+  query: Query = {},
+  options: { readonly deliberate?: boolean } = {},
+): Promise<T> {
   const response = await fetch(url(path, query), {
     headers: { accept: 'application/json' },
     // An abort rejects the promise, which the store records as an error — and a key with
     // an error is re-fetched the next time something subscribes to it. Without this the
     // key is not failed, it is *pending*, which nothing retries and nothing reports.
-    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+    signal: AbortSignal.timeout(
+      options.deliberate === true ? DELIBERATE_TIMEOUT_MS : READ_TIMEOUT_MS,
+    ),
   });
   return parse<T>(response);
 }
@@ -166,6 +190,15 @@ export async function patchJson<T>(path: string, body: unknown, query: Query = {
     body: JSON.stringify(body ?? {}),
   });
   return parse<T>(response);
+}
+
+export interface CleanOptions {
+  readonly keep?: number;
+  readonly force?: boolean;
+  readonly cache?: boolean;
+  readonly worktrees?: boolean;
+  readonly branches?: boolean;
+  readonly dryRun?: boolean;
 }
 
 export type ConfigEditorOperation =
@@ -194,6 +227,15 @@ const scoped = (address: RunAddress): Query => ({ projectId: address.projectId }
 export const api = {
   workspace: () => getJson<WorkspaceView>('/workspace'),
   projects: () => getJson<ProjectView[]>('/projects'),
+  /**
+   * Repositories the workspace could register, by an id the server issued (7.6).
+   *
+   * No path in either direction. The walk found them, the walk named them, and the
+   * browser can only echo a name back — which is what keeps §93 true of a write.
+   */
+  projectCandidates: () => getJson<ProjectCandidateView[]>('/projects/candidates'),
+  registerProject: (candidateId: string, force = false) =>
+    postJson<ProjectRegisteredView>('/projects', force ? { candidateId, force } : { candidateId }),
   runs: (projectId?: string) =>
     getJson<RunSummaryView[]>('/runs', projectId === undefined ? {} : { projectId }),
 
@@ -223,6 +265,20 @@ export const api = {
   reviewRecord: (a: RunAddress) => getJson<ReviewView>(`/runs/${a.runId}/review`, scoped(a)),
   delivery: (a: RunAddress) => getJson<DeliveryView>(`/runs/${a.runId}/delivery`, scoped(a)),
   /**
+   * Who did the work, and what they said to each other (7.8, M5-ACC-15, M4-07).
+   *
+   * Two calls rather than one, because they are two questions and the server answers them
+   * separately — but each is *one* call for the same reason: a thread's status and an
+   * entry's status are folds over the same logs, and reading them apart would let a
+   * repaint show a thread as open beside the entry that closed it.
+   *
+   * Both were served for two milestones with nothing in Deck drawing them, which is why
+   * "why did that task go to that agent" was answerable only from `--classic`.
+   */
+  team: (a: RunAddress) => getJson<TeamView>(`/runs/${a.runId}/team`, scoped(a)),
+  collaboration: (a: RunAddress) =>
+    getJson<CollaborationView>(`/runs/${a.runId}/collaboration`, scoped(a)),
+  /**
    * The list, then one artifact's text — two calls, because the list is cheap and the
    * text is not. The name is never spelled here: it comes back on the list and goes
    * straight back out, which is what keeps §93 true of this door as well.
@@ -230,6 +286,23 @@ export const api = {
   artifacts: (a: RunAddress) => getJson<ArtifactView[]>(`/runs/${a.runId}/artifacts`, scoped(a)),
   artifact: (a: RunAddress, name: ArtifactName) =>
     getJson<ArtifactContentView>(`/runs/${a.runId}/artifacts/${name}`, scoped(a)),
+  /**
+   * What each stage cost, and what its prompt was made of (AR-09, 7.4).
+   *
+   * Read once per run rather than polled: it is a fold over the audit trail, and the
+   * trail of a finished run does not change.
+   */
+  telemetry: (a: RunAddress) => getJson<RunTelemetryView>(`/runs/${a.runId}/telemetry`, scoped(a)),
+  /** Aggregates over recent runs. No monetary figure appears, at any level.
+   * That is a declared decision, not an omission. */
+  analytics: (projectId?: string, limit?: number) =>
+    getJson<AnalyticsView>(
+      '/analytics',
+      {
+        ...(projectId === undefined ? {} : { projectId }),
+        ...(limit === undefined ? {} : { limit: String(limit) }),
+      },
+    ),
   job: (a: RunAddress) => getJson<ActionJobView | null>(`/runs/${a.runId}/job`, scoped(a)),
 
   agents: (projectId?: string) =>
@@ -239,6 +312,32 @@ export const api = {
   /** What each runner reports it can be pointed at. Costs a spawn, so it is its own call. */
   runnerModels: (projectId?: string) =>
     getJson<RunnerModelsView[]>('/runners/models', projectId === undefined ? {} : { projectId }),
+  /**
+   * Can this machine work? (§59, AR-01)
+   *
+   * The whole `doctor` report, shallow: no runner is invoked, so a refresh costs nothing.
+   * Refreshed rarely for the same reason it is cheap — the answer changes when somebody
+   * installs or configures something, not while a page is open.
+   */
+  doctor: (projectId?: string, installProbe = false) =>
+    getJson<DoctorView>(
+      '/doctor',
+      {
+        ...(projectId === undefined ? {} : { projectId }),
+        ...(installProbe ? { install: 'true' } : {}),
+      },
+      // The probe is minutes long by design; the default read deadline is right to
+      // refuse it, and wrong once somebody has asked for it on purpose.
+      { deliberate: installProbe },
+    ),
+  /**
+   * What a cleanup would remove, and — with dryRun off — what it did (§20, 7.7).
+   *
+   * A POST even for the preview: it is the same use case down the same path, and the
+   * only way a preview can be a preview *of this operation*. It also spawns Git.
+   */
+  clean: (projectId: string | undefined, options: CleanOptions) =>
+    postJson<CleanView>('/clean', options, projectId === undefined ? {} : { projectId }),
   /** Which adapters this installation supports. A property of the machine, not a project. */
   runnerTypes: () => getJson<RunnerTypeView[]>('/runner-types', {}),
   /** Read-only, and read here for one thing: which files the two scopes actually are. */
@@ -308,6 +407,7 @@ export const api = {
 export const keys = {
   workspace: () => url('/workspace'),
   projects: () => url('/projects'),
+  projectCandidates: () => url('/projects/candidates'),
   runs: (projectId?: string) => url('/runs', projectId === undefined ? {} : { projectId }),
   run: (a: RunAddress) => url(`/runs/${a.runId}`, scoped(a)),
   stages: (a: RunAddress) => url(`/runs/${a.runId}/stages`, scoped(a)),
@@ -320,13 +420,26 @@ export const keys = {
   approval: (a: RunAddress) => url(`/runs/${a.runId}/approval`, scoped(a)),
   review: (a: RunAddress) => url(`/runs/${a.runId}/review`, scoped(a)),
   delivery: (a: RunAddress) => url(`/runs/${a.runId}/delivery`, scoped(a)),
+  team: (a: RunAddress) => url(`/runs/${a.runId}/team`, scoped(a)),
+  collaboration: (a: RunAddress) => url(`/runs/${a.runId}/collaboration`, scoped(a)),
   artifacts: (a: RunAddress) => url(`/runs/${a.runId}/artifacts`, scoped(a)),
   artifact: (a: RunAddress, name: string) => url(`/runs/${a.runId}/artifacts/${name}`, scoped(a)),
   job: (a: RunAddress) => url(`/runs/${a.runId}/job`, scoped(a)),
+  telemetry: (a: RunAddress) => url(`/runs/${a.runId}/telemetry`, scoped(a)),
+  analytics: (projectId?: string, limit?: number) =>
+    url('/analytics', {
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(limit === undefined ? {} : { limit: String(limit) }),
+    }),
   agents: (projectId?: string) => url('/agents', projectId === undefined ? {} : { projectId }),
   runnersHealth: (projectId?: string) =>
     url('/runners/health', projectId === undefined ? {} : { projectId }),
   runnerTypes: () => url('/runner-types', {}),
+  doctor: (projectId?: string, installProbe = false) =>
+    url('/doctor', {
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(installProbe ? { install: 'true' } : {}),
+    }),
   runnerModels: (projectId?: string) => url('/runners/models', projectId === undefined ? {} : { projectId }),
   config: (projectId?: string) => url('/config', projectId === undefined ? {} : { projectId }),
   configEditor: (scope: ConfigEditorScope, projectId?: string) => url('/config/editor', configQuery(scope, projectId)),

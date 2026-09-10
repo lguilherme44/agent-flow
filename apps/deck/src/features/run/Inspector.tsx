@@ -4,7 +4,8 @@ import { ApiError, api, keys, type RunAddress } from '../../lib/api';
 import type { StateAt } from '../../lib/replay';
 import { invalidate, useResource } from '../../lib/store';
 import { formatClock, formatDuration } from '../../lib/time';
-import { taskTone, words } from '../../lib/tone';
+import { taskTone } from '../../lib/tone';
+import { level, useT, word } from '../../lib/i18n';
 import { Chip, Empty, Notice, Skeleton } from '../../components/ui';
 
 /**
@@ -19,13 +20,14 @@ import { Chip, Empty, Notice, Skeleton } from '../../components/ui';
  * no button whose only outcome is a refusal.
  */
 export function Inspector({ address, taskId, card, attention, past, liveState }: { address: RunAddress; taskId: string | undefined; card: BoardCardView | undefined; attention: AttentionItem | undefined; past: StateAt | undefined; liveState: string | undefined }) {
+  const t = useT();
   const detail = useResource<TaskDetailView>(taskId === undefined ? null : keys.task(address, taskId), () => api.task(address, taskId ?? ''));
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<ApiError | undefined>(undefined);
   const [attemptShown, setAttemptShown] = useState<number | undefined>(undefined);
 
   if (taskId === undefined) {
-    return <Empty hint="Click a lane on the recorder, a node on the graph, or a line in the feed.">No task selected.</Empty>;
+    return <Empty hint={t.inspector.pickHint}>{t.inspector.noTask}</Empty>;
   }
 
   const then = past?.tasks.get(taskId);
@@ -66,15 +68,15 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
         <span className="inspector__id" style={taskId.startsWith('FIX') ? { color: 'var(--warn)' } : undefined}>
           {taskId}
         </span>
-        <Chip tone={taskTone(liveState ?? data?.state)}>{words(liveState ?? data?.state)}</Chip>
+        <Chip tone={taskTone(liveState ?? data?.state)}>{word(t, liveState ?? data?.state)}</Chip>
         {data?.awaitingIntegration ? (
           <Chip tone="idle" plain>
-            awaiting integration
+            {t.inspector.awaitingIntegration}
           </Chip>
         ) : null}
         {data?.workspaceActive ? (
           <Chip tone="live" plain>
-            in worktree
+            {t.inspector.inWorktree}
           </Chip>
         ) : null}
       </div>
@@ -82,15 +84,15 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
 
       {past !== undefined ? (
         <div style={{ marginTop: 12 }}>
-          <Notice tone="warn" k={`at ${formatClock(past.at)}`}>
+          <Notice tone="warn" k={t.inspector.at(formatClock(past.at))}>
             {then === undefined ? (
-              <>The log had not mentioned this task yet.</>
+              <>{t.inspector.notMentionedYet}</>
             ) : (
               <>
-                <b style={{ color: `var(--${taskTone(then.state)})` }}>{words(then.state)}</b>
-                {then.attempt > 0 ? ` · attempt ${String(then.attempt)}` : ''}
+                <b style={{ color: `var(--${taskTone(then.state)})` }}>{word(t, then.state)}</b>
+                {then.attempt > 0 ? ` · ${t.events.attemptN(then.attempt)}` : ''}
                 {then.agent === undefined ? '' : ` · ${then.agent}`}
-                <span className="faint"> — the facts below are the present.</span>
+                <span className="faint"> {t.inspector.factsArePresent}</span>
               </>
             )}
           </Notice>
@@ -98,34 +100,34 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
       ) : null}
 
       {detail.error !== undefined ? (
-        <Empty error>This task could not be read.</Empty>
+        <Empty error>{t.inspector.couldNotRead}</Empty>
       ) : data === undefined ? (
         <Skeleton rows={4} />
       ) : (
         <>
           <div className="facts-grid">
-            <Fact k="complexity" v={data.complexity} />
-            <Fact k="risk" v={data.risk} tone={data.risk === 'high' ? 'bad' : data.risk === 'medium' ? 'warn' : undefined} />
-            <Fact k="attempts" v={String(data.attempts)} />
-            <Fact k="runner" v={data.runner ?? '—'} />
-            <Fact k="model" v={data.model ?? 'not recorded'} tone={data.model === undefined ? 'ghost' : undefined} />
-            <Fact k="reasoning" v={data.reasoning === undefined ? '—' : `${words(data.reasoning)}${data.reasoningClamped ? ' · clamped' : ''}`} />
-            <Fact k="duration" v={formatDuration(data.durationMs)} />
-            <Fact k="validation" v={data.validationPassed === undefined ? '—' : data.validationPassed ? 'passed' : 'failed'} tone={data.validationPassed === undefined ? undefined : data.validationPassed ? 'ok' : 'bad'} />
-            {data.blockReason === undefined ? null : <Fact k="blocked by" v={data.blockReason === 'agent' ? 'the agent' : 'a dependency'} tone="warn" />}
-            {data.correctiveFor === undefined ? null : <Fact k="corrects" v={`${data.correctiveFor.findingType} · ${data.correctiveFor.stage}`} tone="warn" />}
-            {data.fallback === undefined ? null : <Fact k="fallback" v={`from ${data.fallback.from} · ${words(data.fallback.errorCode)}`} tone="warn" />}
-            {data.errorCode === undefined ? null : <Fact k="error" v={words(data.errorCode)} tone="bad" />}
-            {data.integration === undefined ? null : <Fact k="integrated" v={`${data.integration.mergeCommit.slice(0, 10)} · attempt ${String(data.integration.attempt)}`} tone="ok" />}
+            <Fact k={t.inspector.complexity} v={word(t, data.complexity)} />
+            <Fact k={t.inspector.risk} v={level(t, data.risk)} tone={data.risk === 'high' ? 'bad' : data.risk === 'medium' ? 'warn' : undefined} />
+            <Fact k={t.inspector.attempts} v={String(data.attempts)} />
+            <Fact k={t.inspector.runner} v={data.runner ?? t.common.none} />
+            <Fact k={t.inspector.model} v={data.model ?? t.inspector.notRecorded} tone={data.model === undefined ? 'ghost' : undefined} />
+            <Fact k={t.inspector.reasoning} v={data.reasoning === undefined ? t.common.none : `${level(t, data.reasoning)}${data.reasoningClamped ? ` · ${t.inspector.clamped}` : ''}`} />
+            <Fact k={t.inspector.duration} v={formatDuration(data.durationMs)} />
+            <Fact k={t.inspector.validation} v={data.validationPassed === undefined ? t.common.none : data.validationPassed ? word(t, 'passed') : word(t, 'failed')} tone={data.validationPassed === undefined ? undefined : data.validationPassed ? 'ok' : 'bad'} />
+            {data.blockReason === undefined ? null : <Fact k={t.inspector.blockedBy} v={data.blockReason === 'agent' ? t.inspector.theAgent : t.inspector.aDependency} tone="warn" />}
+            {data.correctiveFor === undefined ? null : <Fact k={t.inspector.corrects} v={`${data.correctiveFor.findingType} · ${word(t, data.correctiveFor.stage)}`} tone="warn" />}
+            {data.fallback === undefined ? null : <Fact k={t.inspector.fallback} v={t.inspector.fallbackFrom(data.fallback.from, word(t, data.fallback.errorCode))} tone="warn" />}
+            {data.errorCode === undefined ? null : <Fact k={t.inspector.error} v={word(t, data.errorCode)} tone="bad" />}
+            {data.integration === undefined ? null : <Fact k={t.inspector.integrated} v={`${data.integration.mergeCommit.slice(0, 10)} · ${t.events.attemptN(data.integration.attempt)}`} tone="ok" />}
           </div>
 
           {card === undefined ? null : (
             <div className="reason" data-tone={card.reason.cause === 'none' ? 'ok' : card.reason.cause === 'failure' || card.reason.cause === 'integration' ? 'bad' : 'warn'}>
               <span className="reason__k">
-                {words(card.lane)}
-                {card.reason.cause === 'none' ? '' : ` · ${words(card.reason.cause)}`}
+                {word(t, card.lane)}
+                {card.reason.cause === 'none' ? '' : ` · ${word(t, card.reason.cause)}`}
                 {card.agentName === undefined ? '' : ` · ${card.agentName}`}
-                {card.blockingFindings > 0 ? ` · ${String(card.blockingFindings)} blocking finding${card.blockingFindings === 1 ? '' : 's'}` : ''}
+                {card.blockingFindings > 0 ? ` · ${t.inspector.blockingFindings(card.blockingFindings)}` : ''}
               </span>
               {card.reason.text}
             </div>
@@ -144,14 +146,14 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
                   className="btn"
                   disabled={busy}
                   onClick={() => void retry(false, true)}
-                  title="Records that this task is meant to change nothing, then queues it again."
+                  title={t.inspector.changesNothingTitle}
                 >
-                  It changes nothing — accept that
+                  {t.inspector.changesNothing}
                 </button>
               ) : null}
               <span className="faint" style={{ fontSize: 12 }}>
                 {attention === undefined
-                  ? 'the validated tree was identical to its base'
+                  ? t.inspector.identicalTree
                   : `${attention.priority} · ${attention.what}`}
               </span>
             </div>
@@ -165,7 +167,7 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
                   <>
                     {' '}
                     <button type="button" className="btn btn--sm btn--danger" disabled={busy} onClick={() => void retry(true)} style={{ marginLeft: 8 }}>
-                      Retry anyway
+                      {t.inspector.retryAnyway}
                     </button>
                   </>
                 ) : null}
@@ -176,7 +178,7 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
           {data.attemptHistory !== undefined && data.attemptHistory.length > 0 ? (
             <>
               <div className="sub">
-                <span className="eyebrow">Attempts</span>
+                <span className="eyebrow">{t.inspector.attemptsHeading}</span>
                 <span className="section__count">{data.attemptHistory.length}</span>
               </div>
               <div className="attempts">
@@ -184,10 +186,10 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
                   <div key={attempt.attempt} className="attempt" data-tone={attempt.outcome === 'succeeded' ? 'ok' : 'bad'}>
                     <span className="attempt__n">#{attempt.attempt}</span>
                     <span className="attempt__what">
-                      <b>{attempt.outcome}</b>
-                      {attempt.failureClass === undefined ? '' : ` · ${words(attempt.failureClass)}`}
-                      {attempt.consumedAttempt === false ? ' · did not spend an attempt' : ''}
-                      {attempt.failedCommands.length > 0 ? ` · failed: ${attempt.failedCommands.join(', ')}` : ''}
+                      <b>{word(t, attempt.outcome)}</b>
+                      {attempt.failureClass === undefined ? '' : ` · ${word(t, attempt.failureClass)}`}
+                      {attempt.consumedAttempt === false ? ` · ${t.inspector.didNotSpend}` : ''}
+                      {attempt.failedCommands.length > 0 ? ` · ${t.inspector.failedCommands(attempt.failedCommands.join(', '))}` : ''}
                     </span>
                     <span className="attempt__meta">
                       {attempt.runner}
@@ -202,7 +204,7 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
           {data.acceptanceCriteria.length > 0 ? (
             <>
               <div className="sub">
-                <span className="eyebrow">Acceptance</span>
+                <span className="eyebrow">{t.inspector.acceptance}</span>
               </div>
               <ul className="warnlist">
                 {data.acceptanceCriteria.map((criterion, index) => (
@@ -215,7 +217,7 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
           {data.filesChanged.length > 0 ? (
             <>
               <div className="sub">
-                <span className="eyebrow">Files changed</span>
+                <span className="eyebrow">{t.inspector.filesChanged}</span>
                 <span className="section__count">{data.filesChanged.length}</span>
               </div>
               <div className="pick">
@@ -229,20 +231,20 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
           ) : null}
 
           <div className="sub">
-            <span className="eyebrow">Log</span>
+            <span className="eyebrow">{t.inspector.log}</span>
             {logs === undefined ? (
-              <span className="section__count">{shown.length} lines</span>
+              <span className="section__count">{t.inspector.lines(shown.length)}</span>
             ) : (
               <div className="pick">
                 {logs.map((entry) => (
                   <button key={entry.attempt} type="button" className="pick__item" aria-pressed={(attemptShown ?? logs[logs.length - 1]?.attempt) === entry.attempt} onClick={() => setAttemptShown(entry.attempt)}>
-                    attempt {entry.attempt}
+                    {t.events.attemptN(entry.attempt)}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          {tail.length === 0 ? <Empty>No log lines.</Empty> : <pre className="log">{tail.join('\n')}</pre>}
+          {tail.length === 0 ? <Empty>{t.inspector.noLogLines}</Empty> : <pre className="log">{tail.join('\n')}</pre>}
         </>
       )}
     </div>

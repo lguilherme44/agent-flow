@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ConfigEditorFieldView } from '@contracts/index.js';
 import { FieldControl } from './FieldControl';
+import { ptBR as t } from '../../lib/i18n';
 
 const field = (over: Partial<ConfigEditorFieldView> = {}): ConfigEditorFieldView => ({
   path: ['parallelism', 'maxTasks'],
@@ -43,7 +44,7 @@ describe('FieldControl', () => {
       { raw: 'github', inherited: false },
     );
     const select = screen.getByRole('combobox');
-    expect([...select.querySelectorAll('option')].map((option) => option.textContent)).toEqual(['inherit', 'none', 'github']);
+    expect([...select.querySelectorAll('option')].map((option) => option.textContent)).toEqual([t.crew.inherit, 'none', 'github']);
     expect(select).toHaveValue('github');
     fireEvent.change(select, { target: { value: '' } });
     expect(onChange).toHaveBeenCalledWith('', true);
@@ -53,7 +54,7 @@ describe('FieldControl', () => {
     control({ valueType: 'reasoning_level', options: ['low', 'medium', 'high', 'very_high'], effectiveValue: 'high' }, { inherited: true });
     expect([...screen.getByRole('combobox').querySelectorAll('option')].map((option) => option.value))
       .toEqual(['', 'low', 'medium', 'high', 'very_high']);
-    expect(screen.getByRole('option', { name: 'inherit · high' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: t.crew.inheritValue('high') })).toBeInTheDocument();
   });
 
   it('renders an integer as a number input carrying the inherited value as its placeholder', () => {
@@ -71,7 +72,7 @@ describe('FieldControl', () => {
       { path: ['ui', 'allowedHosts'], valueType: 'string_list', explicitValue: ['localhost', 'deck.local'] },
       { raw: 'localhost, deck.local', inherited: false },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Remove localhost from ui.allowedHosts' }));
+    fireEvent.click(screen.getByRole('button', { name: t.crew.removeItem('localhost', 'ui.allowedHosts') }));
     expect(onChange).toHaveBeenCalledWith('deck.local');
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: ' apex ' } });

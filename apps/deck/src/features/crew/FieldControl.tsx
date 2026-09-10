@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ConfigEditorFieldView } from '@contracts/index.js';
+import { useT } from '../../lib/i18n';
 import { displayValue, listItems } from './crew-config';
 
 /**
@@ -80,6 +81,7 @@ function BooleanControl({ id, field, raw, inherited, onChange }: FieldControlPro
  * save would make the screen right.
  */
 function ChoiceControl({ id, field, raw, inherited, onChange, options }: FieldControlProps & { options: readonly string[] }) {
+  const t = useT();
   const unknown = !inherited && raw !== '' && !options.includes(raw);
   return (
     <select
@@ -90,14 +92,15 @@ function ChoiceControl({ id, field, raw, inherited, onChange, options }: FieldCo
       disabled={!field.editable}
       onChange={(event) => (event.target.value === '' ? onChange('', true) : onChange(event.target.value))}
     >
-      <option value="">{inherited ? `inherit · ${displayValue(field.effectiveValue)}` : 'inherit'}</option>
-      {unknown ? <option value={raw}>{raw} — not declared</option> : null}
+      <option value="">{inherited ? t.crew.inheritValue(displayValue(t, field.effectiveValue)) : t.crew.inherit}</option>
+      {unknown ? <option value={raw}>{t.crew.notDeclared(raw)}</option> : null}
       {options.map((option) => <option key={option} value={option}>{option}</option>)}
     </select>
   );
 }
 
 function NumberControl({ id, field, raw, inherited, onChange }: FieldControlProps) {
+  const t = useT();
   return (
     <input
       id={id}
@@ -107,13 +110,14 @@ function NumberControl({ id, field, raw, inherited, onChange }: FieldControlProp
       className="input mono"
       value={raw}
       disabled={!field.editable}
-      placeholder={inherited ? displayValue(field.effectiveValue) : undefined}
+      placeholder={inherited ? displayValue(t, field.effectiveValue) : undefined}
       onChange={(event) => onChange(event.target.value)}
     />
   );
 }
 
 function TextControl({ id, field, raw, inherited, suggestions, onChange }: FieldControlProps) {
+  const t = useT();
   const offered = suggestions ?? [];
   return (
     <>
@@ -123,7 +127,7 @@ function TextControl({ id, field, raw, inherited, suggestions, onChange }: Field
         className="input mono"
         value={raw}
         disabled={!field.editable}
-        placeholder={inherited ? displayValue(field.effectiveValue) : undefined}
+        placeholder={inherited ? displayValue(t, field.effectiveValue) : undefined}
         {...(offered.length === 0 ? {} : { list: `${id}-suggestions` })}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -143,6 +147,7 @@ function TextControl({ id, field, raw, inherited, suggestions, onChange }: Field
  * parser reads.
  */
 function ListControl({ id, field, raw, inherited, onChange }: FieldControlProps) {
+  const t = useT();
   const [draft, setDraft] = useState('');
   const items = inherited ? listItems(field.effectiveValue) : raw.split(',').map((item) => item.trim()).filter(Boolean);
   const label = field.path.map(String).join('.');
@@ -161,7 +166,7 @@ function ListControl({ id, field, raw, inherited, onChange }: FieldControlProps)
           <button
             type="button"
             className="value-chip__remove"
-            aria-label={`Remove ${item} from ${label}`}
+            aria-label={t.crew.removeItem(item, label)}
             disabled={!field.editable}
             onClick={() => commit(items.filter((entry) => entry !== item))}
           >
@@ -175,7 +180,7 @@ function ListControl({ id, field, raw, inherited, onChange }: FieldControlProps)
         className="field-list__draft mono"
         value={draft}
         disabled={!field.editable}
-        placeholder={items.length === 0 ? 'empty' : 'add…'}
+        placeholder={items.length === 0 ? t.crew.emptyList : t.crew.addItem}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={add}
         onKeyDown={(event) => {

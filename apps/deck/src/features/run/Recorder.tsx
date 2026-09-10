@@ -4,6 +4,7 @@ import { neighbour } from '../../lib/replay';
 import { describe } from '../../lib/sentence';
 import { MINUTE, formatClock, formatDay, formatOffset, scaleTime, stepOf, tickLabel, ticks } from '../../lib/time';
 import { stageTone, taskTone, type Tone } from '../../lib/tone';
+import { useT, word, type Dictionary } from '../../lib/i18n';
 
 /**
  * The recorder: the run as a strip of time you can drag through.
@@ -17,19 +18,6 @@ import { stageTone, taskTone, type Tone } from '../../lib/tone';
  * Draws the fold in `lib/replay.ts` and decides nothing itself. Every bar is a line of the
  * log with its `at` read off.
  */
-
-export const STAGE_SHORT: Record<string, string> = {
-  discovery: 'discovery',
-  'architecture-impact': 'architecture',
-  sdd: 'sdd',
-  planning: 'planning',
-  'plan-review': 'plan review',
-  approval: 'approval',
-  implementation: 'implementation',
-  'code-review': 'code review',
-  verification: 'verification',
-  'final-review': 'final review',
-};
 
 const AXIS_H = 34;
 const TAPE_Y = AXIS_H + 6;
@@ -97,9 +85,9 @@ function markerGlyph(kind: Marker['kind']): { tone: Tone; shape: 'diamond' | 'ci
   }
 }
 
-function Glyph({ x, y, marker, onClick }: { x: number; y: number; marker: Marker; onClick: () => void }) {
+function Glyph({ x, y, marker, onClick, t }: { x: number; y: number; marker: Marker; onClick: () => void; t: Dictionary }) {
   const { tone, shape } = markerGlyph(marker.kind);
-  const said = describe(marker.event);
+  const said = describe(marker.event, t);
   const title = `${formatClock(marker.at)} · ${said.title}${said.detail === undefined ? '' : ` — ${said.detail}`}`;
   const s = 4;
   const common = { className: 'svg-marker', 'data-tone': tone, onClick, style: { cursor: 'pointer' } } as const;
@@ -139,6 +127,12 @@ function Glyph({ x, y, marker, onClick }: { x: number; y: number; marker: Marker
 
 export function Recorder(props: RecorderProps) {
   const { timeline, domain, t, live, finished, truncated, onScrub, selected, onSelect, rows, liveStates, past } = props;
+  /*
+    `t` above is the *playhead instant* — this component had the name first, and the
+    dictionary is `dict` here so the two never meet in one expression.
+  */
+  const dict = useT();
+  const long: Readonly<Record<string, string | undefined>> = dict.stageLong;
   const plotRef = useRef<HTMLDivElement>(null);
   const grabRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -248,40 +242,40 @@ export function Recorder(props: RecorderProps) {
   const tone: Tone = live ? 'live' : 'warn';
   const readout = live
     ? finished
-      ? `${formatClock(domain[1])} · end of the log`
-      : `${formatClock(t)} · now`
-    : `${formatClock(t)} · ${formatOffset(t - domain[0])} from start`;
+      ? dict.recorder.endOfLog(formatClock(domain[1]))
+      : dict.recorder.now(formatClock(t))
+    : dict.recorder.fromStart(formatClock(t), formatOffset(t - domain[0]));
 
   return (
-    <section className="panel recorder" aria-label="Run recorder">
+    <section className="panel recorder" aria-label={dict.recorder.label}>
       <div className="recorder__bar">
         <div className="recorder__mode" data-tone={tone}>
-          <b>{live ? (finished ? 'RECORDED' : 'LIVE') : 'REPLAY'}</b>
+          <b>{live ? (finished ? dict.recorder.recorded : dict.recorder.live) : dict.recorder.replay}</b>
           <span className="recorder__readout">
             {readout}
             {past === undefined ? null : (
               <small>
-                {past.seen}/{timeline.events.length} lines
+                {dict.recorder.lines(past.seen, timeline.events.length)}
               </small>
             )}
-            {truncated ? <small style={{ color: 'var(--warn)' }}>origin cut by the log cap</small> : null}
+            {truncated ? <small style={{ color: 'var(--warn)' }}>{dict.recorder.originCut}</small> : null}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span className="recorder__keys" aria-hidden="true">
             <kbd>←</kbd>
-            <kbd>→</kbd> step · <kbd>⇧</kbd> minute · <kbd>End</kbd> live
+            <kbd>→</kbd> {dict.recorder.keyStep} · <kbd>⇧</kbd> {dict.recorder.keyMinute} · <kbd>End</kbd> {dict.recorder.keyLive}
           </span>
           {live ? null : (
             <button type="button" className="btn btn--sm btn--primary" onClick={() => onScrub(null)}>
-              ● {finished ? 'End' : 'Live'}
+              ● {finished ? dict.recorder.end : dict.recorder.live}
             </button>
           )}
         </div>
       </div>
 
       <div className="recorder__plot" ref={plotRef}>
-        <svg className="recorder__svg" height={HEAD_H} width={width || undefined} role="img" aria-label="Stages and run marks over time">
+        <svg className="recorder__svg" height={HEAD_H} width={width || undefined} role="img" aria-label={dict.recorder.stagesAria}>
           <defs>
             <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
               <rect width="6" height="6" fill="var(--ghost-dim)" />
@@ -294,12 +288,12 @@ export function Recorder(props: RecorderProps) {
             const midnight = date.getHours() === 0 && date.getMinutes() === 0;
             // At a step of a day or more the tick itself reads as a date; a second line
             // would say the same thing twice.
-            const dayLabel = step < 24 * 60 * MINUTE && (index === 0 || midnight) ? formatDay(at) : undefined;
+            const dayLabel = step < 24 * 60 * MINUTE && (index === 0 || midnight) ? formatDay(at, dict.time) : undefined;
             return (
               <g key={at}>
                 <line className="svg-tick" x1={scale(at)} x2={scale(at)} y1={AXIS_H - 6} y2={AXIS_H} />
                 <text className="svg-axis-label" x={scale(at)} y={AXIS_H - 10} textAnchor="middle">
-                  {tickLabel(at, step)}
+                  {tickLabel(at, step, dict.time)}
                 </text>
                 {dayLabel === undefined ? null : (
                   <text className="svg-axis-label" x={scale(at)} y={AXIS_H - 19} textAnchor="middle" style={{ fill: midnight ? 'var(--ink-2)' : undefined, fontWeight: midnight ? 700 : undefined }}>
@@ -311,21 +305,21 @@ export function Recorder(props: RecorderProps) {
           })}
           <line className="svg-grid" x1={x0} x2={x1} y1={AXIS_H} y2={AXIS_H} />
           <text className="svg-stage-name" x={8} y={TAPE_Y + TAPE_H / 2 + 3.5}>
-            STAGES
+            {dict.recorder.stagesRow}
           </text>
           <text className="svg-stage-name" x={8} y={RUNROW_Y + RUNROW_H / 2 + 3.5}>
-            RUN
+            {dict.recorder.runRow}
           </text>
           {/* stage tape */}
           {timeline.stages.map((span, index) => {
             const sx = scale(span.startedAt);
             const ex = span.endedAt === undefined ? scale(domain[1]) : scale(span.endedAt);
             const w = Math.max(3, ex - sx);
-            const label = STAGE_SHORT[span.stage] ?? span.stage;
+            const label = long[span.stage] ?? span.stage;
             const outcome = span.outcome === 'reused' ? 'cached' : span.outcome;
             return (
               <g key={`${span.stage}-${String(index)}`} data-tone={stageTone(outcome)}>
-                <title>{`${label} · ${span.outcome}${span.runner === undefined ? '' : ` · ${span.runner}`}${span.model === undefined ? '' : ` · ${span.model}`}`}</title>
+                <title>{`${label} · ${word(dict, span.outcome)}${span.runner === undefined ? '' : ` · ${span.runner}`}${span.model === undefined ? '' : ` · ${span.model}`}`}</title>
                 <rect className="svg-attempt" data-outcome={span.outcome} x={sx} y={TAPE_Y} width={w} height={TAPE_H} rx={2} />
                 {w > label.length * 6.4 + 10 ? (
                   <text className="svg-tape-label" x={sx + 5} y={TAPE_Y + TAPE_H / 2 + 3.5}>
@@ -337,7 +331,7 @@ export function Recorder(props: RecorderProps) {
           })}
           {/* run-level markers */}
           {runMarkers.map((marker) => (
-            <Glyph key={`${String(marker.index)}`} x={scale(marker.at)} y={RUNROW_Y + RUNROW_H / 2} marker={marker} onClick={() => jump(marker)} />
+            <Glyph key={`${String(marker.index)}`} x={scale(marker.at)} y={RUNROW_Y + RUNROW_H / 2} marker={marker} onClick={() => jump(marker)} t={dict} />
           ))}
           {/* now */}
           {finished ? null : <line className="svg-now" x1={scale(domain[1])} x2={scale(domain[1])} y1={AXIS_H} y2={HEAD_H} />}
@@ -345,7 +339,7 @@ export function Recorder(props: RecorderProps) {
         </svg>
 
         <div className="recorder__lanes">
-          <svg className="recorder__svg" height={lanesH} width={width || undefined} role="img" aria-label="Task attempts over time">
+          <svg className="recorder__svg" height={lanesH} width={width || undefined} role="img" aria-label={dict.recorder.attemptsAria}>
             {axisTicks.map((at) => (
               <line key={at} className="svg-grid" x1={scale(at)} x2={scale(at)} y1={0} y2={lanesH} />
             ))}
@@ -366,7 +360,7 @@ export function Recorder(props: RecorderProps) {
                     onClick={() => onSelect(isSelected ? undefined : row.id)}
                     style={{ cursor: 'pointer' }}
                   >
-                    <title>{`${row.id} · ${row.title}${state === undefined ? '' : ` · ${state}`}`}</title>
+                    <title>{`${row.id} · ${row.title}${state === undefined ? '' : ` · ${word(dict, state)}`}`}</title>
                   </rect>
                   <g data-tone={taskTone(state)}>
                     <circle cx={12} cy={y + ROW_H / 2} r={3} fill="var(--tone)" />
@@ -388,7 +382,7 @@ export function Recorder(props: RecorderProps) {
                     const outcome = span.outcome;
                     return (
                       <g key={`${span.task}-${String(span.attempt)}`} data-tone={outcome === 'unknown' ? 'ghost' : taskTone(outcome)}>
-                        <title>{`${span.task} · attempt ${String(span.attempt)} · ${outcome}${span.runner === undefined ? '' : ` · ${span.runner}`}`}</title>
+                        <title>{`${span.task} · ${dict.events.attemptN(span.attempt)} · ${word(dict, outcome)}${span.runner === undefined ? '' : ` · ${span.runner}`}`}</title>
                         <rect className="svg-attempt" data-outcome={outcome} x={sx} y={y + 5} width={w} height={ROW_H - 10} rx={2} />
                         {span.attempt > 1 && w > 14 ? (
                           <text className="svg-attempt-n" x={sx + 3} y={y + ROW_H / 2 + 3}>
@@ -399,7 +393,7 @@ export function Recorder(props: RecorderProps) {
                     );
                   })}
                   {(taskMarkers.get(row.id) ?? []).map((marker) => (
-                    <Glyph key={String(marker.index)} x={scale(marker.at)} y={y + ROW_H / 2} marker={marker} onClick={() => jump(marker)} />
+                    <Glyph key={String(marker.index)} x={scale(marker.at)} y={y + ROW_H / 2} marker={marker} onClick={() => jump(marker)} t={dict} />
                   ))}
                 </g>
               );
@@ -410,7 +404,7 @@ export function Recorder(props: RecorderProps) {
         </div>
 
         <div className="playhead" data-tone={tone} data-dragging={dragging} style={{ left: playX }} aria-hidden="true">
-          <span className={playX > x1 - 60 ? 'playhead__cap playhead__cap--right' : 'playhead__cap'}>{live ? (finished ? 'END' : 'LIVE') : formatClock(t)}</span>
+          <span className={playX > x1 - 60 ? 'playhead__cap playhead__cap--right' : 'playhead__cap'}>{live ? (finished ? dict.recorder.endCap : dict.recorder.live) : formatClock(t)}</span>
         </div>
 
         <div
@@ -418,7 +412,7 @@ export function Recorder(props: RecorderProps) {
           className="recorder__grab"
           role="slider"
           tabIndex={0}
-          aria-label="Playhead. Drag to replay the run; arrow keys step through the log."
+          aria-label={dict.recorder.playheadAria}
           aria-valuemin={domain[0]}
           aria-valuemax={domain[1]}
           aria-valuenow={t}

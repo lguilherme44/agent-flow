@@ -93,6 +93,40 @@
   letter-spacing: 0.06em;
 }
 
+/*
+  Two words, one pressed. Small and quiet, next to the connection state rather than in
+  the navigation: changing language is something a person does once, and a control that
+  competes with the six screens would be shouting about it every day after that.
+*/
+.lang {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+}
+.lang__pick {
+  padding: 2px var(--s-2);
+  background: none;
+  border: 0;
+  border-radius: calc(var(--r-1) - 2px);
+  color: var(--ink-3);
+  font: inherit;
+  font-size: var(--fs-0);
+  cursor: pointer;
+}
+.lang__pick:hover {
+  color: var(--ink);
+}
+.lang__pick[aria-pressed='true'] {
+  background: var(--bg-2);
+  color: var(--ink);
+}
+.lang__pick:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
 .conn {
   display: inline-flex;
   align-items: center;

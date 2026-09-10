@@ -296,8 +296,75 @@ export function freshnessTone(freshness: string | undefined): Tone {
   }
 }
 
-/** A human label for a machine word: `awaiting_human_approval` → `awaiting human approval`. */
-export function words(value: string | undefined): string {
-  if (value === undefined) return '—';
-  return value.replace(/[_-]+/g, ' ');
+/**
+ * One conversation between two agents, as `core/collaboration/threads.ts` folded it.
+ *
+ * Not `threadTone`: that one answers for a *review* thread, whose words are `approved`
+ * and `changes_requested`. These four are a different vocabulary over a different log,
+ * and one function trying to serve both would answer `ghost` to half of each — which is
+ * how an open question comes to look like an absence.
+ *
+ * `open` is `warn` and `answered` is `live`: an unanswered question is the one waiting on
+ * somebody, and a run that ended mid-conversation (`abandoned`) is history, not a fault.
+ */
+export function conversationTone(status: string | undefined): Tone {
+  switch (status) {
+    case 'resolved':
+      return 'ok';
+    case 'answered':
+      return 'live';
+    case 'open':
+      return 'warn';
+    case 'abandoned':
+      return 'ghost';
+    default:
+      return 'ghost';
+  }
 }
+
+/** A handoff request, from `projectHandoffs`. `requested` is the only one still waiting. */
+export function handoffTone(status: string | undefined): Tone {
+  switch (status) {
+    case 'accepted':
+      return 'ok';
+    case 'rejected':
+      return 'bad';
+    case 'requested':
+      return 'warn';
+    case 'expired':
+      return 'ghost';
+    default:
+      return 'ghost';
+  }
+}
+
+/**
+ * A blackboard entry's standing (M4-06).
+ *
+ * `contested` is `warn` rather than `bad` for the reason `findingTone` gives disputes the
+ * same colour: two agents disagreeing is a thing for a person to settle, not a defect.
+ * `superseded` is `ghost` because a corrected entry is history — and the core is explicit
+ * that the two are different, which is why there are three statuses and not two.
+ */
+export function entryTone(status: string | undefined): Tone {
+  switch (status) {
+    case 'active':
+      return 'ok';
+    case 'contested':
+      return 'warn';
+    case 'superseded':
+      return 'ghost';
+    default:
+      return 'ghost';
+  }
+}
+
+/*
+  `words()` used to live here, and it does not any more.
+
+  This file's first line says what it is for: "the one place a status becomes a colour".
+  Turning a token into *language* is a different job that was sitting here because both
+  start from the same string — and the day the Deck learned a second language, the two
+  stopped being the same size. It is `word(t, token)` in `lib/i18n`, where the table that
+  answers it lives.
+*/

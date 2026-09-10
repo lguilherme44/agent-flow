@@ -3,7 +3,8 @@ import type { RunSummaryView } from '@contracts/index.js';
 import { api, keys } from '../../lib/api';
 import { useResource } from '../../lib/store';
 import { formatDuration, formatRelative } from '../../lib/time';
-import { runStatusTone, words } from '../../lib/tone';
+import { runStatusTone } from '../../lib/tone';
+import { useT, word } from '../../lib/i18n';
 import { useNow } from '../../lib/use-now';
 import { Chip, Empty, Meter, Skeleton } from '../../components/ui';
 import { href, navigate, onLinkClick } from '../../app/router';
@@ -11,6 +12,7 @@ import { NewFeatureDialog } from '../deck/NewFeatureDialog';
 
 /** History. Filters are local: narrowing the list costs no round trip. */
 export function RunsPage({ projectId }: { projectId?: string }) {
+  const t = useT();
   const runs = useResource<RunSummaryView[]>(keys.runs(projectId), () => api.runs(projectId), { refreshMs: 30_000 });
   const projects = useResource(keys.projects(), api.projects);
   const workspace = useResource(keys.workspace(), api.workspace);
@@ -41,26 +43,26 @@ export function RunsPage({ projectId }: { projectId?: string }) {
     <main className="page">
       <div className="page-head">
         <div>
-          <span className="eyebrow">History</span>
+          <span className="eyebrow">{t.runs.history}</span>
           <h1 className="page-head__title">
-            {runs.data?.length ?? 0} run{runs.data?.length === 1 ? '' : 's'}
+            {t.runs.runCount(runs.data?.length ?? 0)}
             {projectId === undefined ? '' : ` · ${names.get(projectId) ?? projectId}`}
           </h1>
-          <p className="page-head__sub">Newest first. Every row is one project's run; ids restart per project per year.</p>
+          <p className="page-head__sub">{t.runs.newestFirst}</p>
         </div>
         <div className="filters">
           <button type="button" className="btn btn--primary" onClick={() => setCreating(true)} disabled={(projects.data?.length ?? 0) === 0}>
-            New feature
+            {t.deck.newFeature}
           </button>
-          <input className="input" placeholder="Filter by id, feature, project…" value={needle} onChange={(event) => setNeedle(event.target.value)} aria-label="Filter runs" />
+          <input className="input" placeholder={t.runs.filterPlaceholder} value={needle} onChange={(event) => setNeedle(event.target.value)} aria-label={t.runs.filterAria} />
           {present.map((status) => (
             <button key={status} type="button" className="toggle" aria-pressed={statuses.has(status)} onClick={() => toggle(status)}>
-              {words(status)}
+              {word(t, status)}
             </button>
           ))}
           {projectId === undefined ? null : (
             <a className="btn btn--ghost btn--sm" href={href({ name: 'runs' })} onClick={onLinkClick}>
-              all projects
+              {t.runs.allProjects}
             </a>
           )}
         </div>
@@ -75,28 +77,28 @@ export function RunsPage({ projectId }: { projectId?: string }) {
       />
 
       {runs.error !== undefined ? (
-        <Empty error>Runs could not be read.</Empty>
+        <Empty error>{t.runs.couldNotRead}</Empty>
       ) : runs.loading ? (
         <Skeleton rows={5} />
       ) : visible.length === 0 ? (
-        <Empty hint={needle === '' && statuses.size === 0 ? 'Start one with the New feature button, or with `agent-flow feature "…"`.' : 'Loosen the filter.'}>
-          No runs match.
+        <Empty hint={needle === '' && statuses.size === 0 ? t.runs.startOneHint : t.runs.loosenFilter}>
+          {t.runs.noMatch}
         </Empty>
       ) : (
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th>project</th>
-                <th>run</th>
-                <th>feature</th>
-                <th>status</th>
-                <th>workflow</th>
-                <th>progress</th>
-                <th>tasks</th>
-                <th>degraded</th>
-                <th>duration</th>
-                <th>updated</th>
+                <th>{t.deck.colProject}</th>
+                <th>{t.runs.colRun}</th>
+                <th>{t.deck.colFeature}</th>
+                <th>{t.runs.colStatus}</th>
+                <th>{t.newFeature.workflow.toLowerCase()}</th>
+                <th>{t.runs.colProgress}</th>
+                <th>{t.deck.colTasks}</th>
+                <th>{t.runs.colDegraded}</th>
+                <th>{t.inspector.duration}</th>
+                <th>{t.run.updated}</th>
               </tr>
             </thead>
             <tbody>
@@ -117,9 +119,9 @@ export function RunsPage({ projectId }: { projectId?: string }) {
                       </span>
                     </td>
                     <td>
-                      <Chip tone={runStatusTone(run.status)}>{words(run.status)}</Chip>
+                      <Chip tone={runStatusTone(run.status)}>{word(t, run.status)}</Chip>
                     </td>
-                    <td className="mono">{run.workflow ?? '—'}</td>
+                    <td className="mono">{run.workflow === undefined ? t.common.none : word(t, run.workflow)}</td>
                     <td style={{ minWidth: 120 }}>
                       <Meter done={run.progress} total={100} tone={run.status === 'failed' ? 'bad' : run.status === 'completed' ? 'ok' : 'live'} />
                     </td>
@@ -127,10 +129,10 @@ export function RunsPage({ projectId }: { projectId?: string }) {
                       {run.completedTasks}/{run.taskCount}
                     </td>
                     <td className="mono" style={{ color: run.degradations > 0 ? 'var(--warn)' : undefined }}>
-                      {run.degradations === 0 ? '—' : run.degradations}
+                      {run.degradations === 0 ? t.common.none : run.degradations}
                     </td>
                     <td className="mono">{formatDuration(run.durationMs)}</td>
-                    <td className="mono">{formatRelative(run.updatedAt, now)}</td>
+                    <td className="mono">{formatRelative(run.updatedAt, now, t.time)}</td>
                   </tr>
                 );
               })}

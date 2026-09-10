@@ -15,6 +15,7 @@ import {
   type WorkflowClass,
 } from './state.schema.js';
 import type { TaskState } from './task.schema.js';
+import type { TelemetryEntry } from './result.schema.js';
 import type { RunProjection } from './projection.js';
 import type { ContextTelemetryObservation } from './context-telemetry.schema.js';
 
@@ -103,6 +104,19 @@ export const PromptParamsSchema = z.object({ prompt: PromptNameSchema });
 
 /** Every read endpoint is scoped to one project. */
 export const ProjectQuerySchema = z.object({ projectId: ProjectIdSchema.optional() });
+
+/**
+ * `doctor`, and the one part of it a caller has to ask for.
+ *
+ * The §8.4 install probe checks out a throwaway copy and runs the project's own install —
+ * minutes on a large repository. It is the default in a terminal, which can block and
+ * announce it, and opt-in over HTTP, which cannot: the first version of `GET /doctor` ran
+ * it unconditionally and the page timed out before painting anything.
+ */
+export const DoctorQuerySchema = z.object({
+  projectId: ProjectIdSchema.optional(),
+  install: z.coerce.boolean().optional(),
+});
 
 /** A configuration source is named by scope and registry id, never by path. */
 export const ConfigEditorQuerySchema = z
@@ -259,6 +273,49 @@ export const EventsQuerySchema = z.object({
   projectId: ProjectIdSchema.optional(),
   runId: RunIdParamSchema.optional(),
 });
+
+/**
+ * Reclaim old run state, and the Git namespace that goes with it (§20, 7.7).
+ *
+ * `dryRun` is the field the screen exists for: reclaiming a worktree or a ref is the
+ * operation that frightens people most, and the answer to "what would this remove" has to
+ * come from *the same function that removes it* — a preview computed some other way is a
+ * preview of a different operation.
+ *
+ * Every flag here is a deliberate widening of what may be deleted, and none is a default.
+ * `branches` is the only one that can delete work, and §20.4 is emphatic that it is never
+ * implied: a run's integration branch is the product the tool told you to go and merge.
+ */
+export const CleanRequestSchema = z.object({
+  /** Keep the newest N runs. */
+  keep: z.coerce.number().int().min(0).max(1_000).optional(),
+  /** Include the active run, which holds in-flight work. */
+  force: z.boolean().optional(),
+  /** Also drop the cached repository map. */
+  cache: z.boolean().optional(),
+  /** Also reclaim the worktrees §20.3 retains — the only copy of what an agent produced. */
+  worktrees: z.boolean().optional(),
+  /** Also delete an integration branch that is merged nowhere. Deletes work. */
+  branches: z.boolean().optional(),
+  /** Report and change nothing. The page asks for this first, always. */
+  dryRun: z.boolean().optional(),
+});
+
+/** Register a candidate. No path, no command, no runner — one id the server issued. */
+export const RegisterProjectRequestSchema = z.object({
+  candidateId: ProjectIdSchema,
+  /**
+   * Replace files that already exist.
+   *
+   * `init` never clobbers by default (§7.7) — it is the first thing agent-flow does in a
+   * repository somebody cares about, and a tool that overwrites a hand-written AGENTS.md
+   * on first contact does not get a second chance. This is the deliberate override, and
+   * it also carries the AR-01 gate: it proceeds past an active run whose `planningBase`
+   * the resulting commit would invalidate, and that override is recorded on the run.
+   */
+  force: z.boolean().optional(),
+});
+
 
 // ---------------------------------------------------------------------------
 // Responses
@@ -806,6 +863,206 @@ export interface RoleRouteView {
 }
 
 /**
+ * A repository the workspace could register, named by an id the server issued (7.6).
+ *
+ * The reason this exists rather than a path field on the request: the whole filesystem
+ * security model is that a client names an id and the registry resolves it (§93). A
+ * directory with no `.agent-flow/` had no id, so there was no request shape that could
+ * ask for it — which is why "add a project" was a disabled button for two milestones.
+ */
+/**
+ * What `clean` did, or what it would do (§20, 7.7).
+ *
+ * Assigned from `app/workspace-cleanup.ts`'s own report, the way `DoctorView` is — the
+ * shapes are linked by a compile error rather than by two people remembering.
+ *
+ * The two refusals are separate outcomes because their repairs are: `locked` means
+ * somebody is executing that run right now, and `namespace_failed` means Git would not
+ * let go of something, so §20.1 keeps the state that explains what is still on disk.
+ */
+export interface CleanRunView {
+  readonly runId: string;
+  readonly outcome: 'locked' | 'namespace_failed' | 'removed';
+  readonly reclaim?: {
+    /** Workspace-relative, never absolute (§7.2, §21.3). */
+    readonly worktrees: readonly string[];
+    /** Kept because they are the only copy of what their agent produced (§20.3). */
+    readonly worktreesRetained: readonly string[];
+    readonly attemptRefs: readonly string[];
+    readonly integrationBranch: {
+      readonly kind: 'redundant' | 'forced' | 'kept' | 'absent';
+      readonly ref?: string;
+      readonly mergedInto?: string;
+      readonly head?: string;
+    };
+    readonly stateRemovable: boolean;
+    /** Path-free sentences, one per thing that could not be done. */
+    readonly failures: readonly string[];
+  };
+}
+
+export interface CleanView {
+  /** True when nothing was written and every outcome is what *would* happen. */
+  readonly dryRun: boolean;
+  readonly keep: number;
+  readonly totalRuns: number;
+  readonly runs: readonly CleanRunView[];
+  /** The active run, kept because `force` was not set. Named rather than skipped. */
+  readonly protectedRun?: string;
+  readonly cacheRemoved: boolean;
+  /** Something was refused — a non-zero exit in a terminal, a warning on a screen. */
+  readonly refused: boolean;
+}
+
+export interface ProjectCandidateView {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface ProjectRegisteredView {
+  /** The project as the registry now knows it — the id every later request uses. */
+  readonly project: ProjectView;
+  readonly stack: { readonly type: string; readonly name: string };
+  /** Project-relative, never absolute (§21.3). */
+  readonly created: readonly string[];
+  readonly updated: readonly string[];
+  readonly skipped: readonly string[];
+  /**
+   * What the operator has to know before the first feature.
+   *
+   * `install_dirties_tree` is the expensive one: a Node project with no committed
+   * lockfile is handed `npm install`, which rewrites it, which fails the post-setup
+   * cleanliness assertion, which refuses every task in worktree mode. A live run
+   * discovered that after paying for planning.
+   */
+  readonly warnings: readonly (
+    | { readonly kind: 'install_dirties_tree'; readonly command: string }
+    | { readonly kind: 'no_validation_commands' }
+    | { readonly kind: 'active_run'; readonly runId: string; readonly status: string }
+  )[];
+}
+
+/**
+ * "Can this machine work?", over HTTP (§59).
+ *
+ * The first question of every working day, and until now only a terminal could ask it:
+ * `doctor` computed each fact and immediately printed it, so the CLI was both the only
+ * caller and the only possible one. On a surface that is meant to replace the terminal,
+ * that made the answer unreachable exactly where it is needed first.
+ *
+ * **Not a hand-copied mirror.** `app/diagnostics.ts` owns the shape; `contracts` may not
+ * import `app`, so the link is made by assignment instead — `server.ts` assigns a
+ * `Diagnosis` straight into a `DoctorView`, and a field that moves or disappears there is
+ * a compile error here. That is deliberately the lesson of the artifact-name defect: a
+ * second list that agrees only until somebody edits one of them.
+ *
+ * Deliberately widened in two places. `PermissionFinding` and `ProbeResult` are declared
+ * in `core` and `app`, and their string unions are re-declared as `string` rather than
+ * imported — a narrower union is assignable to `string`, so the compile-time link holds,
+ * and the browser gains nothing from being unable to type a value the server may add.
+ */
+export interface DoctorToolView {
+  readonly name: 'node' | 'git';
+  readonly present: boolean;
+  readonly version?: string;
+  /** Git only: the worktree-mode floor, so the answer sits beside the question. */
+  readonly floor?: string;
+  readonly belowFloor?: boolean;
+}
+
+export interface DoctorCapabilityView {
+  readonly kind: 'resolved' | 'unresolvable';
+  readonly role: string;
+  readonly runner: string;
+  readonly model?: string;
+  readonly requestedReasoning: ReasoningLevel;
+  readonly effectiveReasoning?: ReasoningLevel;
+  readonly supportedReasoningLevels?: readonly ReasoningLevel[];
+  readonly reasoningClamped?: boolean;
+  readonly permissions?: 'read-only' | 'write';
+  readonly permissionFinding?: {
+    readonly failureClass: string;
+    readonly runner: string;
+    readonly model?: string;
+    readonly toolClass: string;
+    readonly action: string;
+  };
+  /** `unresolvable` only. */
+  readonly errorKind?: string;
+  readonly reason?: string;
+}
+
+export interface DoctorStageRoutingView {
+  readonly stage: string;
+  readonly role: string;
+  readonly runner: string;
+  readonly runnerType: string;
+  readonly readsRepository: boolean;
+  /** A stage that opens no file, served by a runner that spawns a process. */
+  readonly overpowered: boolean;
+}
+
+export interface DoctorInstallProbeView {
+  readonly outcome: 'skipped' | 'dirty_before' | 'install_failed' | 'clean' | 'dirties_checkout';
+  readonly reason?: string;
+  readonly command?: string;
+  readonly entries?: readonly string[];
+}
+
+export interface DoctorRunnerView {
+  readonly id: string;
+  readonly installed: boolean;
+  readonly executable: boolean;
+  readonly auth: string;
+  readonly version?: string;
+  readonly detail?: string;
+}
+
+export interface DoctorProbeView {
+  readonly id: string;
+  readonly outcome: string;
+  readonly durationMs: number;
+  readonly detail?: string;
+  readonly efforts?: readonly {
+    readonly reasoning: ReasoningLevel;
+    readonly outcome: string;
+    readonly detail?: string;
+  }[];
+  readonly toolUse?: { readonly outcome: string; readonly detail?: string };
+}
+
+export interface DoctorView {
+  readonly status: 'OK' | 'DEGRADED' | 'FAIL';
+  readonly tools: readonly DoctorToolView[];
+  readonly install: DoctorInstallProbeView;
+  readonly capabilities: readonly DoctorCapabilityView[];
+  readonly stageRouting: readonly DoctorStageRoutingView[];
+  readonly unusedRunners: readonly { readonly id: string; readonly type: string }[];
+  readonly runners: readonly DoctorRunnerView[];
+  /** Empty unless a deep probe was asked for; the route never asks for one. */
+  readonly probes: readonly DoctorProbeView[];
+  readonly orphanRoles: readonly { readonly role: string; readonly primary: string }[];
+  readonly degradations: readonly {
+    readonly kind: string;
+    readonly reason: string;
+    readonly impact: string;
+  }[];
+  readonly notes: readonly string[];
+  readonly unresolvableRoles: readonly string[];
+  readonly remediations: readonly { readonly problem: string; readonly fix: string }[];
+  /**
+   * False from this route, always, and the browser has to say so.
+   *
+   * The server may not read the process environment (§93), so a runner authenticated by
+   * `apiKeyEnv` answers `401` to a health check made without its key and is reported
+   * `not configured`. Repeating that as a finding would send somebody to fix credentials
+   * that are already there — the flag is what lets the page write "not checked from here"
+   * instead.
+   */
+  readonly readsEnvironment: boolean;
+}
+
+/**
  * A prompt as an asset (§83).
  *
  * No version field, because prompts declare none — and inventing one would be
@@ -906,6 +1163,48 @@ export interface ContextTelemetryAnalyticsView {
  * No monetary figure appears, at any level. Duration and counts are facts this
  * tool observed; a price is a guess about somebody else's contract.
  */
+/**
+ * One run's telemetry, as the route actually answers it (7.4).
+ *
+ * The previous dashboard declared this shape by hand and **lost `context` doing it** — the
+ * AR-09 estimates are the half that answers "why did that stage cost so much", and a
+ * hand-copied response type is exactly how a served field comes to have no reader. Declared
+ * here, assigned from the handler, so a field that moves is a compile error.
+ *
+ * `summary` mirrors `core/telemetry.ts`'s own summary, widened where that module's types
+ * are its own: `contracts` may not import `core`, and a narrower record is assignable to a
+ * wider one, so the link holds without the dependency.
+ */
+export interface TelemetryBucketView {
+  readonly count: number;
+  readonly durationMs: number;
+  readonly failures: number;
+  readonly fallbacks: number;
+  readonly retries: number;
+}
+
+export interface TelemetrySummaryView {
+  readonly entries: number;
+  readonly durationMs: number;
+  readonly failures: number;
+  readonly fallbacks: number;
+  readonly retries: number;
+  /** Entries that ran below the effort they were configured for (R-15). */
+  readonly reasoningClamped: number;
+  readonly byRunner: Record<string, TelemetryBucketView>;
+  /** Keyed by the model the runner reported; entries without one are omitted. */
+  readonly byModel: Record<string, TelemetryBucketView>;
+  readonly byRole: Record<string, TelemetryBucketView>;
+  readonly byStage: Record<string, TelemetryBucketView>;
+}
+
+export interface RunTelemetryView {
+  readonly entries: readonly TelemetryEntry[];
+  readonly summary: TelemetrySummaryView;
+  /** Absent means context telemetry was not observed; it never means zero. */
+  readonly context?: ContextTelemetryView;
+}
+
 export interface AnalyticsView {
   readonly scope: {
     readonly projectIds: string[];

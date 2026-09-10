@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { RunDagView } from '@contracts/index.js';
-import { taskTone, words } from '../../lib/tone';
+import { taskTone } from '../../lib/tone';
+import { useT, word } from '../../lib/i18n';
 import { Empty } from '../../components/ui';
 
 /**
@@ -28,6 +29,7 @@ export interface GraphProps {
 }
 
 export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphProps) {
+  const t = useT();
   const layout = useMemo(() => {
     if (dag === undefined) return undefined;
     const order = new Map(rows.map((row, index) => [row.id, index]));
@@ -54,9 +56,9 @@ export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphPr
     };
   }, [dag, rows]);
 
-  if (error !== undefined) return <Empty error>The dependency graph could not be read.</Empty>;
-  if (dag === undefined || layout === undefined) return <Empty>Reading the plan…</Empty>;
-  if (dag.nodes.length === 0) return <Empty hint="A plan appears here once planning has produced one.">No tasks yet.</Empty>;
+  if (error !== undefined) return <Empty error>{t.graph.couldNotRead}</Empty>;
+  if (dag === undefined || layout === undefined) return <Empty>{t.graph.reading}</Empty>;
+  if (dag.nodes.length === 0) return <Empty hint={t.graph.appearsAfterPlanning}>{t.graph.noTasks}</Empty>;
 
   const titles = new Map(rows.map((row) => [row.id, row.title]));
   const hot = new Set<string>();
@@ -73,20 +75,20 @@ export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphPr
     <div className="graph">
       {dag.invalid !== undefined ? (
         <div className="notice" data-tone="bad" style={{ marginBottom: 12 }}>
-          <span className="notice__k">{words(dag.invalid.kind)}</span>
+          <span className="notice__k">{word(t, dag.invalid.kind)}</span>
           <span>{dag.invalid.message}</span>
         </div>
       ) : null}
       {dag.unresolved.length > 0 ? (
         <div className="notice" data-tone="warn" style={{ marginBottom: 12 }}>
-          <span className="notice__k">unresolved</span>
+          <span className="notice__k">{t.graph.unresolved}</span>
           <span>
-            {dag.unresolved.map((entry) => `${entry.taskId} depends on ${entry.dependsOn}, which the plan does not contain`).join('; ')}
+            {dag.unresolved.map((entry) => t.graph.dependsOnMissing(entry.taskId, entry.dependsOn)).join('; ')}
           </span>
         </div>
       ) : null}
       <div style={{ overflowX: 'auto' }}>
-        <svg className="graph__svg" width={layout.width} height={layout.height} role="img" aria-label="Task dependency graph">
+        <svg className="graph__svg" width={layout.width} height={layout.height} role="img" aria-label={t.graph.aria}>
           {dag.edges.map((edge) => {
             const from = layout.positions.get(edge.from);
             const to = layout.positions.get(edge.to);
@@ -113,7 +115,7 @@ export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphPr
             // Measured, not guessed: 12 characters of the title at 10.5px and 10 of the state
             // at 9px share the 150px second line with 8px to spare.
             const short = title.length > 12 ? `${title.slice(0, 11)}…` : title;
-            const stateWord = state === undefined ? '' : words(state).slice(0, 10);
+            const stateWord = state === undefined ? '' : word(t, state).slice(0, 10);
             const isSelected = selected === node.taskId;
             const dim = selected !== undefined && !isSelected && !hot.has(node.taskId);
             return (
@@ -135,7 +137,7 @@ export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphPr
                 }}
                 aria-label={`${node.taskId} ${title} ${state ?? ''}`}
               >
-                <title>{`${node.taskId} · ${title}${state === undefined ? '' : ` · ${words(state)}`}`}</title>
+                <title>{`${node.taskId} · ${title}${state === undefined ? '' : ` · ${word(t, state)}`}`}</title>
                 <rect className="svg-node__box" width={NODE_W} height={NODE_H} />
                 <circle className="svg-node__dot" cx={12} cy={15} r={3.5} />
                 <text className="svg-node__id" x={22} y={19} style={node.taskId.startsWith('FIX') ? { fill: 'var(--warn)' } : undefined}>

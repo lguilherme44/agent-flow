@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ReasoningLevel } from '../../src/contracts/index.js';
-import {
-  renderCapabilityReport,
-  renderVerdict,
-  unresolvableRoles,
-  type CapabilityObservation,
-} from '../../src/cli/doctor.js';
+import { renderCapabilityReport, renderVerdict } from '../../src/cli/doctor.js';
+import { rolesThatCannotRun, type CapabilityObservation } from '../../src/app/diagnostics.js';
 
 /** The mark the report uses for something that cannot work, as opposed to a warning. */
 const CROSS_MARK = '✗';
@@ -138,8 +134,8 @@ describe('mechanical capability discovery (AR-01)', () => {
     });
 
     it('is counted, so the command can refuse instead of printing OK', () => {
-      expect(unresolvableRoles([unresolvable(), observation()])).toEqual(['sdd']);
-      expect(unresolvableRoles([observation()])).toEqual([]);
+      expect(rolesThatCannotRun([unresolvable(), observation()])).toEqual(['sdd']);
+      expect(rolesThatCannotRun([observation()])).toEqual([]);
     });
   });
 

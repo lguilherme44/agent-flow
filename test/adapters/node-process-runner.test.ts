@@ -34,10 +34,28 @@ const runNode = (script: string, overrides: Record<string, unknown> = {}) =>
  * nothing to do with which shell expresses it. `JSON.stringify` carries the marker path
  * into the inner script, which is also what makes a Windows path with backslashes survive.
  */
-const spawnsAGrandchild = (marker: string, holdMs = 8_000): string => {
-  const grandchild = `setTimeout(()=>{require("node:fs").writeFileSync(${JSON.stringify(
-    marker,
-  )},"x")},1000)`;
+/**
+ * The grandchild announces itself, and only then starts counting down.
+ *
+ * **Two markers, because one of them was an assumption.** The earlier fixture wrote a
+ * single marker one second in, and every caller slept a fixed number of milliseconds
+ * before letting the kill land. Measured under a loaded gate on Windows: the kill arrived
+ * while the grandchild was still being created, `taskkill /T` walked a tree that did not
+ * contain it yet, the direct child died — and the second attempt had no root left to walk,
+ * because a pid tree with a dead root reaches nothing. The orphan then wrote its marker
+ * and the assertion read a real, narrow platform race as a containment defect.
+ *
+ * `alive` is written the instant the grandchild runs, so a test can wait for it and make
+ * the kill provably later than the process it claims to reach. `survived` is written far
+ * enough out that it appears only if the grandchild outlived the kill.
+ */
+const spawnsAGrandchild = (
+  markers: { readonly alive: string; readonly survived: string },
+  { holdMs = 20_000, survivesAfterMs = 5_000 } = {},
+): string => {
+  const grandchild =
+    `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(markers.alive)},"x");` +
+    `setTimeout(()=>{fs.writeFileSync(${JSON.stringify(markers.survived)},"x")},${String(survivesAfterMs)})`;
   return (
     `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],` +
     `{stdio:"ignore"});setTimeout(()=>{},${String(holdMs)});`
@@ -47,6 +65,38 @@ const spawnsAGrandchild = (marker: string, holdMs = 8_000): string => {
 /** A marker path this test owns, in the platform's own temp directory. */
 const markerPath = (name: string): string =>
   join(tmpdir(), `agent-flow-${name}-${String(process.pid)}`);
+
+/** A pair of markers for one grandchild, cleared before use. */
+async function grandchildMarkers(name: string) {
+  const { existsSync, rmSync } = await import('node:fs');
+  const alive = markerPath(`${name}-alive`);
+  const survived = markerPath(`${name}-survived`);
+  rmSync(alive, { force: true });
+  rmSync(survived, { force: true });
+
+  return {
+    alive,
+    survived,
+    /** Resolves once the grandchild exists. Bounded, so a fixture that never spawns fails. */
+    async waitUntilAlive(timeoutMs = 20_000): Promise<void> {
+      // Checked before the clock, so `waitUntilAlive(0)` reads as "it must already be
+      // there" rather than as an unconditional failure.
+      const deadline = Date.now() + timeoutMs;
+      do {
+        if (existsSync(alive)) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      } while (Date.now() < deadline);
+      throw new Error('no grandchild was ever created, so nothing could be proved');
+    },
+    /** True when the grandchild outlived the kill. Clears both markers on the way out. */
+    outlivedTheKill(): boolean {
+      const survived = existsSync(markerPath(`${name}-survived`));
+      rmSync(markerPath(`${name}-alive`), { force: true });
+      rmSync(markerPath(`${name}-survived`), { force: true });
+      return survived;
+    },
+  };
+}
 
 describe('basic execution', () => {
   it('captures stdout and a zero exit code', async () => {
@@ -212,26 +262,28 @@ describe('cancellation (PRI-09, PRI-14)', () => {
     // The same failure the timeout path already documents, on the other path. A cancel
     // that signalled only the direct child would leave exactly the orphans `detached`
     // exists to prevent.
-    const { existsSync, rmSync } = await import('node:fs');
-    const marker = markerPath('cancel-test');
-    rmSync(marker, { force: true });
+    //
+    // **The cancel is the one path where the test owns the clock**, so the ordering is a
+    // fact rather than a hope: the abort is fired *after* the grandchild has announced
+    // itself, which is the only way "the kill reached it" means anything.
+    const markers = await grandchildMarkers('cancel-test');
 
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 200);
-
-    await runNode(spawnsAGrandchild(marker), {
-      timeoutSeconds: 30,
+    const run = runNode(spawnsAGrandchild(markers), {
+      timeoutSeconds: 60,
       killGraceMs: 150,
       signal: controller.signal,
     });
 
-    // The grandchild would write its marker one second in. Wait past that.
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await markers.waitUntilAlive();
+    controller.abort();
+    await run;
 
-    const survived = existsSync(marker);
-    rmSync(marker, { force: true });
-    expect(survived).toBe(false);
-  }, 40_000);
+    // Past the point the grandchild would have written, had it lived.
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+
+    expect(markers.outlivedTheKill()).toBe(false);
+  }, 60_000);
 
   it('leaves an ordinary run untouched when the signal never fires', async () => {
     const controller = new AbortController();
@@ -412,34 +464,78 @@ describe('timeout reaches the whole process tree (V-09 regression)', () => {
     runNode(script, { timeoutSeconds: 0.3, killGraceMs: 150, ...overrides });
 
   it('gives up on schedule even when the child spawned its own children', async () => {
+    const markers = await grandchildMarkers('tree-schedule');
     const startedAt = Date.now();
-    const result = await tree(spawnsAGrandchild(markerPath('tree-schedule')));
+    const result = await tree(spawnsAGrandchild(markers));
     const elapsed = Date.now() - startedAt;
 
     expect(result.timedOut).toBe(true);
-    // Before the fix this waited the full 8 seconds.
+    // Before the fix this waited the full hold.
     expect(elapsed).toBeLessThan(4_000);
-  }, 15_000);
+    markers.outlivedTheKill();
+  }, 20_000);
+
+  it('can see a survivor, and names the limit of a pid tree', async () => {
+    // The control this pair needed and did not have, and it took two measurements to get
+    // right — both worth keeping, because each one is a claim about the platform.
+    //
+    //   1. Switching the tree kill off does **not** turn the assertion red on Windows: a
+    //      fully started grandchild dies with its parent anyway. So "no marker" proves
+    //      nothing until something shows a marker can appear at all.
+    //   2. `detached: true` does not escape either. `taskkill /T` walks *parent pids*, and
+    //      detaching changes the console, not the parentage.
+    //
+    // What does escape is a process whose parent has already exited: it is re-parented,
+    // so it is in nobody's tree, and no pid-rooted kill can reach it. That is the honest
+    // limit of this mechanism rather than a defect in it — and it is exactly the survivor
+    // the assertion below has to be able to see.
+    const markers = await grandchildMarkers('tree-control');
+    const orphan =
+      `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(markers.alive)},"x");` +
+      `setTimeout(()=>{fs.writeFileSync(${JSON.stringify(markers.survived)},"x")},5000)`;
+    // The middle process spawns and **exits at once** — no timer — so by the time the
+    // kill lands its child has already been re-parented out of the tree.
+    const escapes =
+      `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(orphan)}],` +
+      `{stdio:"ignore",detached:true}).unref();`;
+
+    const result = await tree(
+      `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(escapes)}],{stdio:"ignore"});` +
+        `setTimeout(()=>{},20000);`,
+      { timeoutSeconds: 3 },
+    );
+
+    expect(result.timedOut).toBe(true);
+    await markers.waitUntilAlive(0);
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+
+    expect(markers.outlivedTheKill(), 'a re-parented process should have outlived the kill').toBe(true);
+  }, 30_000);
 
   it('leaves no grandchild running behind it', async () => {
-    const { existsSync, rmSync } = await import('node:fs');
-    const marker = markerPath('tree-test');
-    rmSync(marker, { force: true });
+    // **Three seconds, not 300 ms, and the number is the whole repair.** The timeout is
+    // the one path where the runner owns the clock, so the test cannot fire the kill
+    // after the grandchild exists — it can only give the tree enough room to *be* a tree
+    // before the kill lands. At 300 ms it did not: measured under a loaded gate, the kill
+    // arrived mid-creation, `taskkill /T` walked a tree the grandchild was not in yet, and
+    // the second attempt had a dead root and reached nothing. The orphan was real; the
+    // defect it looked like was not.
+    //
+    // The alive marker is what turns the budget into evidence: if the grandchild never
+    // announced itself, the test says so instead of quietly passing on a tree that was
+    // never built — the same trap the `/bin/sh` version of this test fell into.
+    const markers = await grandchildMarkers('tree-test');
 
-    const result = await tree(spawnsAGrandchild(marker));
+    const result = await tree(spawnsAGrandchild(markers), { timeoutSeconds: 3 });
 
-    // The claim only means something if a tree was actually created. Without this the
-    // assertion below passes on any platform where the child failed to spawn — which is
-    // exactly how the `/bin/sh` version of this test reported green on Windows.
     expect(result.timedOut, 'no tree was spawned, so nothing was proved').toBe(true);
+    await markers.waitUntilAlive(0);
 
-    // The grandchild would write its marker one second in. Wait past that.
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    // Past the point the grandchild would have written, had it lived.
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
 
-    const survived = existsSync(marker);
-    rmSync(marker, { force: true });
-    expect(survived).toBe(false);
-  }, 15_000);
+    expect(markers.outlivedTheKill()).toBe(false);
+  }, 30_000);
 
   it('still reports a normal exit for a process that finishes in time', async () => {
     // The tree signalling must not disturb the ordinary path.

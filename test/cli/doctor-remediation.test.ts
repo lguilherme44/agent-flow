@@ -1,27 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { generateRemediations } from '../../src/cli/doctor.js';
-import { assessHealth, type ObservedRunner } from '../../src/core/health.js';
-import { GlobalConfigSchema } from '../../src/contracts/index.js';
-
-const baseConfig = GlobalConfigSchema.parse({
-  runners: {
-    claude: { type: 'claude-code-cli' },
-    codex: { type: 'codex-cli' },
-  },
-  roles: {
-    architect: { runner: 'claude', effort: 'high' },
-    sdd: { runner: 'claude', effort: 'high' },
-    planner: { runner: 'claude', effort: 'high' },
-    planReviewer: { runner: 'codex', effort: 'high' },
-    executors: {
-      trivial: { runner: 'claude', effort: 'low' },
-      normal: { runner: 'claude', effort: 'medium' },
-      complex: { runner: 'claude', effort: 'high' },
-    },
-    verification: { runner: 'claude', effort: 'medium' },
-    finalReviewer: { runner: 'codex', effort: 'very_high' },
-  },
-});
+import { generateRemediations } from '../../src/app/diagnostics.js';
+import type { ObservedRunner } from '../../src/core/health.js';
 
 describe('Doctor Remediation (UX-06 / UX-07)', () => {
   it('generates concrete install commands when tools or runners are missing', () => {
@@ -30,13 +9,10 @@ describe('Doctor Remediation (UX-06 / UX-07)', () => {
       { id: 'codex', installed: true, executable: true, auth: 'not_configured' },
     ];
 
-    const verdict = assessHealth(baseConfig, observed);
-    const remediations = generateRemediations(
-      observed,
-      verdict,
-      { present: false },
-      { present: true },
-    );
+    const remediations = generateRemediations(observed, { name: 'node', present: false }, {
+      name: 'git',
+      present: true,
+    });
 
     expect(remediations).toEqual(
       expect.arrayContaining([
@@ -62,13 +38,10 @@ describe('Doctor Remediation (UX-06 / UX-07)', () => {
       { id: 'codex', installed: true, executable: true, auth: 'configured' },
     ];
 
-    const verdict = assessHealth(baseConfig, observed);
-    const remediations = generateRemediations(
-      observed,
-      verdict,
-      { present: true },
-      { present: true },
-    );
+    const remediations = generateRemediations(observed, { name: 'node', present: true }, {
+      name: 'git',
+      present: true,
+    });
 
     expect(remediations).toHaveLength(0);
   });

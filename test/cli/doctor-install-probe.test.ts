@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
 import { FakeHost } from '../fakes/fake-host.js';
-import { probeInstallCleanliness } from '../../src/cli/doctor.js';
+import { probeInstallCleanliness } from '../../src/app/diagnostics.js';
+import { renderInstallProbe } from '../../src/cli/doctor.js';
 import type { EffectiveConfig } from '../../src/contracts/index.js';
-import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
+import { BORN_DIRTY_FILE, bornDirty, makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
 
 /**
  * An install command, as a Node script on disk outside the repository.
@@ -68,7 +69,7 @@ async function probe(temp: TempRepo, install?: string): Promise<string> {
     ...(install === undefined ? {} : { project: { commands: { install } } }),
   } as unknown as EffectiveConfig;
 
-  const lines = await probeInstallCleanliness({
+  const finding = await probeInstallCleanliness({
     fs: new NodeFileSystem(),
     processRunner: new NodeProcessRunner(),
     config,
@@ -76,7 +77,10 @@ async function probe(temp: TempRepo, install?: string): Promise<string> {
     host: new FakeHost(4242, 'test-host', [4242], temp.home),
   });
 
-  return lines.join('\n');
+  // Through the renderer, so the finding and the sentence that explains it are asserted
+  // together. `probeInstallCleanliness` answers with an outcome now — the Deck reads the
+  // same one — and a structure that stopped producing its line would otherwise pass.
+  return renderInstallProbe(finding).join('\n');
 }
 
 describe('the install-cleanliness probe (§8.4)', () => {
@@ -115,20 +119,17 @@ describe('the install-cleanliness probe (§8.4)', () => {
   });
 
   it('names the checkout phase when a fresh checkout is born dirty', async () => {
-    // The same `.gitattributes` smudge filter the preparation tests use: the
-    // working-tree content no longer matches the index, so the checkout is dirty
-    // before anything is installed. `doctor` must not blame the install for it.
+    // The working-tree content does not match the index the instant Git finishes
+    // writing it, so the checkout is dirty before anything is installed. `doctor`
+    // must not blame the install for it. The fixture spawns nothing to arrange
+    // that — see `bornDirty`, and the gate failure that is the reason it does not.
     repo = await makeTempRepoWithCommit();
-    repo.write('.gitattributes', '*.txt filter=dirtier\n');
-    repo.write('content.txt', 'original\n');
-    repo.commitAll('a filtered file');
-    repo.userGit(['config', 'filter.dirtier.smudge', 'sed s/original/smudged/']);
-    repo.userGit(['config', 'filter.dirtier.clean', 'cat']);
+    bornDirty(repo);
 
     const report = await probe(repo, installScript(repo, 'ignored-output', MAKE_IGNORED_OUTPUT));
 
     expect(report).toContain('not clean before installing');
-    expect(report).toContain('content.txt');
+    expect(report).toContain(BORN_DIRTY_FILE);
     expect(report).toContain('phase: checkout');
   });
 
@@ -251,7 +252,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
     repo = await makeTempRepoWithCommit();
     const outside = join(repo.home, 'not-a-repo');
 
-    const lines = await probeInstallCleanliness({
+    const finding = await probeInstallCleanliness({
       fs: new NodeFileSystem(),
       processRunner: new NodeProcessRunner(),
       config: {
@@ -262,6 +263,7 @@ describe('the install-cleanliness probe (§8.4)', () => {
       host: new FakeHost(4242, 'test-host', [4242], repo.home),
     });
 
-    expect(lines).toEqual([]);
+    expect(finding).toEqual({ outcome: 'skipped', reason: 'no_head' });
+    expect(renderInstallProbe(finding)).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DAY, HOUR, MINUTE, SECOND, formatDuration, formatOffset, formatRelative, scaleTime, ticks } from './time';
+import { en, ptBR } from './i18n';
 
 describe('formatDuration', () => {
   it('picks the grain a person would', () => {
@@ -23,11 +24,26 @@ describe('formatRelative', () => {
   const now = Date.parse('2026-09-04T12:00:00.000Z');
 
   it('rounds towards the reader', () => {
-    expect(formatRelative('2026-09-04T11:59:40.000Z', now)).toBe('just now');
-    expect(formatRelative('2026-09-04T11:57:00.000Z', now)).toBe('3m ago');
-    expect(formatRelative('2026-09-04T09:00:00.000Z', now)).toBe('3h ago');
-    expect(formatRelative('2026-09-03T06:00:00.000Z', now)).toBe('yesterday');
-    expect(formatRelative(undefined, now)).toBe('—');
+    expect(formatRelative('2026-09-04T11:59:40.000Z', now, en.time)).toBe('just now');
+    expect(formatRelative('2026-09-04T11:57:00.000Z', now, en.time)).toBe('3m ago');
+    expect(formatRelative('2026-09-04T09:00:00.000Z', now, en.time)).toBe('3h ago');
+    expect(formatRelative('2026-09-03T06:00:00.000Z', now, en.time)).toBe('yesterday');
+    expect(formatRelative(undefined, now, en.time)).toBe('—');
+  });
+
+  it('says the same instants in the reader\u2019s language', () => {
+    /*
+      The words are an argument, so this is the whole of what changes between languages —
+      and it is why they are an argument: a module-level locale would make these two
+      assertions depend on which ran first.
+    */
+    expect(formatRelative('2026-09-04T11:59:40.000Z', now, ptBR.time)).toBe('agora mesmo');
+    expect(formatRelative('2026-09-04T11:57:00.000Z', now, ptBR.time)).toBe('h\u00e1 3min');
+    expect(formatRelative('2026-09-04T09:00:00.000Z', now, ptBR.time)).toBe('h\u00e1 3h');
+    expect(formatRelative('2026-09-03T06:00:00.000Z', now, ptBR.time)).toBe('ontem');
+    // A month name is language too, and this is the branch that reaches for one.
+    expect(formatRelative('2026-09-01T06:00:00.000Z', now, ptBR.time)).toMatch(/^set /);
+    expect(formatRelative('2026-09-01T06:00:00.000Z', now, en.time)).toMatch(/^Sep /);
   });
 });
 

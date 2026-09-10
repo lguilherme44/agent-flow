@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerHealthView, RunnerModelsView, RunnerTypeView } from '@contracts/index.js';
 import type { ConfigEditorOperation } from '../../lib/api';
 import { Chip, Empty, Skeleton } from '../../components/ui';
-import { words } from '../../lib/tone';
+import { useT, word, type Dictionary } from '../../lib/i18n';
 import { blockedRunnerDependencies, operationsToRemoveDynamicEntity, pathLabel, runnerIdsOf, runnerLeafFields } from './crew-config';
 import { FieldControl } from './FieldControl';
 
@@ -25,13 +25,14 @@ export function RunnerGrid({ view, roles, health, types, models, operations, onC
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
 }) {
+  const t = useT();
   const ids = runnerIdsOf(view.fields);
   const [adding, setAdding] = useState(false);
   return (
     <section className="crew-runners" aria-labelledby="runners-grid">
       <div className="section__head">
-        <h3 id="runners-grid" className="eyebrow" style={{ margin: 0 }}>Runners</h3>
-        <span className="section__count">{ids.length} declared · {types.data?.length ?? '—'} types supported</span>
+        <h3 id="runners-grid" className="eyebrow" style={{ margin: 0 }}>{t.crew.runners}</h3>
+        <span className="section__count">{t.crew.declaredAndTypes(ids.length, types.data?.length)}</span>
       </div>
       {health.loading && ids.length === 0 ? <Skeleton rows={2} /> : null}
       <div className="runner-cards">
@@ -53,11 +54,11 @@ export function RunnerGrid({ view, roles, health, types, models, operations, onC
           ? <AddRunner view={view} types={types} onCancel={() => setAdding(false)} onCreate={(next) => { setAdding(false); onOperations([...operations, ...next]); }} />
           : <button type="button" className="runner-card runner-card--add" onClick={() => setAdding(true)}>
             <span aria-hidden="true">+</span>
-            <span>Add runner</span>
-            <small>{types.data === undefined ? 'types unavailable' : `${String(types.data.length)} types supported`}</small>
+            <span>{t.crew.addRunner}</span>
+            <small>{types.data === undefined ? t.crew.typesUnavailable : t.crew.typesSupported(types.data.length)}</small>
           </button>}
       </div>
-      {types.error === undefined ? null : <Empty error>Runner types could not be read, so a new runner cannot be described here.</Empty>}
+      {types.error === undefined ? null : <Empty error>{t.crew.typesCouldNotRead}</Empty>}
     </section>
   );
 }
@@ -92,10 +93,8 @@ function pendingEnabled(
  * across five expressions it read the same on screen and was unmatchable by any query that
  * asks for a sentence — which is how a message ends up untested for the one thing it says.
  */
-function brokenBySwitch(routes: number): string {
-  return routes === 1
-    ? 'Turned off, and 1 route still points here — it cannot run until it is re-pointed or this is switched back on.'
-    : `Turned off, and ${String(routes)} routes still point here — they cannot run until they are re-pointed or this is switched back on.`;
+function brokenBySwitch(t: Dictionary, routes: number): string {
+  return t.crew.brokenBySwitch(routes);
 }
 
 function RunnerCard({ id, view, roles, health, types, models, operations, onChange, onOperations }: {
@@ -110,6 +109,7 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
   readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
 }) {
+  const t = useT();
   const fields = runnerLeafFields(view.fields, id);
   const type = String(fields.find(({ path }) => path[2] === 'type')?.effectiveValue ?? '');
   const enabled = pendingEnabled(fields, operations);
@@ -124,7 +124,7 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
       <div className="runner-card__top">
         <div className="runner-card__name">
           <span className="runner-card__id mono">{id}</span>
-          <span className="runner-card__type mono">{type || '(no type)'}</span>
+          <span className="runner-card__type mono">{type || t.crew.noType}</span>
         </div>
         {switchField === undefined
           ? null
@@ -132,18 +132,18 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
         {health === undefined
           ? null
           : <Chip tone={!health.installed || !health.executable ? 'bad' : health.auth === 'unknown' ? 'idle' : 'ok'}>
-            {!health.installed ? 'missing' : words(health.auth)}
+            {!health.installed ? t.crew.missing : word(t, health.auth)}
           </Chip>}
       </div>
       {declared === undefined
-        ? <p className="runner-card__unknown">Type <code>{type || '(unset)'}</code> is not one this installation supports.</p>
+        ? <p className="runner-card__unknown">{t.crew.typeBefore}<code>{type || t.crew.unset}</code>{t.crew.typeAfter}</p>
         : <p className="runner-card__caps">
-          <span className="tag">{declared.capabilities.supportsWorkingDirectory ? 'works in the repo' : 'text only'}</span>
-          <span className="tag">{declared.capabilities.supportsReadOnly ? 'can read-only' : 'no read-only mode'}</span>
+          <span className="tag">{declared.capabilities.supportsWorkingDirectory ? t.crew.worksInRepo : t.crew.textOnly}</span>
+          <span className="tag">{declared.capabilities.supportsReadOnly ? t.crew.canReadOnly : t.crew.noReadOnly}</span>
           <span className="tag">{declared.capabilities.structuredOutputStrategy}</span>
         </p>}
       <details className="runner-card__more">
-        <summary>{fields.length} setting{fields.length === 1 ? '' : 's'}</summary>
+        <summary>{t.crew.settingCount(fields.length)}</summary>
         <div className="runner-card__fields">
           {fields.filter(({ path }) => path[2] !== 'enabled').map((field) => (
             <RunnerField
@@ -157,24 +157,24 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
         </div>
       </details>
       <div className="runner-card__foot">
-        <span className="mono">{model === undefined ? 'runner default' : String(model)}</span>
-        <span>{used} role{used === 1 ? '' : 's'}</span>
+        <span className="mono">{model === undefined ? t.crew.runnerDefault : String(model)}</span>
+        <span>{t.crew.roleCount(used)}</span>
         <button
           type="button"
           className="btn btn--danger btn--sm"
-          aria-label={`Remove runner ${id}`}
+          aria-label={t.crew.removeRunner(id)}
           disabled={removals.length === 0 || blocked.length > 0}
-          title={blocked.length === 0 ? undefined : `Referenced by ${blocked.join(', ')}`}
+          title={blocked.length === 0 ? undefined : t.crew.referencedBy(blocked.join(', '))}
           onClick={() => onOperations([...operations, ...removals])}
         >
-          Remove
+          {t.crew.remove}
         </button>
       </div>
       {blocked.length === 0
         ? null
         : enabled
           ? <small className="runner-card__blocked" title={blocked.join(', ')}>
-            Referenced by {blocked.length} route{blocked.length === 1 ? '' : 's'}
+            {t.crew.referencedByRoutes(blocked.length)}
           </small>
           /**
            * Turned off with routes still pointing here (PRI-27).
@@ -194,7 +194,7 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
            * of it is written. Silence is the only wrong answer.
            */
           : <small className="runner-card__broken" title={blocked.join(', ')}>
-            {brokenBySwitch(blocked.length)}
+            {brokenBySwitch(t, blocked.length)}
           </small>}
     </div>
   );
@@ -208,6 +208,7 @@ function RunnerField({ field, operations, onChange, compact = false, suggestions
   readonly compact?: boolean;
   readonly suggestions?: readonly string[];
 }) {
+  const t = useT();
   const label = pathLabel(field.path);
   const leaf = String(field.path[2]);
   const operation = [...operations].reverse().find((entry) => pathLabel(entry.path) === label);
@@ -228,7 +229,7 @@ function RunnerField({ field, operations, onChange, compact = false, suggestions
   );
   if (compact) {
     return (
-      <span className="runner-card__switch" title={field.effectiveValue === false ? 'disabled' : 'enabled'}>
+      <span className="runner-card__switch" title={field.effectiveValue === false ? t.crew.disabled : t.crew.enabled}>
         <label className="visually-hidden" htmlFor={`runner-${label}`}>{label}</label>
         {control}
       </span>
@@ -258,6 +259,7 @@ function AddRunner({ view, types, onCancel, onCreate }: {
   readonly onCancel: () => void;
   readonly onCreate: (operations: ConfigEditorOperation[]) => void;
 }) {
+  const t = useT();
   const [id, setId] = useState('');
   const [type, setType] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
@@ -289,7 +291,7 @@ function AddRunner({ view, types, onCancel, onCreate }: {
       <div className="runner-field">
         <label className="runner-field__name" htmlFor="new-runner-type">type</label>
         <select id="new-runner-type" className="input mono" value={type} onChange={(event) => { setType(event.target.value); setValues({}); }}>
-          <option value="">Choose a type</option>
+          <option value="">{t.crew.chooseType}</option>
           {(types.data ?? []).map((entry) => <option key={entry.type} value={entry.type}>{entry.type}</option>)}
         </select>
       </div>
@@ -300,17 +302,17 @@ function AddRunner({ view, types, onCancel, onCreate }: {
             id={`new-runner-${field.name}`}
             className="input mono"
             value={values[field.name] ?? ''}
-            placeholder={field.secretEnv === true ? 'NAME_OF_ENV_VAR' : undefined}
+            placeholder={field.secretEnv === true ? t.crew.envVarPlaceholder : undefined}
             onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
           />
-          {field.secretEnv === true ? <small>The variable's name. The key itself never enters the file.</small> : null}
+          {field.secretEnv === true ? <small>{t.crew.secretEnvNote}</small> : null}
         </div>
       ))}
       <div className="runner-card__foot">
-        <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel}>Cancel</button>
-        <button type="button" className="btn btn--sm" disabled={!valid} onClick={create}>Add runner</button>
+        <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel}>{t.common.cancel}</button>
+        <button type="button" className="btn btn--sm" disabled={!valid} onClick={create}>{t.crew.addRunner}</button>
       </div>
-      {taken ? <small className="runner-card__blocked">A runner called {id.trim()} already exists.</small> : null}
+      {taken ? <small className="runner-card__blocked">{t.crew.runnerExists(id.trim())}</small> : null}
     </div>
   );
 }

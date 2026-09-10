@@ -1,9 +1,23 @@
+import type { Dictionary } from './i18n';
+
 /**
  * Time, as the recorder needs it: parsing, formatting, and a linear scale with nice ticks.
  *
  * Pure. Every function takes its clock as an argument, so a test can pin "now" and a
  * screenshot never depends on when it was taken.
+ *
+ * **And its words, for the same reason.** `just now`, `yesterday` and the month names are
+ * language, and this module has no idea which one the reader chose. They arrive as an
+ * argument rather than through a module-level locale: a mutable global here would make
+ * every one of these functions impure, which the paragraph above is the whole point of.
+ * The parameter is required, so the compiler — not a reviewer — finds the call sites.
+ *
+ * A duration needs none of it: `41m 22s`, `2.4s` and `840ms` are the same in both
+ * languages, and so is a clock.
  */
+
+/** The slice of the dictionary this module needs, and nothing more. */
+export type TimeWords = Dictionary['time'];
 
 export const SECOND = 1_000;
 export const MINUTE = 60 * SECOND;
@@ -37,16 +51,16 @@ export function formatDuration(duration: number | undefined): string {
   return `${String(days)}d ${String(hours).padStart(2, '0')}h`;
 }
 
-/** `just now`, `3m ago`, `2h ago`, `yesterday`, `Sep 4`. */
-export function formatRelative(iso: string | undefined, now: number): string {
+/** `just now`, `3m ago`, `2h ago`, `yesterday`, `Sep 4` — in the reader's language. */
+export function formatRelative(iso: string | undefined, now: number, words: TimeWords): string {
   const at = ms(iso);
   if (at === undefined) return '—';
   const delta = now - at;
-  if (delta < 45 * SECOND) return 'just now';
-  if (delta < HOUR) return `${String(Math.round(delta / MINUTE))}m ago`;
-  if (delta < DAY) return `${String(Math.round(delta / HOUR))}h ago`;
-  if (delta < 2 * DAY) return 'yesterday';
-  return formatDay(at);
+  if (delta < 45 * SECOND) return words.justNow;
+  if (delta < HOUR) return words.minutesAgo(Math.round(delta / MINUTE));
+  if (delta < DAY) return words.hoursAgo(Math.round(delta / HOUR));
+  if (delta < 2 * DAY) return words.yesterday;
+  return formatDay(at, words);
 }
 
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -59,15 +73,13 @@ export function formatClock(at: number, withSeconds = true): string {
     : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-export function formatDay(at: number): string {
+export function formatDay(at: number, words: TimeWords): string {
   const d = new Date(at);
-  return `${MONTHS[d.getMonth()] ?? ''} ${String(d.getDate())}`;
+  return `${words.months[d.getMonth()] ?? ''} ${String(d.getDate())}`;
 }
 
-export function formatStamp(at: number): string {
-  return `${formatDay(at)} · ${formatClock(at)}`;
+export function formatStamp(at: number, words: TimeWords): string {
+  return `${formatDay(at, words)} · ${formatClock(at)}`;
 }
 
 /** Signed offset from a reference, `+41m 22s`, `−3.0s`. What a scrubber shows. */
@@ -146,8 +158,8 @@ export function ticks(domain: readonly [number, number], width: number, pixelsPe
 }
 
 /** The label a tick gets, given how dense the ticks are. */
-export function tickLabel(at: number, step: number): string {
-  if (step >= DAY) return formatDay(at);
+export function tickLabel(at: number, step: number, words: TimeWords): string {
+  if (step >= DAY) return formatDay(at, words);
   if (step >= MINUTE) return formatClock(at, false);
   return formatClock(at, true);
 }

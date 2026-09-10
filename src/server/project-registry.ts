@@ -74,6 +74,22 @@ export interface DiscoveryResult {
    * absent and conclude the tool is broken.
    */
   readonly skipped: readonly SkippedDirectory[];
+  /**
+   * Repositories under the workspace that have never been through `init` (7.6).
+   *
+   * The registry's security model is that a client names an *id* and never a path (§93),
+   * which is exactly why registering a project could not be done from a screen: a
+   * directory with no `.agent-flow/` has no id, so no request could name it. This closes
+   * that without weakening the model — the ids are issued here, by the same walk, under
+   * the same containment rule, and a directory the operator never pointed the server at
+   * still cannot be addressed.
+   *
+   * **A repository, not any directory.** `.git` is the marker because agent-flow needs one
+   * — worktrees, branches, a `planningBase` — and because offering every directory under a
+   * home folder is not a control plane. It is the same judgement `discoverProjects` makes
+   * about `package.json`, applied one step earlier.
+   */
+  readonly candidates: readonly RegisteredProject[];
 }
 
 /** Directories never worth descending into, and expensive to get wrong. */
@@ -117,6 +133,7 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
   const depth = Math.min(options.depth ?? DEFAULT_WORKSPACE_DEPTH, MAX_WORKSPACE_DEPTH);
   const flavour = options.path ?? nodePath;
   const found: string[] = [];
+  const candidates: string[] = [];
   const skipped: SkippedDirectory[] = [];
   const seen = new Set<string>();
 
@@ -140,6 +157,11 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
       found.push(resolved);
       // Still descends: a monorepo can hold initialised sub-projects, and the
       // depth bound is what stops this rather than an early return.
+    } else if (await options.fs.exists(flavour.join(dir, '.git'))) {
+      // A repository that has never been through `init`. `exists` rather than `stat`,
+      // because `.git` is a *file* in a worktree and in a submodule, and a check that
+      // only accepted a directory would hide exactly the checkouts somebody works in.
+      candidates.push(resolved);
     }
 
     if (remaining <= 0) return;
@@ -169,7 +191,30 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
     await walk(start, resolvedRoot, depth);
   }
 
-  return { projects: assignIds(found.sort()), skipped };
+  // Projects first, and their ids computed exactly as they were before candidates
+  // existed. Assigning over the union would let a directory that has never been
+  // registered rename a project somebody has bookmarked, which is a steep price for a
+  // tidier implementation.
+  const projects = assignIds(found.sort());
+  const taken = new Set(projects.map((project) => project.id));
+
+  return {
+    projects,
+    candidates: assignIds(candidates.sort()).map((candidate) => {
+      const id = taken.has(candidate.id) ? uniqueId(candidate.id, taken) : candidate.id;
+      taken.add(id);
+      return { ...candidate, id };
+    }),
+    skipped,
+  };
+}
+
+/** The first free variant of an id, so a candidate can never shadow a project. */
+function uniqueId(base: string, taken: ReadonlySet<string>): string {
+  for (let n = 2; ; n += 1) {
+    const next = `${base}-${String(n)}`;
+    if (!taken.has(next)) return next;
+  }
 }
 
 /**
@@ -193,6 +238,10 @@ export { within as isWithinWorkspace };
 
 /**
  * Builds a registry from an explicit list, for a single-project server.
+ *
+ * Offers no candidates and cannot rescan, and both are the truthful answer rather than a
+ * limitation: a registry built from a list was never asked to walk anything, so there is
+ * no directory it could honestly propose and nothing for a second walk to find.
  */
 export function registryOf(projects: readonly RegisteredProject[]): ProjectRegistry {
   const byId = new Map(projects.map((project) => [project.id, project]));
@@ -202,6 +251,41 @@ export function registryOf(projects: readonly RegisteredProject[]): ProjectRegis
     get: (id) => byId.get(id),
     /** The first registered project — what a single-project UI defaults to. */
     primary: () => projects[0],
+    candidates: () => [],
+  };
+}
+
+/**
+ * A registry that can look again (7.6).
+ *
+ * `agent-flow ui` walked the workspace once at startup, which was right while registering
+ * a project meant stopping the server and running `init` in a terminal. It stops being
+ * right the moment the Deck can register one: the write succeeds, `.agent-flow/config.yaml`
+ * exists on disk, and the workspace list still does not have it — a screen that told the
+ * truth when it was rendered and lies by the time the operator reads it.
+ *
+ * Rescanning is the whole mechanism, deliberately. Nothing here appends to a list: the
+ * walk is re-run under the same roots, the same depth and the same containment rule, so a
+ * project can only appear because the filesystem says it is there.
+ */
+export function discoveredRegistry(options: DiscoverOptions): ProjectRegistry & {
+  rescan(): Promise<DiscoveryResult>;
+} {
+  let current: DiscoveryResult = { projects: [], candidates: [], skipped: [] };
+  let byId = new Map<string, RegisteredProject>();
+
+  const index = (result: DiscoveryResult): DiscoveryResult => {
+    current = result;
+    byId = new Map(result.projects.map((project) => [project.id, project]));
+    return result;
+  };
+
+  return {
+    all: () => [...current.projects],
+    get: (id) => byId.get(id),
+    primary: () => current.projects[0],
+    candidates: () => [...current.candidates],
+    rescan: async () => index(await discoverProjects(options)),
   };
 }
 
@@ -209,6 +293,10 @@ export interface ProjectRegistry {
   all(): RegisteredProject[];
   get(id: string): RegisteredProject | undefined;
   primary(): RegisteredProject | undefined;
+  /** Repositories that could become projects. Empty for a registry built from a list. */
+  candidates(): RegisteredProject[];
+  /** Re-walks the workspace. Absent when there is no workspace to walk. */
+  rescan?(): Promise<DiscoveryResult>;
 }
 
 /**

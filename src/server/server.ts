@@ -3,7 +3,9 @@ import {
   AnalyticsQuerySchema,
   ConfigApplyRequestSchema,
   ConfigEditorQuerySchema,
+  CleanRequestSchema,
   ConfigValidateRequestSchema,
+  DoctorQuerySchema,
   ApproveRequestSchema,
   ArtifactParamsSchema,
   EventsQuerySchema,
@@ -16,6 +18,7 @@ import {
   RetryRequestSchema,
   ReviewRequestSchema,
   ReviseRequestSchema,
+  RegisterProjectRequestSchema,
   RunParamsSchema,
   StageLogParamsSchema,
   StartRequestSchema,
@@ -26,12 +29,17 @@ import {
   type ActionResultView,
   type AnalyticsView,
   type ApprovalGateView,
+  type CleanView,
   type ConfigView,
+  type DoctorView,
   type HealthResponse,
+  type ProjectCandidateView,
+  type ProjectRegisteredView,
   type ProjectView,
   type PromptView,
   type RoleRouteView,
   type RunSummaryView,
+  type RunTelemetryView,
   type WorkspaceView,
   type RunnerHealthView,
   type RunnerModelsView,
@@ -45,6 +53,9 @@ import { ConfigSourceCodecError } from '../ports/config-source-codec.js';
 import { StateStore } from '../app/state-store.js';
 import { PromptLoader } from '../app/prompt-loader.js';
 import { describeRoleRoutes } from '../app/role-routes.js';
+import { diagnose } from '../app/diagnostics.js';
+import { projectRelativePaths, registerProject } from '../app/init-project.js';
+import { cleanWorkspace, DEFAULT_RUNS_KEPT } from '../app/workspace-cleanup.js';
 import { RunExecutionLock, type LockRefusal } from '../app/run-execution-lock.js';
 import {
   approve,
@@ -65,6 +76,8 @@ import {
 } from '../app/run-actions.js';
 import { loadConfig } from '../config/loader.js';
 import { buildRegistry, describeRunnerTypes } from '../adapters/runners/registry.js';
+import { createGitCommand } from '../adapters/git/git-command.js';
+import { createGitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { referencedRunners } from '../core/health.js';
 import { capabilitiesOf } from '../core/role.js';
 import { collectTelemetry } from '../app/telemetry.js';
@@ -295,6 +308,109 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return views;
   });
 
+  /**
+   * Repositories under the workspace that have never been through `init` (7.6).
+   *
+   * Separate from `/projects` because they are a different kind of thing: one is what the
+   * server will talk about, the other is what it *could* be asked to start talking about.
+   * Folding them together would put a directory with no configuration into every list that
+   * currently means "a project", and every reader would have to learn to filter it out.
+   */
+  app.get('/api/v1/projects/candidates', (): ProjectCandidateView[] =>
+    options.registry.candidates().map((candidate) => ({
+      id: candidate.id,
+      name: candidate.name,
+      // No path. The id is the whole vocabulary, and a listing that leaked the directory
+      // would hand a browser the one thing §93 exists to keep out of it.
+    })),
+  );
+
+  /**
+   * Register a project, from the screen (7.6).
+   *
+   * `agent-flow init` detects the stack, reads the project's real scripts and writes
+   * `.agent-flow/config.yaml`, `AGENTS.md` and a `.gitignore` block. This is that use
+   * case — the same function, not a copy — reached by an id the server issued.
+   *
+   * **The AR-01 gate runs here too, and before the write.** `init` writes files that have
+   * to be committed, and that commit moves HEAD; a run's `planningBase` is frozen when the
+   * run is created, so committing now would leave it planning against one base and
+   * executing against another. The evidence run paid for that once. "It writes nothing" is
+   * half the contract, and a gate that ran after the write would be the other half missing.
+   */
+  app.post('/api/v1/projects', async (request, reply): Promise<ProjectRegisteredView | undefined> => {
+    const body = RegisterProjectRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'expected a candidate id');
+
+    const candidate = options.registry
+      .candidates()
+      .find((entry) => entry.id === body.data.candidateId);
+    if (candidate === undefined) return notFound(reply, 'no such candidate');
+
+    const outcome = await registerProject({
+      store: new StateStore({
+        fs: options.fs,
+        clock: options.clock,
+        projectDir: candidate.path,
+      }),
+      fs: options.fs,
+      projectDir: candidate.path,
+      ...(body.data.force === undefined ? {} : { force: body.data.force }),
+    });
+
+    if (!outcome.ok) {
+      const active = outcome.active;
+      reply.code(409).send({
+        error: 'active_run',
+        message: `Run ${active.runId} is still active (${active.status}). init writes files that have to be committed, and that commit moves HEAD.`,
+        action: 'Finish or abandon the run first, or retry with force to proceed anyway.',
+        forcible: true,
+      });
+      return undefined;
+    }
+
+    const { result, active } = outcome;
+
+    // The workspace is walked again rather than appended to: a project may only appear
+    // because the filesystem says it is there, under the same containment rule as every
+    // other one. Without this the write would succeed and the list would still be wrong.
+    await options.registry.rescan?.();
+    const registered = options.registry.all().find((project) => project.path === candidate.path);
+
+    if (registered === undefined) {
+      reply.code(500).send({
+        error: 'not_registered',
+        message: 'The project was written but the workspace scan did not pick it up.',
+        action: 'Restart `agent-flow ui` and check the workspace root and depth.',
+      });
+      return undefined;
+    }
+
+    const overview = await reader.projectOverview(registered);
+    const stack = await stackOf(options, registered);
+
+    reply.code(201);
+    return {
+      project: {
+        id: registered.id,
+        name: registered.name,
+        path: registered.path,
+        ...(stack === undefined ? {} : { stack }),
+        ...overview,
+      },
+      stack: { type: result.stack.type, name: result.stack.name },
+      created: projectRelativePaths(candidate.path, result.created),
+      updated: projectRelativePaths(candidate.path, result.updated),
+      skipped: projectRelativePaths(candidate.path, result.skipped),
+      warnings: [
+        ...result.warnings,
+        ...(active === undefined
+          ? []
+          : [{ kind: 'active_run' as const, runId: active.runId, status: active.status }]),
+      ],
+    };
+  });
+
   app.get('/api/v1/runs', async (request, reply): Promise<RunSummaryView[] | undefined> => {
     const query = ProjectQuerySchema.safeParse(request.query ?? {});
     if (!query.success) return badRequest(reply, 'invalid projectId');
@@ -522,7 +638,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     return log === null ? notFound(reply, 'no such run') : log;
   });
 
-  app.get('/api/v1/runs/:runId/telemetry', async (request, reply) => {
+  app.get('/api/v1/runs/:runId/telemetry', async (request, reply): Promise<RunTelemetryView | undefined> => {
     const scope = resolveRun(request, reply, projectOf);
     if (scope === undefined) return undefined;
 
@@ -714,6 +830,120 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       ...(route.fallback === undefined ? {} : { fallback: route.fallback }),
       ...(route.fallbackAbsent === undefined ? {} : { fallbackAbsent: route.fallbackAbsent }),
     }));
+  });
+
+  /**
+   * "Can this machine work?" (§59, AR-01).
+   *
+   * The same diagnosis the terminal prints, as data. Nothing here renders and nothing here
+   * decides: `diagnose` owns every check and the verdict, so a Deck that disagreed with
+   * `agent-flow doctor` would be a type error rather than a support conversation.
+   *
+   * **Shallow, always.** `--deep` spends quota on every runner, and a page that could ask
+   * for it would ask on every visit — a browser refresh must never cost a model call. The
+   * live probe stays an explicit, one-off act in a terminal, exactly as `/runners/health`
+   * already decided for the same reason.
+   *
+   * **And the install probe is opt-in, which took running the page to find out.** It is
+   * the slowest thing `doctor` does by an order of magnitude — a throwaway checkout and
+   * the project's own install — and the first version of this route ran it before
+   * answering. Measured against this repository: the browser's own read deadline fired
+   * first and the page said the machine could not be diagnosed. The probe is a real check
+   * and it stays available at `?install=true`; what changed is that asking for it is now
+   * a decision rather than the price of opening a page.
+   *
+   * **No environment.** Nothing here reads a credential (§93), so `readsEnvironment` comes
+   * back false and the page says which answers that weakens rather than repeating them as
+   * findings.
+   */
+  app.get('/api/v1/doctor', async (request, reply): Promise<DoctorView | undefined> => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const query = DoctorQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) return badRequest(reply, 'invalid doctor options');
+
+    const config = await loadConfig({
+      fs: options.fs,
+      globalConfigPath: options.globalConfigPath,
+      projectDir: project.path,
+    });
+
+    // Assigned, never rebuilt field by field. `DoctorView` says why: this line is the
+    // only thing keeping the wire shape and `Diagnosis` from drifting, and a mapping
+    // written out by hand would have made the drift invisible instead.
+    const view: DoctorView = await diagnose({
+      fs: options.fs,
+      processRunner: options.processRunner,
+      host: options.processHost,
+      config,
+      projectDir: project.path,
+      promptsDir: options.promptsDir,
+      installProbe: query.data.install === true,
+    });
+
+    return view;
+  });
+
+  /**
+   * Reclaim old run state and the Git namespace that goes with it (§20, 7.7).
+   *
+   * **A write route that is usually a read.** `dryRun` runs the same function down the
+   * same path and writes nothing, which is the only way a preview can be a preview *of
+   * this operation* rather than of a second implementation that agrees until it does not.
+   * It stays a POST because the guard treats POST as a write and makes the browser prove
+   * it is same-origin (PRI-05) — and because a dry run still spawns Git.
+   *
+   * What may be deleted is `app/namespace-reclaim.ts`'s decision and nothing here widens
+   * it: every path is derived from run state and then intersected with what Git actually
+   * registered under Agent Flow's own root.
+   */
+  app.post('/api/v1/clean', async (request, reply): Promise<CleanView | undefined> => {
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, 'no such project');
+
+    const body = CleanRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, 'invalid cleanup options');
+
+    const git = await createGitCommand({
+      processRunner: options.processRunner,
+      fs: options.fs,
+      homeDir: options.processHost.homeDir,
+    });
+
+    const view: CleanView = await cleanWorkspace(
+      {
+        fs: options.fs,
+        host: options.processHost,
+        workspaces: await createGitWorkspaces({
+          git,
+          fs: options.fs,
+          homeDir: options.processHost.homeDir,
+        }),
+        store: new StateStore({
+          fs: options.fs,
+          clock: options.clock,
+          projectDir: project.path,
+        }),
+        lock: new RunExecutionLock({
+          fs: options.fs,
+          clock: options.clock,
+          host: options.processHost,
+          projectDir: project.path,
+        }),
+        projectDir: project.path,
+      },
+      {
+        keep: body.data.keep ?? DEFAULT_RUNS_KEPT,
+        ...(body.data.force === undefined ? {} : { force: body.data.force }),
+        ...(body.data.cache === undefined ? {} : { cache: body.data.cache }),
+        ...(body.data.worktrees === undefined ? {} : { worktrees: body.data.worktrees }),
+        ...(body.data.branches === undefined ? {} : { branches: body.data.branches }),
+        ...(body.data.dryRun === undefined ? {} : { dryRun: body.data.dryRun }),
+      },
+    );
+
+    return view;
   });
 
   /**

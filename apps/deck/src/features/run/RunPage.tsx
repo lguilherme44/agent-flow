@@ -4,7 +4,8 @@ import { ApiError, api, keys } from '../../lib/api';
 import { buildTimeline, stateAt } from '../../lib/replay';
 import { invalidate, useResource } from '../../lib/store';
 import { formatClock, formatDuration, formatRelative, formatStamp, ms } from '../../lib/time';
-import { runtimeTone, words } from '../../lib/tone';
+import { runtimeTone } from '../../lib/tone';
+import { useT, word } from '../../lib/i18n';
 import { useNow } from '../../lib/use-now';
 import { Chip, Empty, Notice, Pri, Skeleton, Tape } from '../../components/ui';
 import { href, navigate, onLinkClick } from '../../app/router';
@@ -15,7 +16,7 @@ import { Feed } from './Feed';
 import { StageLog } from './StageLog';
 import { ConfirmCancel } from './ConfirmCancel';
 import { GateDialog } from './GateDialog';
-import { Outcome, type OutcomeTab } from './Outcome';
+import { Outcome, tabForFocus, type OutcomeTab } from './Outcome';
 
 /** Runtime statuses after which nothing moves, and the recorder's right edge stands still. */
 const FINISHED = new Set(['complete', 'failed', 'cancelled']);
@@ -29,6 +30,7 @@ const FINISHED = new Set(['complete', 'failed', 'cancelled']);
  * in the address, so a link to a moment in a run is a link a person can send.
  */
 export function RunPage({ projectId, runId, task, at }: { projectId: string; runId: string; task?: string; at?: string }) {
+  const dict = useT();
   const address = useMemo(() => ({ projectId, runId }), [projectId, runId]);
 
   const run = useResource<RunDetailView>(keys.run(address), () => api.run(address));
@@ -118,10 +120,9 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
     }
   };
 
-  const start = (): Promise<void> => ask(() => api.start(address), 'Asked. Execution runs as a job; progress arrives on the recorder.');
-  const pause = (): Promise<void> =>
-    ask(() => api.pause(address), 'Paused. A task already in flight finishes; nothing further starts.');
-  const resume = (): Promise<void> => ask(() => api.resume(address), 'Resumed. Execution continues as a job.');
+  const start = (): Promise<void> => ask(() => api.start(address), dict.run.startedOk);
+  const pause = (): Promise<void> => ask(() => api.pause(address), dict.run.pausedOk);
+  const resume = (): Promise<void> => ask(() => api.resume(address), dict.run.resumedOk);
   /**
    * Terminal, and asked twice on purpose.
    *
@@ -142,12 +143,12 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
 
   const cancelRun = (): Promise<void> => {
     setConfirmCancel(false);
-    return ask(() => api.cancel(address), 'Cancelled. Evidence, the integration branch and the worktrees are all still on disk.');
+    return ask(() => api.cancel(address), dict.run.cancelledOk);
   };
   // The last step, from the page a person is already on. Verification, the two reviewers
   // and the Definition of Done run as a job; the run's status moves when they are done.
   const finalReview = (): Promise<void> =>
-    ask(() => api.review(address), 'Asked. Verification and the final review run as a job; the run closes when the Definition of Done holds.');
+    ask(() => api.review(address), dict.run.reviewAsked);
 
   const failedPlanningStage = useMemo<RunStage | undefined>(() => {
     if (run.data?.runtime.status !== 'failed') return undefined;
@@ -163,41 +164,11 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   }, [run.data, log.data]);
 
   const retryPlanning = (stg?: RunStage): Promise<void> =>
-    ask(() => api.resumePlanning(address, stg), `Retrying planning from ${stg ?? 'stage'}…`);
+    ask(() => api.resumePlanning(address, stg), dict.run.retryingPlanning(stg === undefined ? dict.run.stageWord : word(dict, stg)));
 
   const openGate = (tab: 'decide' | 'revise'): void => {
     setGateTab(tab);
     setGateOpen(true);
-  };
-
-  /**
-   * Where a row that only wants to *show* something lands (`AttentionFocus`).
-   *
-   * The projection has emitted a focus for every item since M8, and Deck read none of it:
-   * every non-acting row selected a task and stopped, so "Review the findings" and "The
-   * remote's checks went red" both landed on the same panel, neither of which held the
-   * answer. The exact shape the previous dashboard's `?panel=` had for two milestones —
-   * a field nobody reads fails no compiler and no assertion.
-   *
-   * `plan` is the gate dialog rather than a tab, because the plan is a decision and the
-   * dialog is where a decision is made. `run`, `task` and `team` have no outcome surface,
-   * so they leave the panel alone and let the task selection below do the work.
-   */
-  const outcomeFor = (focus: AttentionItem['focus']): OutcomeTab | undefined => {
-    switch (focus) {
-      case 'review':
-      case 'quality':
-        return 'review';
-      case 'delivery':
-        return 'delivery';
-      case 'run':
-      case 'plan':
-      case 'task':
-      case 'team':
-        return undefined;
-      default:
-        return undefined;
-    }
   };
 
   const onAttentionAction = (item: AttentionItem): void => {
@@ -215,7 +186,9 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
       case 'retry':
       case 'inspect':
       default: {
-        const tab = outcomeFor(item.focus);
+        // Where the projection said to look. `undefined` means the answer is above this
+        // panel, so the selection below is the whole move.
+        const tab = tabForFocus(item.focus);
         if (tab !== undefined) setOutcomeTab(tab);
         if (item.scope.taskId !== undefined) setSelected(item.scope.taskId);
         setScrub(null);
@@ -231,11 +204,11 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
           error
           hint={
             <a href={href({ name: 'runs', projectId })} onClick={onLinkClick} style={{ textDecoration: 'underline' }}>
-              Runs in this project
+              {dict.run.runsInThisProject}
             </a>
           }
         >
-          {run.error instanceof ApiError && run.error.status === 404 ? `${runId} does not exist in ${projectId}.` : `${runId} could not be read.`}
+          {run.error instanceof ApiError && run.error.status === 404 ? dict.run.doesNotExist(runId, projectId) : dict.run.couldNotRead(runId)}
         </Empty>
       </main>
     );
@@ -260,40 +233,40 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         <div style={{ minWidth: 0 }}>
           <div className="run-head__crumbs">
             <a href={href({ name: 'deck' })} onClick={onLinkClick}>
-              deck
+              {dict.nav.deck.toLowerCase()}
             </a>
             <span aria-hidden="true">/</span>
             <a href={href({ name: 'runs', projectId })} onClick={onLinkClick}>
               {projectName}
             </a>
             <span aria-hidden="true">/</span>
-            <span>{detail?.workflow ?? 'run'}</span>
+            <span>{detail?.workflow === undefined ? dict.run.runWord : word(dict, detail.workflow)}</span>
             {detail?.isolation.mode === 'worktree' ? (
               <>
                 <span aria-hidden="true">/</span>
                 <span title={detail.isolation.integrationBranch}>
-                  worktrees · {detail.isolation.parallelism.effective} at once
-                  {detail.isolation.parallelism.clamped ? ` of ${String(detail.isolation.parallelism.requested)}` : ''}
+                  {dict.run.worktreesAtOnce(detail.isolation.parallelism.effective)}
+                  {detail.isolation.parallelism.clamped ? dict.run.ofRequested(detail.isolation.parallelism.requested) : ''}
                 </span>
               </>
             ) : null}
           </div>
           <h1 className="run-head__id">
             <span>{runId}</span>
-            {rt === undefined ? null : <Chip tone={runtimeTone(rt.status)}>{words(rt.status)}</Chip>}
+            {rt === undefined ? null : <Chip tone={runtimeTone(rt.status)}>{word(dict, rt.status)}</Chip>}
             {rt?.paused === true ? (
-              <Chip tone="warn" plain title="An operator asked for no new work. A task already in flight finishes.">
-                paused
+              <Chip tone="warn" plain title={dict.run.pausedTitle}>
+                {dict.run.paused}
               </Chip>
             ) : null}
             {detail !== undefined && detail.revisionCount !== undefined && detail.revisionCount > 0 ? (
               <Chip tone="idle" plain>
-                revision {detail.revisionCount}
+                {dict.run.revisionN(detail.revisionCount)}
               </Chip>
             ) : null}
             {detail !== undefined && detail.degradationDetail.length > 0 ? (
               <Chip tone="warn" plain title={detail.degradationDetail.map((degradation) => degradation.reason).join('\n')}>
-                {detail.degradationDetail.length} degraded
+                {dict.run.degraded(detail.degradationDetail.length)}
               </Chip>
             ) : null}
           </h1>
@@ -306,22 +279,22 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               </p>
               {detail.feature.length > 180 ? (
                 <button type="button" className="run-head__more" onClick={() => setFeatureOpen((value) => !value)}>
-                  {featureOpen ? 'less' : 'read the whole request'}
+                  {featureOpen ? dict.feed.less : dict.run.readWholeRequest}
                 </button>
               ) : null}
               <div className="facts" style={{ marginTop: 12 }}>
                 <span>
-                  created <b>{formatStamp(Date.parse(detail.createdAt))}</b>
+                  {dict.run.created} <b>{formatStamp(Date.parse(detail.createdAt), dict.time)}</b>
                 </span>
                 <span>
-                  updated <b>{formatRelative(detail.updatedAt, now)}</b>
+                  {dict.run.updated} <b>{formatRelative(detail.updatedAt, now, dict.time)}</b>
                 </span>
                 <span>
-                  elapsed <b>{formatDuration(detail.durationMs)}</b>
+                  {dict.run.elapsed} <b>{formatDuration(detail.durationMs)}</b>
                 </span>
                 {detail.isolation.integrationHead === undefined ? null : (
                   <span>
-                    head <b>{detail.isolation.integrationHead.slice(0, 10)}</b>
+                    {dict.run.head} <b>{detail.isolation.integrationHead.slice(0, 10)}</b>
                   </span>
                 )}
               </div>
@@ -337,57 +310,57 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         <div className="run-head__side">
           <div className="run-head__actions">
             {job.data !== null && job.data !== undefined ? (
-              <span className="job">{job.data.kind === 'start' ? 'executing' : job.data.kind === 'review' ? 'reviewing' : job.data.kind === 'revise' ? 're-planning' : job.data.kind === 'plan' ? 'planning' : job.data.kind}…</span>
+              <span className="job">{job.data.kind === 'start' ? dict.run.jobExecuting : job.data.kind === 'review' ? dict.run.jobReviewing : job.data.kind === 'revise' ? dict.run.jobReplanning : job.data.kind === 'plan' ? dict.run.jobPlanning : word(dict, job.data.kind)}…</span>
             ) : null}
             {failedPlanningStage !== undefined && idle ? (
               <button type="button" className="btn btn--primary" onClick={() => void retryPlanning(failedPlanningStage)}>
-                Retry {failedPlanningStage}
+                {dict.run.retryStage(word(dict, failedPlanningStage))}
               </button>
             ) : null}
             {showReview ? (
               <button type="button" className="btn btn--primary" onClick={() => void finalReview()}>
-                Run the final review
+                {dict.run.runFinalReview}
               </button>
             ) : null}
             {gateOffered ? (
               <button type="button" className="btn btn--primary" onClick={() => openGate('decide')}>
-                Review the plan
+                {dict.run.reviewThePlan}
               </button>
             ) : null}
             {detail !== undefined && !detail.approved && !FINISHED.has(detail.runtime.status) && gate.data !== undefined ? (
               <button type="button" className="btn" onClick={() => openGate('revise')}>
-                Ask for a revision
+                {dict.gate.askRevision}
               </button>
             ) : null}
             {showStart ? (
               <button type="button" className="btn btn--primary" onClick={() => void start()}>
-                {detail !== undefined && detail.completedTasks > 0 ? 'Resume' : 'Start execution'}
+                {detail !== undefined && detail.completedTasks > 0 ? dict.run.resume : dict.run.startExecution}
               </button>
             ) : null}
             {rt?.paused === true ? (
               <button type="button" className="btn btn--primary" onClick={() => void resume()}>
-                Resume the run
+                {dict.run.resumeRun}
               </button>
             ) : null}
             {unfinished && rt.paused !== true ? (
               <button type="button" className="btn" onClick={() => void pause()}>
-                Pause
+                {dict.run.pause}
               </button>
             ) : null}
             {unfinished ? (
               <button type="button" className="btn btn--danger" onClick={() => setConfirmCancel(true)}>
-                Cancel run
+                {dict.run.cancelRun}
               </button>
             ) : null}
             <a className="btn btn--ghost" href={href({ name: 'runs', projectId })} onClick={onLinkClick}>
-              all runs
+              {dict.run.allRuns}
             </a>
           </div>
           {rt === undefined ? null : (
-            <div className="axes" aria-label="Progress">
-              <Axis label="workflow" done={rt.progress.workflow.done} total={rt.progress.workflow.total} tone={runtimeTone(rt.status) === 'bad' ? 'bad' : 'live'} />
-              <Axis label="tasks" done={rt.progress.implementation.done} total={rt.progress.implementation.total} tone="ok" />
-              {rt.progress.corrective === undefined ? null : <Axis label="corrective" done={rt.progress.corrective.done} total={rt.progress.corrective.total} tone="warn" />}
+            <div className="axes" aria-label={dict.run.progress}>
+              <Axis label={dict.run.axisWorkflow} done={rt.progress.workflow.done} total={rt.progress.workflow.total} tone={runtimeTone(rt.status) === 'bad' ? 'bad' : 'live'} />
+              <Axis label={dict.run.axisTasks} done={rt.progress.implementation.done} total={rt.progress.implementation.total} tone="ok" />
+              {rt.progress.corrective === undefined ? null : <Axis label={dict.run.axisCorrective} done={rt.progress.corrective.done} total={rt.progress.corrective.total} tone="warn" />}
             </div>
           )}
           <div style={{ width: 'min(100%, 420px)', alignSelf: 'stretch' }}>
@@ -397,40 +370,40 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
       </header>
 
       {failedPlanningStage !== undefined ? (
-        <Notice tone="bad" k="planning failed">
-          Planning stopped at stage <b>{failedPlanningStage}</b>. Review the error in the feed below, inspect the <b>Stage output</b> tab, or click <b>Retry {failedPlanningStage}</b> above to resume from this stage.
+        <Notice tone="bad" k={dict.run.planningFailedKey}>
+          {dict.run.planningStoppedBefore} <b>{word(dict, failedPlanningStage)}</b>{dict.run.planningStoppedAfter(word(dict, failedPlanningStage))}
         </Notice>
       ) : null}
 
       {actionNote === undefined ? null : (
-        <Notice tone={actionNote.tone} k={actionNote.tone === 'ok' ? 'asked' : 'refused'}>
+        <Notice tone={actionNote.tone} k={actionNote.tone === 'ok' ? dict.run.asked : dict.common.refused}>
           {actionNote.text}
         </Notice>
       )}
 
       {rt?.gate !== undefined ? (
-        <Notice tone="warn" k={words(rt.gate.gate)}>
+        <Notice tone="warn" k={word(dict, rt.gate.gate)}>
           {rt.gate.action}
           {rt.gate.tasks.length > 0 ? ` — ${rt.gate.tasks.join(', ')}` : ''}
         </Notice>
       ) : null}
       {rt?.escalation !== undefined ? (
-        <Notice tone="bad" k="recovery exhausted">
-          <b>{rt.escalation.task}</b> · {words(rt.escalation.failureClass)} — {rt.escalation.humanAction}
+        <Notice tone="bad" k={word(dict, 'recovery_exhausted')}>
+          <b>{rt.escalation.task}</b> · {word(dict, rt.escalation.failureClass)} — {rt.escalation.humanAction}
         </Notice>
       ) : null}
 
       {control.error !== undefined ? (
-        <Notice tone="ghost" k="attention">
-          The attention queue could not be read for this run.
+        <Notice tone="ghost" k={dict.run.attentionKey}>
+          {dict.run.attentionCouldNotRead}
         </Notice>
       ) : attention.length === 0 ? null : (
-        <div className="queue" role="list" aria-label="What needs a person on this run">
+        <div className="queue" role="list" aria-label={dict.run.queueAria}>
           {attention.map((item) => (
             <div key={`${item.id}|${item.since}`} className="ticket" role="listitem">
               <Pri priority={item.priority} />
               <div className="ticket__scope">
-                <span className="ticket__project">{words(item.kind)}</span>
+                <span className="ticket__project">{word(dict, item.kind)}</span>
                 <span className="ticket__run">{item.scope.taskId ?? item.scope.runId}</span>
               </div>
               <div className="truncate">
@@ -440,7 +413,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               <button type="button" className={item.action.destructive ? 'btn btn--sm btn--danger' : 'btn btn--sm'} onClick={() => onAttentionAction(item)}>
                 {item.action.label}
               </button>
-              <span className="ticket__since">{formatRelative(item.since, now)}</span>
+              <span className="ticket__since">{formatRelative(item.since, now, dict.time)}</span>
             </div>
           ))}
         </div>
@@ -448,7 +421,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
 
       {timeline === undefined ? (
         log.error !== undefined ? (
-          <Empty error>The audit log could not be read, so there is nothing to record.</Empty>
+          <Empty error>{dict.run.logCouldNotRead}</Empty>
         ) : (
           <div className="panel">
             <Skeleton rows={4} />
@@ -475,10 +448,10 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         <section className="panel" aria-labelledby="graph-h">
           <div className="panel__head">
             <span id="graph-h" className="eyebrow">
-              Graph{past === undefined ? '' : ` · as of ${formatClock(t)}`}
+              {dict.run.graph}{past === undefined ? '' : ` · ${dict.run.asOf(formatClock(t))}`}
             </span>
             <span className="section__count">
-              {dag.data?.nodes.length ?? 0} tasks · {dag.data?.edges.length ?? 0} edges
+              {dict.run.tasksAndEdges(dag.data?.nodes.length ?? 0, dag.data?.edges.length ?? 0)}
             </span>
           </div>
           <div className="panel__body">
@@ -489,11 +462,11 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         <section className="panel" aria-labelledby="task-h">
           <div className="panel__head">
             <span id="task-h" className="eyebrow">
-              Task
+              {dict.run.task}
             </span>
             {selected === undefined ? null : (
               <button type="button" className="btn btn--ghost btn--sm" onClick={() => setSelected(undefined)}>
-                clear
+                {dict.common.clear}
               </button>
             )}
           </div>
@@ -510,13 +483,13 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               carries two kilobytes of the second on a failure and none of it otherwise.
             */}
             <div className="panel__tabs" role="tablist" aria-labelledby="feed-h">
-              <span id="feed-h" className="visually-hidden">Log</span>
-              <button type="button" role="tab" aria-selected={logTab === 'events'} onClick={() => setLogTab('events')}>Events</button>
-              <button type="button" role="tab" aria-selected={logTab === 'stage'} onClick={() => setLogTab('stage')}>Stage output</button>
+              <span id="feed-h" className="visually-hidden">{dict.inspector.log}</span>
+              <button type="button" role="tab" aria-selected={logTab === 'events'} onClick={() => setLogTab('events')}>{dict.run.events}</button>
+              <button type="button" role="tab" aria-selected={logTab === 'stage'} onClick={() => setLogTab('stage')}>{dict.run.stageOutput}</button>
             </div>
             <span className="section__count">
-              {logTab === 'stage' ? '' : log.data === undefined ? '' : `${String(log.data.total)} lines`}
-              {logTab === 'stage' ? '' : log.data?.truncated ? ' · origin cut' : ''}
+              {logTab === 'stage' ? '' : log.data === undefined ? '' : dict.inspector.lines(log.data.total)}
+              {logTab === 'stage' ? '' : log.data?.truncated ? ` · ${dict.run.originCut}` : ''}
             </span>
           </div>
           <div className="panel__body">
@@ -536,9 +509,10 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
 }
 
 function Axis({ label, done, total, tone }: { label: string; done: number; total: number; tone: 'ok' | 'live' | 'warn' | 'bad' }) {
+  const dict = useT();
   const pct = total <= 0 ? 0 : Math.round((done / total) * 100);
   return (
-    <div className="axis" role="img" aria-label={`${label} ${String(done)} of ${String(total)}`}>
+    <div className="axis" role="img" aria-label={dict.common.progressOf(label, done, total)}>
       <span className="axis__k">
         <span>{label}</span>
         <b>

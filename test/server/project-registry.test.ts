@@ -166,6 +166,96 @@ describe('a workspace is the directory the operator named, and nothing else (UI-
   });
 });
 
+/**
+ * 7.6 — the repositories the workspace could register.
+ *
+ * A candidate is the answer to "what am I allowed to offer", and it has to obey exactly
+ * the rules a project does: inside the root, resolved rather than followed, bounded by the
+ * same depth. The walk issues the ids, which is the whole reason a browser can ask for one
+ * without ever naming a directory (§93).
+ */
+describe('candidates for registration', () => {
+  const repo = (paths: readonly string[], projects: readonly string[] = []): InMemoryFileSystem => {
+    const world = new InMemoryFileSystem();
+    for (const path of paths) world.seed(`${path}/.git/HEAD`, 'ref: refs/heads/main\n');
+    for (const path of projects) world.seed(`${path}/.agent-flow/config.yaml`, CONFIG);
+    return world;
+  };
+
+  it('offers a repository that has never been through init', async () => {
+    const fs = repo(['/wk/api']);
+
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
+
+    expect(found.projects).toEqual([]);
+    expect(found.candidates.map((candidate) => candidate.path)).toEqual(['/wk/api']);
+  });
+
+  it('offers nothing for a directory that is not a repository', async () => {
+    // The rule `discoverProjects` already applies to `package.json`, one step earlier:
+    // half a machine has a directory, and a control plane that proposed every one of them
+    // would be a file browser with a worse interface.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/wk/notes/README.md', '# not a repository\n');
+
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
+
+    expect(found.candidates).toEqual([]);
+  });
+
+  it('does not offer a repository that is already a project', async () => {
+    const fs = repo(['/wk/api'], ['/wk/api']);
+
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
+
+    expect(found.projects.map((project) => project.path)).toEqual(['/wk/api']);
+    expect(found.candidates).toEqual([]);
+  });
+
+  it('offers a checkout whose .git is a file, as a worktree or a submodule has', async () => {
+    // `exists` rather than `stat`: a check that only accepted a directory would hide
+    // exactly the checkouts somebody works in.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/wk/api/.git', 'gitdir: /wk/main/.git/worktrees/api\n');
+
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
+
+    expect(found.candidates.map((candidate) => candidate.path)).toEqual(['/wk/api']);
+  });
+
+  it('refuses a repository reached by a link out of the workspace', async () => {
+    // The same rule as a project's, and it has to be: a candidate id is a write target.
+    const fs = repo(['/wk/api', '/private/secrets']);
+    fs.link('/wk/elsewhere', '/private/secrets');
+
+    const found = await discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 });
+
+    expect(found.candidates.map((candidate) => candidate.path)).toEqual(['/wk/api']);
+    expect(found.skipped.map((entry) => entry.resolved)).toEqual(['/private/secrets']);
+  });
+
+  it('never gives a candidate an id a project already holds', async () => {
+    // Two checkouts sharing a basename, one registered and one not. Colliding would let a
+    // candidate shadow a project on every route that resolves an id.
+    const fs = repo(['/a/api', '/b/api'], ['/a/api']);
+
+    const found = await discoverProjects({ fs, path: posix, roots: ['/a', '/b'], depth: 2 });
+
+    expect(found.projects.map((project) => project.id)).toEqual(['api']);
+    expect(found.candidates.map((candidate) => candidate.id)).toEqual(['api-2']);
+  });
+
+  it('issues ids the routes will accept', () => {
+    const fs = repo(['/wk/My Repo!']);
+
+    return discoverProjects({ fs, path: posix, roots: ['/wk'], depth: 3 }).then((found) => {
+      for (const candidate of found.candidates) {
+        expect(ProjectIdSchema.safeParse(candidate.id).success, candidate.id).toBe(true);
+      }
+    });
+  });
+});
+
 describe('project ids', () => {
   it('always match what the routes will accept', () => {
     // If an id could not round-trip through the URL schema, the project would

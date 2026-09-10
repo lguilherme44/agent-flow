@@ -15,6 +15,7 @@ import {
   runnerIdsOf,
   sectionFields,
 } from './crew-config';
+import { en, ptBR } from '../../lib/i18n';
 
 const field = (path: string[], overrides: Partial<ConfigEditorFieldView> = {}): ConfigEditorFieldView => ({
   path,
@@ -83,7 +84,11 @@ describe('crew configuration model', () => {
     };
     expect(fieldInputValue(view.fields[0]!)).toBe('');
     expect(fieldInputValue(view.fields[1]!)).toBe('Reviewers');
-    expect(sectionFields(view.fields).get('Teams')?.[0]?.path).toEqual(['teams', 'reviewers', 'name']);
+    // Keyed by the configuration's own key, so the accordion's default-open sections do
+    // not depend on which language the heading is in.
+    expect(sectionFields(en, view.fields).get('teams')?.fields[0]?.path).toEqual(['teams', 'reviewers', 'name']);
+    expect(sectionFields(en, view.fields).get('teams')?.name).toBe('Teams');
+    expect(sectionFields(ptBR, view.fields).get('teams')?.name).toBe('Equipes');
   });
 
   it('blocks runner removal while roles, fallback routes or Teams still reference it', () => {
@@ -144,9 +149,10 @@ describe('crew configuration model', () => {
   });
 
   it('explains restart, next-run and execution-context timing and scopes cache invalidation', () => {
-    expect(effectSummary(['next_execution_context', 'server_restart'])).toBe('after a server restart');
-    expect(effectSummary(['next_execution_context', 'next_run'])).toBe('to the next run');
-    expect(effectSummary(['next_execution_context'])).toBe('to the next execution context');
+    expect(effectSummary(en, ['next_execution_context', 'server_restart'])).toBe('after a server restart');
+    expect(effectSummary(en, ['next_execution_context', 'next_run'])).toBe('to the next run');
+    expect(effectSummary(en, ['next_execution_context'])).toBe('to the next execution context');
+    expect(effectSummary(ptBR, ['next_execution_context'])).toBe('no próximo contexto de execução');
     const global = configInvalidationPredicate('global', 'flowcanvas');
     expect(global('/api/v1/config/editor?scope=project&projectId=other')).toBe(true);
     expect(global('/api/v1/runs?projectId=flowcanvas')).toBe(false);
