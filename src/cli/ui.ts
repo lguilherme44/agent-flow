@@ -1,10 +1,12 @@
 import { existsSync } from 'node:fs';
+import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
 import { NodeProcessRunner } from '../adapters/process/node-process-runner.js';
-import { buildServer } from '../server/server.js';
+import { buildServer, type RunningServer, type ServerPairing } from '../server/server.js';
 import { resolvePromptsDir } from '../app/prompt-paths.js';
 import { NodeHost } from '../adapters/host/node-host.js';
 import {
@@ -13,6 +15,7 @@ import {
   discoveredRegistry,
 } from '../server/project-registry.js';
 import { loadConfig } from '../config/loader.js';
+import { isLoopbackHost, extractHostname } from '../core/device-session.js';
 import type { FileSystem } from '../ports/index.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
@@ -30,6 +33,8 @@ export interface UiOptions {
   readonly depth?: string;
   /** Serve the previous dashboard (`apps/web`) instead of Deck. */
   readonly classic?: boolean;
+  /** Enable remote device access through pairing (FR-002). */
+  readonly pair?: boolean;
 }
 
 /**
@@ -58,17 +63,17 @@ export interface ResolvedWebDir {
  * request shape that carries a directory, which is what makes "the operator
  * chose what this server can see" true rather than aspirational (§93).
  *
- * Binds to loopback by default and says so. Binding to `0.0.0.0` is possible and
- * loud: the server has no authentication, so anything that can reach the port
- * can read every run, every artifact and every project path on this machine.
- * That is a reasonable thing to want on a trusted network and an unreasonable
- * thing to do by accident, which is the difference a warning makes.
+ * Binds to loopback by default. Binding outside loopback requires remote access
+ * authentication (`--pair` or `ui.pairing.enabled: true`, FR-019).
  */
 export async function runUiCommand(
   root: string | undefined,
   options: UiOptions,
   globals: GlobalOptions,
-  hooks: { readonly onListening?: (url: string) => void } = {},
+  hooks: {
+    readonly onListening?: (url: string) => void;
+    readonly onReady?: (server: RunningServer) => void;
+  } = {},
 ): Promise<ExitCodeValue> {
   const fs = new NodeFileSystem();
   const clock = new SystemClock();
@@ -81,6 +86,37 @@ export async function runUiCommand(
     // global `--cwd` still decides the single-project case, so the two ways of
     // naming a directory do not compete.
     const workspace = root === undefined ? globals.cwd : resolve(globals.cwd, root);
+
+    const pairingEnabled = await resolvePairingEnabled(options.pair, {
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: workspace,
+    });
+
+    if (!pairingEnabled && !isLoopbackHost(extractHostname(host) ?? host)) {
+      process.stderr.write(
+        [
+          `Binding to ${host} exposes the dashboard to the network, which requires authentication.`,
+          'Pass `--pair` to enable remote device pairing:',
+          '',
+          `  agent-flow ui --host ${host} --pair`,
+          '',
+        ].join('\n'),
+      );
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    if (pairingEnabled && options.classic === true) {
+      process.stderr.write(
+        [
+          'Cannot combine `--pair` with `--classic`.',
+          'The classic dashboard (apps/web) does not support device pairing and would fail',
+          'with 401 Unauthorized on every read. Drop `--classic` to use Deck with pairing.',
+          '',
+        ].join('\n'),
+      );
+      return ExitCode.CONFIG_ERROR;
+    }
 
     const depth = await resolveDepth(options.depth, {
       fs,
@@ -131,6 +167,7 @@ export async function runUiCommand(
 
     const web = resolveWebDir(options.classic === true ? 'classic' : 'deck');
     const webDir = web?.path;
+    const admittedAddresses = pairingEnabled ? enumerateBoundAddresses(host) : undefined;
     const server = await buildServer({
       fs,
       clock,
@@ -151,6 +188,19 @@ export async function runUiCommand(
       // rebinding for the default install (§93).
       allowedHosts,
       ...(webDir === undefined ? {} : { webDir }),
+      ...(admittedAddresses === undefined
+        ? {}
+        : {
+            remoteAccess: {
+              admittedAddresses,
+              onPair: (session) => {
+                process.stdout.write(`Device paired: ${session.deviceId} (${session.label})\n`);
+              },
+              onRevoke: (session) => {
+                process.stdout.write(`Session revoked: ${session.deviceId} (${session.label})\n`);
+              },
+            },
+          }),
     });
 
     // **A taken port is an ordinary outcome, and it used to print a stack trace.**
@@ -187,13 +237,27 @@ export async function runUiCommand(
     }
     const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${String(port)}`;
 
-    const lines = [
-      `Agent Flow UI on ${url}`,
-      '',
+    const lines: string[] = [];
+
+    if (server.pairing !== undefined) {
+      const code = formatPairingCode(server.pairing.code);
+      lines.push(
+        `Pairing code: ${code}`,
+        '',
+        ...server.pairing.admittedAddresses.map((addr) => `http://${addr}:${String(port)}`),
+        '',
+        'Restarting the server unpairs every device and invalidates any outstanding code.',
+        '',
+      );
+    } else {
+      lines.push(`Agent Flow UI on ${url}`, '');
+    }
+
+    lines.push(
       `${String(discovered.projects.length)} project(s) under ${workspace}:`,
       ...discovered.projects.map((project) => `  ${project.id.padEnd(24)}${project.path}`),
       '',
-    ];
+    );
 
     if (discovered.candidates.length > 0) {
       // Said here because otherwise the only way to learn they exist is to open the Deck
@@ -240,19 +304,6 @@ export async function runUiCommand(
       lines.push('Dashboard: Deck. The previous dashboard is one flag away: --classic', '');
     }
 
-    if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
-      lines.push(
-        `⚠ Bound to ${host}, not loopback.`,
-        '  This server has no authentication. Anything that can reach this port',
-        '  can read every run, artifact and project path on this machine.',
-        '',
-        '  It answers to addresses, not to names: reach it at an IP, or declare the',
-        '  name under ui.allowedHosts. A name it was not told about is refused,',
-        '  because a name an attacker controls can be pointed back at this machine.',
-        '',
-      );
-    }
-
     lines.push(
       'Approve, revise, retry and run work from the dashboard or from here — both go',
       'through the same use cases, so the two cannot disagree about a gate.',
@@ -260,21 +311,50 @@ export async function runUiCommand(
     );
     process.stdout.write(lines.join('\n'));
 
-    hooks.onListening?.(url);
+    const openUrl =
+      server.pairing !== undefined && server.pairing.admittedAddresses.length > 0
+        ? `http://${server.pairing.admittedAddresses[0]}:${String(port)}`
+        : url;
 
-    if (options.open !== false) await openBrowser(processRunner, url);
+    let closed = false;
+    let rl: readline.Interface | undefined = undefined;
+    let resolveShutdown: (() => void) | undefined = undefined;
+
+    const shutdown = (): void => {
+      void server.close();
+    };
+
+    const originalClose = server.close.bind(server);
+    server.close = async () => {
+      try {
+        await originalClose();
+      } finally {
+        closed = true;
+        rl?.close();
+        process.removeListener('SIGINT', shutdown);
+        process.removeListener('SIGTERM', shutdown);
+        resolveShutdown?.();
+      }
+    };
+
+    hooks.onListening?.(openUrl);
+    hooks.onReady?.(server);
+
+    if (options.open !== false) await openBrowser(processRunner, openUrl);
+
+    if (server.pairing !== undefined) {
+      rl = installPairingConsole(server.pairing);
+    }
 
     // Resolves when the server closes. Nothing else keeps this process alive,
     // so returning here would exit immediately with the port half-open.
-    await new Promise<void>((resolveWait) => {
-      const shutdown = (): void => {
-        void server.close().then(() => {
-          resolveWait();
-        });
-      };
-      process.once('SIGINT', shutdown);
-      process.once('SIGTERM', shutdown);
-    });
+    if (!closed) {
+      await new Promise<void>((resolveWait) => {
+        resolveShutdown = resolveWait;
+        process.once('SIGINT', shutdown);
+        process.once('SIGTERM', shutdown);
+      });
+    }
 
     return ExitCode.OK;
   } catch (error) {
@@ -414,4 +494,184 @@ async function openBrowser(
   } catch {
     // Nothing to report: the URL is already printed above.
   }
+}
+
+/**
+ * Resolves whether remote access via pairing is enabled (FR-002).
+ *
+ * The flag `--pair` wins if passed. Otherwise, reads `ui.pairing.enabled` from configuration.
+ * A configuration that will not load yields false (strict-load degradation).
+ */
+export async function resolvePairingEnabled(
+  flag: boolean | undefined,
+  options: {
+    fs: FileSystem;
+    globalConfigPath: string;
+    projectDir: string;
+  },
+): Promise<boolean> {
+  if (flag !== undefined) return flag;
+  try {
+    const config = await loadConfig(options);
+    return config.global.ui.pairing.enabled;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Enumerates the network addresses the server will be reachable on (FR-003, FR-018).
+ *
+ * For non-wildcard addresses (like 127.0.0.1 or a specific IP), returns that address alone.
+ * For wildcard addresses (0.0.0.0 or ::), enumerates non-internal IPv4 addresses across
+ * all network interfaces using `node:os.networkInterfaces()`.
+ */
+export function enumerateBoundAddresses(
+  host: string,
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
+): readonly string[] {
+  if (host !== '0.0.0.0' && host !== '::') {
+    return [host === 'localhost' ? '127.0.0.1' : host];
+  }
+
+  const addresses: string[] = [];
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) continue;
+    for (const entry of entries) {
+      if (entry.internal) continue;
+      if (entry.family === 'IPv4' || (entry.family as unknown) === 4) {
+        if (!addresses.includes(entry.address)) {
+          addresses.push(entry.address);
+        }
+      }
+    }
+  }
+
+  if (addresses.length === 0) {
+    addresses.push('127.0.0.1');
+  }
+
+  return addresses;
+}
+
+/**
+ * Formats a 12-character pairing code as xxxx-xxxx-xxxx for operator display (FR-003).
+ */
+export function formatPairingCode(code: string): string {
+  const clean = code.replace(/-/g, '');
+  if (clean.length !== 12) return code;
+  return `${clean.slice(0, 4)}-${clean.slice(4, 8)}-${clean.slice(8, 12)}`;
+}
+
+export type PairingConsoleCommand =
+  | { readonly kind: 'list' }
+  | { readonly kind: 'code' }
+  | { readonly kind: 'revoke'; readonly deviceId: string }
+  | { readonly kind: 'unknown'; readonly line: string };
+
+/**
+ * Parses a line entered into the interactive TTY pairing console (FR-028).
+ *
+ * Pure and side-effect free:
+ * - 'list' -> lists live sessions
+ * - 'revoke <deviceId>' -> revokes the session for deviceId
+ * - anything else -> unrecognised, prompts with the two supported forms
+ */
+export function parsePairingConsoleLine(line: string): PairingConsoleCommand {
+  const trimmed = line.trim();
+  if (trimmed === 'list') {
+    return { kind: 'list' };
+  }
+  if (trimmed === 'code') {
+    return { kind: 'code' };
+  }
+  const match = /^revoke\s+(\S+)$/.exec(trimmed);
+  if (match) {
+    const deviceId = match[1];
+    if (deviceId !== undefined) {
+      return { kind: 'revoke', deviceId };
+    }
+  }
+  return { kind: 'unknown', line: trimmed };
+}
+
+/**
+ * Executes a parsed pairing console command against RunningServer.pairing (FR-028).
+ */
+export function executePairingConsoleCommand(
+  line: string,
+  pairing: ServerPairing,
+  write: (text: string) => void = (text) => process.stdout.write(text),
+): void {
+  const command = parsePairingConsoleLine(line);
+  switch (command.kind) {
+    case 'list': {
+      const sessions = pairing.listSessions();
+      if (sessions.length === 0) {
+        write('No active device sessions.\n');
+        return;
+      }
+      write(`${String(sessions.length)} active device session${sessions.length === 1 ? '' : 's'}:\n`);
+      for (const session of sessions) {
+        write(`  ${session.deviceId}  ${session.label}\n`);
+      }
+      return;
+    }
+    case 'revoke': {
+      const outcome = pairing.revokeSession(command.deviceId);
+      if (!outcome.ok) {
+        write(`No active session found for device "${command.deviceId}".\n`);
+      }
+      return;
+    }
+    case 'code': {
+      // The outstanding code is replaced, not added to: single-use is a property of the
+      // code, and two live codes would be two credentials for one decision. Live sessions
+      // are untouched — that is the whole difference between this and a restart.
+      write(`Pairing code: ${pairing.issueCode()}\n`);
+      write('Valid for 10 minutes, and it replaces any code printed before it.\n');
+      return;
+    }
+    case 'unknown': {
+      write(
+        `Unrecognised command "${command.line}". Available commands:\n` +
+          `  list\n  code\n  revoke <deviceId>\n`,
+      );
+      return;
+    }
+  }
+}
+
+/**
+ * Installs the interactive TTY console for listing and revoking device sessions (FR-028).
+ *
+ * When process.stdin.isTTY !== true, no console is installed and nothing is read from stdin.
+ */
+export function installPairingConsole(
+  pairing: ServerPairing,
+  options: {
+    stdin?: NodeJS.ReadableStream;
+    stdout?: NodeJS.WritableStream;
+    isTTY?: boolean;
+    write?: (text: string) => void;
+  } = {},
+): readline.Interface | undefined {
+  const isTTY = options.isTTY ?? (process.stdin.isTTY === true);
+  if (!isTTY) {
+    return undefined;
+  }
+
+  const rl = readline.createInterface({
+    input: options.stdin ?? process.stdin,
+    output: options.stdout ?? process.stdout,
+    terminal: true,
+  });
+
+  const write = options.write ?? ((text: string) => process.stdout.write(text));
+
+  rl.on('line', (line: string) => {
+    executePairingConsoleCommand(line, pairing, write);
+  });
+
+  return rl;
 }

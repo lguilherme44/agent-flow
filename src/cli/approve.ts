@@ -156,6 +156,7 @@ export function actionDeps(globals: GlobalOptions): RunActionDeps {
     // Which entry point is asking. Written into the execution lock, so a person
     // refused by one can see whether the other is what has it.
     owner: 'cli',
+    actor: { kind: 'keyboard' },
   };
 }
 

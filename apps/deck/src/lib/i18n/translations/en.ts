@@ -113,6 +113,8 @@ export const en = {
     analytics: 'Analytics',
     doctor: 'Doctor',
     clean: 'Clean',
+    devices: 'Devices',
+    pairing: 'Pairing',
     live: 'live',
     reconnecting: 'reconnecting · polling',
     connecting: 'connecting',
@@ -1203,6 +1205,52 @@ export const en = {
     idle: 'idle',
     working: 'working',
     full: 'full',
+  },
+
+  /* ─── Remote pairing & devices (FR-021, FR-022) ───────────────────────────── */
+  pairing: {
+    title: 'Pair Device',
+    subtitle: 'Enter the pairing code shown in the server terminal to connect this device.',
+    description: 'Enter the pairing code shown in the server terminal to connect this device.',
+    codeLabel: 'Pairing Code',
+    codePlaceholder: 'xxxx-xxxx-xxxx',
+    deviceLabel: 'Device Label',
+    devicePlaceholder: 'e.g. Chrome on iPhone',
+    pairButton: 'Pair Device',
+    pairing: 'Pairing…',
+    pairedSuccess: 'Device paired successfully',
+    codeExpired: 'The pairing code has expired. Restart the server to issue a new code.',
+    codeUsed: 'This pairing code has already been used.',
+    codeBurned:
+      'This pairing code has been burned after too many failed attempts. Restart the server to issue a new code.',
+    codeUnknown: 'The pairing code is invalid.',
+    limitReached:
+      'The limit of 16 live device sessions has been reached. Revoke a session to pair a new device.',
+    pairingDisabled: 'Remote device pairing is not enabled on this server.',
+    restartWarning:
+      'Restarting the server unpairs every device and invalidates any outstanding code.',
+    codeRequired: 'Please enter a pairing code.',
+    labelRequired: 'Please enter a device label.',
+    invalidCodeFormat: 'Expected a 12-character pairing code like xxxx-xxxx-xxxx.',
+  },
+
+  devices: {
+    title: 'Connected Devices',
+    subtitle: 'Manage active device sessions. Revoking a session disconnects that device immediately.',
+    description: 'Manage active device sessions. Revoking a session disconnects that device immediately.',
+    noSessions: 'No remote devices are currently paired.',
+    revoke: 'Revoke',
+    revoking: 'Revoking…',
+    revoked: 'Device session revoked',
+    pairedAt: 'Paired at',
+    lastSeenAt: 'Last seen',
+    deviceId: 'Device ID',
+    deviceLabel: 'Device',
+    actions: 'Actions',
+    activeSessions: (count: number) =>
+      `${String(count)} active device session${count === 1 ? '' : 's'}`,
+    couldNotLoad: 'Could not load device sessions.',
+    couldNotRevoke: (message: string) => `Could not revoke session: ${message}`,
   },
 };
 

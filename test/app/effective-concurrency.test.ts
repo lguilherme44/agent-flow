@@ -4,7 +4,8 @@ import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { buildExecutionContext } from '../../src/app/execution-context.js';
-import { start, type RunActionDeps } from '../../src/app/run-actions.js';
+import { start } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import { approveRun } from '../../src/app/approval.js';
 import { PlanSchema } from '../../src/contracts/index.js';
 import { MAX_ISOLATED_TASK_CONCURRENCY } from '../../src/core/concurrency.js';
@@ -165,7 +166,7 @@ async function approvedRun(projectConfig: string, isolationMode?: 'none') {
   }));
   await approveRun(store, run.runId, plan);
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner,
@@ -174,7 +175,7 @@ async function approvedRun(projectConfig: string, isolationMode?: 'none') {
     promptsDir: '/install/prompts',
     host: new FakeHost(),
     owner: 'cli',
-  };
+  });
 
   return { fs, clock, store, processRunner, deps, runId: run.runId };
 }

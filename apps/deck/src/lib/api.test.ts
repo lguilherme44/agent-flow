@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getJson } from './api';
+import { api, ApiError, getJson, keys, onUnauthorized } from './api';
 
 /**
  * A read that hangs has to end (PRI-28).
@@ -70,5 +70,86 @@ describe('getJson', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('branches on 401 throwing an ApiError that notifies onUnauthorized and contains no secret', async () => {
+    const unauthorizedHandler = vi.fn();
+    const unsubscribe = onUnauthorized(unauthorizedHandler);
+
+    try {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: 'session_required',
+              message: 'This server requires an active device session for remote access.',
+              action: 'Pair this device using the code printed in the server terminal.',
+            }),
+            { status: 401, headers: { 'content-type': 'application/json' } },
+          ),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      let caughtError: unknown = undefined;
+      try {
+        await getJson('/runs');
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(ApiError);
+      const apiErr = caughtError as ApiError;
+      expect(apiErr.status).toBe(401);
+      expect(apiErr.code).toBe('session_required');
+      expect(apiErr.isUnauthorized).toBe(true);
+      expect(apiErr.detail).toBeUndefined();
+
+      expect(unauthorizedHandler).toHaveBeenCalledTimes(1);
+      expect(unauthorizedHandler).toHaveBeenCalledWith(apiErr);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('provides keys.sessions() that is URL-shaped and carries no credential', () => {
+    const urlKey = keys.sessions();
+    expect(urlKey).toMatch(/\/sessions\?lang=/);
+    expect(urlKey).not.toMatch(/secret|token|cookie|auth/i);
+  });
+
+  it('posts pair request and gets sessions and revokes session without secrets', async () => {
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const target = String(input);
+      if (target.includes('/pair') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ deviceId: 'dev_123', label: 'Phone', pairedAt: 1000 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (target.includes('/sessions') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true, deviceId: 'dev_123', label: 'Phone' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (target.includes('/sessions')) {
+        return new Response(JSON.stringify([{ deviceId: 'dev_123', label: 'Phone', pairedAt: 1000, lastSeenAt: 2000 }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pairRes = await api.pair('abcd-efgh-ijkl', 'Phone');
+    expect(pairRes).toEqual({ deviceId: 'dev_123', label: 'Phone', pairedAt: 1000 });
+
+    const sessions = await api.sessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.deviceId).toBe('dev_123');
+
+    const revokeRes = await api.revokeSession('dev_123');
+    expect(revokeRes.ok).toBe(true);
   });
 });

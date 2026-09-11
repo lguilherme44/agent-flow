@@ -5,7 +5,8 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { LOCK_VERSION } from '../../src/app/run-execution-lock.js';
-import { review, type RunActionDeps } from '../../src/app/run-actions.js';
+import { review } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 
 /**
  * §18.2 — `review` under the run execution lease, and only where it needs one.
@@ -72,7 +73,7 @@ async function project(isolation: 'worktree' | 'none') {
       : { isolationMode: 'none' as const },
   );
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: '' }),
@@ -81,7 +82,7 @@ async function project(isolation: 'worktree' | 'none') {
     promptsDir: '/install/prompts',
     host,
     owner: 'cli',
-  };
+  });
 
   return { fs, host, store, deps, runId: run.runId };
 }

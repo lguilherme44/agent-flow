@@ -6,7 +6,8 @@ import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PlanSchema, type WorkflowClass } from '../../src/contracts/index.js';
 import { planHash } from '../../src/app/approval.js';
-import { review, start, type RunActionDeps } from '../../src/app/run-actions.js';
+import { review, start } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 
 const PROJECT_CONFIG = `project:
   name: test-project
@@ -129,7 +130,7 @@ async function createTestHarness(options: {
     };
   });
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner: fakeRunner,
@@ -138,7 +139,7 @@ async function createTestHarness(options: {
     promptsDir: '/install/prompts',
     host,
     owner: 'cli',
-  };
+  });
 
   return { fs, host, store, deps, runId: run.runId, parsedPlan, hash };
 }

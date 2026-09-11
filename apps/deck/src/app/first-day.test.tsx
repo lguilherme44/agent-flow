@@ -37,6 +37,7 @@ const DOCTOR = {
   unresolvableRoles: [],
   remediations: [],
   readsEnvironment: false,
+  remoteAccess: { known: false },
 } satisfies DoctorView;
 
 const serve = (projects: ProjectView[]) => {

@@ -134,6 +134,7 @@ const READS = [
   '/runs/{run}/delivery?projectId=demo',
   '/runs/{run}/telemetry?projectId=demo',
   '/runs/{run}/quality?projectId=demo',
+  '/sessions',
 ];
 
 describe('every read the Deck issues survives being asked in a language', () => {

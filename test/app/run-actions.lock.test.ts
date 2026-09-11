@@ -5,7 +5,8 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { LOCK_VERSION } from '../../src/app/run-execution-lock.js';
-import { retryTask, type RunActionDeps } from '../../src/app/run-actions.js';
+import { retryTask } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 
 /**
  * AF-L01.1-A — the lease outlives nothing.
@@ -67,7 +68,7 @@ async function project() {
     tasks: [{ id: 'FIX-001', state: 'failed', attempts: 1, infrastructureFailures: 0 }],
   }));
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: '1.0.0' }),
@@ -76,7 +77,7 @@ async function project() {
     promptsDir: '/install/prompts',
     host,
     owner: 'cli',
-  };
+  });
 
   return { fs, host, store, deps, runId: run.runId };
 }

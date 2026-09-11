@@ -125,15 +125,50 @@ function expandClassEscapesDeep(node: unknown): unknown {
  * which key, what was wrong. Config errors are the most common way this tool
  * will fail, and a raw Zod dump is not an answer.
  */
-export function formatValidationError(error: z.ZodError, source?: string): string {
+export function formatValidationError(
+  error: z.ZodError,
+  source?: string,
+  /**
+   * The value that failed, so the message can show what was actually sent.
+   *
+   * Optional because three of the four callers hand this to a person reading a config
+   * file they can open. The fourth hands it to a *model*, as the reason to try again —
+   * and there the omission is expensive: a `.refine()` issue carries no `received`, so a
+   * stage that cited a file by an unacceptable path was told only which field was wrong
+   * and which rule it broke, never the string it sent. Measured on AF-2026-004: three
+   * `final-review` attempts, 22 minutes of Opus, each failing the same rule on a
+   * different finding, and a log line the operator could not act on either.
+   */
+  data?: unknown,
+): string {
   const header = source ? `Invalid ${source}:` : 'Validation failed:';
   const lines = error.issues.map((issue) => {
     const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-    const received =
-      'received' in issue && issue.received !== undefined
-        ? ` (received: ${JSON.stringify(issue.received)})`
-        : '';
+    const sent =
+      'received' in issue && issue.received !== undefined ? issue.received : valueAt(data, issue.path);
+    const received = sent === undefined ? '' : ` (received: ${shortJson(sent)})`;
     return `  • ${path}: ${issue.message}${received}`;
   });
   return [header, ...lines].join('\n');
+}
+
+/** Walks a Zod issue path into the value it was reported against. */
+function valueAt(data: unknown, path: readonly PropertyKey[]): unknown {
+  let current = data;
+  for (const step of path) {
+    if (current === null || typeof current !== 'object') return undefined;
+    current = (current as Record<PropertyKey, unknown>)[step];
+  }
+  return current;
+}
+
+/**
+ * Enough of the value to recognise it, and no more.
+ *
+ * A rejected field can be a whole nested object, and a validation message is read in a
+ * log line and in a re-prompt — neither is the place for a page of JSON.
+ */
+function shortJson(value: unknown): string {
+  const text = JSON.stringify(value) ?? String(value);
+  return text.length <= 160 ? text : `${text.slice(0, 157)}...`;
 }

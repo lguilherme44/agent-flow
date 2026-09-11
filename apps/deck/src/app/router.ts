@@ -18,6 +18,8 @@ export type Route =
   | { readonly name: 'doctor'; readonly projectId?: string }
   | { readonly name: 'clean'; readonly projectId?: string }
   | { readonly name: 'analytics'; readonly projectId?: string }
+  | { readonly name: 'devices' }
+  | { readonly name: 'pairing' }
   | { readonly name: 'missing'; readonly path: string };
 
 export function parseRoute(pathname: string, search: string): Route {
@@ -45,6 +47,14 @@ export function parseRoute(pathname: string, search: string): Route {
 
   if (segments[0] === 'analytics' && segments.length === 1) {
     return project === undefined ? { name: 'analytics' } : { name: 'analytics', projectId: project };
+  }
+
+  if (segments[0] === 'devices' && segments.length === 1) {
+    return { name: 'devices' };
+  }
+
+  if (segments[0] === 'pairing' && segments.length === 1) {
+    return { name: 'pairing' };
   }
 
   const runExtras = (): { task?: string; at?: string } => {
@@ -84,6 +94,10 @@ export function href(route: Route): string {
       return route.projectId === undefined ? '/clean' : `/clean?project=${encodeURIComponent(route.projectId)}`;
     case 'analytics':
       return route.projectId === undefined ? '/analytics' : `/analytics?project=${encodeURIComponent(route.projectId)}`;
+    case 'devices':
+      return '/devices';
+    case 'pairing':
+      return '/pairing';
     case 'run': {
       const params = new URLSearchParams();
       if (route.task !== undefined) params.set('task', route.task);

@@ -59,6 +59,7 @@ const REPORT: DoctorView = {
   unresolvableRoles: [],
   remediations: [],
   readsEnvironment: false,
+  remoteAccess: { known: false },
 };
 
 const withReport = (over: Partial<DoctorView>): DoctorView => ({ ...REPORT, ...over });

@@ -12,8 +12,8 @@ import {
   start,
   type ActionError,
   type ActionOutcome,
-  type RunActionDeps,
 } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import { watchLifecycle } from '../../src/app/run-lifecycle.js';
 import { PlanSchema } from '../../src/contracts/index.js';
 import { planHash } from '../../src/app/approval.js';
@@ -111,7 +111,7 @@ async function project() {
     ],
   }));
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: '1.0.0' }),
@@ -120,7 +120,7 @@ async function project() {
     promptsDir: '/install/prompts',
     host,
     owner: 'cli',
-  };
+  });
 
   return { fs, clock, host, store, deps, runId: run.runId };
 }

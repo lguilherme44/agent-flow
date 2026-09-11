@@ -23,6 +23,9 @@ import {
   StageLogParamsSchema,
   StartRequestSchema,
   TaskParamsSchema,
+  PairRequestSchema,
+  DeviceSessionParamsSchema,
+  type DeviceSessionView,
   roleConfigKeys,
   type ActionErrorView,
   type ActionJobView,
@@ -46,10 +49,17 @@ import {
   type RunnerTypeView,
   type RunnerView,
   type ServerEvent,
+  type RunActor,
   LocaleQuerySchema,
   DEFAULT_LOCALE,
 } from '../contracts/index.js';
 import { phrasesFor, type Phrases } from '../core/phrases/index.js';
+import {
+  DeviceSessionStore,
+  type DeviceSession,
+  type RevokeSessionOutcome,
+} from '../app/device-sessions.js';
+import { checkSession, serializeSessionCookie } from './session-guard.js';
 import { ConfigEditorTargetError, type ConfigEditOperation, type ConfigEditView, type ConfigTarget } from '../app/config-editor.js';
 import { ConfigSourceCodecError } from '../ports/config-source-codec.js';
 import { StateStore } from '../app/state-store.js';
@@ -128,15 +138,27 @@ import {
  *     cases, inside a job, exactly as the CLI spawns them.
  */
 
+export interface ServerRemoteAccessOptions {
+  readonly admittedAddresses: readonly string[];
+  readonly onPair?: (session: { readonly deviceId: string; readonly label: string }) => void;
+  readonly onRevoke?: (session: { readonly deviceId: string; readonly label: string }) => void;
+}
+
 export interface ServerOptions {
   readonly fs: FileSystem;
   readonly clock: Clock;
   readonly processRunner: ProcessRunner;
   /**
-   * This process, for the run execution lock (AF-L01).
+   * Node process identity and randomness, minting nonce values for attempt
+   * receipts (§7.4).
    *
-   * Named apart from `host` below, which is a network interface. One is who we are,
-   * the other is where we listen, and calling both `host` would have them read as
+   * Replaces the `nonce: Nonce` port with the generic Host abstraction so test fakes
+   * can supply entropy, filesystem paths and platform primitives without each being
+   * a separate port.
+   *
+   * Pure in tests via `FakeHost`; bound to Node's runtime in production via `NodeHost`.
+   * Stored beside `fs` rather than inside it, because the filesystem is not a host
+   * and the host is not a filesystem, even if `NodeHost` delegates to `node:os` for
    * the same thing.
    */
   readonly processHost: Host;
@@ -164,17 +186,75 @@ export interface ServerOptions {
    * second answer to the same question.
    */
   readonly allowedHosts?: readonly string[];
+  /**
+   * Remote access, opt-in, resolved by the CLI (§93).
+   *
+   * Absent is the default install, and absence is what FR-001 is provable from: the
+   * session stage of the hook is not entered, so no code path differs from today's.
+   * The addresses are enumerated by `src/cli/ui.ts` because `src/server` may not
+   * import `src/cli` and because "which interfaces is this bound to" is a fact the
+   * CLI already has to state to print a reachable URL.
+   */
+  readonly remoteAccess?: ServerRemoteAccessOptions;
+}
+
+export interface ServerPairing {
+  readonly code: string;
+  readonly admittedAddresses: readonly string[];
+  listSessions(): readonly DeviceSessionView[];
+  revokeSession(deviceId: string): RevokeSessionOutcome;
+  /**
+   * A fresh code, from the process that already owns the store (FR-030).
+   *
+   * **Not the FR-014 that AMENDMENT 1 withdrew.** That one asked for a *second process*
+   * to mint a code, which memory-only makes impossible: there is no store outside this
+   * process for another one to reach. This is the process that holds it, answering its
+   * own operator — the same seam `listSessions` and `revokeSession` already use.
+   *
+   * It exists because ten minutes was measured against the real loop and lost, three
+   * times in one sitting: a code has to survive a person walking to another device, and
+   * the only alternative on offer was restarting the server, which unpairs every device
+   * already connected in order to help one that is not. Issuing a new code invalidates
+   * the outstanding one — single-use is unchanged — and touches no live session.
+   */
+  issueCode(): string;
 }
 
 export interface RunningServer {
   readonly app: FastifyInstance;
   readonly bus: EventBus;
   readonly watcher: RunWatcher;
+  /** Present exactly when `remoteAccess` was. The CLI prints it; nothing stores it. */
+  readonly pairing?: ServerPairing;
   close(): Promise<void>;
 }
 
 export async function buildServer(options: ServerOptions): Promise<RunningServer> {
   const app = Fastify({ logger: false });
+
+  let pairing: ServerPairing | undefined = undefined;
+  let sessionStore: DeviceSessionStore | undefined = undefined;
+
+  if (options.remoteAccess !== undefined) {
+    sessionStore = new DeviceSessionStore(options.processHost);
+    const issued = sessionStore.issuePairingCode(options.processHost, options.clock);
+    pairing = {
+      code: issued.code,
+      admittedAddresses: options.remoteAccess.admittedAddresses,
+      listSessions: () => {
+        const now = options.clock ? Date.parse(options.clock.now()) : Date.now();
+        return sessionStore!.listSessions(now);
+      },
+      revokeSession: (deviceId: string) => {
+        const outcome = sessionStore!.revokeSession(deviceId);
+        if (outcome.ok) {
+          options.remoteAccess?.onRevoke?.({ deviceId: outcome.deviceId, label: outcome.label });
+        }
+        return outcome;
+      },
+      issueCode: () => sessionStore!.issuePairingCode(options.processHost, options.clock).code,
+    };
+  }
 
   /**
    * Who may talk to this server, decided before any handler runs (PRI-05).
@@ -183,17 +263,24 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
    * routing — which is what makes this a boundary rather than a check. A refusal here
    * cannot have had a side effect, because nothing below it has run.
    *
-   * The rules and the attack they answer live in `request-guard.ts`. What belongs here
-   * is only the wiring: the host guard on everything, the origin guard on writes, and
-   * the request's own validated `Host` as the identity a write's `Origin` must match.
+   * The rules and the attack they answer live in `request-guard.ts` and `session-guard.ts`.
+   * Ordered checkHost -> checkSession -> checkWrite.
    */
   app.addHook('onRequest', (request, reply, done) => {
     const host = request.headers.host;
 
     const hostOutcome = checkHost(host, {
       ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
+      ...(options.remoteAccess === undefined
+        ? {}
+        : { boundAddresses: options.remoteAccess.admittedAddresses }),
     });
     if (!hostOutcome.ok) return refuseGuard(reply, hostOutcome.refusal, done);
+
+    if (sessionStore !== undefined) {
+      const sessionOutcome = checkSession(request, sessionStore, options.clock);
+      if (!sessionOutcome.ok) return refuseGuard(reply, sessionOutcome.refusal, done);
+    }
 
     if (!isWriteMethod(request.method)) return done();
 
@@ -314,6 +401,88 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       host: options.host,
       port: options.port,
     };
+  });
+
+  app.post('/api/v1/pair', (request, reply) => {
+    if (sessionStore === undefined) {
+      return reply.code(404).send({ error: 'not_found', message: say(request).pairingNotEnabled });
+    }
+
+    const parsed = PairRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'bad_request', message: say(request).invalidPairRequest });
+    }
+
+    const now = options.clock ? Date.parse(options.clock.now()) : Date.now();
+    const outcome = sessionStore.pairDevice({
+      code: parsed.data.code,
+      label: parsed.data.label,
+      now,
+      host: options.processHost,
+    });
+
+    if (!outcome.ok) {
+      if (outcome.refusal === 'too_many_sessions') {
+        return reply.code(409).send({ error: 'conflict', message: say(request).sessionLimitReached });
+      }
+
+      // **Four refusals, four answers** (D22). This collapsed `expired`, `used`, `burned`
+      // and `unknown` into one *"invalid pairing code"* — the same words for a code that
+      // ran out of time, one already spent, one burned by failed guesses, and one that
+      // never existed. Measured live: a code expired between being printed and being
+      // typed, and the operator was told it was invalid, which sends a person to check
+      // their typing instead of asking for a new code. The four sentences were already
+      // written in the phrase book and reached nothing.
+      //
+      // The status stays 401 for all four and the *distinctions are not secrets*: every
+      // one of them is about a code the operator is holding, on a server they started.
+      // `sayFor`, not `say`: the latter narrows to the `server` slice, and these four
+      // sentences live at the top level beside the screen that shows them — which is the
+      // point, since the Deck renders the same refusal the API returns.
+      const phrases = sayFor(request.query).pairing;
+      const message = {
+        expired: phrases.codeExpired,
+        used: phrases.codeUsed,
+        burned: phrases.codeBurned,
+        unknown: phrases.codeUnknown,
+        ok: phrases.codeUnknown,
+      }[outcome.refusal];
+
+      return reply.code(401).send({ error: 'unauthorized', message });
+    }
+
+    reply.header('set-cookie', serializeSessionCookie(outcome.deviceId, outcome.secret));
+    options.remoteAccess?.onPair?.({ deviceId: outcome.deviceId, label: outcome.label });
+    return reply.code(200).send({
+      deviceId: outcome.deviceId,
+      label: outcome.label,
+      pairedAt: outcome.pairedAt,
+    });
+  });
+
+  app.get('/api/v1/sessions', (_request, reply) => {
+    const now = options.clock ? Date.parse(options.clock.now()) : Date.now();
+    const sessions = sessionStore !== undefined ? sessionStore.listSessions(now) : [];
+    return reply.code(200).send(sessions);
+  });
+
+  app.post('/api/v1/sessions/:deviceId/revoke', (request, reply) => {
+    const params = DeviceSessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: 'bad_request', message: say(request).invalidDeviceSessionRequest });
+    }
+
+    if (sessionStore === undefined) {
+      return reply.code(404).send({ error: 'not_found', message: say(request).noSuchDeviceSession });
+    }
+
+    const outcome = sessionStore.revokeSession(params.data.deviceId);
+    if (!outcome.ok) {
+      return reply.code(404).send({ error: 'not_found', message: say(request).noSuchDeviceSession });
+    }
+
+    options.remoteAccess?.onRevoke?.({ deviceId: outcome.deviceId, label: outcome.label });
+    return reply.code(200).send({ ok: true, deviceId: outcome.deviceId, label: outcome.label });
   });
 
   app.get('/api/v1/projects', async (): Promise<ProjectView[]> => {
@@ -903,6 +1072,9 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       projectDir: project.path,
     });
 
+    const now = options.clock ? Date.parse(options.clock.now()) : Date.now();
+    const liveSessions = sessionStore ? sessionStore.listSessions(now).length : 0;
+
     // Assigned, never rebuilt field by field. `DoctorView` says why: this line is the
     // only thing keeping the wire shape and `Diagnosis` from drifting, and a mapping
     // written out by hand would have made the drift invisible instead.
@@ -915,6 +1087,17 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       promptsDir: options.promptsDir,
       installProbe: query.data.install === true,
       say: sayFor(request.query),
+      remoteAccess: options.remoteAccess !== undefined
+        ? {
+            enabled: true,
+            admittedAddresses: options.remoteAccess.admittedAddresses,
+            liveSessions,
+          }
+        : {
+            enabled: false,
+            admittedAddresses: [],
+            liveSessions: 0,
+          },
     });
 
     return view;
@@ -1117,21 +1300,30 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
   };
 
   /** The ports a use case needs, for one project. Never a client-supplied path. */
-  const depsFor = (project: RegisteredProject, say: Phrases): RunActionDeps => ({
-    fs: options.fs,
-    clock: options.clock,
-    processRunner: options.processRunner,
-    host: options.processHost,
-    projectDir: project.path,
-    globalConfigPath: options.globalConfigPath,
-    promptsDir: options.promptsDir,
-    // Written into the execution lock, so a CLI refused by this server can see that
-    // the server is what has the run.
-    owner: 'server',
-    // §93.1: the reader's language reaches the use case with the request, so a refusal
-    // and the button that produced it are never in two languages.
-    say,
-  });
+  const depsFor = (project: RegisteredProject, say: Phrases, request?: unknown): RunActionDeps => {
+    const session = (request as { deviceSession?: DeviceSession } | undefined)?.deviceSession;
+    const actor: RunActor =
+      session !== undefined
+        ? { kind: 'device', deviceId: session.deviceId, label: session.label }
+        : { kind: 'keyboard' };
+
+    return {
+      fs: options.fs,
+      clock: options.clock,
+      processRunner: options.processRunner,
+      host: options.processHost,
+      projectDir: project.path,
+      globalConfigPath: options.globalConfigPath,
+      promptsDir: options.promptsDir,
+      // Written into the execution lock, so a CLI refused by this server can see that
+      // the server is what has the run.
+      owner: 'server',
+      actor,
+      // §93.1: the reader's language reaches the use case with the request, so a refusal
+      // and the button that produced it are never in two languages.
+      say,
+    };
+  };
 
   /** The lock, for the pre-flight read. Acquisition belongs to the use cases. */
   const lockFor = (project: RegisteredProject): RunExecutionLock =>
@@ -1146,7 +1338,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await describeApprovalGate(depsFor(scope.project, sayFor(request.query)), scope.runId);
+    const outcome = await describeApprovalGate(depsFor(scope.project, sayFor(request.query), request), scope.runId);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     const gate = outcome.value;
@@ -1180,7 +1372,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = PlanRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).featureNeedsDescription);
 
-    const deps = depsFor(project, sayFor(request.query));
+    const deps = depsFor(project, sayFor(request.query), request);
     // The requested class travels with the description, so the one refusal answerable
     // from configuration alone lands before a run is created (§3.2, C-19).
     const created = await createFeatureRun(deps, body.data.description, body.data.workflow);
@@ -1215,7 +1407,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = ResumePlanningRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidPlanResumeRequest);
 
-    const deps = depsFor(scope.project, sayFor(request.query));
+    const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
     const { from, skipReview, noCache } = body.data;
 
@@ -1264,7 +1456,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     // No hash crosses this boundary. The use case reads the plan on disk and
     // hashes it, so there is no version of this call that approves a plan the
     // person did not see (§90).
-    const outcome = await approve(depsFor(scope.project, sayFor(request.query)), scope.runId, {
+    const outcome = await approve(depsFor(scope.project, sayFor(request.query), request), scope.runId, {
       force: body.data.force,
     });
 
@@ -1283,7 +1475,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = RejectRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidRejectRequest);
 
-    const outcome = await reject(depsFor(scope.project, sayFor(request.query)), scope.runId, body.data.reason);
+    const outcome = await reject(depsFor(scope.project, sayFor(request.query), request), scope.runId, body.data.reason);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
     return actionResult(scope.runId, outcome.warnings);
   });
@@ -1298,7 +1490,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = RetryRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidRetryRequest);
 
-    const outcome = await retryTask(depsFor(project, sayFor(request.query)), params.data.runId, params.data.taskId, {
+    const outcome = await retryTask(depsFor(project, sayFor(request.query), request), params.data.runId, params.data.taskId, {
       force: body.data.force,
       expectNoChange: body.data.expectNoChange,
     });
@@ -1377,7 +1569,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await pause(depsFor(scope.project, sayFor(request.query)), scope.runId);
+    const outcome = await pause(depsFor(scope.project, sayFor(request.query), request), scope.runId);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     return actionResult(scope.runId, outcome.warnings, {
@@ -1391,7 +1583,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await cancel(depsFor(scope.project, sayFor(request.query)), scope.runId);
+    const outcome = await cancel(depsFor(scope.project, sayFor(request.query), request), scope.runId);
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     return actionResult(scope.runId, outcome.warnings, {
@@ -1406,7 +1598,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const deps = depsFor(scope.project, sayFor(request.query));
+    const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
 
     // A job, because resuming executes the plan — minutes of work and spawned runners.
@@ -1432,7 +1624,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = StartRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidStartRequest);
 
-    const deps = depsFor(scope.project, sayFor(request.query));
+    const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
     const taskId = body.data.taskId;
 
@@ -1465,7 +1657,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       return badRequest(reply, say(request).revisionNeedsInstruction);
     }
 
-    const deps = depsFor(scope.project, sayFor(request.query));
+    const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
     const instruction = body.data.instruction;
 
@@ -1500,7 +1692,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = ReviewRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidReviewRequest);
 
-    const deps = depsFor(scope.project, sayFor(request.query));
+    const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
     const fix = body.data.fix;
 
@@ -1570,9 +1762,26 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const keepAlive = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
     keepAlive.unref?.();
 
-    request.raw.on('close', () => {
+    const session = (request as { deviceSession?: DeviceSession }).deviceSession;
+    const closeStream = (): void => {
       clearInterval(keepAlive);
       unsubscribe();
+      try {
+        reply.raw.end();
+      } catch {
+        // Socket may already be closed
+      }
+    };
+
+    if (session !== undefined && sessionStore !== undefined) {
+      sessionStore.registerStream(session.deviceId, closeStream);
+    }
+
+    request.raw.on('close', () => {
+      closeStream();
+      if (session !== undefined && sessionStore !== undefined) {
+        sessionStore.unregisterStream(session.deviceId, closeStream);
+      }
     });
 
     return reply;
@@ -1600,6 +1809,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     app,
     bus,
     watcher,
+    ...(pairing === undefined ? {} : { pairing }),
     close: async () => {
       watcher.stop();
       await app.close();

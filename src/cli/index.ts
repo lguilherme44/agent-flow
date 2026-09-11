@@ -290,6 +290,10 @@ export async function main(argv: string[]): Promise<number> {
     .option('--no-open', 'do not open a browser')
     .option('--depth <n>', 'how deep to look for projects (default: ui.workspaceDepth, or 2)')
     .option('--classic', 'serve the previous dashboard instead of Deck')
+    .option(
+      '--pair',
+      'enable remote device pairing (restarting the server unpairs every device and invalidates any outstanding code)',
+    )
     .action(async (root: string | undefined, options: UiOptions, command: Command) => {
       exitCode = await runUiCommand(root, options, globalOptions(command));
     });

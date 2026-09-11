@@ -122,6 +122,46 @@ fechados, o D9 aberto porque não reproduz) e **D14/D15, achados na retomada de 
 quando o plano recusado voltou para uma segunda passada. Boa parte deles é o mesmo defeito
 de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
 
+- [x] **D18 · Quem julga tem 2400 s; quem escreve tem 900 s por esquecimento** — `.agent-flow/config.yaml`
+      Medido na primeira execução real do plano, em 11/09/2026. Os papéis de julgamento
+      receberam `timeoutSeconds: 2400` com a justificativa escrita ao lado; os executores
+      ficaram no default de 900 s porque ninguém olhou para eles.
+
+      A TASK-004, `complex`, morreu em **15min01 — 901 s, o default no segundo** — e essa
+      morte **gastou uma das duas tentativas**. A segunda fez o trabalho em 23min54 e
+      reprovou por nove imports não usados. O tempo nunca foi a discordância; foi o relógio.
+
+      Durações observadas por task neste repositório: TASK-001 22min25, TASK-003 21min55,
+      TASK-004 23min54. **900 s era menos da metade do típico.**
+
+      Vale registrar o que ficou certo: essa foi uma falha *honesta* — `errorCode: timeout`,
+      `failureClass: runner_timeout`. Antes do [[D16]] o agy teria batido no teto próprio de
+      300 s e devolvido `SUCCESS` com enfeite. A correção do D16 é o que transformou isso
+      em algo diagnosticável.
+
+      Corrigido: `complex` 2400 s, `normal` 1800 s, `trivial` 900 s, com a medição escrita
+      no comentário.
+
+- [ ] **D19 · Não existe "eu já consertei, só valida de novo"** — `src/cli/index.ts` + `src/app/run-actions.ts`
+      A TASK-004 parou com `recovery_exhausted` e a evidência inteira era:
+
+      ```
+      npm run lint → exit 1: 9:30  error  'RunActionDeps' is defined but never used
+      ```
+
+      Nove imports não usados, em nove arquivos de teste — o executor moveu os pontos de
+      construção para `fakeRunActionDeps` e deixou o tipo para trás. `typecheck` limpo,
+      **3972 testes passando**, a substância das quatro tasks de pé.
+
+      O produto diz *"Review the attempt evidence, then retry the task"*, e `retry` só sabe
+      **rodar o modelo de novo**. Para apagar nove linhas de import, isso é uma chamada de
+      ~20 minutos de um executor. `--expect-no-change` chega perto mas diz outra coisa:
+      *aceite um diff vazio*, não *revalide o que eu corrigi*.
+
+      **Pronto quando:** existir um caminho que reexecuta só os comandos de validação sobre
+      a árvore como ela está — e que registre no log que a correção foi humana, porque um
+      task fechado por mão de gente não pode parecer um fechado pelo modelo.
+
 - [x] **D17 · O D7 ficou aberto exatamente na superfície que importa** — `src/cli/feature.ts`
       O `resumeHint` recebeu a classe do workflow como parâmetro **com default
       `'standard'`** — e o único chamador que não tinha classe para dar é o `catch` do

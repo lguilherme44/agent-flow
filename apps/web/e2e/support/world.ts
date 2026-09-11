@@ -34,6 +34,10 @@ export type ImplOutcome = 'completed' | 'blocked' | 'failed';
 export interface WorldOptions {
   /** Which shipped dashboard the real UI server should expose. */
   readonly dashboard?: 'classic' | 'deck';
+  /** Enable remote device access through pairing (FR-002). */
+  readonly pair?: boolean;
+  /** Host interface to bind to (e.g. '0.0.0.0' or '127.0.0.1'). */
+  readonly host?: string;
   /** Directory names under the temp root. Each becomes an Agent Flow project. */
   readonly projects?: readonly string[];
   /** Serve the temp root as a workspace rather than a single project. */
@@ -158,8 +162,8 @@ export class World {
     readonly globalConfigPath: string,
     readonly projectDirs: Readonly<Record<string, string>>,
     readonly fakeLog: string,
-    readonly url: string,
-    private readonly server: ChildProcess,
+    public url: string,
+    public server: ChildProcess,
     /**
      * What the fake coding CLI is told, whoever spawns it.
      *
@@ -168,10 +172,50 @@ export class World {
      * started from the browser and one started from a shell have to be the same
      * run, which is the premise every scenario here rests on.
      */
-    private readonly fakeEnv: Readonly<Record<string, string>>,
+    readonly fakeEnv: Readonly<Record<string, string>>,
     /** Where the parked agents leave their markers. Absent unless `hold`. */
     readonly holdDir?: string,
+    private _serverOutput: () => string = () => '',
+    readonly served: string = '',
+    readonly dashboard: 'classic' | 'deck' = 'classic',
   ) {}
+
+  /** The captured stdout and stderr of the running server process (UI-31, TASK-008). */
+  get output(): string {
+    return this._serverOutput();
+  }
+
+  /** Stops the UI server child process. */
+  async stopServer(): Promise<void> {
+    await stop(this.server);
+  }
+
+  /** Starts a new UI server child process for this world. */
+  async startServer(
+    options: { pair?: boolean; host?: string; dashboard?: 'classic' | 'deck' } = {},
+  ): Promise<StartedServer> {
+    const started = await startServer(
+      this.globalConfigPath,
+      this.served,
+      this.root,
+      this.fakeEnv,
+      options.dashboard ?? this.dashboard,
+      options.pair ?? false,
+      options.host,
+    );
+    this.server = started.child;
+    this.url = started.url;
+    this._serverOutput = () => started.output;
+    return started;
+  }
+
+  /** Restarts the UI server child process. */
+  async restartServer(
+    options: { pair?: boolean; host?: string; dashboard?: 'classic' | 'deck' } = {},
+  ): Promise<StartedServer> {
+    await this.stopServer();
+    return await this.startServer(options);
+  }
 
   /**
    * Runs `git` in one project and returns its stdout, trimmed.
@@ -347,7 +391,9 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
   let holdDir: string | undefined;
 
   try {
-    await writeFile(globalConfigPath, globalConfig(options), 'utf8');
+    // **The fake CLI needs a name this platform can spawn** — see `fakeCliCommand`.
+    const fakeCli = await installFakeCli(root);
+    await writeFile(globalConfigPath, globalConfig(options, fakeCli), 'utf8');
 
     if (options.hold === true) {
       holdDir = join(root, 'hold');
@@ -425,12 +471,15 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     }
 
     const served = options.workspace === true ? root : (projectDirs[first] as string);
-    const { child, url } = await startServer(
+    const dashboard = options.dashboard ?? (options.pair ? 'deck' : 'classic');
+    const started = await startServer(
       globalConfigPath,
       served,
       root,
       fakeEnv,
-      options.dashboard ?? 'classic',
+      dashboard,
+      options.pair ?? false,
+      options.host,
     );
 
     return new World(
@@ -438,10 +487,13 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
       globalConfigPath,
       projectDirs,
       fakeLog,
-      url,
-      child,
+      started.url,
+      started.child,
       fakeEnv,
-      ...(holdDir === undefined ? [] : ([holdDir] as const)),
+      holdDir,
+      () => started.output,
+      served,
+      dashboard,
     );
   } catch (error) {
     await rm(root, { recursive: true, force: true });
@@ -489,13 +541,21 @@ async function initRepository(dir: string, branch: string | undefined): Promise<
   }
 }
 
-async function startServer(
+export interface StartedServer {
+  readonly child: ChildProcess;
+  readonly url: string;
+  readonly output: string;
+}
+
+export async function startServer(
   globalConfigPath: string,
   served: string,
   cwd: string,
   fakeEnv: Readonly<Record<string, string>>,
   dashboard: 'classic' | 'deck',
-): Promise<{ child: ChildProcess; url: string }> {
+  pair = false,
+  host?: string,
+): Promise<StartedServer> {
   const port = await freePort();
 
   const child = spawn(
@@ -510,6 +570,8 @@ async function startServer(
       String(port),
       '--no-open',
       ...(dashboard === 'classic' ? ['--classic'] : []),
+      ...(pair ? ['--pair'] : []),
+      ...(host !== undefined ? ['--host', host] : []),
     ],
     {
       cwd,
@@ -528,16 +590,52 @@ async function startServer(
     });
   }
 
-  const url = `http://127.0.0.1:${String(port)}`;
+  const effectiveHost = host === '0.0.0.0' || host === undefined ? '127.0.0.1' : host;
+  const url = `http://${effectiveHost}:${String(port)}`;
   if (!(await waitForHealth(url, child))) {
     await stop(child);
     throw new Error(`agent-flow ui never answered on ${url}\n${output}`);
   }
 
-  return { child, url };
+  return {
+    child,
+    url,
+    get output() {
+      return output;
+    },
+  };
 }
 
-function globalConfig(options: WorldOptions): string {
+/**
+ * A path to the fake coding CLI that this platform can actually execute.
+ *
+ * The config below names a runner's `command`, and agent-flow spawns that command. A
+ * `.mjs` file works on POSIX because the kernel reads its shebang; **Windows has no
+ * shebang and does not carry `.mjs` in `PATHEXT`**, so the spawn fails with `EFTYPE`
+ * before the fake ever runs. Measured on 11/09/2026: every spec in the browser gate
+ * failed that way on Windows, including specs that predate the feature being tested —
+ * so `scripts/gates.mjs` marks `test:e2e` `required-local, per-change` for a gate that
+ * has never been runnable on this machine. That is how a spec with two wrong assertions
+ * was written and declared validated.
+ *
+ * The shim is generated into the world's own temporary directory rather than committed
+ * beside the fake: it is an artefact of how this platform spawns, it must not outlive the
+ * run that needed it, and a second file in `support/` invites somebody to edit one of the
+ * two. `%~dp0` resolves against the shim's own directory, so the pair travels together.
+ *
+ * `RunnerConfig.args` cannot do this job — `BaseRunner` appends those *after* the
+ * arguments the adapter builds, which is right for an operator's extra flags and wrong
+ * for a script path that has to come first.
+ */
+async function installFakeCli(root: string): Promise<string> {
+  if (process.platform !== 'win32') return FAKE_CLI;
+
+  const shim = join(root, 'fake-agent-cli.cmd');
+  await writeFile(shim, `@echo off\r\n"${process.execPath}" "${FAKE_CLI}" %*\r\n`, 'utf8');
+  return shim;
+}
+
+function globalConfig(options: WorldOptions, fakeCli: string): string {
   // A distinct id rather than a broken command on `codex`, so only the role
   // pointed at it is affected and the rest of the run still behaves.
   const absent = '/nonexistent/agent-flow-e2e-no-such-runner';
@@ -554,12 +652,12 @@ runners:
   claude:
     type: claude-code-cli
     enabled: true
-    command: ${FAKE_CLI}
+    command: ${fakeCli}
     apiKeyEnv: SECRET_API_TOKEN
   codex:
     type: codex-cli
     enabled: true
-    command: ${FAKE_CLI}
+    command: ${fakeCli}
   broken:
     type: codex-cli
     enabled: true

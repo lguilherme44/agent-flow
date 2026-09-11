@@ -58,13 +58,26 @@ runners:
 # adapter now sends the role's own budget as `--print-timeout`, and both seats get the
 # time they were configured with.
 roles:
+  # The executors were left on the 900 s default by omission while every role that judges
+  # got 2400 s — and the omission killed a task. Measured on AF-2026-004: TASK-004, a
+  # `complex` task, was cut at 15min01 — 901 s, the default to the second — and that kill
+  # spent one of its two attempts. The second attempt did the work in 23min54 and failed
+  # on nine unused imports, so the budget was never the disagreement; it was the clock.
+  #
+  # Same reasoning as the roles above: a multiple of the worst case seen, not a round
+  # number near it. Observed per task on this repository — TASK-001 22min25, TASK-003
+  # 21min55, TASK-004 23min54 — so 900 s was under half of typical and 2400 s bounds a
+  # runaway without turning a normal task into a coin flip.
   executors:
     trivial:
       runner: agy
+      timeoutSeconds: 900
     normal:
       runner: agy
+      timeoutSeconds: 1800
     complex:
       runner: agy
+      timeoutSeconds: 2400
   # 2400 s, not the 900 s default, and the number comes from measurement rather than
   # caution. The SDD stage on this repository took 15min03 in AF-2026-003 and 15min02 in
   # AF-2026-004 — one side of the 900 s default each. Discovery was 10min17 and the

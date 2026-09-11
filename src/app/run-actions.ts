@@ -9,6 +9,7 @@ import {
   type RunState,
   type TaskState,
   type WorkflowClass,
+  type RunActor,
 } from '../contracts/index.js';
 import { PlanningRefusal, type PipelineOptions } from './planning-pipeline.js';
 import { StageFailure } from './stage-runner.js';
@@ -236,6 +237,21 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
    */
   readonly owner: LockOwner;
   /**
+   * Who decided, as opposed to which entry point holds the lock.
+   *
+   * Deliberately not folded into `owner`. `owner` is a `LockOwner` and belongs to
+   * AF-L01: it answers "what is busy with this run" and is read back out of a lock
+   * file. Attribution answers "who moved the gate" and is read out of the run's audit
+   * trail years later. One field carrying both would make `owner: 'server'` mean two
+   * things and would silently attribute every remote action to "the server".
+   *
+   * **Required, not optional.** There are exactly two construction sites —
+   * `src/cli/approve.ts:151` and `src/server/server.ts:1120` — and making this
+   * required turns the keyboard half into a compile error rather than an omission a
+   * reviewer has to notice. That is the whole reason it is not `actor?`.
+   */
+  readonly actor: RunActor;
+  /**
    * The language every refusal below is written in, defaulting to English (§93.1).
    *
    * An argument rather than a lookup, and optional rather than required, for the reason
@@ -244,6 +260,19 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
    */
   readonly say?: Phrases;
 };
+
+/**
+ * Appends an operator_action audit event recording who took this action (FR-016).
+ */
+export async function recordActor(
+  store: StateStore,
+  runId: string,
+  action: string,
+  actor: RunActor,
+): Promise<void> {
+  await store.appendEvent(runId, 'operator_action', { action, actor });
+}
+
 
 // ---------------------------------------------------------------------------
 // the execution lock
@@ -697,6 +726,7 @@ async function grantApproval(
 
   const forced = !check.allowed && options.force === true;
   await recordApproval(context.store, runId, plan, { forced });
+  await recordActor(context.store, runId, 'approve', deps.actor);
 
   // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
   // stay spent; the count of calls made *with no intervening human action* is by definition
@@ -776,6 +806,7 @@ async function rejectPlan(
   await context.store.appendEvent(runId, 'run_rejected', {
     reason: reason ?? '(no reason given)',
   });
+  await recordActor(context.store, runId, 'reject', deps.actor);
 
   return done({ runId });
 }
@@ -942,6 +973,7 @@ async function requeue(
   // stay spent; the count of calls made *with no intervening human action* is by definition
   // broken by this one.
   await clearAutonomy(context.store, runId);
+  await recordActor(context.store, runId, 'retryTask', deps.actor);
 
   return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
 }
@@ -960,6 +992,7 @@ export interface StartOptions {
   readonly taskId?: string;
   readonly onTaskStart?: (taskId: string) => void;
   readonly onTaskFinish?: BuildContextOptions['onTaskFinish'];
+  readonly recordAction?: boolean;
 }
 
 /**
@@ -1242,6 +1275,10 @@ async function execute(
     }
   }
 
+  if (options.recordAction !== false) {
+    await recordActor(context.store, runId, 'start', deps.actor);
+  }
+
   // A run that was asked for parallelism it did not get has to be able to say so
   // afterwards (M2-00.3). Recorded here rather than where the number is resolved,
   // because `buildExecutionContext` is also assembled by every read — the approval
@@ -1400,6 +1437,7 @@ export async function pause(
   if (!alreadyPaused) {
     await store.updateRun(runId, (current) => ({ ...current, pauseRequestedAt: at }));
     await store.appendEvent(runId, 'run_paused', { at });
+    await recordActor(store, runId, 'pause', deps.actor);
   }
 
   // Read after the write, not before. A run that started executing between the two would
@@ -1480,8 +1518,9 @@ export async function resume(
 
   await store.updateRun(runId, (current) => ({ ...current, pauseRequestedAt: undefined }));
   await store.appendEvent(runId, 'run_resumed', { at: deps.clock.now() });
+  await recordActor(store, runId, 'resume', deps.actor);
 
-  const started = await start(deps, runId);
+  const started = await start(deps, runId, { recordAction: false });
   if (!started.ok) return started;
 
   return done({ runId, outcome: started.value.outcome }, started.warnings);
@@ -1576,6 +1615,7 @@ export async function cancel(
       ? {}
       : { pid: held.holder.pid, hostname: held.holder.hostname }),
   });
+  await recordActor(store, runId, 'cancel', deps.actor);
 
   return done(
     {
@@ -1667,6 +1707,7 @@ async function replan(
     attemptedRevision: currentRevisions + 1,
     maxAllowed: budget.maxRevisionCycles,
   });
+  await recordActor(context.store, runId, 'revise', deps.actor);
 
   const request = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
   const pipeline = buildPlanningPipeline(context);
@@ -2223,6 +2264,7 @@ async function judgeRun(
       ? {}
       : { openBlockingFindings: fromCodeReview.review.findings.map(idOf) }),
   });
+  await recordActor(context.store, runId, 'review', deps.actor);
 
   await context.store.updateRun(runId, (current) => ({
     ...current,

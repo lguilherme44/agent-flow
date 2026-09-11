@@ -253,7 +253,28 @@ export interface Diagnosis {
    * checked from here" instead of repeating a false negative as a finding.
    */
   readonly readsEnvironment: boolean;
+  /**
+   * Remote access status (FR-023).
+   *
+   * Known when diagnosed from the running server process; unknown from the standalone
+   * CLI command (`agent-flow doctor`), which cannot inspect in-memory pairing state.
+   */
+  readonly remoteAccess: DiagnosisRemoteAccess;
 }
+
+/**
+ * Remote access status as reported by `diagnose` (FR-023).
+ *
+ * Known by the running server process; unknown from a standalone CLI command.
+ */
+export type DiagnosisRemoteAccess =
+  | { readonly known: false }
+  | {
+      readonly known: true;
+      readonly enabled: boolean;
+      readonly admittedAddresses: readonly string[];
+      readonly liveSessions: number;
+    };
 
 export interface DiagnoseOptions {
   readonly fs: FileSystem;
@@ -287,6 +308,20 @@ export interface DiagnoseOptions {
   readonly onInstallProbe?: (command: string) => void;
   /** The reader's language for the remediations. English when a caller does not ask. */
   readonly say?: Phrases;
+  /**
+   * What the *running server* knows about remote access (FR-023).
+   *
+   * Optional, and absent from `src/cli/doctor.ts` on purpose. The pairing store lives
+   * in the `agent-flow ui` process and nowhere else, so a terminal cannot read it —
+   * and a terminal that reported `off` would be reporting a fact about itself as a
+   * fact about the server. The same shape as `readsEnvironment`: a reader that cannot
+   * see something says so rather than guessing.
+   */
+  readonly remoteAccess?: {
+    readonly enabled: boolean;
+    readonly admittedAddresses: readonly string[];
+    readonly liveSessions: number;
+  };
 }
 
 /**
@@ -393,6 +428,14 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     unresolvableRoles,
     remediations: generateRemediations(runners, node, git, options.say ?? en),
     readsEnvironment: options.env !== undefined,
+    remoteAccess: options.remoteAccess !== undefined
+      ? {
+          known: true,
+          enabled: options.remoteAccess.enabled,
+          admittedAddresses: options.remoteAccess.admittedAddresses,
+          liveSessions: options.remoteAccess.liveSessions,
+        }
+      : { known: false },
   };
 }
 

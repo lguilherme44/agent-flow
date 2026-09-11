@@ -100,6 +100,8 @@ export const ptBR: Dictionary = {
     analytics: 'Métricas',
     doctor: 'Diagnóstico',
     clean: 'Limpeza',
+    devices: 'Dispositivos',
+    pairing: 'Pareamento',
     live: 'ao vivo',
     reconnecting: 'reconectando · consultando',
     connecting: 'conectando',
@@ -1197,5 +1199,51 @@ export const ptBR: Dictionary = {
     idle: 'ocioso',
     working: 'trabalhando',
     full: 'lotado',
+  },
+
+  /* ─── Pareamento remoto & dispositivos (FR-021, FR-022) ──────────────────── */
+  pairing: {
+    title: 'Parear Dispositivo',
+    subtitle: 'Digite o código de pareamento exibido no terminal do servidor para conectar este dispositivo.',
+    description: 'Digite o código de pareamento exibido no terminal do servidor para conectar este dispositivo.',
+    codeLabel: 'Código de Pareamento',
+    codePlaceholder: 'xxxx-xxxx-xxxx',
+    deviceLabel: 'Nome do Dispositivo',
+    devicePlaceholder: 'ex.: Chrome no iPhone',
+    pairButton: 'Parear Dispositivo',
+    pairing: 'Pareando…',
+    pairedSuccess: 'Dispositivo pareado com sucesso',
+    codeExpired: 'O código de pareamento expirou. Reinicie o servidor para gerar um novo código.',
+    codeUsed: 'Este código de pareamento já foi utilizado.',
+    codeBurned:
+      'Este código de pareamento foi queimado após muitas tentativas com falha. Reinicie o servidor para gerar um novo código.',
+    codeUnknown: 'O código de pareamento é inválido.',
+    limitReached:
+      'O limite de 16 sessões ativas de dispositivos foi atingido. Revogue uma sessão para parear um novo dispositivo.',
+    pairingDisabled: 'O pareamento remoto de dispositivos não está habilitado neste servidor.',
+    restartWarning:
+      'Reiniciar o servidor despareia todos os dispositivos e invalida qualquer código pendente.',
+    codeRequired: 'Por favor, digite o código de pareamento.',
+    labelRequired: 'Por favor, digite o nome do dispositivo.',
+    invalidCodeFormat: 'Esperado um código de pareamento de 12 caracteres como xxxx-xxxx-xxxx.',
+  },
+
+  devices: {
+    title: 'Dispositivos Conectados',
+    subtitle: 'Gerencie as sessões ativas de dispositivos. Revogar uma sessão desconecta o dispositivo imediatamente.',
+    description: 'Gerencie as sessões ativas de dispositivos. Revogar uma sessão desconecta o dispositivo imediatamente.',
+    noSessions: 'Nenhum dispositivo remoto está pareado no momento.',
+    revoke: 'Revogar',
+    revoking: 'Revogando…',
+    revoked: 'Sessão do dispositivo revogada',
+    pairedAt: 'Pareado em',
+    lastSeenAt: 'Visto pela última vez',
+    deviceId: 'ID do Dispositivo',
+    deviceLabel: 'Dispositivo',
+    actions: 'Ações',
+    activeSessions: (count: number) =>
+      `${String(count)} ${count === 1 ? 'sessão ativa de dispositivo' : 'sessões ativas de dispositivos'}`,
+    couldNotLoad: 'Não foi possível carregar as sessões de dispositivos.',
+    couldNotRevoke: (message: string) => `Não foi possível revogar a sessão: ${message}`,
   },
 };

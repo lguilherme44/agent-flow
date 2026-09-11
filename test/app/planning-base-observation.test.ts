@@ -11,7 +11,8 @@ import type {
   ProcessSpawnOptions,
 } from '../../src/ports/index.js';
 import { StateStore } from '../../src/app/state-store.js';
-import { approve, start, type RunActionDeps } from '../../src/app/run-actions.js';
+import { approve, start } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import {
   composeRunIdentity,
   resolveRunGitIdentity,
@@ -161,7 +162,7 @@ async function sequentialProject() {
     tasks: [{ id: 'TASK-001', state: 'queued' as const, attempts: 0, infrastructureFailures: 0 }],
   }));
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner: new GitOnlyProcessRunner(),
@@ -170,7 +171,7 @@ async function sequentialProject() {
     promptsDir,
     host: new FakeHost(1000, 'test-host', [1000], temp.home),
     owner: 'cli',
-  };
+  });
 
   return { temp, store, deps, runId: run.runId, planningBase: run.planningBase };
 }

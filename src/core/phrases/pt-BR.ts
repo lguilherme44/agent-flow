@@ -77,6 +77,9 @@ export const ptBR: Phrases = {
     workspaceScanDepth: 'Profundidade da varredura do workspace',
     scanDepthNote:
       'até onde, abaixo da raiz do workspace, o `agent-flow ui ~/wk` procura projetos; um diretório além disso não é descoberto nem servido',
+    uiPairing: 'Pareamento de dispositivos',
+    uiPairingNote:
+      'se dispositivos remotos podem se parear com este servidor via código de curta duração',
     retentionNote:
       'O histórico de runs é podado a pedido, não por política: agent-flow clean --keep <n>. Não há configuração de retenção para ler.',
     notSet: 'não definido',
@@ -111,6 +114,8 @@ export const ptBR: Phrases = {
     runLoginOrExport: (command, variable) => `Rode \`${command}\` ou exporte ${variable}`,
     runInTerminal: (command) => `Rode \`${command}\` no seu terminal`,
     installProbeReason: 'sonda de instalação do agent-flow doctor',
+    remoteAccessUndetermined:
+      'o status de acesso remoto não pode ser determinado a partir de um terminal; consulte o servidor em execução',
   },
   delivery: {
     noForgeConfigured: 'nenhuma forge está configurada, então esta run não entrega em lugar nenhum',
@@ -189,6 +194,12 @@ export const ptBR: Phrases = {
     correctYamlRetry: 'Corrija o YAML de origem e tente de novo.',
     configUnreadable: 'A configuração não pôde ser lida nem salva.',
     checkFsRetry: 'Confira o acesso ao sistema de arquivos e tente de novo.',
+    pairingNotEnabled: 'o pareamento não está habilitado neste servidor',
+    invalidPairRequest: 'requisição de pareamento inválida',
+    invalidPairingCode: 'código de pareamento inválido',
+    sessionLimitReached: 'o limite de 16 sessões ativas de dispositivos foi atingido',
+    noSuchDeviceSession: 'sessão de dispositivo não encontrada',
+    invalidDeviceSessionRequest: 'requisição de sessão de dispositivo inválida',
   },
   git: {
     notAGitRepository:
@@ -518,5 +529,33 @@ export const ptBR: Phrases = {
     checksPending: (pending) => `${String(pending)} checagens remotas ainda não reportaram`,
     checksAreObservation: 'checagens remotas são observação, nunca um veredito local',
     openTheRunSummary: 'Abrir o resumo da run',
+  },
+  pairing: {
+    title: 'Parear Dispositivo',
+    description: 'Digite o código de pareamento exibido no terminal do servidor para conectar este dispositivo.',
+    codeLabel: 'Código de Pareamento',
+    deviceLabel: 'Nome do Dispositivo',
+    pairButton: 'Parear Dispositivo',
+    codeExpired: 'O código de pareamento expirou. Digite `code` no terminal do servidor para gerar outro.',
+    codeUsed: 'Este código de pareamento já foi utilizado.',
+    codeBurned:
+      'Este código de pareamento foi queimado após muitas tentativas com falha. Digite `code` no terminal do servidor para gerar outro.',
+    codeUnknown: 'O código de pareamento é inválido.',
+    limitReached:
+      'O limite de 16 sessões ativas de dispositivos foi atingido. Revogue uma sessão para parear um novo dispositivo.',
+    pairingDisabled: 'O pareamento remoto de dispositivos não está habilitado neste servidor.',
+    restartWarning:
+      'Reiniciar o servidor despareia todos os dispositivos e invalida qualquer código pendente.',
+  },
+  devices: {
+    title: 'Dispositivos Conectados',
+    description: 'Gerencie as sessões ativas de dispositivos. Revogar uma sessão desconecta o dispositivo imediatamente.',
+    noSessions: 'Nenhum dispositivo remoto está pareado no momento.',
+    revoke: 'Revogar',
+    revoked: 'Sessão do dispositivo revogada',
+    pairedAt: 'Pareado em',
+    lastSeenAt: 'Visto pela última vez',
+    activeSessions: (count) =>
+      `${String(count)} ${count === 1 ? 'sessão ativa de dispositivo' : 'sessões ativas de dispositivos'}`,
   },
 };

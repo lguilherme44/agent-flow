@@ -896,7 +896,12 @@ export class StageRunner {
       } else {
         const result = stage.outputSchema.safeParse(candidate);
         if (!result.success) {
-          problems.push(...formatValidationError(result.error).split('\n').slice(1));
+          // `candidate` passed so the problem names the value, not only the field and the
+          // rule. This string is both the log line and the reason the re-prompt gives the
+          // model, and a model asked to correct a value it is not shown is being asked to
+          // guess — measured as three attempts failing the same rule on three different
+          // findings.
+          problems.push(...formatValidationError(result.error, undefined, candidate).split('\n').slice(1));
         }
       }
     }

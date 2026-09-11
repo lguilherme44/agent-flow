@@ -13,6 +13,8 @@ describe('parseRoute', () => {
     expect(parseRoute('/clean', '?project=flowcanvas')).toEqual({ name: 'clean', projectId: 'flowcanvas' });
     expect(parseRoute('/analytics', '')).toEqual({ name: 'analytics' });
     expect(parseRoute('/analytics', '?project=flowcanvas')).toEqual({ name: 'analytics', projectId: 'flowcanvas' });
+    expect(parseRoute('/devices', '')).toEqual({ name: 'devices' });
+    expect(parseRoute('/pairing', '')).toEqual({ name: 'pairing' });
     expect(parseRoute('/p/flowcanvas/runs/AF-2026-002', '?task=TASK-004&at=2026-09-04T14:31:21.212Z')).toEqual({
       name: 'run',
       projectId: 'flowcanvas',
@@ -48,6 +50,8 @@ describe('href', () => {
       { name: 'clean' as const, projectId: 'flowcanvas' },
       { name: 'analytics' as const },
       { name: 'analytics' as const, projectId: 'flowcanvas' },
+      { name: 'devices' as const },
+      { name: 'pairing' as const },
       { name: 'run' as const, projectId: 'flowcanvas', runId: 'AF-2026-002', task: 'TASK-004' },
     ]) {
       const to = href(route);

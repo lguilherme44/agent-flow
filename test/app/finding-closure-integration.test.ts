@@ -7,7 +7,7 @@ import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
-import { type RunActionDeps } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 
 describe('Finding Closure & Residual Risk Integration', () => {
   const PROJECT = '/repo';
@@ -83,7 +83,7 @@ describe('Finding Closure & Residual Risk Integration', () => {
     // Seed global config in fake fs
     fs.seed('/install/config.yaml', 'runners:\n  claude:\n    type: claude-code-cli\n');
 
-    const deps: RunActionDeps = {
+    const deps = fakeRunActionDeps({
       fs,
       clock,
       processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: '1.0.0' }),
@@ -92,7 +92,7 @@ describe('Finding Closure & Residual Risk Integration', () => {
       promptsDir: '/install/prompts',
       host,
       owner: 'cli',
-    };
+    });
 
     // Read through approval gate action outcome
     const outcome = await describeApprovalGate(deps, run.runId);

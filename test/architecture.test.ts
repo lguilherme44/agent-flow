@@ -262,6 +262,25 @@ describe('the local server exposes no credentials (§93)', () => {
   });
 });
 
+describe('server.ts onRequest hook stays synchronous (NFR-010)', () => {
+  it('installs exactly one addHook which is not async and contains no await', () => {
+    const { text } = read('src/server/server.ts');
+    const code = codeOnly(text);
+    const hookMatches = [...code.matchAll(/\baddHook\s*\(/g)];
+    expect(hookMatches.length, 'server.ts must have exactly one addHook call').toBe(1);
+
+    const hookStart = text.indexOf('.addHook(');
+    expect(hookStart).toBeGreaterThan(-1);
+
+    // Extract the hook block up to its closing done() callback
+    const hookSnippet = text.slice(hookStart, text.indexOf('const bus = createEventBus();', hookStart));
+    const codeSnippet = codeOnly(hookSnippet);
+
+    expect(codeSnippet).not.toMatch(/\basync\b/);
+    expect(codeSnippet).not.toMatch(/\bawait\b/);
+  });
+});
+
 describe('src/ports declares contracts only (AD-03)', () => {
   it('imports no adapters', () => {
     const offenders = sourceFiles('src/ports')
@@ -4120,6 +4139,27 @@ describe('every review event type has something that emits it (§64, I-43)', () 
 
     // Everything the product runs. The contracts file declares them; it must not also be
     // what "uses" them.
+    const emitters = sourceFiles('src')
+      .map(read)
+      .filter(({ path }) => !path.startsWith('src/contracts/'))
+      .map(({ text }) => withoutComments(text))
+      .join('\n');
+
+    const unwritten = declared.filter((name) => !new RegExp(`'${name ?? ''}'`).test(emitters));
+
+    expect(unwritten).toEqual([]);
+  });
+});
+
+describe('every operator event type has something that emits it (FR-016)', () => {
+  it('leaves no declared type unwritten', () => {
+    const schema = read(join(ROOT, 'src/contracts/state.schema.ts')).text;
+    const block = /export const OPERATOR_EVENT_TYPES = \[([\s\S]*?)\] as const;/.exec(schema);
+    expect(block).not.toBeNull();
+
+    const declared = [...(block?.[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
+    expect(declared.length).toBeGreaterThan(0);
+
     const emitters = sourceFiles('src')
       .map(read)
       .filter(({ path }) => !path.startsWith('src/contracts/'))

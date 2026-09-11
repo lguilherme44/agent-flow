@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { describe, it, expect } from 'vitest';
 import {
   ReasoningLevelSchema,
@@ -293,6 +294,60 @@ describe('Task (§12, §46)', () => {
       expect(result.success).toBe(false);
       if (result.success) return;
       expect(formatValidationError(result.error)).toMatch(/not a shell command/i);
+    });
+  });
+
+  /**
+   * D21 — a rejected value the message never named.
+   *
+   * Measured on AF-2026-004: `final-review` failed three times on
+   * `findings.N.evidence.0.id: expected a path inside the repository, relative to its
+   * root`, on a different finding each time, 22 minutes of Opus. The rule that rejected it
+   * is a `.refine()`, and a refinement issue carries no `received` — so the message named
+   * the field and the rule and not the string, in the log *and* in the re-prompt. The
+   * model was asked to correct a value it was never shown.
+   */
+  describe('a validation message names the value it rejected', () => {
+    it('reads the value off the data when the issue itself does not carry it', () => {
+      const schema = z.object({
+        evidence: z.array(z.object({ id: z.string().refine((v) => !v.includes(':'), 'no line numbers') })),
+      });
+      const data = { evidence: [{ id: 'src/server/server.ts:446' }] };
+
+      const result = schema.safeParse(data);
+      expect(result.success).toBe(false);
+      if (result.success) return;
+
+      const message = formatValidationError(result.error, undefined, data);
+      expect(message).toContain('no line numbers');
+      expect(message).toContain('src/server/server.ts:446');
+    });
+
+    it('says nothing about a value it was not given, rather than inventing one', () => {
+      // The three callers that hand this to a person reading their own file pass no data,
+      // and must keep reading exactly as before.
+      const schema = z.object({ id: z.string().refine(() => false, 'always wrong') });
+      const message = formatValidationError(
+        (schema.safeParse({ id: 'anything' }) as { error: z.ZodError }).error,
+      );
+
+      expect(message).toContain('always wrong');
+      expect(message).not.toContain('received');
+    });
+
+    it('truncates a large value instead of pasting an object into a log line', () => {
+      const schema = z.object({ big: z.array(z.string()).refine(() => false, 'nope') });
+      const data = { big: Array.from({ length: 200 }, (_, i) => `entry-${String(i)}`) };
+
+      const message = formatValidationError(
+        (schema.safeParse(data) as { error: z.ZodError }).error,
+        undefined,
+        data,
+      );
+
+      expect(message).toContain('nope');
+      expect(message).toContain('...');
+      expect(message.length).toBeLessThan(400);
     });
   });
 

@@ -137,17 +137,23 @@ half-merged tree and report a verdict about a state that never existed. It gets
 
 ## Binding somewhere other than loopback
 
-Possible, and loud:
+Binding to anything other than loopback requires authentication:
 
 ```bash
-agent-flow ui --host 0.0.0.0
+agent-flow ui --host 0.0.0.0 --pair
 ```
 
-The command prints a warning saying exactly what that means: this server has no
-authentication, so anything that can reach the port can read every run, every artifact
-and every project path on this machine. That is a reasonable thing to want on a trusted
-network and an unreasonable thing to do by accident, which is the difference a warning
-makes.
+Attempting to bind a non-loopback address without `--pair` (or `ui.pairing.enabled: true`
+in global configuration) is refused before the server binds and exits `CONFIG_ERROR`
+(FR-019). The classic dashboard (`--classic`) is also refused with `--pair` because
+it has no pairing screen and would 401 on every read with no way out (FR-020).
+
+With remote access on, the server prints a twelve-character single-use pairing code
+matching `xxxx-xxxx-xxxx` and one reachable URL per admitted interface address (FR-002, FR-003).
+Any non-loopback request presenting no valid session is refused `401 Unauthorized` on
+every `/api/v1/*` route — reads and the event stream included (FR-008). Only the static bundle
+and `POST /api/v1/pair` are served without a session (FR-009), so a phone or second device
+can load the dashboard and enter the code.
 
 ---
 
@@ -633,12 +639,41 @@ when *you* merge the integration branch — the repository's configuration is ne
 modified, and `agent-flow` never writes to `git config`. Hooks are also **not** isolated
 from `project.commands.*`: those are your commands, run as you wrote them.
 
-**There is no authorisation model.** Anyone who can reach the port *and satisfy the
-request guard* can approve a plan and start a run. The guard establishes that the request
-came from this server's own dashboard or from a non-browser client on this machine; it
-does not establish **who**. On loopback that is the person at the keyboard and any local
-process that can open a socket. Bound elsewhere, it is everybody on that network — the
-guard does not change that, and `--host 0.0.0.0` still warrants the warning it prints.
+**Loopback remains unauthenticated, and remote devices authenticate by pairing.** On
+loopback, anyone who can reach the port and satisfy the request guard can interact with
+the server — the guard establishes that the request came from this server's own dashboard
+or from a non-browser client on this machine; it does not establish **who** (that is the
+person at the keyboard and any local process that can open a socket). When bound outside
+loopback, remote device access requires pairing (`--pair` or `ui.pairing.enabled: true`).
+An unpaired remote peer cannot read or write any API route (FR-008). Pairing mints an
+`HttpOnly` session cookie bound to the device (FR-005). A device session can read and
+approve runs, but is refused `403 Forbidden` on machine-wide changes (`POST /api/v1/clean`
+and `PATCH /api/v1/config/editor`, FR-017). Every write action from a paired device appends
+an `operator_action` event attributing the action to that device's id and label, distinct
+from keyboard actions (FR-016).
+
+**A local reverse proxy can bypass device pairing (SEC-015).** A reverse proxy on the
+same machine makes every forwarded request appear to come from loopback, bypassing
+pairing entirely. SEC-014 catches proxies that annotate (checking for `X-Forwarded-*`
+and `Forwarded` headers and refusing loopback bypass) and not those that strip. If exposing
+Agent Flow through a local reverse proxy, authentication and header preservation must
+be arranged on the proxy.
+
+**The transport is plain HTTP (SEC-009).** The transport is plain HTTP, so on a shared
+network the session cookie and every response body are readable in transit; this feature
+authenticates and does not encrypt, and TLS termination is the operator's to arrange.
+`ui.allowedHosts` exists so a terminating reverse proxy in front of this server is a
+supported configuration.
+
+**Pairing state lives in process memory only (FR-024, FR-029).** Neither sessions nor
+outstanding pairing codes are written to disk. A deliberate consequence of this decision
+is that restarting the server unpairs every device and invalidates any outstanding code.
+With the pairing state in memory there is no separate CLI process that can list or
+revoke sessions, so terminal session management exists only at the TTY of the running
+`agent-flow ui` — a deliberate consequence of the memory-only decision, recorded
+alongside 'restarting unpairs every device'. FR-013 and FR-014 are withdrawn by
+AMENDMENT 1 and are recorded here as withdrawn: there is no new CLI command and no
+second process, so a fresh code requires a restart.
 
 **The process timeout cannot signal a process tree on Windows.** Elsewhere the child runs
 in its own process group and the whole tree is signalled; on Windows only the direct

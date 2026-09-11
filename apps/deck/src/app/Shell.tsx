@@ -17,9 +17,28 @@ export function Shell({ route, connection, version, children }: { route: Route; 
         ? { label: t.nav.reconnecting, tone: 'warn' }
         : { label: t.nav.connecting, tone: 'idle' };
 
-  const link = (name: 'deck' | 'runs' | 'crew' | 'analytics' | 'doctor' | 'clean', label: string): ReactNode => {
+  const link = (
+    name: 'deck' | 'runs' | 'crew' | 'analytics' | 'doctor' | 'clean' | 'devices' | 'pairing',
+    label: string,
+  ): ReactNode => {
     const current = route.name === name || (name === 'runs' && route.name === 'run');
-    const to = href(name === 'deck' ? { name: 'deck' } : name === 'runs' ? { name: 'runs' } : name === 'crew' ? { name: 'crew' } : name === 'analytics' ? { name: 'analytics' } : name === 'doctor' ? { name: 'doctor' } : { name: 'clean' });
+    const to = href(
+      name === 'deck'
+        ? { name: 'deck' }
+        : name === 'runs'
+          ? { name: 'runs' }
+          : name === 'crew'
+            ? { name: 'crew' }
+            : name === 'analytics'
+              ? { name: 'analytics' }
+              : name === 'doctor'
+                ? { name: 'doctor' }
+                : name === 'clean'
+                  ? { name: 'clean' }
+                  : name === 'devices'
+                    ? { name: 'devices' }
+                    : { name: 'pairing' },
+    );
     return (
       <a className="nav__link" href={to} onClick={onLinkClick} aria-current={current ? 'page' : undefined}>
         {label}
@@ -40,6 +59,8 @@ export function Shell({ route, connection, version, children }: { route: Route; 
           {link('analytics', t.nav.analytics)}
           {link('doctor', t.nav.doctor)}
           {link('clean', t.nav.clean)}
+          {link('devices', t.nav.devices)}
+          {link('pairing', t.nav.pairing)}
         </nav>
         <div className="status-cluster">
           {/*

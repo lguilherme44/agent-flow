@@ -212,6 +212,33 @@ describe('checkHost — the DNS rebinding guard', () => {
       expect(outcome.refusal.status).toBe(400);
     }
   });
+
+  describe('with boundAddresses (remote access on - FR-018, SEC-006)', () => {
+    const boundAddresses = ['192.168.1.9'];
+    const policy = { boundAddresses, allowedHosts: ['flow.internal'] };
+
+    it('admits loopback, whatever form it takes', () => {
+      expect(checkHost('127.0.0.1:4782', policy).ok).toBe(true);
+      expect(checkHost('[::1]:4782', policy).ok).toBe(true);
+      expect(checkHost('localhost:4782', policy).ok).toBe(true);
+    });
+
+    it('admits the LAN address the server is actually bound to', () => {
+      expect(checkHost('192.168.1.9:4782', policy).ok).toBe(true);
+    });
+
+    it('refuses a different private address that is not in boundAddresses', () => {
+      const outcome = checkHost('10.0.0.4:4782', policy);
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.refusal.status).toBe(403);
+      expect(outcome.refusal.error).toBe('host_not_allowed');
+    });
+
+    it('admits declared allowedHosts', () => {
+      expect(checkHost('flow.internal:4782', policy).ok).toBe(true);
+    });
+  });
 });
 
 describe('checkWrite — the cross-origin guard', () => {

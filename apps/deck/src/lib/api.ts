@@ -36,6 +36,8 @@ import type {
   ReviewView,
   TeamView,
   CollaborationView,
+  DeviceSessionView,
+  PairResponseView,
 } from '@contracts/index.js';
 import { en, type Dictionary } from './i18n/translations/en.js';
 import { ptBR } from './i18n/translations/pt-BR.js';
@@ -85,6 +87,26 @@ export class ApiError extends Error {
     this.action = extras.action;
     this.forcible = extras.forcible ?? false;
     this.detail = extras.detail;
+  }
+
+  get isUnauthorized(): boolean {
+    return this.status === 401;
+  }
+}
+
+type UnauthorizedListener = (error: ApiError) => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+export function onUnauthorized(listener: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(listener);
+  return () => {
+    unauthorizedListeners.delete(listener);
+  };
+}
+
+export function notifyUnauthorized(error: ApiError): void {
+  for (const listener of [...unauthorizedListeners]) {
+    listener(error);
   }
 }
 
@@ -140,6 +162,26 @@ async function parse<T>(response: Response, acceptedErrorStatuses: readonly numb
     } catch {
       body = undefined;
     }
+  }
+
+  if (response.status === 401 && !acceptedErrorStatuses.includes(401)) {
+    const refusal = (body ?? {}) as {
+      error?: string;
+      message?: string;
+      action?: string;
+      forcible?: boolean;
+    };
+    const error = new ApiError(
+      401,
+      refusal.message ?? words().statusFromServer('401'),
+      {
+        ...(refusal.error === undefined ? {} : { code: refusal.error }),
+        ...(refusal.action === undefined ? {} : { action: refusal.action }),
+        ...(refusal.forcible === undefined ? {} : { forcible: refusal.forcible }),
+      },
+    );
+    notifyUnauthorized(error);
+    throw error;
   }
 
   if (!response.ok && !acceptedErrorStatuses.includes(response.status)) {
@@ -442,6 +484,12 @@ export const api = {
    */
   plan: (projectId: string, body: { description: string; workflow?: string; skipReview?: boolean; noCache?: boolean }) =>
     postJson<ActionJobView>('/runs', body, { projectId }),
+  pair: (code: string, label: string) =>
+    postJson<PairResponseView>('/pair', { code, label }),
+  sessions: () =>
+    getJson<DeviceSessionView[]>('/sessions'),
+  revokeSession: (deviceId: string) =>
+    postJson<{ readonly ok: boolean; readonly deviceId: string; readonly label: string }>(`/sessions/${deviceId}/revoke`, {}),
 };
 
 /** Cache keys are the URLs, so invalidation can reason about paths. */
@@ -484,4 +532,5 @@ export const keys = {
   runnerModels: (projectId?: string) => url('/runners/models', projectId === undefined ? {} : { projectId }),
   config: (projectId?: string) => url('/config', projectId === undefined ? {} : { projectId }),
   configEditor: (scope: ConfigEditorScope, projectId?: string) => url('/config/editor', configQuery(scope, projectId)),
+  sessions: () => url('/sessions'),
 };

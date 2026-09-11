@@ -537,6 +537,49 @@ export const LIFECYCLE_EVENT_TYPES = [
 export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];
 
 /**
+ * Who moved a run, and how they reached it (FR-016).
+ *
+ * Declared here for the reason LIFECYCLE_EVENT_TYPES is: so the next reader of the
+ * event log finds one spelling rather than three. A gate moved from a paired device
+ * writes `{ kind: 'device', deviceId, label }`; the same action from the keyboard
+ * writes `{ kind: 'keyboard' }`. Absent is a third state meaning "written before
+ * attribution existed", and nothing may promote it to keyboard — the same discipline
+ * isolationMode already carries.
+ */
+export const OPERATOR_EVENT_TYPES = [
+  /** `detail: { action, actor }`. Who moved this run, and how they reached it. */
+  'operator_action',
+] as const;
+
+export type OperatorEventType = (typeof OPERATOR_EVENT_TYPES)[number];
+
+export type RunActor =
+  | { readonly kind: 'keyboard' }
+  | {
+      readonly kind: 'device';
+      readonly deviceId: string;
+      readonly label: string;
+    };
+
+export type OperatorAttribution = RunActor | { readonly kind: 'unattributed' };
+
+/**
+ * Extracts the operator attribution from an event (FR-016).
+ *
+ * An event with no actor field (such as any event written before this feature)
+ * is returned as `{ kind: 'unattributed' }`. It is NEVER promoted to `{ kind: 'keyboard' }`,
+ * preserving the distinction between a local terminal action and an unrecorded historical action.
+ */
+export function attributionOf(event: { readonly detail?: Record<string, unknown> }): OperatorAttribution {
+  const actor = event.detail?.['actor'];
+  if (actor && typeof actor === 'object' && 'kind' in actor) {
+    return actor as RunActor;
+  }
+  return { kind: 'unattributed' };
+}
+
+
+/**
  * The event names team orchestration is allowed to emit (M5).
  *
  * Declared here for the reason the three lists above are: so the next reader of the event

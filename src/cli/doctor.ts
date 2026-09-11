@@ -14,6 +14,7 @@ import {
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { renderStageRouting, renderUnusedRunners } from './render/routing.js';
+import { en, type Phrases } from '../core/phrases/index.js';
 import type { GlobalOptions } from './index.js';
 
 export interface DoctorOptions {
@@ -88,6 +89,7 @@ export async function runDoctorCommand(
             notes: diagnosis.notes,
             unresolvableRoles: diagnosis.unresolvableRoles,
             probes: diagnosis.probes,
+            remoteAccess: diagnosis.remoteAccess,
           },
           null,
           2,
@@ -106,7 +108,7 @@ export async function runDoctorCommand(
 }
 
 /** The whole report, in the order a person reads it. */
-export function renderDiagnosis(diagnosis: Diagnosis, strict = false): string[] {
+export function renderDiagnosis(diagnosis: Diagnosis, strict = false, say: Phrases = en): string[] {
   const lines: string[] = ['Agent Flow Doctor', ''];
 
   for (const tool of diagnosis.tools) lines.push(renderTool(tool));
@@ -222,6 +224,8 @@ export function renderDiagnosis(diagnosis: Diagnosis, strict = false): string[] 
     lines.push('');
   }
 
+  for (const line of renderRemoteAccess(diagnosis.remoteAccess, say)) lines.push(line);
+
   lines.push(renderVerdict({ status: diagnosis.status, notes: diagnosis.notes }));
 
   if (diagnosis.status === 'DEGRADED' && !strict) {
@@ -229,6 +233,42 @@ export function renderDiagnosis(diagnosis: Diagnosis, strict = false): string[] 
     lines.push('Work is still possible. Use --strict to treat this as a failure in CI.');
   }
 
+  return lines;
+}
+
+/**
+ * Remote access status, as lines (FR-023).
+ *
+ * Unknown when diagnosed from the standalone CLI command (`agent-flow doctor`),
+ * because in-memory pairing state lives in the `agent-flow ui` process and nowhere
+ * else. The honest answer is to report that remote access cannot be determined from
+ * the terminal and to name the running server as where to ask, rather than guessing
+ * "off" for a server it cannot see.
+ */
+export function renderRemoteAccess(
+  remoteAccess: Diagnosis['remoteAccess'],
+  say: Phrases = en,
+): string[] {
+  if (!remoteAccess.known) {
+    return [
+      'Remote access:',
+      `  ${DASH} ${say.doctor.remoteAccessUndetermined}`,
+      '',
+    ];
+  }
+
+  const lines: string[] = ['Remote access:'];
+  if (remoteAccess.enabled) {
+    lines.push(
+      `  ${TICK} enabled (${String(remoteAccess.liveSessions)} live session${remoteAccess.liveSessions === 1 ? '' : 's'})`,
+    );
+    if (remoteAccess.admittedAddresses.length > 0) {
+      lines.push(`    admitted addresses: ${remoteAccess.admittedAddresses.join(', ')}`);
+    }
+  } else {
+    lines.push(`  ${DASH} off`);
+  }
+  lines.push('');
   return lines;
 }
 

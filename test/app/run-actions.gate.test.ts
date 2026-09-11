@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeHost } from '../fakes/fake-host.js';
@@ -9,13 +11,19 @@ import { planHash } from '../../src/app/approval.js';
 import { LOCK_VERSION } from '../../src/app/run-execution-lock.js';
 import {
   approve,
+  cancel,
+  pause,
   reject,
+  resume,
   retryTask,
+  review,
   revise,
   start,
   type ActionOutcome,
-  type RunActionDeps,
 } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
+import { actionDeps } from '../../src/cli/approve.js';
+import { attributionOf, type RunActor } from '../../src/contracts/state.schema.js';
 import { decideTaskRecovery } from '../../src/core/recovery-policy.js';
 import { GlobalConfigSchema } from '../../src/contracts/index.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
@@ -165,7 +173,7 @@ async function project(options: { runner?: ProcessRunner } = {}) {
     tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0, infrastructureFailures: 0 }],
   }));
 
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs,
     clock,
     processRunner: options.runner ?? new FakeProcessRunner().always({ exitCode: 0, stdout: '1.0.0' }),
@@ -174,7 +182,7 @@ async function project(options: { runner?: ProcessRunner } = {}) {
     promptsDir: '/install/prompts',
     host,
     owner: 'cli',
-  };
+  });
 
   return { fs, host, store, deps, runId: run.runId };
 }
@@ -731,5 +739,318 @@ describe('run refuses before it takes the lock (C-19)', () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.error.code).toBe('no_plan');
+  });
+});
+
+describe('operator_action attribution (FR-016)', () => {
+  it('approving from a paired device appends operator_action with detail.action === "approve" and detail.actor', async () => {
+    const world = await project();
+    const deviceActor: RunActor = {
+      kind: 'device',
+      deviceId: 'dev-phone-123',
+      label: 'Operator Phone',
+    };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    const outcome = await approve(deps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvents = events.filter((e) => e.type === 'operator_action');
+    expect(opEvents).toHaveLength(1);
+    expect(opEvents[0]!.detail).toEqual({
+      action: 'approve',
+      actor: deviceActor,
+    });
+  });
+
+  it('approving from the keyboard appends operator_action with detail.actor === {kind:"keyboard"} via src/cli/approve.ts actionDeps', async () => {
+    const world = await project();
+    const baseCliDeps = actionDeps({
+      cwd: '/repo',
+      globalConfigPath: '/install/config.yaml',
+      json: false,
+      verbose: false,
+      dryRun: false,
+      strict: false,
+    });
+    // actionDeps sets actor: { kind: 'keyboard' } and owner: 'cli'
+    expect(baseCliDeps.actor).toEqual({ kind: 'keyboard' });
+    expect(baseCliDeps.owner).toBe('cli');
+
+    const cliDeps = fakeRunActionDeps({
+      ...baseCliDeps,
+      fs: world.fs,
+      clock: world.deps.clock,
+      host: world.host,
+      processRunner: world.deps.processRunner,
+    });
+
+    const outcome = await approve(cliDeps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvents = events.filter((e) => e.type === 'operator_action');
+    expect(opEvents).toHaveLength(1);
+    expect(opEvents[0]!.detail).toEqual({
+      action: 'approve',
+      actor: { kind: 'keyboard' },
+    });
+  });
+
+  it('reject appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-tab-1', label: 'Tablet' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    const outcome = await reject(deps, world.runId, 'not what was asked');
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find((e) => e.type === 'operator_action');
+    expect(opEvent?.detail).toEqual({
+      action: 'reject',
+      actor: deviceActor,
+    });
+  });
+
+  it('revise appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-tab-2', label: 'Tablet 2' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    await revise(deps, world.runId, 'split TASK-001').catch(() => undefined);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find((e) => e.type === 'operator_action');
+    expect(opEvent?.detail).toEqual({
+      action: 'revise',
+      actor: deviceActor,
+    });
+  });
+
+  it('start appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    await approve(world.deps, world.runId);
+
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-laptop', label: 'Laptop' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    await start(deps, world.runId);
+
+    const events = await world.store.readEvents(world.runId);
+    const startOp = events.find(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'start',
+    );
+    expect(startOp).toBeDefined();
+    expect(startOp?.detail).toEqual({
+      action: 'start',
+      actor: deviceActor,
+    });
+  });
+
+  it('retryTask appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'failed', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-retry', label: 'Retry Terminal' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    const outcome = await retryTask(deps, world.runId, 'TASK-001');
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'retryTask',
+    );
+    expect(opEvent?.detail).toEqual({
+      action: 'retryTask',
+      actor: deviceActor,
+    });
+  });
+
+  it('review appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    await world.store.updateRun(world.runId, (s) => ({
+      ...s,
+      tasks: [{ id: 'TASK-001', state: 'running', attempts: 1, infrastructureFailures: 0 }],
+    }));
+    await world.store.updateRun(world.runId, (s) => ({
+      ...s,
+      approved: true,
+      status: 'running',
+      workflow: 'simple',
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    const runner = new FakeProcessRunner().always((opts) => {
+      if (opts.args.includes('--version') || opts.command === 'git') {
+        return { exitCode: 0, stdout: '1.0.0' };
+      }
+      const payload = {
+        verdict: 'PASS',
+        summary: 'Looks good.',
+        findings: [],
+      };
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          is_error: false,
+          subtype: 'success',
+          result: JSON.stringify(payload),
+          structured_output: payload,
+        }),
+      };
+    });
+
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-reviewer', label: 'Reviewer' };
+    const deps = fakeRunActionDeps({
+      ...world.deps,
+      processRunner: runner,
+      actor: deviceActor,
+    });
+
+    const outcome = await review(deps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'review',
+    );
+    expect(opEvent?.detail).toEqual({
+      action: 'review',
+      actor: deviceActor,
+    });
+  });
+
+  it('pause appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-pause', label: 'Pausinator' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    const outcome = await pause(deps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'pause',
+    );
+    expect(opEvent?.detail).toEqual({
+      action: 'pause',
+      actor: deviceActor,
+    });
+  });
+
+  it('resume appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    await world.store.updateRun(world.runId, (state) => ({
+      ...state,
+      approved: true,
+      approvedPlanHash: planHash(PlanSchema.parse(PLAN)),
+      status: 'approved',
+      tasks: [{ id: 'TASK-001', state: 'queued', attempts: 0, infrastructureFailures: 0 }],
+    }));
+    await pause(world.deps, world.runId);
+
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-resume', label: 'Resumer' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    const outcome = await resume(deps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const resumeOps = events.filter(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'resume',
+    );
+    expect(resumeOps).toHaveLength(1);
+    expect(resumeOps[0]!.detail).toEqual({
+      action: 'resume',
+      actor: deviceActor,
+    });
+    // Resume invokes start with recordAction: false so start operator_action is NOT appended
+    const startOps = events.filter(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'start',
+    );
+    expect(startOps).toHaveLength(0);
+  });
+
+  it('cancel appends operator_action with its own action and caller actor', async () => {
+    const world = await project();
+    const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-cancel', label: 'Canceller' };
+    const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
+
+    const outcome = await cancel(deps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'cancel',
+    );
+    expect(opEvent?.detail).toEqual({
+      action: 'cancel',
+      actor: deviceActor,
+    });
+  });
+
+  it('a refused action appends no operator_action (FR-016)', async () => {
+    const world = await project();
+    // Invalidate planReview so approve fails without force
+    await world.fs.remove(`/repo/.agent-flow/runs/${world.runId}/reviews/plan-review.json`);
+
+    const outcome = await approve(world.deps, world.runId, { force: false });
+    expect(outcome.ok).toBe(false);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvents = events.filter((e) => e.type === 'operator_action');
+    expect(opEvents).toHaveLength(0);
+  });
+
+  it('run_approved persisted detail is still exactly {planHash, taskCount, forced, approvedAt} (FR-016)', async () => {
+    const world = await project();
+    const outcome = await approve(world.deps, world.runId);
+    expect(outcome.ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const approvedEvent = events.find((e) => e.type === 'run_approved');
+    expect(approvedEvent).toBeDefined();
+    const keys = Object.keys(approvedEvent!.detail ?? {}).sort();
+    expect(keys).toEqual(['approvedAt', 'forced', 'planHash', 'taskCount'].sort());
+  });
+
+  it('an event with no actor is never read as keyboard: historical fixture renders as unattributed (FR-016)', () => {
+    const fixturePath = join(import.meta.dirname, '..', 'fixtures', 'legacy-artifacts', 'events.jsonl');
+    const content = readFileSync(fixturePath, 'utf8');
+    const lines = content.trim().split('\n').filter(Boolean);
+    expect(lines.length).toBeGreaterThan(0);
+
+    for (const line of lines) {
+      const parsed = JSON.parse(line);
+      const attribution = attributionOf(parsed);
+      expect(attribution.kind).toBe('unattributed');
+      expect(attribution.kind).not.toBe('keyboard');
+    }
+  });
+
+  it('RunActionDeps.owner is unchanged in type and meaning, and run_busy refusal prose reads correctly', async () => {
+    const world = await project();
+    expect(world.deps.owner).toBe('cli');
+
+    // Simulate busy run held by server
+    world.host.spawn(31_337);
+    holdLock(world.fs, world.runId, { pid: 31_337, owner: 'server', operation: 'revise' });
+
+    const outcome = await approve(world.deps, world.runId);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.code).toBe('run_busy');
+      expect(outcome.error.message).toContain('server');
+    }
   });
 });

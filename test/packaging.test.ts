@@ -135,6 +135,20 @@ describe('the published package', () => {
     }
   });
 
+  it('dependencies set is byte-identical to before the feature (NFR-003)', () => {
+    // Reading package.json directly: catches added runtime dependencies like @fastify/cookie
+    // or CORS plugins, which bareImports only catches if they were undeclared.
+    const raw = readFileSync(join(ROOT, 'package.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { dependencies: Record<string, string> };
+    expect(Object.keys(parsed.dependencies)).toEqual([
+      '@fastify/static',
+      'commander',
+      'fastify',
+      'yaml',
+      'zod',
+    ]);
+  });
+
   it('imports no devDependency at runtime', () => {
     // A devDependency is not installed for a consumer. Importing one from `src/`
     // produces a package that works in the checkout and throws `Cannot find module`

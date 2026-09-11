@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
 import { review, type RunActionDeps } from '../../src/app/run-actions.js';
+import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import { buildDag } from '../../src/core/dag.js';
 import type { ProcessResult, ProcessRunner, ProcessSpawnOptions } from '../../src/ports/index.js';
 import { makeWorktreeRun, type WorktreeRun } from '../fixtures/worktree-run.js';
@@ -163,7 +164,7 @@ async function reviewable(): Promise<{
   );
 
   const runner = new RecordingProcessRunner();
-  const deps: RunActionDeps = {
+  const deps = fakeRunActionDeps({
     fs: new NodeFileSystem(),
     clock: current.clock,
     processRunner: runner,
@@ -172,7 +173,7 @@ async function reviewable(): Promise<{
     globalConfigPath: join(current.repo.home, 'no-such-config.yaml'),
     promptsDir: join(import.meta.dirname, '../../prompts'),
     owner: 'cli',
-  };
+  });
 
   const head = current.repo
     .userGit(['rev-parse', `refs/heads/${current.integrationBranch}`])

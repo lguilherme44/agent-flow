@@ -369,6 +369,23 @@ export const GlobalConfigSchema = z.object({
        * name, such as a reverse proxy.
        */
       allowedHosts: z.array(z.string().trim().min(1)).default([]),
+      /**
+       * Remote device pairing and session access (FR-002, FR-024).
+       *
+       * Global only, and absent from project-overridable keys: a repository must not
+       * decide whether the host machine exposes itself to remote devices.
+       */
+      pairing: z
+        .object({
+          /**
+           * Whether remote access via pairing is enabled (FR-002).
+           *
+           * When true (or when `--pair` is passed), the server issues a pairing code
+           * at startup and admits authenticated non-loopback device sessions.
+           */
+          enabled: z.boolean().default(false),
+        })
+        .prefault({}),
     })
     .prefault({}),
   /**

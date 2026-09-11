@@ -64,6 +64,52 @@ export const TaskParamsSchema = z.object({
 });
 
 /**
+ * Device ids are opaque identifiers issued by the server.
+ *
+ * Constrained by regex so a crafted device id cannot escape path segments
+ * or smuggle control characters (SEC-007, SEC-008).
+ */
+export const DeviceIdSchema = z
+  .string()
+  .regex(/^[a-zA-Z0-9_-]{1,64}$/, 'expected a device id');
+
+/**
+ * A device label is constrained at the schema to a printable, control-character-free
+ * charset of at most 40 characters (SEC-008, NFR-009).
+ *
+ * It is rendered both to a terminal and to a page, and it is the one attacker-supplied
+ * string in device pairing that reaches either.
+ */
+export const DeviceLabelSchema = z
+  .string()
+  .regex(/^[\x20-\x7E]{1,40}$/, 'expected a printable device label of at most 40 characters');
+
+/**
+ * A single-use pairing code is 12 characters, typed with or without hyphens (NFR-009, FR-003).
+ *
+ * Normalised by stripping hyphens and lowercasing so the server compares plaintext uniformly.
+ */
+export const PairingCodeFieldSchema = z
+  .string()
+  .regex(
+    /^[0-9a-zA-Z]{4}-?[0-9a-zA-Z]{4}-?[0-9a-zA-Z]{4}$/,
+    'expected a 12-character pairing code like xxxx-xxxx-xxxx',
+  )
+  .transform((v) => v.replace(/-/g, '').toLowerCase());
+
+export const PairRequestSchema = z.object({
+  code: PairingCodeFieldSchema,
+  label: DeviceLabelSchema,
+});
+
+export const DeviceSessionParamsSchema = z.object({
+  deviceId: DeviceIdSchema,
+});
+
+export type PairRequest = z.infer<typeof PairRequestSchema>;
+export type DeviceSessionParams = z.infer<typeof DeviceSessionParamsSchema>;
+
+/**
  * A stage is named from a closed set, never spelled by the caller.
  *
  * The name becomes a filename under the run's `logs/`, so this enum is the whole defence
@@ -1091,6 +1137,47 @@ export interface DoctorView {
    * instead.
    */
   readonly readsEnvironment: boolean;
+  readonly remoteAccess: DoctorRemoteAccessView;
+}
+
+/**
+ * Remote access status as reported by GET /api/v1/doctor (FR-023).
+ *
+ * Known by the running server process; unknown from a standalone CLI command.
+ */
+export type DoctorRemoteAccessView =
+  | { readonly known: false }
+  | {
+      readonly known: true;
+      readonly enabled: boolean;
+      readonly admittedAddresses: readonly string[];
+      readonly liveSessions: number;
+    };
+
+/**
+ * A live paired device session, as listed by GET /api/v1/sessions (FR-011).
+ *
+ * Exposes deviceId, label, and activity timestamps. No secret and no hash of one
+ * appears in this view (SEC-003). Declares no filesystem path field
+ * (test/architecture.test.ts:1851-1898).
+ */
+export interface DeviceSessionView {
+  readonly deviceId: string;
+  readonly label: string;
+  readonly pairedAt: number;
+  readonly lastSeenAt: number;
+}
+
+/**
+ * Result of successfully pairing a device via POST /api/v1/pair (FR-005).
+ *
+ * Sets an HttpOnly session cookie on the response; the body contains device metadata
+ * and never contains a secret.
+ */
+export interface PairResponseView {
+  readonly deviceId: string;
+  readonly label: string;
+  readonly pairedAt: number;
 }
 
 /**

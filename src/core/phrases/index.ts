@@ -107,6 +107,8 @@ export interface Phrases {
     readonly everythingElseInBrowser: string;
     readonly workspaceScanDepth: string;
     readonly scanDepthNote: string;
+    readonly uiPairing: string;
+    readonly uiPairingNote: string;
     readonly retentionNote: string;
     readonly notSet: string;
     readonly none: string;
@@ -143,6 +145,7 @@ export interface Phrases {
     readonly runLoginOrExport: (command: string, variable: string) => string;
     readonly runInTerminal: (command: string) => string;
     readonly installProbeReason: string;
+    readonly remoteAccessUndetermined: string;
   };
   /**
    * Where the work has got to on the forge, in one sentence (M7 §40).
@@ -229,6 +232,12 @@ export interface Phrases {
     readonly correctYamlRetry: string;
     readonly configUnreadable: string;
     readonly checkFsRetry: string;
+    readonly pairingNotEnabled: string;
+    readonly invalidPairRequest: string;
+    readonly invalidPairingCode: string;
+    readonly sessionLimitReached: string;
+    readonly noSuchDeviceSession: string;
+    readonly invalidDeviceSessionRequest: string;
   };
   /**
    * What is wrong with the repository, and the one command that fixes it (§6.3, C-01).
@@ -529,6 +538,39 @@ export interface Phrases {
     readonly checksPending: (pending: number) => string;
     readonly checksAreObservation: string;
     readonly openTheRunSummary: string;
+  };
+  /**
+   * Device pairing and remote access phrases (FR-002..FR-029).
+   *
+   * Vocabulary is device / session / pairing throughout — never auth,
+   * credentials or token (SEC-007).
+   */
+  readonly pairing: {
+    readonly title: string;
+    readonly description: string;
+    readonly codeLabel: string;
+    readonly deviceLabel: string;
+    readonly pairButton: string;
+    readonly codeExpired: string;
+    readonly codeUsed: string;
+    readonly codeBurned: string;
+    readonly codeUnknown: string;
+    readonly limitReached: string;
+    readonly pairingDisabled: string;
+    readonly restartWarning: string;
+  };
+  /**
+   * Connected device sessions management (FR-011, FR-012, FR-022).
+   */
+  readonly devices: {
+    readonly title: string;
+    readonly description: string;
+    readonly noSessions: string;
+    readonly revoke: string;
+    readonly revoked: string;
+    readonly pairedAt: string;
+    readonly lastSeenAt: string;
+    readonly activeSessions: (count: number) => string;
   };
 }
 

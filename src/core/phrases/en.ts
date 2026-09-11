@@ -70,6 +70,9 @@ export const en: Phrases = {
     workspaceScanDepth: 'Workspace scan depth',
     scanDepthNote:
       'how far under a workspace root `agent-flow ui ~/wk` looks for projects; a directory beyond it is not discovered and not served',
+    uiPairing: 'Device pairing',
+    uiPairingNote:
+      'whether remote devices can pair with this server via a short-lived pairing code',
     retentionNote:
       'Run history is pruned on request rather than on a policy: agent-flow clean --keep <n>. There is no retention setting to read.',
     notSet: 'not set',
@@ -103,6 +106,8 @@ export const en: Phrases = {
     runLoginOrExport: (command, variable) => `Run \`${command}\` or export ${variable}`,
     runInTerminal: (command) => `Run \`${command}\` in your terminal`,
     installProbeReason: 'agent-flow doctor install probe',
+    remoteAccessUndetermined:
+      'remote access status cannot be determined from a terminal; ask the running server',
   },
   delivery: {
     noForgeConfigured: 'no forge is configured, so this run delivers nowhere',
@@ -180,6 +185,12 @@ export const en: Phrases = {
     correctYamlRetry: 'Correct the YAML source and retry.',
     configUnreadable: 'The configuration could not be read or saved.',
     checkFsRetry: 'Check filesystem access and retry.',
+    pairingNotEnabled: 'pairing is not enabled on this server',
+    invalidPairRequest: 'invalid pairing request',
+    invalidPairingCode: 'invalid pairing code',
+    sessionLimitReached: 'the limit of 16 live device sessions has been reached',
+    noSuchDeviceSession: 'no such device session',
+    invalidDeviceSessionRequest: 'invalid device session request',
   },
   git: {
     notAGitRepository: 'Run `git init`, or turn worktree mode off with `git.useWorktrees: false`.',
@@ -498,5 +509,33 @@ export const en: Phrases = {
     checksPending: (pending) => `${String(pending)} remote checks have not reported`,
     checksAreObservation: 'remote checks are an observation and never a local verdict',
     openTheRunSummary: 'Open the run summary',
+  },
+  pairing: {
+    title: 'Pair Device',
+    description: 'Enter the pairing code printed in the server terminal to connect this device.',
+    codeLabel: 'Pairing Code',
+    deviceLabel: 'Device Name',
+    pairButton: 'Pair Device',
+    codeExpired: 'The pairing code has expired. Type `code` in the server terminal for a new one.',
+    codeUsed: 'This pairing code has already been used.',
+    codeBurned:
+      'This pairing code has been burned after too many failed attempts. Type `code` in the server terminal for a new one.',
+    codeUnknown: 'The pairing code is invalid.',
+    limitReached:
+      'The limit of 16 live device sessions has been reached. Revoke a session to pair a new device.',
+    pairingDisabled: 'Remote device pairing is not enabled on this server.',
+    restartWarning:
+      'Restarting the server unpairs every device and invalidates any outstanding code.',
+  },
+  devices: {
+    title: 'Connected Devices',
+    description: 'Manage active device sessions. Revoking a session disconnects that device immediately.',
+    noSessions: 'No remote devices are currently paired.',
+    revoke: 'Revoke',
+    revoked: 'Device session revoked',
+    pairedAt: 'Paired at',
+    lastSeenAt: 'Last seen',
+    activeSessions: (count) =>
+      `${String(count)} active device session${count === 1 ? '' : 's'}`,
   },
 };

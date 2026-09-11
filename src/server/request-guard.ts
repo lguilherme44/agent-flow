@@ -30,6 +30,8 @@
  * decision table can be tested exhaustively without binding a port.
  */
 
+import { admitsHost } from '../core/device-session.js';
+
 /** A refusal, in the shape the rest of the API already answers errors in (§95). */
 export interface GuardRefusal {
   readonly status: number;
@@ -142,6 +144,15 @@ export interface HostPolicy {
    * that a name nobody named is refused.
    */
   readonly allowedHosts?: readonly string[];
+  /**
+   * The addresses this server is actually bound to (FR-018).
+   *
+   * Absent means today's rule, unchanged: any address literal is admitted, because a
+   * literal asks no DNS question. Present narrows it — an address literal is admitted
+   * only when it is loopback or one of these. The narrowing is about *reachability*,
+   * which the rebinding argument never covered.
+   */
+  readonly boundAddresses?: readonly string[];
 }
 
 /**
@@ -160,6 +171,24 @@ export function checkHost(header: string | undefined, policy: HostPolicy = {}): 
       'invalid_host',
       'This request carries no usable Host header.',
       'Reach the dashboard at the address the server printed when it started.',
+    );
+  }
+
+  if (policy.boundAddresses !== undefined) {
+    if (
+      admitsHost({
+        hostname: header!,
+        boundAddresses: policy.boundAddresses,
+        allowedHosts: policy.allowedHosts,
+      })
+    ) {
+      return ALLOWED;
+    }
+    return refuse(
+      403,
+      'host_not_allowed',
+      `This server does not answer to the host name "${hostname}".`,
+      'Use the address the server printed, or add the name to ui.allowedHosts if you put a proxy in front of it.',
     );
   }
 
