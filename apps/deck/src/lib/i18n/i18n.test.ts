@@ -76,6 +76,7 @@ describe('the Deck speaks two languages and means the same thing in both', () =>
       'words.pr_open',
       'words.review',
       'words.risk',
+      'recorder.marks.forge',
     ]);
 
     const copied = enLeaves

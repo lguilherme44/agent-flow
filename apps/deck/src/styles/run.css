@@ -169,9 +169,9 @@
 
 /* ── Recorder ────────────────────────────────────────────────────────────── */
 
+/* `--gutter` is a fallback for the first paint; the component sets the measured one inline. */
 .recorder {
   --gutter: 132px;
-  --row: 22px;
   position: relative;
   user-select: none;
 }
@@ -215,6 +215,66 @@
   align-items: center;
   color: var(--ink-4);
   font-size: var(--fs-0);
+}
+
+/* What the colours and shapes below mean — only the ones on screen; folded on a phone. */
+.recorder__legend-wrap {
+  border-bottom: 1px solid var(--line);
+}
+.recorder__legend-toggle {
+  display: block;
+  width: 100%;
+  padding: var(--s-2) var(--s-4);
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.recorder__legend-toggle:hover {
+  color: var(--ink);
+}
+.recorder__legend-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.recorder__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  margin: 0;
+  padding: var(--s-2) var(--s-4);
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--ink-3);
+}
+.recorder__legend-toggle + .recorder__legend {
+  padding-top: 0;
+}
+.recorder__legend-k {
+  color: var(--ink-4);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.recorder__legend-k:not(:first-child) {
+  margin-left: var(--s-3);
+}
+.recorder__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.recorder__legend-item svg {
+  display: block;
+  flex: none;
+  overflow: visible;
 }
 
 .recorder__plot {
@@ -274,6 +334,9 @@
   left: var(--gutter);
   cursor: col-resize;
   z-index: 2;
+  /* A finger on the playhead scrubs; without this the browser would scroll the page instead. */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .recorder__grab:focus-visible {
   box-shadow: inset 0 0 0 2px var(--warn);
@@ -298,6 +361,15 @@
 }
 .svg-lane-label--fix {
   fill: var(--warn);
+}
+/* The task's title beside its id, in the UI face so the two read as id and name. */
+.svg-lane-title {
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  fill: var(--ink-3);
+}
+.svg-lane-title[data-selected='true'] {
+  fill: var(--ink-2);
 }
 .svg-tape-label {
   font-family: var(--font-mono);
@@ -339,10 +411,19 @@
   fill: var(--bg);
   font-weight: 700;
 }
+/* A mark is an instant: a shape with a ground-coloured halo, so it reads against a bar or a grid line. */
+.svg-mark {
+  cursor: pointer;
+}
 .svg-marker {
   fill: var(--tone);
   stroke: var(--bg);
-  stroke-width: 1;
+  stroke-width: 1.25;
+}
+.svg-marker--ring {
+  fill: var(--bg);
+  stroke: var(--tone);
+  stroke-width: 2;
 }
 .svg-marker--line {
   stroke: var(--tone);
@@ -350,7 +431,7 @@
   fill: none;
   opacity: 0.55;
 }
-.svg-marker:hover {
+.svg-mark:hover .svg-marker {
   stroke: var(--ink);
 }
 .svg-now {

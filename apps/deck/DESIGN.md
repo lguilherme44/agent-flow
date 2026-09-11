@@ -59,7 +59,9 @@ is the frame's only colour.
 
 **The tape.** The pipeline as ten cells, the same encoding at 8px in a project lane and at
 22px in the run header, and again drawn to true duration on the recorder. A cell narrower
-than its word drops the word and keeps the colour (`@container`).
+than its word drops the word and keeps the colour (`@container`); on the recorder it
+first falls back to the short word (`stageShort`), and a legend above the tape names only
+the colours and marks that are on screen.
 
 ## Screens
 
