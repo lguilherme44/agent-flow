@@ -35,6 +35,16 @@ const FALLBACK_ELIGIBLE: ReadonlySet<RunnerErrorCode> = new Set([
 /** One re-prompt after the first bad response, then stop. */
 const MAX_REPAIR_ATTEMPTS = 2;
 
+/**
+ * How much of its timeout a stage may use before the run says so (D8).
+ *
+ * 80%, which is close enough that the next slower run loses and far enough that a normal
+ * stage does not cry wolf. The two measurements that produced this were 15min02 and 15min03
+ * against a 900 s budget — 100.2% and 100.3% — so anything under ~90% would have been
+ * silent right up to the failure.
+ */
+const NEAR_TIMEOUT_SHARE = 0.8;
+
 export class StageFailure extends Error {
   /**
    * Whether a fallback runner may be tried (§55).
@@ -720,6 +730,26 @@ export class StageRunner {
       }
 
       logLines.push(`repair=${repair} ok durationMs=${result.durationMs}`);
+
+      // **The budget, beside the duration, when the two came close** (D8).
+      //
+      // Both numbers already existed and were never compared. A stage that finished at 99%
+      // of its timeout is one configuration change — or one slower day — from being killed,
+      // and the run said nothing to distinguish it from a stage that took a minute.
+      //
+      // An event rather than a degradation: nothing was lost. It is a fact about how close
+      // this run ran to a limit, which is exactly what somebody needs before the day it
+      // stops being close enough.
+      const budgetMs = resolved.timeoutSeconds * 1000;
+      if (budgetMs > 0 && result.durationMs >= budgetMs * NEAR_TIMEOUT_SHARE) {
+        await store.appendEvent(runId, 'stage_near_timeout', {
+          stage: stage.name,
+          role: stage.role,
+          durationMs: result.durationMs,
+          timeoutSeconds: resolved.timeoutSeconds,
+          share: Math.round((result.durationMs / budgetMs) * 100),
+        });
+      }
 
       // "The runner answered" and "the answer was accepted" are two facts, and
       // `stage_completed` was carrying both. They diverged on a real run: the

@@ -442,6 +442,22 @@ export const STAGE_EVENT_TYPES = [
   'stage_reused',
   'stage_context_measured',
   /**
+   * `detail: { stage, role, durationMs, timeoutSeconds, share }`. A stage that nearly ran out.
+   *
+   * **The product knew both numbers and never compared them.** Every role carries a
+   * `timeoutSeconds`, every stage records a `durationMs`, and nothing put the two side by
+   * side — so a stage that finished with seconds to spare was indistinguishable from one
+   * that finished in a minute.
+   *
+   * Measured, on the same stage of the same repository with the same model: 15min03 and it
+   * passed, 15min02 and it was killed, against a 900 s default. The default is not the
+   * defect — `config.schema.ts` argues deliberately that a CLI which has genuinely hung
+   * should be cut loose in fifteen minutes rather than forty-five, and that argument still
+   * holds. The defect is that landing a second either side of the line looked identical
+   * from outside, so nobody could know their configuration was a coin flip until it lost.
+   */
+  'stage_near_timeout',
+  /**
    * `detail: { stage, detail }`. A read-only stage's disposable checkout is still on disk.
    *
    * The stage itself is unaffected — this is a *cleanup* that did not finish, and §6.1b's

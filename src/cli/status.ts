@@ -1,4 +1,5 @@
 import { PlanSchema, ReviewResultSchema, type RunState } from '../contracts/index.js';
+import { planningResume } from '../core/resume.js';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
 import { StateStore } from '../app/state-store.js';
@@ -96,7 +97,11 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
             taskCount: plan?.success ? plan.data.tasks.length : 0,
             completedStages,
             review: review?.success ? review.data : null,
-            telemetry: { entries: telemetry, summary: summariseTelemetry(telemetry) },
+            telemetry: {
+              entries: telemetry.entries,
+              summary: summariseTelemetry(telemetry.entries),
+              ...(telemetry.dropped.length === 0 ? {} : { dropped: telemetry.dropped }),
+            },
           },
           null,
           2,
@@ -177,8 +182,18 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     // thirteen positionals — a fourteenth would be the kind of call site where an argument
     // slips one place and nothing complains. It also collects the same telemetry `--json`
     // reports, so the two surfaces cannot disagree about what a run spent.
-    const spend = renderSpend(summariseSpend(await collectTelemetry(store, state)));
+    const telemetry = await collectTelemetry(store, state);
+    const spend = renderSpend(summariseSpend(telemetry.entries));
     if (spend !== undefined) process.stdout.write(`\n${spend}\n`);
+
+    // Said out loud, because the alternative is a spend total that is quietly short and a
+    // reader with no way to know it (D10).
+    if (telemetry.dropped.length > 0) {
+      process.stderr.write(
+        `\n${String(telemetry.dropped.length)} telemetry row(s) could not be read and are ` +
+          `missing from the total above: ${telemetry.dropped.map((row) => row.subject).join(', ')}\n`,
+      );
+    }
 
     // C-22, at the one surface a person is most likely to be looking at when a run stops.
     // Rendered after the run summary rather than instead of it: the escalation says what to
@@ -444,9 +459,15 @@ export function render(
   if (runtime.status === 'plan_rejected_revisable') {
     lines.push('', 'The review rejected this plan. Revise it with: agent-flow revise "<instruction>"');
   } else if (runtime.status === 'failed' && state.stage !== 'implementation') {
+    // What survives, read from the fold rather than claimed (D7).
+    const resume = planningResume(state.stage, state.workflow ?? 'standard');
     lines.push(
       '',
-      `This run stopped in "${state.stage}"; the stages before it are kept.`,
+      `This run stopped in "${state.stage}".`,
+      resume.kept.length === 0
+        ? '  Nothing before it is reused.'
+        : `  Kept:        ${resume.kept.join(', ')}`,
+      ...(resume.rerun.length === 0 ? [] : [`  Runs again:  ${resume.rerun.join(', ')}`]),
       `Resume with: agent-flow feature "<same description>" --from ${state.stage}`,
     );
   }

@@ -347,6 +347,7 @@ export interface Phrases {
     readonly finishedNothingToRun: (runId: string, status: string) => string;
     readonly noRunnableAtReview: (runId: string, tasks: string, count: number) => string;
     readonly noRunnableBlocked: (runId: string, tasks: string, count: number) => string;
+    readonly noRunnableFailed: (runId: string, tasks: string, count: number) => string;
     readonly noRunnableInState: (runId: string, status: string) => string;
     readonly reviewEvidenceThenRetry: (taskId: string) => string;
     readonly answerBlockedThenRetry: string;
@@ -392,7 +393,14 @@ export interface Phrases {
       errorCode: string,
       message: string,
     ) => string;
-    readonly stagesBeforeKept: (stage: string) => string;
+    /**
+     * What a resume keeps and what it pays for again (D7).
+     *
+     * Three arguments rather than one, because the sentence used to assert that everything
+     * before the stage survived and a measured resume redid discovery. `kept` and `rerun`
+     * arrive already joined — they are stage names, which are identifiers.
+     */
+    readonly stagesBeforeKept: (stage: string, kept: string, rerun: string) => string;
 
     readonly noPlanToReviewAgainst: (runId: string) => string;
     readonly finishPlanningBeforeReviewing: string;

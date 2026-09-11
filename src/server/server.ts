@@ -46,7 +46,6 @@ import {
   type RunnerTypeView,
   type RunnerView,
   type ServerEvent,
-  type TelemetryEntry,
   LocaleQuerySchema,
   DEFAULT_LOCALE,
 } from '../contracts/index.js';
@@ -683,14 +682,21 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       return notFound(reply, say(request).noSuchRun);
     }
 
-    const entries: TelemetryEntry[] = await collectTelemetry(store, state);
+    const { entries, dropped } = await collectTelemetry(store, state);
     const context = await new ContextTelemetryReader({
       fs: options.fs,
       projectDir: scope.project.path,
     }).read(scope.runId);
     return {
-      entries,
+      entries: [...entries],
       summary: summariseTelemetry(entries),
+      // **Rows the fold built and its own schema refused** (D10).
+      //
+      // Reported rather than swallowed, and reported *here* because this is the surface
+      // where somebody is looking at the chart that is missing them. A count is enough:
+      // it turns "the page is empty" into "the page is empty and the server knows why",
+      // which is the entire distance between a bug you can find and one you cannot.
+      ...(dropped.length === 0 ? {} : { dropped: dropped.length }),
       ...(context === undefined ? {} : { context }),
     };
   });

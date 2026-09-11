@@ -303,6 +303,8 @@ export const en: Phrases = {
       `${runId} has no runnable task: ${tasks} ${count === 1 ? 'is' : 'are'} at review_required.`,
     noRunnableBlocked: (runId, tasks, count) =>
       `${runId} has no runnable task: ${tasks} ${count === 1 ? 'is' : 'are'} blocked.`,
+    noRunnableFailed: (runId, tasks, count) =>
+      `${runId} has no runnable task: ${tasks} ${count === 1 ? 'failed' : 'have failed'}.`,
     noRunnableInState: (runId, status) =>
       `${runId} has no runnable task in its current state (${status}).`,
     reviewEvidenceThenRetry: (taskId) =>
@@ -359,9 +361,10 @@ export const en: Phrases = {
       'The installed prompts do not match this build. Reinstall agent-flow, or run `agent-flow doctor`.',
     stageFailed: (stage, failureClass, errorCode, message) =>
       `Stage "${stage}" failed: ${failureClass} (${errorCode}). ${message}`,
-    stagesBeforeKept: (stage) =>
-      `The stages before ${stage} are kept. Resume with: ` +
-      `agent-flow feature "<same description>" --from ${stage}`,
+    stagesBeforeKept: (stage, kept, rerun) =>
+      (kept === '' ? 'Nothing before it is reused' : `Kept: ${kept}`) +
+      (rerun === '' ? '' : `. Runs again: ${rerun}`) +
+      `. Resume with: agent-flow feature "<same description>" --from ${stage}`,
 
     noPlanToReviewAgainst: (runId) => `${runId} has no plan to review against.`,
     finishPlanningBeforeReviewing: 'Finish planning before reviewing the implementation.',

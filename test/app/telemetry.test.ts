@@ -132,6 +132,36 @@ async function world() {
 }
 
 describe('telemetry is derived from what the run already recorded', () => {
+  it('reports a row it built and its own schema refused, rather than dropping it', async () => {
+    const w = await world();
+    const run = await w.store.createRun('a feature');
+
+    // A stage event whose detail cannot satisfy :  is
+    // part of the entry and this one is a number. Written straight to the log, because
+    // the defect is about what the *fold* does with a row it cannot parse — and the fold
+    // is what a malformed historical event meets.
+    await w.store.appendEvent(run.runId, 'stage_completed', {
+      stage: 'discovery',
+      role: 'architect',
+      runner: 'claude',
+      reasoning: 42,
+      startedAt: '2026-09-10T00:00:00.000Z',
+      finishedAt: '2026-09-10T00:00:04.000Z',
+    });
+
+    const { entries, dropped } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+
+    // It is not in the chart…
+    expect(entries).toHaveLength(0);
+    // …and it did not vanish. Before this, both were true of the same row and only the
+    // first was observable: correcting an unrelated off-by-one emptied the whole page and
+    // nothing anywhere said why.
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]?.kind).toBe('stage');
+    expect(dropped[0]?.subject).toBe('discovery');
+    expect(dropped[0]?.reason).toContain('reasoning');
+  });
+
   it('reports one entry per stage, with the effort it ran at', async () => {
     const w = await world();
     const run = await w.store.createRun('f');
@@ -145,7 +175,7 @@ describe('telemetry is derived from what the run already recorded', () => {
       { projectDir: '/repo', projectConfig: 'none', agentsMd: 'none' },
     );
 
-    const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
@@ -176,7 +206,7 @@ describe('telemetry is derived from what the run already recorded', () => {
       { projectDir: '/repo', projectConfig: 'none', agentsMd: 'none' },
     );
 
-    const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
     expect(entries[0]?.durationMs).toBe(7_000);
   });
 
@@ -222,7 +252,7 @@ describe('telemetry is derived from what the run already recorded', () => {
       agentsMd: 'none',
     });
 
-    const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
 
     expect(entries[0]?.runner).toBe('codex');
     expect(entries[0]?.fallback).toEqual({ from: 'claude', errorCode: 'quota_exceeded' });
@@ -243,7 +273,7 @@ describe('telemetry is derived from what the run already recorded', () => {
       }),
     ).rejects.toThrow();
 
-    const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
 
     expect(entries[0]).toMatchObject({ status: 'failed', errorCode: 'timeout', runner: 'claude' });
     expect(summariseTelemetry(entries).failures).toBe(1);
@@ -263,7 +293,7 @@ describe('telemetry is derived from what the run already recorded', () => {
       tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
     }));
 
-    const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
     const tasks = entries.filter((entry) => entry.kind === 'task');
 
     expect(entries.filter((entry) => entry.stage === 'implementation')).toHaveLength(1);
@@ -287,7 +317,7 @@ describe('telemetry is derived from what the run already recorded', () => {
       tasks: [{ id: 'TASK-001', state: 'completed', attempts: 3, infrastructureFailures: 0 }],
     }));
 
-    const entries = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
 
     expect(summariseTelemetry(entries).retries).toBe(2);
   });
@@ -313,6 +343,10 @@ describe('telemetry is derived from what the run already recorded', () => {
     const w = await world();
     const run = await w.store.createRun('f');
 
-    expect(await collectTelemetry(w.store, await w.store.loadRun(run.runId))).toEqual([]);
+    // Both halves empty: nothing to report, and nothing quietly refused either (D10).
+    expect(await collectTelemetry(w.store, await w.store.loadRun(run.runId))).toEqual({
+      entries: [],
+      dropped: [],
+    });
   });
 });

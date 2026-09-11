@@ -173,7 +173,7 @@ fora.**
       **Pronto quando:** `clean` nomeia e recupera um diretório sob a raiz própria que
       nenhuma run reivindica, e o dry-run o mostra antes.
 
-- [ ] **D8 · O timeout default por papel é um sorteio para Opus neste repositório** — `src/contracts/config.schema.ts:28`
+- [x] **D8 · O timeout default por papel é um sorteio, e ninguém consegue ver isso** — `src/app/stage-runner.ts`
       `DEFAULT_TIMEOUT_SECONDS = 900`. Medido duas vezes, no mesmo estágio, no mesmo
       repositório, com o mesmo modelo: `AF-2026-003` fez o SDD em **15min03 e passou**;
       `AF-2026-004` fez em **15min02 e estourou**. Não é margem de segurança — é a linha
@@ -182,12 +182,16 @@ fora.**
       saída para mostrar, porque não houve resposta. Discovery e impacto sobrevivem (os dois
       honram o ponto de retomada), então são ~20 min de Opus preservados e ~15 min jogados
       fora, por invocação, sem nada dizer que o limite estava perto.
-      **Pronto quando:** ou o default cabe o pior caso medido de um repositório real, ou o
-      estágio avisa antes de morrer — "este estágio está em 80% do limite" é um fato que o
-      produto tem e não conta. O `doctor` sabe o `timeoutSeconds` de cada papel e nunca o
-      compara com nada.
+      **Fechado avisando, não elevando o default.** O `config.schema.ts` argumenta
+      deliberadamente que um CLI que travou de verdade deve ser cortado em quinze minutos e
+      não quarenta e cinco, e esse argumento continua de pé — contrariar decisão documentada
+      em silêncio é o que critiquei numa tarefa do plano. O defeito não era o número: era
+      que terminar a um segundo da morte e terminar em um minuto ficavam **idênticos** de
+      fora. Agora um estágio que consome 80% do próprio orçamento escreve
+      `stage_near_timeout { durationMs, timeoutSeconds, share }`. Os dois números já
+      existiam e nunca tinham sido comparados.
 
-- [ ] **D13 · Obedecer o produto invalida a run** — `src/app/workspace-preparation.ts` + `src/app/run-git-identity.ts`
+- [x] **D13 · Obedecer o produto invalida a run** — `src/app/workspace-preparation.ts` + `src/app/run-git-identity.ts`
       Medido de ponta a ponta num projeto novo, em 10/09/2026. A sequência, cada passo
       correto sozinho:
       1. `run` recusa: *"the install command changed files that are tracked or not ignored:
@@ -202,7 +206,7 @@ fora.**
       plano terá de ser refeito — ou, melhor, o `init` recusa terminar com o lockfile
       ausente em vez de avisar no rodapé de vinte linhas.
 
-- [ ] **D12 · `run` manda começar uma run nova quando a resposta é `retry`** — `src/app/run-actions.ts`
+- [x] **D12 · `run` manda começar uma run nova quando a resposta é `retry`** — `src/app/run-actions.ts`
       `refuseUnrunnable` trata `review_required` e `blocked` e não trata `failed`: uma
       tarefa falhada cai no ramo genérico *"Start a new run, or check `agent-flow status`"*.
       O `status`, olhando o mesmo estado, diz a coisa certa: *"Fix what stopped TASK-001,
@@ -212,7 +216,7 @@ fora.**
       **Pronto quando:** `run` e `status` dão a mesma instrução para o mesmo estado, e um
       teste falha se divergirem.
 
-- [ ] **D11 · O `feature` imprime o caminho de um SDD que não existe** — `src/cli/feature.ts`
+- [x] **D11 · O `feature` imprime o caminho de um SDD que não existe** — `src/cli/feature.ts`
       No workflow `simple` não há estágio de SDD — e a mensagem final imprime
       `SDD  …/runs/AF-2026-001/sdd.md` mesmo assim. O arquivo não existe; `ls` no diretório
       da run mostra `plan.json` e nenhum `sdd.md`. Quem seguir a linha abre um arquivo que
@@ -221,7 +225,7 @@ fora.**
       diretório, e um teste roda os quatro workflows conferindo que cada caminho impresso
       existe.
 
-- [ ] **D10 · Uma entrada de telemetria que não valida some sem dizer nada** — `src/app/telemetry.ts:99`
+- [x] **D10 · Uma entrada de telemetria que não valida some sem dizer nada** — `src/app/telemetry.ts:99`
       `const parsed = TelemetryEntrySchema.safeParse(candidate); if (parsed.success)
       entries.push(parsed.data);` — sem `else`. Uma entrada que não valida não é reportada,
       não é contada, não vira evento: ela deixa de existir.
@@ -282,9 +286,15 @@ fora.**
       `git add -A` que reestagiava a normalização), e o `vitest.lanes.ts` escreve a frase
       que torna isto grave: *"a timeout that reports contention teaches people to re-run
       the suite until it is green"*. Um gate que pisca é um gate em que ninguém confia.
+      **Estado em 10/09/2026: 1 falha em 8 execuções**, e a causa segue desconhecida.
+      Depois da primeira falha: 4 execuções isoladas verdes e 3 em paralelo com as outras
+      suítes de Git real, todas verdes.
+      **E a razão de eu não saber a causa é minha, não do produto.** Escrevi aqui que o
+      reporter tinha cortado a asserção; não cortou — eu filtrei a saída com `rg | head` no
+      meu próprio comando e descartei o corpo da falha. O dado existia.
       **Pronto quando:** a lane completa roda dez vezes seguidas verde, ou a causa está
-      nomeada e fixada. Rodar com `--reporter=verbose` e guardar a saída inteira é o
-      primeiro passo — foi o que faltou aqui.
+      nomeada e fixada. Guardar a saída inteira em arquivo, sem filtro, é o que falta —
+      `npx vitest run --config vitest.subprocess.config.ts > d9.log 2>&1`.
 
 ---
 

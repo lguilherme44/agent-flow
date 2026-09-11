@@ -316,6 +316,8 @@ export const ptBR: Phrases = {
       `${runId} não tem tarefa executável: ${tasks} ${count === 1 ? 'está' : 'estão'} em review_required.`,
     noRunnableBlocked: (runId, tasks, count) =>
       `${runId} não tem tarefa executável: ${tasks} ${count === 1 ? 'está bloqueada' : 'estão bloqueadas'}.`,
+    noRunnableFailed: (runId, tasks, count) =>
+      `${runId} não tem tarefa executável: ${tasks} ${count === 1 ? 'falhou' : 'falharam'}.`,
     noRunnableInState: (runId, status) =>
       `${runId} não tem tarefa executável no estado atual (${status}).`,
     reviewEvidenceThenRetry: (taskId) =>
@@ -374,9 +376,10 @@ export const ptBR: Phrases = {
       'Os prompts instalados não batem com este build. Reinstale o agent-flow, ou rode `agent-flow doctor`.',
     stageFailed: (stage, failureClass, errorCode, message) =>
       `O estágio "${stage}" falhou: ${failureClass} (${errorCode}). ${message}`,
-    stagesBeforeKept: (stage) =>
-      `Os estágios anteriores a ${stage} estão guardados. Retome com: ` +
-      `agent-flow feature "<mesma descrição>" --from ${stage}`,
+    stagesBeforeKept: (stage, kept, rerun) =>
+      (kept === '' ? 'Nada antes dele é reaproveitado' : `Guardados: ${kept}`) +
+      (rerun === '' ? '' : `. Roda de novo: ${rerun}`) +
+      `. Retome com: agent-flow feature "<mesma descrição>" --from ${stage}`,
 
     noPlanToReviewAgainst: (runId) => `${runId} não tem plano para revisar contra.`,
     finishPlanningBeforeReviewing: 'Termine o planejamento antes de revisar a implementação.',

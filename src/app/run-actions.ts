@@ -84,6 +84,7 @@ import {
   type MechanicalVerification,
 } from '../core/definition-of-done.js';
 import { getCeremonyBudget } from '../core/adaptive-workflow.js';
+import { planningResume } from '../core/resume.js';
 
 /**
  * Every state transition a person can ask for, as use cases (UI-27).
@@ -1065,6 +1066,17 @@ async function refuseUnrunnable(
   // AR §3.6 calls a contract violation.
   const waiting = state.tasks.filter((task) => task.state === 'review_required');
   const blocked = state.tasks.filter((task) => task.state === 'blocked');
+  // **The third state, and it was falling through to "start a new run"** (D13-adjacent).
+  //
+  // Measured end to end: a task whose validation failed sits at `failed`, which is neither
+  // `review_required` nor `blocked`, so this refusal reached its generic branch and told an
+  // operator to start over — discarding a plan they had just paid for. `agent-flow status`,
+  // reading the same state file, said the right thing in the same breath: *"Fix what
+  // stopped TASK-001, then `agent-flow retry` it."*
+  //
+  // The product knew. One of its two surfaces did not say it, and it was the surface the
+  // person had just used.
+  const failed = state.tasks.filter((task) => task.state === 'failed');
 
   return {
     code: 'nothing_to_run',
@@ -1083,13 +1095,21 @@ async function refuseUnrunnable(
                 blocked.map((task) => task.id).join(', '),
                 blocked.length,
               )
-            : say.actions.noRunnableInState(runId, state.status),
+            : failed.length > 0
+              ? say.actions.noRunnableFailed(
+                  runId,
+                  failed.map((task) => task.id).join(', '),
+                  failed.length,
+                )
+              : say.actions.noRunnableInState(runId, state.status),
     action:
       waiting.length > 0
         ? say.actions.reviewEvidenceThenRetry(waiting[0]?.id ?? '')
         : blocked.length > 0
           ? say.actions.answerBlockedThenRetry
-          : say.actions.startNewOrCheckStatus,
+          : failed.length > 0
+            ? say.actions.reviewEvidenceThenRetry(failed[0]?.id ?? '')
+            : say.actions.startNewOrCheckStatus,
   };
 }
 
@@ -1866,7 +1886,16 @@ export async function planFeature(
           error.errorCode,
           error.message,
         ),
-        action: say.actions.stagesBeforeKept(error.stage),
+        // Generated from what the pipeline actually reuses, never asserted (D7). The
+        // workflow class decides discovery, so the run must supply it.
+        action: (() => {
+          const resume = planningResume(error.stage, state.workflow ?? 'standard');
+          return say.actions.stagesBeforeKept(
+            error.stage,
+            resume.kept.join(', '),
+            resume.rerun.join(', '),
+          );
+        })(),
         detail: { stage: error.stage, errorCode: error.errorCode, failureClass: error.failureClass },
       });
     }

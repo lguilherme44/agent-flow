@@ -87,8 +87,19 @@ describe('A11 — the failure says where to pick the run back up', () => {
     expect(hint).toContain('agent-flow feature');
   });
 
-  it('says the earlier stages survive, because that is the reason to use it', () => {
-    expect(resumeHint('planning')).toContain('kept');
+  it('names which earlier stages survive, because that is the reason to use it', () => {
+    // It used to assert the word "kept" and nothing more, which is how the sentence stayed
+    // wrong: *"the stages before this one are kept"* was true of two of them and false of
+    // discovery on a high-risk resume — measured, ten minutes of a frontier model redone
+    // on a promise. A test that accepts any sentence containing "kept" accepts that one.
+    expect(resumeHint('planning', 'standard')).toContain(
+      'Kept: discovery, architecture-impact, sdd',
+    );
+
+    // And the case the old assertion could not have caught.
+    const highRisk = resumeHint('sdd', 'high-risk');
+    expect(highRisk).toContain('Kept: architecture-impact');
+    expect(highRisk).toContain('Runs again: discovery');
   });
 
   it('warns that revise is the other tool, and costs a cycle', () => {

@@ -27,16 +27,47 @@ import type { StateStore } from './state-store.js';
  * own id, validation outcome and provenance; counting both would double every
  * implementation call in every aggregate.
  */
+/**
+ * A row this fold built and its own schema then refused (D10).
+ *
+ * **It exists so that dropping one cannot be silent.** The parse used to be
+ * `if (parsed.success) entries.push(...)` with no `else`: a row that failed validation was
+ * not reported, not counted and not logged — it stopped existing. Measured the hard way,
+ * correcting an off-by-one in the repair counter made `repairs` legitimately `0`, the
+ * entry's `attempts` field is `min(1)`, every parse failed, and the **telemetry page went
+ * blank** with nothing anywhere saying why. Five tests turned red and none of them named
+ * the cause.
+ *
+ * Returned rather than logged, because the app layer has no logger and a read path must
+ * not throw: a caller that receives this in its type cannot forget it exists.
+ */
+export interface DroppedTelemetry {
+  readonly kind: 'stage' | 'task';
+  /** The stage or task the row was about, so the report names something. */
+  readonly subject: string;
+  /** Zod's own account of what did not fit. */
+  readonly reason: string;
+}
+
+export interface TelemetryCollection {
+  readonly entries: readonly TelemetryEntry[];
+  /** Empty in every healthy run. Non-empty is a contract bug in this fold. */
+  readonly dropped: readonly DroppedTelemetry[];
+}
+
 export async function collectTelemetry(
   store: StateStore,
   state: RunState,
-): Promise<TelemetryEntry[]> {
+): Promise<TelemetryCollection> {
   const events = await store.readEventsBestEffort(state.runId);
+  const dropped: DroppedTelemetry[] = [];
 
-  return [
-    ...stageEntries(state.runId, events),
-    ...(await taskEntries(store, state, events)),
+  const entries = [
+    ...stageEntries(state.runId, events, dropped),
+    ...(await taskEntries(store, state, events, dropped)),
   ].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+
+  return { entries, dropped };
 }
 
 /**
@@ -51,7 +82,11 @@ function usageOf(detail: Record<string, unknown>): { model?: string } | undefine
   return typeof usage === 'object' && usage !== null ? (usage as { model?: string }) : undefined;
 }
 
-function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntry[] {
+function stageEntries(
+  runId: string,
+  events: readonly RunEvent[],
+  dropped: DroppedTelemetry[],
+): TelemetryEntry[] {
   const entries: TelemetryEntry[] = [];
 
   for (const event of events) {
@@ -106,7 +141,13 @@ function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntr
     };
 
     const parsed = TelemetryEntrySchema.safeParse(candidate);
-    if (parsed.success) entries.push(parsed.data);
+    if (parsed.success) {
+      entries.push(parsed.data);
+    } else {
+      // Never dropped in silence (D10). A row this fold built and its own schema refused
+      // is a contract bug here, not bad data — and the last one emptied the whole page.
+      dropped.push({ kind: 'stage', subject: String(detail['stage'] ?? event.type), reason: parsed.error.message });
+    }
   }
 
   return entries;
@@ -116,6 +157,7 @@ async function taskEntries(
   store: StateStore,
   state: RunState,
   events: readonly RunEvent[],
+  dropped: DroppedTelemetry[],
 ): Promise<TelemetryEntry[]> {
   const roles = rolesOf(events);
   const entries: TelemetryEntry[] = [];
@@ -154,7 +196,11 @@ async function taskEntries(
       ...(result.usage === undefined ? {} : { usage: result.usage }),
     });
 
-    if (parsed.success) entries.push(parsed.data);
+    if (parsed.success) {
+      entries.push(parsed.data);
+    } else {
+      dropped.push({ kind: 'task', subject: task.id, reason: parsed.error.message });
+    }
   }
 
   return entries;

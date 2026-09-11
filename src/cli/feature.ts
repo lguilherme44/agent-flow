@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { planningResume } from '../core/resume.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -115,16 +116,34 @@ export async function runFeatureCommand(
       return ExitCode.OK;
     }
 
+    // **Only the artifacts this run actually wrote** (D11).
+    //
+    // The `simple` and `trivial` workflows have no SDD stage, and this block printed its
+    // path regardless — measured on a real `--workflow simple` run, which listed
+    // `…/runs/AF-2026-001/sdd.md` for a file `ls` says is not there. A path a person is
+    // told to read and cannot open is worse than saying nothing: the first guess is that
+    // the run is broken.
+    //
+    // Asked of the filesystem rather than inferred from the workflow class, so a stage
+    // that stops writing its artifact cannot leave this message claiming otherwise.
+    const written = [
+      { label: 'SDD  ', path: paths.sdd },
+      { label: 'Plan ', path: paths.plan },
+    ].filter((artifact) => existsSync(artifact.path));
+
     process.stdout.write(
       [
         '',
         `${String(result.plan.tasks.length)} tasks planned.`,
         '',
-        `  SDD   ${paths.sdd}`,
-        `  Plan  ${paths.plan}`,
+        ...written.map((artifact) => `  ${artifact.label}  ${artifact.path}`),
         '',
-        'Read both before approving — the automated review checks the plan against',
-        'the SDD, but it is not the one accountable for it.',
+        written.length > 1
+          ? 'Read both before approving — the automated review checks the plan against'
+          : 'Read it before approving — the automated review checks the plan, but it is',
+        written.length > 1
+          ? 'the SDD, but it is not the one accountable for it.'
+          : 'not the one accountable for it.',
         '',
         nextStepAfterPlanning(result.review?.verdict),
         '',
@@ -157,10 +176,22 @@ export async function runFeatureCommand(
  * Quiet when the failure happened before any stage began: there is nothing to
  * resume from, and a suggestion that cannot be followed is worse than none.
  */
-export function resumeHint(stage: string | undefined): string {
+export function resumeHint(stage: string | undefined, workflow: WorkflowClass = 'standard'): string {
   if (stage === undefined) return '';
+
+  // **Named rather than asserted** (D7). This said "the stages before this one are kept",
+  // and a measured resume from `sdd` re-ran discovery — ten minutes of a frontier model,
+  // because the resume point reaches only the two stages that go through
+  // `stageOrExisting`. The fold in `core/resume.ts` is the single answer; this renders it.
+  const resume = planningResume(stage as RunStage, workflow);
+  const kept =
+    resume.kept.length === 0
+      ? 'Nothing before it is reused.'
+      : `Kept: ${resume.kept.join(', ')}.`;
+  const rerun = resume.rerun.length === 0 ? '' : ` Runs again: ${resume.rerun.join(', ')}.`;
+
   return (
-    `\nThe stages before this one are kept. Resume with:\n` +
+    `\n${kept}${rerun} Resume with:\n` +
     `  agent-flow feature "<same description>" --from ${stage}\n` +
     `\nUse \`revise\` instead only when the plan itself needs changing — it spends a\n` +
     `revision cycle and tells the planner a reviewer asked for the change.\n`

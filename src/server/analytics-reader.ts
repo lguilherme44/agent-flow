@@ -106,7 +106,10 @@ export class AnalyticsReader {
         }
 
         try {
-          entries.push(...(await collectTelemetry(store, state)));
+          // The per-run telemetry endpoint is where a dropped row is reported (D10); this
+          // one aggregates across every run in a workspace, and a count with no run
+          // attached would name nothing a reader could act on.
+          entries.push(...(await collectTelemetry(store, state)).entries);
         } catch {
           // A malformed historical audit line cannot take analytics down.
         }

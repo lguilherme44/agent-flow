@@ -579,9 +579,27 @@ export class Scheduler {
           // halted exactly there, after planning had already been paid for.
           const named =
             outcome.changes.length === 0 ? '' : `: ${outcome.changes.join(', ')}`;
+          // **And the consequence of the obvious fix** (D13).
+          //
+          // Measured end to end on a fresh project: this refusal names `package-lock.json`,
+          // the operator commits it — which is the only way to satisfy the check — and the
+          // *next* `run` refuses with "this run was planned against 2757f498 and HEAD is now
+          // 446ced23". Both refusals are correct in isolation. Following the first causes
+          // the second, and nothing said so, so a plan that had already been paid for was
+          // lost to obedience.
+          //
+          // Said here rather than fixed in the gate, because the gate is right: §6.2 exists
+          // precisely so an isolated run does not build on a tree that moved. What was
+          // missing is that this sentence knew where the operator was about to walk.
+          const consequence =
+            outcome.phase === 'setup'
+              ? '\n\nCommitting those files moves HEAD, and this run was planned against the ' +
+                'commit before it — so plan again after committing rather than re-running ' +
+                'this one.'
+              : '';
           haltedBy =
             `${outcome.task} never started: workspace preparation failed ` +
-            `at the ${outcome.phase} check — ${outcome.detail}${named}`;
+            `at the ${outcome.phase} check — ${outcome.detail}${named}${consequence}`;
         }
       }
 
