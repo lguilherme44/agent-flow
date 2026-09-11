@@ -1346,3 +1346,27 @@ input[type='checkbox'] {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+
+/**
+ * A phone (measured, 11/09/2026).
+ *
+ * `run.css` stopped at 720px. At 390 the only box that still pushed the document past the
+ * viewport was `.panel__tabs` — an `inline-flex` segmented control that sizes to its
+ * content and has nothing to give when the content does not fit.
+ *
+ * Wrapped rather than scrolled, for the same reason the nav is: a tab nobody can see is a
+ * view nobody opens, and there are few enough of them that two rows is cheap.
+ */
+@media (max-width: 520px) {
+  .panel__tabs {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  /* Share the row instead of each demanding its natural width, so two tabs split it and
+     three wrap cleanly rather than one being clipped. */
+  .panel__tabs button {
+    flex: 1 1 auto;
+  }
+}

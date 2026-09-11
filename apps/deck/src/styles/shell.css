@@ -271,3 +271,44 @@
     font-size: var(--fs-4);
   }
 }
+
+/**
+ * A phone (measured, 11/09/2026).
+ *
+ * Nothing in this file went below 720px, and the Deck had never been opened on a phone
+ * until the device-pairing feature gave it a reason to be. At 390px the eight nav links
+ * laid out as one 659px row: the document scrolled sideways by 269px and the last four
+ * sections — including Devices and Pairing, the two the feature added — sat off-screen
+ * with no affordance saying so.
+ *
+ * **Wrapped, not scrolled.** A horizontal scroller is the other common answer and it
+ * keeps the bar one line tall, but it hides destinations behind a gesture nothing
+ * advertises; the section somebody cannot find is the one they stop using. Two rows cost
+ * ~34px on an 844px screen, which is the cheaper thing to spend.
+ */
+@media (max-width: 520px) {
+  .nav {
+    flex-wrap: wrap;
+    row-gap: var(--s-1);
+  }
+
+  /**
+   * Taller and tighter at once: `--s-3` of side padding is what made the row overflow,
+   * and 8px of vertical is what makes a link a target a thumb hits rather than a word it
+   * lands near. 32px is the floor every platform guideline draws; this clears it.
+   */
+  .nav__link {
+    padding: 8px var(--s-2);
+  }
+
+  /* The underline on the current page is inset by the old padding, so it would float
+     away from the shorter label it belongs to. */
+  .nav__link[aria-current='page']::after {
+    left: var(--s-2);
+    right: var(--s-2);
+  }
+
+  .page {
+    padding: var(--s-3);
+  }
+}

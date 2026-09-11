@@ -50,7 +50,8 @@
     "test:visual:linux": "./scripts/visual-linux.sh",
     "test:fast": "vitest run",
     "test:subprocess": "vitest run --config vitest.subprocess.config.ts",
-    "install:global": "node scripts/install-global.mjs"
+    "install:global": "node scripts/install-global.mjs",
+    "test:phone": "npm run test:phone --workspace @agent-flow/deck"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

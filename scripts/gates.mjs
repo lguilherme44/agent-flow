@@ -207,6 +207,14 @@ export const GATES = [
     why: 'Deck’s pure modules — the replay fold, the time scale, the router — and its components, in jsdom.',
   },
   {
+    id: 'test:phone',
+    lane: 'browser',
+    policy: 'required-local',
+    recurrence: 'per-change',
+    command: 'npm run test:phone',
+    why: 'The Deck at 390px. Nothing here looked below 1024 until somebody opened the dashboard on a phone and found the nav laid out for a tablet — these assert the page does not scroll sideways and that every control is big enough for a thumb.',
+  },
+  {
     id: 'build',
     lane: 'node',
     policy: 'required-local',

@@ -41,7 +41,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
     css: false,
-    exclude: ['node_modules/**', 'dist/**'],
+    // `phone/**` is Playwright, not vitest: it needs a browser and a built bundle, and
+    // vitest picking it up fails at collection — a red suite that says nothing about the
+    // code. Run it with `npm run test:phone`.
+    exclude: ['node_modules/**', 'dist/**', 'phone/**'],
     poolOptions: {
       threads: {
         minThreads: 1,
