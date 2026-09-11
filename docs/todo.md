@@ -187,6 +187,40 @@ fora.**
       produto tem e não conta. O `doctor` sabe o `timeoutSeconds` de cada papel e nunca o
       compara com nada.
 
+- [ ] **D13 · Obedecer o produto invalida a run** — `src/app/workspace-preparation.ts` + `src/app/run-git-identity.ts`
+      Medido de ponta a ponta num projeto novo, em 10/09/2026. A sequência, cada passo
+      correto sozinho:
+      1. `run` recusa: *"the install command changed files that are tracked or not ignored:
+         package-lock.json"* — antes de gastar qualquer chamada de modelo, nomeando o
+         arquivo. Recusa exemplar.
+      2. Commito o lockfile, que é o que ela pede.
+      3. `run` recusa de novo: *"this run was planned against 2757f498 and HEAD is now
+         446ced23"*. O §6.2 está certo: uma run isolada não constrói sobre árvore que se
+         moveu.
+      **Obedecer o passo 1 causa o passo 3, e nada avisa.** O plano de US$ 0,44 é perdido.
+      **Pronto quando:** a recusa da preparação diz que commitar vai mover o HEAD e que o
+      plano terá de ser refeito — ou, melhor, o `init` recusa terminar com o lockfile
+      ausente em vez de avisar no rodapé de vinte linhas.
+
+- [ ] **D12 · `run` manda começar uma run nova quando a resposta é `retry`** — `src/app/run-actions.ts`
+      `refuseUnrunnable` trata `review_required` e `blocked` e não trata `failed`: uma
+      tarefa falhada cai no ramo genérico *"Start a new run, or check `agent-flow status`"*.
+      O `status`, olhando o mesmo estado, diz a coisa certa: *"Fix what stopped TASK-001,
+      then `agent-flow retry` it."*
+      O produto sabe a resposta e uma das duas superfícies não a dá — e é a superfície que
+      a pessoa acabou de usar.
+      **Pronto quando:** `run` e `status` dão a mesma instrução para o mesmo estado, e um
+      teste falha se divergirem.
+
+- [ ] **D11 · O `feature` imprime o caminho de um SDD que não existe** — `src/cli/feature.ts`
+      No workflow `simple` não há estágio de SDD — e a mensagem final imprime
+      `SDD  …/runs/AF-2026-001/sdd.md` mesmo assim. O arquivo não existe; `ls` no diretório
+      da run mostra `plan.json` e nenhum `sdd.md`. Quem seguir a linha abre um arquivo que
+      nunca foi escrito.
+      **Pronto quando:** a mensagem lista os artefatos que a run produziu, lidos do
+      diretório, e um teste roda os quatro workflows conferindo que cada caminho impresso
+      existe.
+
 - [ ] **D10 · Uma entrada de telemetria que não valida some sem dizer nada** — `src/app/telemetry.ts:99`
       `const parsed = TelemetryEntrySchema.safeParse(candidate); if (parsed.success)
       entries.push(parsed.data);` — sem `else`. Uma entrada que não valida não é reportada,
