@@ -359,6 +359,26 @@ export class AgyRunner extends BaseRunner {
       args.push('--mode', 'accept-edits');
     }
 
+    // **This CLI gives up after five minutes of its own accord, and calls it success.**
+    // `agy --help`: `--print-timeout  Timeout for print mode wait (default 5m0s)`. On
+    // expiry it exits 0 with `{"status":"SUCCESS"}` and a placeholder where the answer
+    // should be — measured twice on this repository, both just under the cap:
+    //
+    // | role | duration | status | response |
+    // |---|---|---|---|
+    // | planReviewer | 289 s | SUCCESS | `""` |
+    // | planner | 299.4 s | SUCCESS | `"Waiting for task completion.\n"` |
+    //
+    // Neither was a model that had nothing to say; both were a CLI that stopped waiting.
+    // And because the exit code is 0, the role's own `timeoutSeconds` — 2400 on the
+    // stages that need it — never fired: a budget the caller set was overruled in silence
+    // by a default nobody passed a flag to change.
+    //
+    // Sent *above* our own budget rather than equal to it, so the authority is single:
+    // whichever limit is real, the one that fires is agent-flow's, and a stage that runs
+    // out of time fails as a timeout instead of as malformed output.
+    args.push('--print-timeout', `${String(Math.max(1, Math.ceil(input.timeoutSeconds)) + 60)}s`);
+
     args.push('--add-dir', input.workingDirectory);
 
     for (const path of input.additionalReadPaths ?? []) {

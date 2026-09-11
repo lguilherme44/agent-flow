@@ -122,6 +122,35 @@ fechados, o D9 aberto porque não reproduz) e **D14/D15, achados na retomada de 
 quando o plano recusado voltou para uma segunda passada. Boa parte deles é o mesmo defeito
 de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
 
+- [x] **D16 · O `agy` desiste em 5 minutos e chama isso de sucesso** — `src/adapters/runners/agy-runner.ts`
+      `agy --help`: `--print-timeout  Timeout for print mode wait (default 5m0s)`. Ao
+      estourar, ele sai com **código 0**, `status: SUCCESS`, e um texto de enfeite no lugar
+      da resposta. O adaptador nunca passou a flag, então **todo estágio do agy tinha um
+      teto de 300 s que ninguém pediu** — e o `timeoutSeconds` do papel, 2400 s nos que
+      precisam, jamais disparava, porque o processo terminava bem.
+
+      Medido duas vezes neste repositório, nas duas cadeiras:
+
+      | papel | duração | status | resposta |
+      |---|---|---|---|
+      | `planReviewer` | 289 s | SUCCESS | `""` |
+      | `planner` | 299,4 s | SUCCESS | `"Waiting for task completion.\n"` |
+
+      Controle: o mesmo `agy`, mesmas flags, prompt pequeno — 2,8 s, `structured_output`
+      válido. **Não era modelo sem ter o que dizer; era CLI que parou de esperar.**
+
+      **Custou mais do que o estágio.** A justificativa escrita no `.agent-flow/config.yaml`
+      — *"agy revisando um plano do Claude não produziu nada"* — virou a decisão de pôr o
+      `agy` planejando e o Claude revisando, que é o contrário do que o operador tinha
+      pedido. A comparação nunca foi justa: os papéis do Claude tinham 2400 s e o agy tinha
+      cinco minutos. **Uma decisão de roteamento tomada em cima de um artefato de medição.**
+
+      Corrigido: o adaptador manda `--print-timeout` derivado do `timeoutSeconds` do papel,
+      e **maior** que ele — com dois limites correndo, o que vale tem de ser o do
+      agent-flow, para que falta de tempo falhe como timeout honesto e não como saída
+      malformada. O roteamento voltou para Claude planejando e agy revisando, com o
+      comentário do config reescrito dizendo por que mudou.
+
 - [ ] **D14 · Um plano recusado é replanejado sem lembrar por quê** — `src/app/run-actions.ts` + `src/app/planning-pipeline.ts`
       Medido em 10/09/2026 retomando a AF-2026-004. A revisão entre provedores escreveu
       `reviews/plan-review.json` com nove achados, cada um ancorado em arquivo e linha —

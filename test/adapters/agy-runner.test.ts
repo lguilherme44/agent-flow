@@ -258,6 +258,43 @@ describe('AgyRunner argv construction', () => {
     expect(valueAfter(proc.lastCall?.args ?? [], '--effort')).toBe('high');
   });
 
+  /**
+   * D16 — the role's budget reaches the CLI, because otherwise the CLI's own beats it.
+   *
+   * `agy` waits five minutes by default and then exits **0** with `status: SUCCESS` and a
+   * placeholder where the answer should be. Measured twice on this repository: the plan
+   * reviewer at 289 s with an empty response, the planner at 299.4 s with *"Waiting for
+   * task completion."* — and both roles had been given far longer by configuration. A
+   * 2400 s budget that a 300 s default silently overrules is not a budget.
+   */
+  it('hands the CLI the caller\'s budget, so its own five-minute default cannot preempt it', async () => {
+    const { runner, proc } = makeRunner(
+      new FakeProcessRunner().always({
+        stdout: JSON.stringify({ status: 'SUCCESS', response: 'done' }),
+      }),
+    );
+
+    await runner.run({ ...baseInput, timeoutSeconds: 2400 });
+
+    expect(valueAfter(proc.lastCall?.args ?? [], '--print-timeout')).toBe('2460s');
+  });
+
+  it('leaves the last word to agent-flow, sending a longer limit than it enforces', async () => {
+    // Above and not equal: two limits racing at the same instant is a coin flip between an
+    // honest timeout and a SUCCESS carrying nothing. The one that fires must be ours.
+    const { runner, proc } = makeRunner(
+      new FakeProcessRunner().always({
+        stdout: JSON.stringify({ status: 'SUCCESS', response: 'done' }),
+      }),
+    );
+
+    await runner.run({ ...baseInput, timeoutSeconds: 900 });
+
+    const sent = valueAfter(proc.lastCall?.args ?? [], '--print-timeout');
+    expect(sent).toBe('960s');
+    expect(Number.parseInt(sent ?? '0', 10)).toBeGreaterThan(900);
+  });
+
   it('passes prompt on stdin', async () => {
     const { runner, proc } = makeRunner(
       new FakeProcessRunner().always({

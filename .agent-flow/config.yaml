@@ -44,10 +44,19 @@ runners:
 #
 # `planReviewer` is the exception, and it has to be: §3.2 requires a HIGH-RISK plan review
 # from a *different provider* than the planner, because one model confirming its own
-# hypothesis is not a review. With Claude planning, the reviewer is agy — and that is the
-# right way round. Measured on 10/09/2026 with the roles reversed: agy planned, Claude
-# reviewed, and Claude found a contradiction inside the SDD itself. The pair is what works,
-# not either half.
+# hypothesis is not a review. Claude plans; agy reviews.
+#
+# **This was the other way round until 11/09/2026, on a measurement that was an artifact.**
+# The comment here used to argue that agy could not review — "289 s, SUCCESS, empty
+# response" — and put agy on the plan instead. It was not a model with nothing to say. It
+# was `agy --print-timeout`, whose default is 5m0s and whose expiry exits 0 with
+# `status: SUCCESS` and a placeholder. The Claude roles had `timeoutSeconds: 2400`; agy
+# had five minutes that no flag asked for. The two were never compared on equal terms.
+#
+# Confirmed by the same failure in the other seat: agy as *planner* returned 299.4 s,
+# SUCCESS, `"Waiting for task completion."`. Same cap, same silence, other role. The
+# adapter now sends the role's own budget as `--print-timeout`, and both seats get the
+# time they were configured with.
 roles:
   executors:
     trivial:
@@ -70,18 +79,20 @@ roles:
     runner: claude
     model: opus
     timeoutSeconds: 2400
-  # `agy` plans, and this is the allocation the evidence chose rather than the one that
-  # reads best. With two providers and one strong model, the strong one is worth more on the
-  # *review* than on the plan: measured 10/09/2026, Claude reviewing an agy plan produced 11
-  # findings anchored in file and line — one of them a contradiction inside the SDD itself —
-  # while agy reviewing a Claude plan produced nothing at all (289 s, SUCCESS, empty
-  # response). A strong plan nobody checks is unchecked; a weaker plan with a working review
-  # converges, and high-risk gives three revision cycles to converge in.
+  # Claude writes the plan, which is what the operator asked for and what the cap made look
+  # unaffordable. The one measurement that still stands from the earlier pass is that Claude
+  # reviewing produced 11 findings anchored in file and line, one of them a contradiction
+  # inside the SDD itself — a real review. Whether agy reviews as well is now an open
+  # question rather than a settled one, because the run that said no was capped at five
+  # minutes. It is measured again from here, on equal terms.
   planner:
-    runner: agy
-  planReviewer:
     runner: claude
     model: opus
+    timeoutSeconds: 2400
+  # 2400 s on agy too, which before this change bought nothing: the CLI stopped at 300 s
+  # whatever the role said. The adapter forwards it now.
+  planReviewer:
+    runner: agy
     timeoutSeconds: 2400
   verification:
     runner: claude
