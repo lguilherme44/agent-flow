@@ -187,7 +187,21 @@ fora.**
       produto tem e não conta. O `doctor` sabe o `timeoutSeconds` de cada papel e nunca o
       compara com nada.
 
-- [ ] **D6 · `repairs` reporta 1 quando não houve reparo nenhum** — `src/app/stage-runner.ts:626`
+- [ ] **D10 · Uma entrada de telemetria que não valida some sem dizer nada** — `src/app/telemetry.ts:99`
+      `const parsed = TelemetryEntrySchema.safeParse(candidate); if (parsed.success)
+      entries.push(parsed.data);` — sem `else`. Uma entrada que não valida não é reportada,
+      não é contada, não vira evento: ela deixa de existir.
+      **Medido:** consertar o D6 fez `repairs` virar 0 numa primeira tentativa; o campo
+      `attempts` do schema é `min(1)`; o parse falhou; e a **página de telemetria inteira
+      ficou vazia**. Nenhuma mensagem, nenhum aviso, nenhum log. Cinco testes caíram e
+      nenhum deles dizia *por quê* — o diagnóstico exigiu ler o fold.
+      É a mesma família dos outros: um resultado calculado e jogado fora. E é a pior
+      variante, porque o descarte é de *evidência*.
+      **Pronto quando:** uma entrada recusada aparece em algum lugar — contada no relatório,
+      num evento, ou numa linha de log com o motivo do Zod — e um teste falha se voltar a
+      sumir em silêncio.
+
+- [x] **D6 · `repairs` reporta 1 quando não houve reparo nenhum** — `src/app/stage-runner.ts:626`
       O contador é incrementado no **topo** do loop, então `repairs: 1` significa uma
       tentativa e zero re-prompts. O docblock do campo diz que ele conta "how many times
       the stage had to re-prompt for a well-formed answer" e insiste, em parágrafo próprio,
@@ -221,6 +235,22 @@ fora.**
       **Pronto quando:** a frase enumera o que de fato sobrevive, ou os quatro estágios
       honram o ponto de retomada. E um teste falha se a frase e o comportamento voltarem a
       discordar — a frase é gerada de uma lista, não escrita à mão.
+
+---
+
+- [ ] **D9 · O gate pisca: `bornDirty` falha ~1 em 2 execuções da lane completa** — `test/fixtures/temp-repo.ts`
+      Medido em 10/09/2026 com a máquina ociosa: uma execução completa da lane de
+      subprocesso falhou em *"names the checkout phase when a fresh checkout is born
+      dirty"*; a execução seguinte, também completa, passou (2657 ms); e o arquivo passou
+      quatro vezes isolado. Não consegui capturar o texto da asserção — o reporter resumido
+      corta o corpo — então a causa segue desconhecida.
+      O fixture já foi diagnosticado duas vezes nesta base (a segunda vez corrigiu o
+      `git add -A` que reestagiava a normalização), e o `vitest.lanes.ts` escreve a frase
+      que torna isto grave: *"a timeout that reports contention teaches people to re-run
+      the suite until it is green"*. Um gate que pisca é um gate em que ninguém confia.
+      **Pronto quando:** a lane completa roda dez vezes seguidas verde, ou a causa está
+      nomeada e fixada. Rodar com `--reporter=verbose` e guardar a saída inteira é o
+      primeiro passo — foi o que faltou aqui.
 
 ---
 

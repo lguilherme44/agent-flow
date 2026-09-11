@@ -623,6 +623,17 @@ export class StageRunner {
     // counter owns that word. Sharing it produced a log line reading
     // `attempt=1 failed` inside a file named `…-attempt-2.log`, which is two
     // different numbers under one name in one sentence.
+    // **Counts re-prompts, and the name is the contract.**
+    //
+    // Incremented at the top of the loop, so `repair` is the *attempt* number and the
+    // number of repairs is one less. Reported as `repair - 1` at every exit for that
+    // reason: the field is called `repairs`, its doc-comment says it counts "how many
+    // times the stage had to re-prompt for a well-formed answer", and it spent this
+    // codebase's history reporting 1 for zero.
+    //
+    // It was not only wrong in the log. The Deck renders `repairs > 0` as a chip, so every
+    // stage that answered correctly on the first try showed "1 repair" on the screen — and
+    // a dogfood report was written claiming a repair loop had fired when nothing had.
     let repair = 0;
     let lastProblems: string[] = [];
     // Who produced the answer we are about to reject. Repairs can straddle a
@@ -693,7 +704,7 @@ export class StageRunner {
           // A failure is provenance too: it ran somewhere, at some effort, and
           // possibly after a substitution that also failed.
           ...executionDetail(lastExecution),
-          repairs: repair,
+          repairs: repair - 1,
           startedAt,
           finishedAt: clock.now(),
         });
@@ -768,7 +779,7 @@ export class StageRunner {
           // inherited configured intent where the invariant is that actual
           // execution wins. The two agree except in the one case worth seeing.
           ...executionDetail(execution),
-          repairs: repair,
+          repairs: repair - 1,
           startedAt,
           finishedAt: clock.now(),
         });
@@ -779,7 +790,7 @@ export class StageRunner {
             ? {}
             : { data: stage.outputSchema.parse(result.json ?? safeJson(result.text)) }),
           runner: execution.runner,
-          repairs: repair,
+          repairs: repair - 1,
           execution,
         };
       }
@@ -802,7 +813,7 @@ export class StageRunner {
       role: stage.role,
       errorCode: 'invalid_output',
       ...executionDetail(lastExecution),
-      repairs: repair,
+      repairs: repair - 1,
       startedAt,
       finishedAt: clock.now(),
       problems: lastProblems,

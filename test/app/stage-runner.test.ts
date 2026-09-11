@@ -145,7 +145,10 @@ describe('running a stage', () => {
     // Repaired rather than refused: the same loop that handles a malformed answer now
     // handles an absent one, and the re-prompt says which it was.
     expect(result.text).toBe('# SDD body');
-    expect(result.repairs).toBe(2);
+    // One re-prompt, not two attempts: the counter names repairs and an answer that
+    // arrived on the second try cost exactly one. It read 2 until the off-by-one was
+    // found, and a dogfood report was written on the strength of that number.
+    expect(result.repairs).toBe(1);
     expect(runner.calls[1]?.prompt).toContain('empty answer');
     expect((await store.readEvents(run.runId)).map((e) => e.type)).toContain('stage_completed');
   });

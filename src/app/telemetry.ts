@@ -90,7 +90,17 @@ function stageEntries(runId: string, events: readonly RunEvent[]): TelemetryEntr
       // read — an existing run's telemetry must not lose a number because a field was
       // renamed. The entry's own field keeps its name; renaming that is a read-model
       // change and belongs to the milestone that owns read models.
-      attempts: detail['repairs'] ?? detail['attempts'] ?? 1,
+      //
+      // **Invocations, which is repairs plus the first one.** `repairs` counts re-prompts,
+      // so a stage that answered correctly on the first try reports 0 — and this field is
+      // `min(1)`. Mapping one straight onto the other made `safeParse` fail and the entry
+      // vanish: measured, correcting the repair counter emptied the telemetry page
+      // completely, and nothing said why (D10).
+      //
+      // Events written before that correction are off by one here — their `repairs: 1`
+      // meant one attempt and now reads as two. Stated rather than migrated: rewriting an
+      // append-only log to make a chart tidier is the worse trade.
+      attempts: Number(detail['repairs'] ?? detail['attempts'] ?? 0) + 1,
       ...(detail['errorCode'] === undefined ? {} : { errorCode: detail['errorCode'] }),
       ...(detail['usage'] === undefined ? {} : { usage: detail['usage'] }),
     };
