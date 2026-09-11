@@ -25,6 +25,26 @@ describe('the resume sentence is rendered from the fold', () => {
     expect(hint).not.toContain('Runs again');
   });
 
+  /**
+   * D17 — the parameter used to default to `standard`, and the caller that matters had
+   * no class to give.
+   *
+   * Measured on AF-2026-004, a `high-risk` run whose planning stage failed: the failure
+   * printed *"Kept: discovery, architecture-impact, sdd"*, I followed it, and discovery
+   * re-ran for 13m07s of Opus. Every assertion in this file passed the whole time —
+   * they all supplied a class, which is precisely what the broken caller could not do.
+   * So the case to pin is the absent argument, not another present one.
+   */
+  it('claims nothing about kept stages when the class is unknown', () => {
+    const hint = resumeHint('planning');
+
+    expect(hint).not.toContain('Kept:');
+    expect(hint).not.toContain('Runs again');
+    // Still useful: the resume line is true regardless of class.
+    expect(hint).toContain('--from planning');
+    expect(hint).toContain('agent-flow feature');
+  });
+
   it('positive control: it never claims a kept stage that re-runs', () => {
     // Asserted over the output rather than over the source, because the source *does*
     // still contain the old sentence — quoted in the comment that explains why it went.

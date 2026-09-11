@@ -11,6 +11,7 @@ import {
   type WorkflowClass,
 } from '../contracts/index.js';
 import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
+import type { StateStore } from '../app/state-store.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
 import { createRunWithIdentity, revise } from '../app/run-actions.js';
@@ -48,6 +49,9 @@ export async function runFeatureCommand(
   // Outside the `try`, because the catch is the one place it is read: the stage a
   // failed run stopped in is what makes the resume line below complete.
   let lastStarted: string | undefined;
+  // And for the same reason, the store: the other half of that line is the workflow
+  // class, and it is written by the pipeline rather than known here (D17).
+  let store: StateStore | undefined;
 
   try {
     const from = options.from === undefined ? undefined : parseStage(options.from);
@@ -60,6 +64,8 @@ export async function runFeatureCommand(
       projectDir: globals.cwd,
       globalConfigPath: globals.globalConfigPath,
     });
+
+    store = context.store;
 
     if (globals.dryRun) {
       printExecutionPlan(context.config.global, context.capabilities, globals);
@@ -154,8 +160,30 @@ export async function runFeatureCommand(
   } catch (error) {
     const rendered = renderError(error);
     process.stderr.write(`\n${rendered.message}\n`);
-    process.stderr.write(resumeHint(lastStarted));
+    process.stderr.write(resumeHint(lastStarted, await classOf(store)));
     return rendered.exitCode;
+  }
+}
+
+/**
+ * The run's workflow class, or nothing — read inside a `catch`, so it may not throw.
+ *
+ * The class is what decides which stages a resume keeps, and it is decided by the
+ * pipeline rather than by this command: `--workflow` is an override that is usually
+ * absent, and the classifier can elevate past it. So the answer is read back from the
+ * state the pipeline wrote, which is the only place it is true.
+ *
+ * **Swallows everything on purpose.** This runs while another error is being reported,
+ * and a store that cannot be read must not replace the failure the operator needs to
+ * see with one about reading the store. Without a class the sentence says less (see
+ * `resumeHint`), which is the correct amount to say.
+ */
+async function classOf(store: StateStore | undefined): Promise<WorkflowClass | undefined> {
+  if (store === undefined) return undefined;
+  try {
+    return (await store.loadCurrentRun())?.workflow;
+  } catch {
+    return undefined;
   }
 }
 
@@ -176,22 +204,35 @@ export async function runFeatureCommand(
  * Quiet when the failure happened before any stage began: there is nothing to
  * resume from, and a suggestion that cannot be followed is worse than none.
  */
-export function resumeHint(stage: string | undefined, workflow: WorkflowClass = 'standard'): string {
+export function resumeHint(stage: string | undefined, workflow?: WorkflowClass): string {
   if (stage === undefined) return '';
 
   // **Named rather than asserted** (D7). This said "the stages before this one are kept",
   // and a measured resume from `sdd` re-ran discovery — ten minutes of a frontier model,
   // because the resume point reaches only the two stages that go through
   // `stageOrExisting`. The fold in `core/resume.ts` is the single answer; this renders it.
-  const resume = planningResume(stage as RunStage, workflow);
+  //
+  // **And no default class** (D17). The parameter defaulted to `standard`, so the one
+  // caller that had no class to give — the failure path, which is where this sentence is
+  // read — printed the `standard` answer for every run. Measured on AF-2026-004, a
+  // `high-risk` run: *"Kept: discovery, architecture-impact, sdd"*, and the resume it
+  // suggested spent thirteen minutes of Opus re-running discovery. A default that is
+  // right most of the time is how the fold's answer gets discarded at the surface; when
+  // the class is unknown the clause is omitted, because no claim beats a wrong one.
+  const resume = workflow === undefined ? undefined : planningResume(stage as RunStage, workflow);
   const kept =
-    resume.kept.length === 0
-      ? 'Nothing before it is reused.'
-      : `Kept: ${resume.kept.join(', ')}.`;
-  const rerun = resume.rerun.length === 0 ? '' : ` Runs again: ${resume.rerun.join(', ')}.`;
+    resume === undefined
+      ? ''
+      : resume.kept.length === 0
+        ? 'Nothing before it is reused. '
+        : `Kept: ${resume.kept.join(', ')}. `;
+  const rerun =
+    resume === undefined || resume.rerun.length === 0
+      ? ''
+      : `Runs again: ${resume.rerun.join(', ')}. `;
 
   return (
-    `\n${kept}${rerun} Resume with:\n` +
+    `\n${kept}${rerun}Resume with:\n` +
     `  agent-flow feature "<same description>" --from ${stage}\n` +
     `\nUse \`revise\` instead only when the plan itself needs changing — it spends a\n` +
     `revision cycle and tells the planner a reviewer asked for the change.\n`

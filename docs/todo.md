@@ -122,6 +122,28 @@ fechados, o D9 aberto porque não reproduz) e **D14/D15, achados na retomada de 
 quando o plano recusado voltou para uma segunda passada. Boa parte deles é o mesmo defeito
 de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
 
+- [x] **D17 · O D7 ficou aberto exatamente na superfície que importa** — `src/cli/feature.ts`
+      O `resumeHint` recebeu a classe do workflow como parâmetro **com default
+      `'standard'`** — e o único chamador que não tinha classe para dar é o `catch` do
+      `feature`, que é onde a frase é lida. Resultado: toda run que falhava imprimia a
+      resposta do `standard`.
+
+      Medido em 11/09/2026 na AF-2026-004, que é `high-risk`: o estágio `planning` falhou,
+      a mensagem disse *"Kept: discovery, architecture-impact, sdd"*, eu segui a retomada
+      que ela indicava, e o discovery rodou de novo por **13m07s de Opus** — a segunda vez
+      na mesma run.
+
+      **É o D7 inteiro outra vez, um nível acima.** O fold estava certo, o `status` estava
+      certo, os testes estavam verdes — e todos passavam a classe, que é justamente o que o
+      chamador quebrado não conseguia fazer. Um default que acerta na maioria dos casos é
+      como a resposta do fold é descartada na borda.
+
+      Corrigido: sem default. A classe é lida do estado que o pipeline escreveu (dentro de
+      um `try` que engole tudo — isso roda enquanto outro erro está sendo reportado, e não
+      pode substituir a falha que a pessoa precisa ver). Sem classe, a cláusula "Kept:"
+      simplesmente não sai: **não afirmar é melhor do que afirmar errado.** O teste novo
+      fixa o argumento ausente, não mais um presente.
+
 - [x] **D16 · O `agy` desiste em 5 minutos e chama isso de sucesso** — `src/adapters/runners/agy-runner.ts`
       `agy --help`: `--print-timeout  Timeout for print mode wait (default 5m0s)`. Ao
       estourar, ele sai com **código 0**, `status: SUCCESS`, e um texto de enfeite no lugar
