@@ -53,3 +53,6 @@ apps/web/dist.hidden-by-packaging-smoke/
 # Local design mockups
 ui/
 apps/deck/dist.hidden-by-packaging-smoke/
+
+# graphify (saída gerada, regenerável via `graphify .`)
+.graphify/

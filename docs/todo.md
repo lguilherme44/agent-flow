@@ -117,9 +117,35 @@ lendo a saída · suíte inteira verde.
 O agent-flow planejou uma feature para o agent-flow: pareamento de dispositivo para o Deck,
 em `high-risk`, `agy` planejando e `claude` revisando. A feature não saiu — a revisão entre
 provedores recusou o plano com 11 achados e a revisão seguinte morreu por um defeito que eu
-mesmo tinha introduzido uma hora antes. Os cinco itens abaixo são o resíduo, e quatro deles
-são o mesmo defeito de roupa diferente: **um resultado que foi calculado e depois jogado
-fora.**
+mesmo tinha introduzido uma hora antes. São quinze itens: **D1 a D13 do dogfood** (doze
+fechados, o D9 aberto porque não reproduz) e **D14/D15, achados na retomada de 10/09/2026**,
+quando o plano recusado voltou para uma segunda passada. Boa parte deles é o mesmo defeito
+de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
+
+- [ ] **D14 · Um plano recusado é replanejado sem lembrar por quê** — `src/app/run-actions.ts` + `src/app/planning-pipeline.ts`
+      Medido em 10/09/2026 retomando a AF-2026-004. A revisão entre provedores escreveu
+      `reviews/plan-review.json` com nove achados, cada um ancorado em arquivo e linha —
+      e nem `revise` nem `feature --from` passam um único deles ao planejador. O
+      `replan` monta o prompt como `request + "Revision requested by the reviewer:" +
+      instrução`, e a instrução é o que a pessoa digitou. O arquivo com os achados está no
+      disco, ao lado, e ninguém o lê.
+      **Custou:** copiei os nove achados na mão para dentro da descrição para que a
+      passada seguinte não os perdesse. Sem isso, o ciclo de revisão do `high-risk` — três
+      ciclos, exatamente para convergir — replaneja contra a mesma lacuna e é recusado pelo
+      mesmo motivo.
+      **Pronto quando:** o estágio de planejamento recebe os achados da última revisão como
+      entrada, e um teste falha se um plano recusado for replanejado sem eles.
+
+- [ ] **D15 · `feature` só aceita a descrição como argumento de shell** — `src/cli/index.ts`
+      O `revise` aceita `--file`, `-` e `--edit`, e o comentário ao lado diz o porquê:
+      *"A multi-paragraph revision does not survive being a shell argument (AR-08)."* Vale
+      igual para a descrição de uma feature, e mais: a desta run tem 9 KB, com crases,
+      aspas e quebras de linha. O `feature` tem só `<description>` posicional.
+      **Custou:** tive de subir a run por um script Node com `spawn` e argv, porque montar
+      a linha de comando no shell mangla o texto — o mesmo defeito que o comentário do
+      `revise` já descreve.
+      **Pronto quando:** `feature` lê a descrição de `--file`, de `-` ou do `$EDITOR`,
+      pelo mesmo caminho que o `revise` já usa.
 
 - [x] **D1 · A porta ocupada responde com stack trace de Node** — `src/cli/ui.ts`
       `Error: listen EADDRINUSE` mais quatro linhas de `node:internal`. O produto sabe que
