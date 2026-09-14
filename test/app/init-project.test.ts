@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
-import { initProject } from '../../src/app/init-project.js';
-import { ProjectConfigSchema } from '../../src/contracts/index.js';
+import { initProject, registerProject } from '../../src/app/init-project.js';
+import { StateStore } from '../../src/app/state-store.js';
+import { FixedClock } from '../fakes/fixed-clock.js';
+import { ProjectConfigSchema, type RunStatus } from '../../src/contracts/index.js';
 
 const PROJECT = '/repo';
 
@@ -259,5 +261,77 @@ describe('instruction files agent-flow does not read', () => {
     const result = await initProject({ fs, projectDir: PROJECT });
 
     expect(result.warnings.map((warning) => warning.kind)).not.toContain('instructions_unread');
+  });
+});
+
+/**
+ * The AR-01 gate, which had no test at all — which is how `cancelled` slipped past it.
+ *
+ * `init` writes files that have to be committed, and that commit moves HEAD. A run's
+ * planningBase is frozen when the run is created, so writing while one is open leaves it
+ * planning against one base and executing against another. The gate is the defence.
+ *
+ * Measured, on a real repository: a warm-up's process died, its run stayed at `running`,
+ * and `init` refused — correctly. `cancel`, the one supported way to close a run, wrote
+ * `cancelled`, which the gate also read as open. There was no path out but `--force`,
+ * which bypasses the gate rather than satisfying it.
+ */
+describe('the gate that protects a run’s planningBase (AR-01)', () => {
+  async function withRun(status: RunStatus) {
+    const fs = seeded(nodeRepo);
+    const store = new StateStore({ fs, clock: new FixedClock(), projectDir: PROJECT });
+    const run = await store.createRun('a feature');
+    await store.updateRun(run.runId, (state) => ({ ...state, status }));
+
+    return { fs, store, runId: run.runId };
+  }
+
+  it('refuses to write while a run is still open', async () => {
+    const { store, fs } = await withRun('running');
+    const outcome = await registerProject({ store, fs, projectDir: PROJECT });
+
+    expect(outcome).toMatchObject({ ok: false, reason: 'active_run' });
+    // "It writes nothing" is half the contract, so the refusal is asserted by absence too.
+    expect(await fs.exists(`${PROJECT}/.agent-flow/config.yaml`)).toBe(false);
+  });
+
+  it('writes once the run has ended', async () => {
+    for (const status of ['completed', 'failed'] as const) {
+      const { store, fs } = await withRun(status);
+      expect(await registerProject({ store, fs, projectDir: PROJECT })).toMatchObject({ ok: true });
+    }
+  });
+
+  it('treats a cancelled run as ended, because it is', async () => {
+    // `state.schema.ts`: "the one terminal outcome that is neither completed nor failed …
+    // what is gone is the intent to continue". The gate read the complement and disagreed
+    // with it, so cancelling released nothing.
+    const { store, fs } = await withRun('cancelled');
+
+    expect(await registerProject({ store, fs, projectDir: PROJECT })).toMatchObject({ ok: true });
+  });
+
+  it('still refuses every status that has not ended', async () => {
+    // Positive control for the test above: `cancelled` was added to a list, not the list
+    // replaced by a blanket. A run waiting for a human is still a run.
+    for (const status of ['running', 'waiting_for_approval', 'plan_rejected', 'approved'] as const) {
+      const { store, fs } = await withRun(status);
+      expect(await registerProject({ store, fs, projectDir: PROJECT })).toMatchObject({
+        ok: false,
+        reason: 'active_run',
+      });
+    }
+  });
+
+  it('writes anyway under --force, and records the override on the run', async () => {
+    const { store, fs, runId } = await withRun('running');
+    const outcome = await registerProject({ store, fs, projectDir: PROJECT, force: true });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const events = await store.readEvents(runId);
+    expect(events.find((event) => event.type === 'init_during_active_run')?.detail).toMatchObject({
+      forced: true,
+      status: 'running',
+    });
   });
 });

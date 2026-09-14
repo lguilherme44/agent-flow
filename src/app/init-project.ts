@@ -8,12 +8,27 @@ import type { RunState } from '../contracts/index.js';
 /**
  * A run whose planningBase a commit could invalidate (AR-01, C-02).
  *
- * "Not completed or failed" is the spec's definition, and it is deliberately the
+ * "Not completed or failed" was the spec's definition, and it was deliberately the
  * complement rather than a list: a status added later is active until somebody decides
  * otherwise, which is the safe direction for a gate to fail in.
+ *
+ * **`cancelled` is the status that argument was written before, and it breaks it.**
+ * `state.schema.ts` defines it as "the one terminal outcome that is neither `completed`
+ * nor `failed`… what is gone is the intent to continue" — so the complement reported an
+ * ended run as ongoing, and two documented intentions in this codebase contradicted each
+ * other. Measured, on a real repository: a warm-up whose process died left its run at
+ * `running`, `agent-flow init` refused to write, and `cancel` — the one supported way to
+ * close a run — did not lift the refusal. There was no path out but `--force`, which
+ * bypasses the gate rather than satisfying it.
+ *
+ * Still the complement, not a list: the safe direction is unchanged, and a status added
+ * after this one is active until somebody says otherwise. What changed is that the three
+ * terminal statuses are now all named, because they are all terminal.
  */
 export function isRunActive(state: RunState): boolean {
-  return state.status !== 'completed' && state.status !== 'failed';
+  return (
+    state.status !== 'completed' && state.status !== 'failed' && state.status !== 'cancelled'
+  );
 }
 
 /**
