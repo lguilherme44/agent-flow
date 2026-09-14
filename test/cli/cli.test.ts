@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { main } from '../../src/cli/index.js';
 import { ExitCode } from '../../src/cli/exit-codes.js';
 import { renderError } from '../../src/cli/render/errors.js';
+import { renderWarm } from '../../src/cli/init.js';
 import { ConfigError } from '../../src/config/loader.js';
 import { StageFailure } from '../../src/app/stage-runner.js';
 import { RoleResolutionError } from '../../src/core/role.js';
@@ -167,6 +168,58 @@ describe('error rendering', () => {
     expect(rendered.message).toContain('original CLI message');
   });
 
+  /**
+   * A timeout that tells the reader which limit was hit and where to change it.
+   *
+   * The sentence used to be "Raise timeoutSeconds for this role if this is expected",
+   * which names no role, no path and no duration — so the reader could not tell a tight
+   * budget from a hung runner without reading the source. Measured: a discovery stage
+   * killed at 900 s whose whole record was the word `timeout`.
+   */
+  describe('a timeout names the numbers and the key', () => {
+    const killed = (role: 'architect' | 'executor.normal') =>
+      new StageFailure('discovery', 'timeout', 'failed', undefined, undefined, undefined, {
+        role,
+        timeoutSeconds: 900,
+        durationMs: 900_004,
+      });
+
+    it('says how long it ran and what it was allowed', () => {
+      const message = renderError(killed('architect')).message;
+
+      expect(message).toContain('15m00s');
+      expect(message).toContain('900s');
+    });
+
+    it('names the config path that raises the limit', () => {
+      expect(renderError(killed('architect')).message).toContain('roles.architect.timeoutSeconds');
+    });
+
+    it('uses the path the file actually has, not the workflow’s spelling', () => {
+      // The workflow says `executor.normal`; the YAML says `roles.executors.normal`. A hint
+      // printing the first would send someone to edit a key that does not exist.
+      const message = renderError(killed('executor.normal')).message;
+
+      expect(message).toContain('roles.executors.normal.timeoutSeconds');
+      expect(message).not.toContain('roles.executor.normal');
+    });
+
+    it('explains the empty output rather than showing nothing', () => {
+      // A killed CLI that buffers its whole response leaves no bytes. Printing nothing
+      // about that sends the reader looking for a log that was never written.
+      expect(renderError(killed('architect')).message).toMatch(/wrote no output/i);
+    });
+
+    it('falls back to the vague sentence rather than inventing numbers', () => {
+      // No budget travelled with this failure — every construction site predating the
+      // field, and the two paths that legitimately have none.
+      const message = renderError(new StageFailure('discovery', 'timeout', 'failed')).message;
+
+      expect(message).toMatch(/exceeded its timeout/i);
+      expect(message).not.toMatch(/\d+s budget/);
+    });
+  });
+
   it('keeps the stack for an unexpected error', () => {
     // Here the trace really is the most useful thing available.
     const rendered = renderError(new Error('something unforeseen'));
@@ -175,5 +228,48 @@ describe('error rendering', () => {
 
   it('renders a state error without a trace', () => {
     expect(renderError(new StateError('Run AF-2026-404 not found')).message).toContain('AF-2026-404');
+  });
+});
+
+/**
+ * `init --warm`, which exists so the first feature is not the one that finds the wall.
+ *
+ * Two numbers nobody had before it: how long the repository's map takes to build, and how
+ * much of the architect's budget that is. A repository too large for the default was
+ * indistinguishable from one that fits, right up to the request that died at its first
+ * stage — measured at 15min00s against 900s.
+ */
+describe('the warm-up reports the map against the budget', () => {
+  it('says how long it took and what share of the budget that is', () => {
+    const lines = renderWarm({ ran: true, elapsedMs: 450_000 }, 900).join('\n');
+
+    expect(lines).toContain('7m30s');
+    expect(lines).toContain('900s');
+    expect(lines).toContain('50%');
+  });
+
+  it('stays quiet when there is margin', () => {
+    // Crying wolf at 50% would train people past the one warning that matters.
+    const lines = renderWarm({ ran: true, elapsedMs: 450_000 }, 900).join('\n');
+
+    expect(lines).not.toMatch(/Warning/);
+  });
+
+  it('warns, and names the key, once the margin is gone', () => {
+    // 80%, the same share `stage_near_timeout` uses — deliberately not a second opinion,
+    // or setup would certify a configuration the first real run then rejects.
+    const lines = renderWarm({ ran: true, elapsedMs: 800_000 }, 900).join('\n');
+
+    expect(lines).toMatch(/Warning/);
+    expect(lines).toContain('roles.architect.timeoutSeconds');
+  });
+
+  it('says nothing was spent when the map was already current', () => {
+    // The elapsed time here is a cache check, not a stage. Reporting it as "built in 2ms,
+    // 0% of the budget" would be a measurement of the wrong thing, stated confidently.
+    const lines = renderWarm({ ran: false, elapsedMs: 2 }, 900).join('\n');
+
+    expect(lines).toMatch(/already current/i);
+    expect(lines).not.toMatch(/%/);
   });
 });

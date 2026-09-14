@@ -165,6 +165,13 @@ export interface PipelineResult {
   readonly review?: ReviewResult;
 }
 
+/** What {@link PlanningPipeline.warm} measured. It measures; it does not judge. */
+export interface WarmResult {
+  /** False when a valid cache already answered, and nothing was spent. */
+  readonly ran: boolean;
+  readonly elapsedMs: number;
+}
+
 /**
  * Adaptive planning pipeline (M2.1-C).
  *
@@ -176,6 +183,48 @@ export interface PipelineResult {
  */
 export class PlanningPipeline {
   constructor(private readonly options: PlanningPipelineOptions) {}
+
+  /**
+   * Discovery on its own, so the first feature is not the one that pays for it.
+   *
+   * The map is feature-agnostic — that is why it is cached at all — but nothing could
+   * build it ahead of time, so the first real request funded a stage that has nothing to
+   * do with it. On a large repository that is the most expensive stage in the run, and
+   * when it does not fit the role's budget the request it was attached to dies with it:
+   * measured, a monorepo's discovery ran 15min00s into a 900 s limit and took the whole
+   * planning run down at the first stage.
+   *
+   * Returns the numbers rather than judging them. Whether 78% of a budget is comfortable
+   * is a question for whoever configured the budget, and `cli/init.ts` is where that gets
+   * said — this layer measures.
+   *
+   * `elapsedMs` is wall-clock around the call and includes the cache check, which is a
+   * `stat` and a hash against a stage that spends minutes inside one CLI invocation. On a
+   * cache hit it is the cache check and nothing else, which is why `ran` is reported
+   * beside it instead of leaving a reader to infer it from a small number.
+   */
+  async warm(
+    runId: string,
+    options: { readonly onProgress?: PipelineOptions['onProgress'] } = {},
+  ): Promise<WarmResult> {
+    const stagesRun: RunStage[] = [];
+    const startedAt = this.options.clock.monotonicMs();
+
+    await this.discover(runId, {
+      projectConfig: this.renderProjectConfig(),
+      agentsMd: await this.readAgentsMd(),
+      useCache: true,
+      onProgress: options.onProgress,
+      stagesRun,
+    });
+
+    return {
+      // `discover` pushes the stage only when it actually invoked the runner, so this is
+      // the cache answer rather than a second guess at it.
+      ran: stagesRun.length > 0,
+      elapsedMs: this.options.clock.monotonicMs() - startedAt,
+    };
+  }
 
   async run(
     runId: string,

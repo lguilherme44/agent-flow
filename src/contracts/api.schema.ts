@@ -1011,10 +1011,17 @@ export interface ProjectRegisteredView {
    * lockfile is handed `npm install`, which rewrites it, which fails the post-setup
    * cleanliness assertion, which refuses every task in worktree mode. A live run
    * discovered that after paying for planning.
+   *
+   * `instructions_unread` is the quiet one: agent-flow reads AGENTS.md and nothing else,
+   * so rules kept in another tool's file are rules no stage ever sees. Measured — a
+   * monorepo whose AGENTS.md had drifted 641 lines behind its CLAUDE.md lost the section
+   * naming its own code index, and discovery read the repository by hand until it was
+   * killed at its timeout.
    */
   readonly warnings: readonly (
     | { readonly kind: 'install_dirties_tree'; readonly command: string }
     | { readonly kind: 'no_validation_commands' }
+    | { readonly kind: 'instructions_unread'; readonly paths: readonly string[] }
     | { readonly kind: 'active_run'; readonly runId: string; readonly status: string }
   )[];
 }

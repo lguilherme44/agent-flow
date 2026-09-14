@@ -119,6 +119,13 @@ export function RegisterProjectDialog({ open, onClose }: { open: boolean; onClos
                   {t.register.noValidationAfter}
                 </>
               ) : null}
+              {warning.kind === 'instructions_unread' ? (
+                <>
+                  <code>{warning.paths.join(', ')}</code> {t.register.instructionsUnreadBefore}
+                  <code>AGENTS.md</code>
+                  {t.register.instructionsUnreadAfter}
+                </>
+              ) : null}
               {warning.kind === 'active_run' ? (
                 <>
                   {t.register.activeRunBefore}<b>{warning.runId}</b>

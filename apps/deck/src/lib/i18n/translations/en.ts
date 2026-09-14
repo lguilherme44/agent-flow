@@ -256,6 +256,8 @@ export const en = {
     installDirties: 'writes a lockfile this repository does not track yet. Every task will be refused at the setup check until it is committed — the tree has to be identical before and after install, or an attempt cannot say what it changed. Run it once and commit the lockfile before the first feature.',
     noValidationBefore: 'No validation commands were detected. Add them to ',
     noValidationAfter: ' — agent-flow runs them itself, so an invented command fails for the wrong reason.',
+    instructionsUnreadBefore: 'holds instructions agent-flow never reads. Every stage receives ',
+    instructionsUnreadAfter: ' and only that file, so anything living only in the other one is invisible to planning — including the tools this repository expects an agent to use. Mirror what still applies.',
     activeRunBefore: 'Run ',
     activeRunAfter: (status: string) => ` is active (${status}) and its planningBase may no longer match HEAD once you commit these files. This was recorded on the run.`,
     commitFirst: 'Commit what was just written before starting a feature — otherwise it lands in the first diff the reviewer sees, as though the feature did it.',

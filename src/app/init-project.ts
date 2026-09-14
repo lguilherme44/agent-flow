@@ -81,6 +81,26 @@ const GITIGNORE_BEGIN = '# agent-flow';
 const DIRTIES_THE_TREE = /^(npm|pnpm|yarn) install\b/;
 
 /**
+ * Instruction files other tools read, which agent-flow does not.
+ *
+ * §37 names AGENTS.md as *the* standing-rules file, and every stage prompt receives it —
+ * `planning-pipeline.ts` and `review-service.ts` read that path and no other, and the
+ * discovery cache fingerprints its digest. A repository that keeps its real rules
+ * somewhere else is therefore planned against rules nobody wrote.
+ *
+ * **Measured, on a Vue/Express monorepo.** `AGENTS.md` described itself as a consolidation
+ * of `CLAUDE.md` and had drifted 641 lines behind it; the drift included the section
+ * naming the repository's own code index. Discovery went in without it, read the monorepo
+ * file by file, and was killed at its timeout — an expensive failure whose cause was a
+ * stale copy of a file nothing compared.
+ *
+ * Names, not paths: these sit at the repository root, and §21.3 keeps persisted detail
+ * relative. The list is what has been *seen* rather than what could exist — a guess at
+ * every assistant's filename would warn about files no one in this repository has.
+ */
+const UNREAD_INSTRUCTION_FILES = ['CLAUDE.md', 'GEMINI.md', '.cursorrules'] as const;
+
+/**
  * The wall this project will walk into on its first run, said before it does.
  *
  * A finding rather than a sentence, because two surfaces have to say it: `agent-flow init`
@@ -108,6 +128,19 @@ export type InitWarning =
   | {
       /** Nothing was detected to run, so verification would pass by having nothing to do. */
       readonly kind: 'no_validation_commands';
+    }
+  | {
+      /**
+       * Standing rules live in a file agent-flow never opens. See
+       * {@link UNREAD_INSTRUCTION_FILES}.
+       *
+       * Reported only when the content actually *differs* from AGENTS.md. A repository
+       * that keeps two identical copies — one per tool — is doing the right thing and
+       * must not be nagged about it; the failure mode is drift, not duplication.
+       */
+      readonly kind: 'instructions_unread';
+      /** Repository-relative names, in the order they are looked for. */
+      readonly paths: readonly string[];
     };
 
 export interface InitResult {
@@ -170,7 +203,7 @@ export async function initProject(options: InitOptions): Promise<InitResult> {
   if (gitignoreResult === 'created') created.push(gitignorePath);
   if (gitignoreResult === 'updated') updated.push(gitignorePath);
 
-  return { stack, created, updated, skipped, warnings: warningsFor(stack) };
+  return { stack, created, updated, skipped, warnings: await warningsFor(fs, projectDir, stack) };
 }
 
 export type RegisterOutcome =
@@ -236,7 +269,11 @@ export async function registerProject(options: RegisterProjectOptions): Promise<
   return { ok: true, result, ...(active === undefined ? {} : { active }) };
 }
 
-function warningsFor(stack: DetectedStack): InitWarning[] {
+async function warningsFor(
+  fs: FileSystem,
+  projectDir: string,
+  stack: DetectedStack,
+): Promise<InitWarning[]> {
   const warnings: InitWarning[] = [];
 
   const install = stack.commands.install;
@@ -248,7 +285,40 @@ function warningsFor(stack: DetectedStack): InitWarning[] {
     warnings.push({ kind: 'no_validation_commands' });
   }
 
+  const unread = await unreadInstructions(fs, projectDir);
+  if (unread.length > 0) warnings.push({ kind: 'instructions_unread', paths: unread });
+
   return warnings;
+}
+
+/**
+ * Instruction files that exist, say something AGENTS.md does not, and are never read.
+ *
+ * Compared by content rather than by existence, because the healthy arrangement is two
+ * identical files — one per tool — and warning about that would train people to ignore
+ * the warning that matters. Whitespace is normalised on both sides so a trailing newline
+ * is not reported as divergence.
+ *
+ * Runs after `writeAgentsMd`, deliberately: on a first `init` the block agent-flow owns
+ * has just been written, and the comparison should be against the file as it now stands.
+ */
+async function unreadInstructions(fs: FileSystem, projectDir: string): Promise<string[]> {
+  const agentsPath = `${projectDir}/AGENTS.md`;
+  const agents = (await fs.exists(agentsPath)) ? normalise(await fs.readFile(agentsPath)) : '';
+
+  const found: string[] = [];
+  for (const name of UNREAD_INSTRUCTION_FILES) {
+    const path = `${projectDir}/${name}`;
+    if (!(await fs.exists(path))) continue;
+    if (normalise(await fs.readFile(path)) === agents) continue;
+    found.push(name);
+  }
+
+  return found;
+}
+
+function normalise(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
 }
 
 function renderProjectConfig(stack: DetectedStack): string {

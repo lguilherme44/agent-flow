@@ -137,7 +137,10 @@ export async function main(argv: string[]): Promise<number> {
     .command('init')
     .description('Prepare this repository for agent-flow')
     .option('--force', 'overwrite files that already exist')
-    .action(async (options: { force?: boolean }, command: Command) => {
+    // Opt-in because it spends a model call, where the rest of `init` is local and free —
+    // the same line `doctor --deep` draws around probing auth (R-14).
+    .option('--warm', 'build the repository map now and measure it against the budget')
+    .action(async (options: { force?: boolean; warm?: boolean }, command: Command) => {
       exitCode = await runInitCommand(options, globalOptions(command));
     });
 

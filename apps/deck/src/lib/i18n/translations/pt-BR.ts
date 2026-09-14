@@ -240,6 +240,8 @@ export const ptBR: Dictionary = {
     installDirties: 'escreve um lockfile que este repositório ainda não versiona. Toda tarefa vai ser recusada na checagem de setup até ele ser commitado — a árvore precisa ser idêntica antes e depois do install, senão uma tentativa não consegue dizer o que mudou. Rode uma vez e commite o lockfile antes da primeira feature.',
     noValidationBefore: 'Nenhum comando de validação foi detectado. Adicione-os em ',
     noValidationAfter: ' — o agent-flow roda esses comandos, então um comando inventado falha pelo motivo errado.',
+    instructionsUnreadBefore: 'guarda instruções que o agent-flow nunca lê. Toda etapa recebe o ',
+    instructionsUnreadAfter: ' e só ele, então o que existe apenas no outro arquivo fica invisível para o planejamento — inclusive as ferramentas que este repositório espera que um agente use. Espelhe o que ainda vale.',
     activeRunBefore: 'A run ',
     activeRunAfter: (status: string) => ` está ativa (${status}) e o planningBase dela pode deixar de bater com o HEAD assim que você commitar estes arquivos. Isso ficou registrado na run.`,
     commitFirst: 'Commite o que acabou de ser escrito antes de começar uma feature — senão isso cai no primeiro diff que o revisor vê, como se a feature tivesse feito.',

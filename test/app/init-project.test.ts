@@ -196,3 +196,68 @@ describe('AGENTS.md is appended to, never replaced (§37)', () => {
     expect(agents).toContain('## Architecture');
   });
 });
+
+/**
+ * Rules kept where agent-flow never looks (§37).
+ *
+ * Every stage prompt receives AGENTS.md and no other instruction file, so a repository
+ * whose real rules live elsewhere is planned against rules nobody wrote. Measured: a
+ * monorepo's AGENTS.md had drifted 641 lines behind its CLAUDE.md, and the drift included
+ * the section naming the repository's own code index — discovery read the tree by hand
+ * until its timeout killed it.
+ */
+describe('instruction files agent-flow does not read', () => {
+  it('names a CLAUDE.md that says something AGENTS.md does not', async () => {
+    const fs = seeded({ ...nodeRepo, 'CLAUDE.md': '# Rules\n\nUse the codegraph index first.\n' });
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    expect(result.warnings).toContainEqual({
+      kind: 'instructions_unread',
+      paths: ['CLAUDE.md'],
+    });
+  });
+
+  it('says nothing about a mirror that agrees', async () => {
+    // Positive control for the assertion above: the warning has to be about *drift*, not
+    // about a second file existing. Two identical copies — one per tool — is the healthy
+    // arrangement, and nagging about it trains people past the warning that matters.
+    const fs = seeded(nodeRepo);
+    await initProject({ fs, projectDir: PROJECT });
+
+    const agents = await fs.readFile(`${PROJECT}/AGENTS.md`);
+    fs.seed(`${PROJECT}/CLAUDE.md`, agents);
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    expect(result.warnings.map((warning) => warning.kind)).not.toContain('instructions_unread');
+  });
+
+  it('ignores a difference that is only whitespace', async () => {
+    const fs = seeded(nodeRepo);
+    await initProject({ fs, projectDir: PROJECT });
+
+    const agents = await fs.readFile(`${PROJECT}/AGENTS.md`);
+    fs.seed(`${PROJECT}/CLAUDE.md`, `${agents}\n\n\n`);
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    expect(result.warnings.map((warning) => warning.kind)).not.toContain('instructions_unread');
+  });
+
+  it('names every unread file, in one warning', async () => {
+    const fs = seeded({
+      ...nodeRepo,
+      'CLAUDE.md': '# One\n',
+      'GEMINI.md': '# Two\n',
+    });
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    const unread = result.warnings.find((warning) => warning.kind === 'instructions_unread');
+    expect(unread).toMatchObject({ paths: ['CLAUDE.md', 'GEMINI.md'] });
+  });
+
+  it('says nothing when there is nothing beside AGENTS.md', async () => {
+    const fs = seeded(nodeRepo);
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    expect(result.warnings.map((warning) => warning.kind)).not.toContain('instructions_unread');
+  });
+});

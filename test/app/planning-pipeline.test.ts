@@ -823,3 +823,73 @@ describe('Adaptive Workflow Pipeline Execution', () => {
     expect(runner.calls).toHaveLength(0);
   });
 });
+
+/**
+ * Discovery, ahead of the feature that would otherwise fund it.
+ *
+ * The map is feature-agnostic and cached, which is why paying for it inside the first
+ * request was always an accident of ordering rather than a design. On a large repository
+ * it is also the stage most likely not to fit its budget — and a discovery that runs out
+ * of time takes the whole planning run with it, at its first stage, before anything that
+ * could be reused exists.
+ */
+describe('warming the repository map', () => {
+  it('builds the map and says it ran', async () => {
+    const { pipeline, run, runner, fs } = await harness();
+    runner.pushText('# Architecture\n\nA Node service.');
+
+    const warm = await pipeline.warm(run.runId);
+
+    expect(warm.ran).toBe(true);
+    expect(await fs.readFile(agentFlowPaths(PROJECT).architectureCache)).toContain('A Node service.');
+  });
+
+  it('leaves a cache a later run actually reuses', async () => {
+    // The point of warming. Without the fingerprint written beside the file the map is
+    // correctly refused as untrustworthy, and the warm-up would have bought nothing.
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushText('# Architecture\n\nA Node service.');
+    await pipeline.warm(run.runId);
+
+    const second = await store.createRun('a later feature');
+
+    expect((await pipeline.warm(second.runId)).ran).toBe(false);
+  });
+
+  it('re-runs once the repository moves under the warmed map', async () => {
+    // The positive control for the test above, and for the defect it guards: a cache
+    // reused on existence alone keeps planning against a codebase that is gone. AGENTS.md
+    // is one of the four fingerprint inputs, so writing it has to invalidate the map.
+    const { pipeline, run, runner, store, fs: files } = await harness();
+    runner.pushText('# Architecture\n\nA Node service.');
+    await pipeline.warm(run.runId);
+
+    files.seed(`${PROJECT}/AGENTS.md`, '# Project Instructions\n\nPrefer the code index.\n');
+    runner.pushText('# Architecture\n\nA Node service, mapped again.');
+    const second = await store.createRun('a later feature');
+
+    expect((await pipeline.warm(second.runId)).ran).toBe(true);
+  });
+
+  it('spends nothing when the map is already current', async () => {
+    const { pipeline, run, runner, fs, processRunner } = await harness();
+    await seedValidCache(fs, processRunner, '# Architecture\n\nAlready known.');
+
+    const warm = await pipeline.warm(run.runId);
+
+    expect(warm.ran).toBe(false);
+    // Nothing was queued on the runner, so a call would have thrown. Asserted anyway:
+    // "it did not run" is the claim, and an empty queue is how it is proven.
+    expect(runner.calls.length).toBe(0);
+  });
+
+  it('reports an elapsed time rather than inventing one', async () => {
+    const { pipeline, run, runner } = await harness();
+    runner.pushText('# Architecture\n\nA Node service.');
+
+    const warm = await pipeline.warm(run.runId);
+
+    expect(warm.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(warm.elapsedMs)).toBe(true);
+  });
+});

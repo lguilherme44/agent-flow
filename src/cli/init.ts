@@ -2,8 +2,14 @@ import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { SystemClock } from '../adapters/clock/system-clock.js';
 import { registerProject } from '../app/init-project.js';
 import { StateStore } from '../app/state-store.js';
+import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
+import { createRunWithIdentity } from '../app/run-actions.js';
+import { roleConfigForStage } from '../contracts/index.js';
+import type { WarmResult } from '../app/planning-pipeline.js';
+import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
-import { renderError } from './render/errors.js';
+import { renderError, roleTimeoutKey } from './render/errors.js';
+import { formatElapsed, writeProgress } from './render/progress.js';
 import type { GlobalOptions } from './index.js';
 
 /**
@@ -15,7 +21,7 @@ import type { GlobalOptions } from './index.js';
  * was chosen for them.
  */
 export async function runInitCommand(
-  options: { force?: boolean },
+  options: { force?: boolean; warm?: boolean },
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
   const fs = new NodeFileSystem();
@@ -86,6 +92,15 @@ export async function runInitCommand(
           'changed. Run it once and commit the lockfile before the first feature.',
         );
       }
+      if (warning.kind === 'instructions_unread') {
+        lines.push(
+          '',
+          `Warning: ${warning.paths.join(', ')} ${warning.paths.length > 1 ? 'hold' : 'holds'} instructions agent-flow never reads.`,
+          'Every stage receives AGENTS.md and only AGENTS.md, so anything that lives only',
+          'in the other file is invisible to planning — including the tools this repository',
+          'expects an agent to use. Mirror what still applies into AGENTS.md.',
+        );
+      }
     }
 
     if (active !== undefined) {
@@ -104,10 +119,12 @@ export async function runInitCommand(
       'Commit what was just written before starting a feature — otherwise it',
       'lands in the first diff the reviewer sees, as though the feature did it.',
       '',
-      'Next: agent-flow doctor',
+      options.warm === true ? 'Next: warming the repository map' : 'Next: agent-flow doctor',
       '',
     );
     process.stdout.write(lines.join('\n'));
+
+    if (options.warm === true) return warmRepositoryMap(globals);
 
     return ExitCode.OK;
   } catch (error) {
@@ -115,4 +132,117 @@ export async function runInitCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+/**
+ * How much of the architect's budget discovery may use before `init` says so.
+ *
+ * The same 80% `stage-runner.ts` uses for `stage_near_timeout`, and deliberately the same
+ * number rather than a second opinion: a stage that would warn during a feature has to
+ * warn here, or setup would certify a configuration the first real run then rejects.
+ */
+const WARN_ABOVE_SHARE = 0.8;
+
+/**
+ * Builds the repository map once, at setup, and reports it against the budget.
+ *
+ * **Two problems, one call.** The map is feature-agnostic and cached, so until something
+ * built it ahead of time the first feature funded a stage that had nothing to do with it.
+ * And the budget it has to fit was never checked against anything: a repository too large
+ * for the default is indistinguishable from one that fits until the day a request dies at
+ * its first stage — which is how a 15-minute discovery took a whole planning run down.
+ *
+ * Opt-in, because this spends a model call and `init` is otherwise local and free. The
+ * same reasoning `doctor --deep` already follows for probing auth (R-14): a command that
+ * costs money asks first.
+ */
+async function warmRepositoryMap(globals: GlobalOptions): Promise<ExitCodeValue> {
+  try {
+    const context = await buildExecutionContext({
+      ...nodeAdapters(),
+      projectDir: globals.cwd,
+      globalConfigPath: globals.globalConfigPath,
+    });
+
+    // **The limit this stage will actually run against, from the same function the stage
+    // runner resolves through.** Not `resolveRole`: that also validates capabilities
+    // against what the prompt declares, and satisfying it from here would mean restating
+    // `discovery.md`'s own front matter in the CLI — two copies of a fact the prompt owns,
+    // one of which would be wrong the day the prompt changed. The capability check still
+    // happens, inside `warm`, where the prompt is in hand.
+    //
+    // Named with the stage, because `roles.architect.stages.discovery.timeoutSeconds` is a
+    // real override and a role-level read would quietly report a budget nothing uses.
+    const budgetSeconds = roleConfigForStage(
+      context.config.global.roles,
+      'architect',
+      'discovery',
+    ).timeoutSeconds;
+
+    const run = await createRunWithIdentity(context, WARM_FEATURE);
+    const pipeline = buildPlanningPipeline(context);
+
+    try {
+      const warm = await pipeline.warm(run.runId, {
+        onProgress: (label, status) => {
+          writeProgress(label, status, globals.verbose === true);
+        },
+      });
+      // Terminal before returning, always. A run left `running` is an active run, and
+      // `init`'s own AR-01 gate refuses to write anything while one exists — so a
+      // warm-up that forgot to close itself would lock the command that started it.
+      await context.store.updateRun(run.runId, (state) => ({ ...state, status: 'completed' }));
+
+      process.stdout.write(`\n${renderWarm(warm, budgetSeconds).join('\n')}\n`);
+      return ExitCode.OK;
+    } catch (error) {
+      await context.store.updateRun(run.runId, (state) => ({ ...state, status: 'failed' }));
+      throw error;
+    }
+  } catch (error) {
+    const rendered = renderError(error);
+    process.stderr.write(`${rendered.message}\n`);
+    return rendered.exitCode;
+  }
+}
+
+/** The feature text a warm-up run carries. It plans nothing; it says what it is. */
+const WARM_FEATURE = 'Warm the repository map (agent-flow init --warm). No feature is planned.';
+
+/**
+ * What the warm-up measured, as sentences — the judgement `PlanningPipeline.warm` refuses.
+ *
+ * Exported for the same reason `roleTimeoutKey` is: this is the whole point of `--warm`,
+ * and the alternative to testing it here is driving the command end to end, which needs
+ * real adapters and a model call. A pure function of two numbers should not cost that.
+ */
+export function renderWarm(warm: WarmResult, timeoutSeconds: number): string[] {
+  if (!warm.ran) {
+    return [
+      'The repository map was already current — nothing was spent.',
+      '',
+      'Next: agent-flow doctor',
+    ];
+  }
+
+  const budgetMs = timeoutSeconds * 1000;
+  const share = budgetMs > 0 ? Math.round((warm.elapsedMs / budgetMs) * 100) : 0;
+  const lines = [
+    `Repository map built in ${formatElapsed(warm.elapsedMs)}, against a ${String(timeoutSeconds)}s ` +
+      `budget (${String(share)}%). Later features reuse it until the repository moves.`,
+  ];
+
+  if (budgetMs > 0 && warm.elapsedMs >= budgetMs * WARN_ABOVE_SHARE) {
+    // The number that matters is the margin, and it is the one nobody had: this stage is
+    // one slower day from being killed, and a killed discovery takes its whole run with it.
+    lines.push(
+      '',
+      `Warning: that is ${String(share)}% of what this role is allowed. Raise`,
+      `\`${roleTimeoutKey('architect')}\` in .agent-flow/config.yaml before the first`,
+      'feature — a discovery that runs out of time fails the run at its first stage.',
+    );
+  }
+
+  lines.push('', 'Next: agent-flow doctor');
+  return lines;
 }
