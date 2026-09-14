@@ -70,12 +70,34 @@ describe('what the fingerprint covers', () => {
     expect(fingerprintDifferences(before, after)).toContain('the checked-out commit');
   });
 
-  it('changes when tracked files are modified', async () => {
+  it('is unmoved by a modified tracked file, because structure no longer comes from here', async () => {
+    // **This asserted the opposite until the repository map existed, and was right to.**
+    // While the cached prose was the only thing a later stage knew about the codebase, a
+    // modified file had to invalidate it. The cost was that touching one file in a branch
+    // you were working in re-ran the most expensive stage in the product — so on an active
+    // working tree the amortisation this cache exists for barely happened.
+    //
+    // `discovery` now opens with an index built by parsing the tree at the moment it runs,
+    // so "what exists right now" arrives fresh and is never served from here. What is
+    // cached is prose about conventions and seams, and three modified files do not change
+    // those. `discovery-cache.ts` names the residual risk this accepts.
     const fs = new InMemoryFileSystem();
     const before = await compute(fs, git('abc'));
     const after = await compute(fs, git('abc', ' M src/a.ts'));
 
+    expect(fingerprintsMatch(before, after)).toBe(true);
+  });
+
+  it('still moves the moment that change is committed', async () => {
+    // The positive control for the test above: relaxing the dirty check must not mean the
+    // cache stopped following the repository. A commit is the event that says "this is the
+    // codebase now", and it still invalidates.
+    const fs = new InMemoryFileSystem();
+    const before = await compute(fs, git('abc', ' M src/a.ts'));
+    const after = await compute(fs, git('def'));
+
     expect(fingerprintsMatch(before, after)).toBe(false);
+    expect(fingerprintDifferences(before, after)).toContain('the checked-out commit');
   });
 
   it('changes when AGENTS.md changes', async () => {

@@ -16,18 +16,35 @@ import { agentFlowPaths } from './paths.js';
  *
  * What goes into the fingerprint is a trade-off. Hashing the whole working tree
  * would be correct and would also invalidate on every save, which turns the
- * most expensive stage into one that runs constantly. These four inputs cover
+ * most expensive stage into one that runs constantly. These three inputs cover
  * the changes that actually alter the answer:
  *
  *   - `head` — the commit the map was built from
- *   - `dirty` — tracked files modified since, by name; content is left out so
- *     that editing the same file twice does not thrash the cache
  *   - `agentsMd` — the standing rules, which shape what discovery reports
  *   - `projectConfig` — stack, commands and architecture rules
+ *
+ * **`dirty` was the fourth, and the repository map is why it is gone.** It hashed the
+ * names of tracked files modified since the commit, which meant touching one file in a
+ * branch you were working in invalidated the most expensive stage in the product — so on
+ * an active working tree the amortisation this cache exists for barely happened. It was
+ * the right conservative choice while the cached prose was the *only* thing a later stage
+ * knew about the repository.
+ *
+ * It no longer is. `discovery` now opens with a ranked index built by parsing the working
+ * tree at the moment the stage runs, so "what exists right now" arrives fresh every time
+ * and is never served from here. What this cache holds is the other half — the prose about
+ * how the codebase is organised, what its conventions are, where its seams are — and three
+ * modified files do not change any of that. Splitting the artifact by what it costs to
+ * rebuild is the whole point: structure is seconds and is always current; synthesis is
+ * minutes and is cached against the things that actually change it.
+ *
+ * The residual risk is named rather than dismissed: an uncommitted refactor large enough
+ * to change the conventions themselves will be described by prose written before it. `head`
+ * catches it the moment it is committed, the fresh index contradicts it before that, and
+ * `--no-cache` is the lever for anyone who knows they are in the middle of one.
  */
 export const CacheFingerprintSchema = z.object({
   head: z.string(),
-  dirty: z.string(),
   agentsMd: z.string(),
   projectConfig: z.string(),
 });
@@ -78,30 +95,21 @@ export async function computeFingerprint(
     return result.ok && result.value.exitCode === 0 ? result.value.stdout.trim() : '';
   };
 
-  // A repository without git still gets a usable fingerprint: head and dirty
-  // fall back to empty, and the other two inputs carry the signal.
+  // A repository without git still gets a usable fingerprint: head falls back to empty,
+  // and the other two inputs carry the signal.
   const head = (await git('rev-parse', ['HEAD'])) || EMPTY;
-  const status = await git('status', ['--porcelain=v1', '--untracked-files=no']);
 
   const agentsMdPath = `${projectDir}/AGENTS.md`;
   const agentsMd = (await fs.exists(agentsMdPath))
     ? digest(await fs.readFile(agentsMdPath))
     : EMPTY;
 
-  return {
-    head,
-    dirty: status.length > 0 ? digest(status) : EMPTY,
-    agentsMd,
-    projectConfig: digest(inputs.projectConfig),
-  };
+  return { head, agentsMd, projectConfig: digest(inputs.projectConfig) };
 }
 
 export function fingerprintsMatch(a: CacheFingerprint, b: CacheFingerprint): boolean {
   return (
-    a.head === b.head &&
-    a.dirty === b.dirty &&
-    a.agentsMd === b.agentsMd &&
-    a.projectConfig === b.projectConfig
+    a.head === b.head && a.agentsMd === b.agentsMd && a.projectConfig === b.projectConfig
   );
 }
 
@@ -112,7 +120,6 @@ export function fingerprintDifferences(
 ): string[] {
   const labels: Record<keyof CacheFingerprint, string> = {
     head: 'the checked-out commit',
-    dirty: 'tracked files modified since the last commit',
     agentsMd: 'AGENTS.md',
     projectConfig: 'the project configuration',
   };

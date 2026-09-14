@@ -551,7 +551,12 @@ describe('the discovery cache is invalidated when the repository changes (V-07 r
     expect(second.stagesRun).toContain('discovery');
   });
 
-  it('re-runs discovery when tracked files were modified', async () => {
+  it('reuses the map when files were modified but nothing was committed', async () => {
+    // **The opposite of what this asserted, and deliberately.** A modified tracked file
+    // used to re-run the most expensive stage in the product, which meant an active working
+    // tree almost never got the amortisation this cache exists for. Discovery now opens
+    // with an index parsed from the tree at the moment it runs, so what changed on disk
+    // reaches the stage without the cached prose being thrown away to deliver it.
     const proc = gitReturning('abc123');
     const { pipeline, run, runner } = await harness({ processRunner: proc });
     scriptHappyPath(runner);
@@ -564,7 +569,7 @@ describe('the discovery cache is invalidated when the repository changes (V-07 r
     );
 
     scriptHappyPath(runner);
-    expect((await pipeline.run(run.runId, 'second')).stagesRun).toContain('discovery');
+    expect((await pipeline.run(run.runId, 'second')).stagesRun).not.toContain('discovery');
   });
 
   it('re-runs discovery when AGENTS.md changed', async () => {
