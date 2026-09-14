@@ -85,6 +85,11 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       envPass: policy.envPass,
       isolateSettings: policy.isolateSettings,
       ...(config.command === undefined ? {} : { command: config.command }),
+      // The declared MCP set, when there is one. Only this adapter takes it today — the
+      // flag names and the `mcp__<server>` grant spelling are Claude Code's, and AD-13
+      // keeps provider vocabulary below the port. Another CLI that grows an equivalent
+      // reads the same field and spells it its own way.
+      ...(config.mcp === undefined ? {} : { mcp: config.mcp }),
       // `RunnerConfig.args` (§7): the seam for what this schema does not model,
       // most concretely pointing a coding CLI at another inference endpoint.
       extraArgs: config.args,

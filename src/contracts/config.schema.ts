@@ -72,6 +72,58 @@ export const RunnerConfigSchema = z.object({
    */
   dangerouslySkipPermissions: z.boolean().default(false),
   /**
+   * The MCP servers this runner may use, **declared here and nowhere else**.
+   *
+   * PRI-18 cuts a coding CLI off from the operator's customisations so a run is the same
+   * on every machine, and it does that with one blanket flag. The blanket also removes
+   * *capability*: a repository that ships its own code index — the thing that turns
+   * "read the monorepo file by file" into one query — exposes it over MCP, and the run
+   * cannot reach it. That was not a trade anybody chose; it arrived bundled.
+   *
+   * Declaring the set restores the capability without losing the reason for the flag:
+   * these servers, from this file, on every machine, granted by name. The same posture
+   * `execution.passEnv` takes — a list somebody has to be able to audit.
+   *
+   * **Measured, `claude 2.1.268`**, against a stub MCP server returning a known marker:
+   *
+   * ```
+   * --setting-sources '' --mcp-config x.json --strict-mcp-config
+   *   --allowedTools mcp__probe                        → marker returned
+   * … the same, plus --safe-mode                       → "the tool does not exist"
+   * … --mcp-config, no --allowedTools                  → loaded, then permission_denied
+   * … --bare, which documents honouring --mcp-config   → api_error: it reads neither
+   *                                                      OAuth nor the keychain
+   * ```
+   *
+   * Three facts, then: `--safe-mode` outranks `--mcp-config`; a server whose tools are
+   * not granted is worse than absent, because it costs a denial per call; and `--bare`
+   * is not the way out for a CLI on subscription auth.
+   *
+   * **The cost, stated because it is real.** Declaring this drops `--safe-mode`, and with
+   * it the blanket over `CLAUDE.md`, skills, plugins and hooks. `--setting-sources ''`
+   * still covers the settings files — the measured `language` leak stays closed — but a
+   * repository's own `CLAUDE.md` is read again. Set this when that is the arrangement you
+   * want, not to make one stage faster.
+   */
+  mcp: z
+    .object({
+      /** Straight to `--mcp-config`: a path to a JSON file, or the JSON itself. */
+      config: z.string().min(1),
+      /**
+       * Server names to grant, spelled as they are in `config`.
+       *
+       * Each becomes `--allowedTools mcp__<name>`, which the probe confirmed grants a
+       * whole server rather than one tool — the adapter cannot know the tool names, and a
+       * list it had to keep in step with somebody else's server would rot.
+       *
+       * Empty is legal and means "load them, grant nothing": every call is then refused,
+       * which the measurement above names. Left legal rather than forbidden because it is
+       * a coherent thing to want while debugging, and made loud in the adapter instead.
+       */
+      servers: z.array(z.string().min(1)).default([]),
+    })
+    .optional(),
+  /**
    * The model's context window in tokens, when the operator knows it.
    *
    * Nothing infers this, and the default is to say nothing rather than to assume a

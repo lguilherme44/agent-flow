@@ -56,6 +56,10 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   field('version', 'integer'),
   ...['type', 'command', 'baseUrl', 'apiKeyEnv', 'model'].map((key) => field(`runners.*.${key}`, 'string')),
   field('runners.*.enabled', 'boolean'), field('runners.*.args', 'string_list'), field('runners.*.contextWindow', 'integer'),
+  // The declared MCP set. Editable for the same reason `args` is — it is how an operator
+  // hands a runner the repository's own index — and `servers` is a list rather than a
+  // boolean because a grant nobody can read back is not a grant anybody can audit.
+  field('runners.*.mcp.config', 'string'), field('runners.*.mcp.servers', 'string_list'),
   ...['architect', 'sdd', 'planner', 'planReviewer', 'executors.trivial', 'executors.normal', 'executors.complex', 'verification', 'finalReviewer'].flatMap((role) => roleFields(`roles.${role}`)),
   field('fallback.enabled', 'boolean'), field('fallback.on', 'string_list'), ...roleFields('fallback.roles.*'),
   field('parallelism.maxTasks', 'integer'), field('retry.maxAttempts', 'integer'),

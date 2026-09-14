@@ -73,8 +73,22 @@ export interface BaseRunnerOptions {
    * the un-isolated one is the one that needs a decision behind it.
    */
   readonly isolateSettings?: boolean;
+  /**
+   * `RunnerConfig.mcp` — the MCP servers this runner may use, and which are granted.
+   *
+   * Carried here for the same reason `envPass` is: it describes the runner, not one
+   * invocation, and the spawn boundary must not reach for configuration. Absent means
+   * the adapter's own blanket isolation applies unchanged, which is the default.
+   */
+  readonly mcp?: RunnerMcp;
   /** Overrides the executable looked up on PATH. */
   readonly command?: string;
+}
+
+/** A declared MCP set. Mirrors `RunnerConfig.mcp`, which carries the reasoning. */
+export interface RunnerMcp {
+  readonly config: string;
+  readonly servers: readonly string[];
 }
 
 /**
@@ -98,6 +112,8 @@ export abstract class BaseRunner implements AgentRunner {
   protected readonly envPass: readonly string[] | undefined;
   /** `execution.isolateRunnerSettings` (PRI-18). Read by {@link isolationArgs}. */
   protected readonly isolateSettings: boolean;
+  /** `RunnerConfig.mcp` (PRI-18). Read by {@link isolationArgs}, where it changes the flags. */
+  protected readonly mcp: RunnerMcp | undefined;
 
   constructor(options: BaseRunnerOptions) {
     this.id = options.id;
@@ -106,6 +122,7 @@ export abstract class BaseRunner implements AgentRunner {
     this.envPass = options.envPass;
     this.extraArgs = options.extraArgs ?? [];
     this.isolateSettings = options.isolateSettings ?? true;
+    this.mcp = options.mcp;
   }
 
   /**

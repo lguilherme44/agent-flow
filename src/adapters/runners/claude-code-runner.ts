@@ -196,9 +196,36 @@ export class ClaudeCodeRunner extends BaseRunner {
    * that too, and there it is wrong: `--system-prompt` replaces the CLI's built-in prompt,
    * which is where its own tool conventions live. Removing them to remove a persona costs
    * far more than it saves, and the persona arrives through settings.
+   *
+   * **`--safe-mode` goes when an MCP set is declared, because the two cannot coexist.**
+   * Probed on `claude 2.1.268` against a stub server returning a known marker: with
+   * `--mcp-config` and `--strict-mcp-config` the tool answered; adding `--safe-mode` to the
+   * otherwise identical command made the model report the tool did not exist. The blanket
+   * wins, and it takes the repository's own code index with it — which is how one discovery
+   * stage came to read a monorepo file by file until its timeout killed it.
+   * `RunnerConfig.mcp` carries what the trade costs; this is where it is spent.
    */
   protected override isolationArgs(): readonly string[] {
-    return ['--setting-sources', '', '--safe-mode'];
+    if (this.mcp === undefined) return ['--setting-sources', '', '--safe-mode'];
+
+    return [
+      // The settings files stay shut either way: this is the flag that closed the measured
+      // `language` leak, and nothing about MCP re-opens it.
+      '--setting-sources',
+      '',
+      '--mcp-config',
+      this.mcp.config,
+      // **Granted per server, with `--strict-mcp-config` last on purpose.** `--allowedTools`
+      // is variadic and swallows the words after it — the hazard `--disallowedTools` already
+      // documents above — so an option token has to terminate it *inside* this list, before
+      // `RunnerConfig.args` rides after. A server loaded but not granted is worse than
+      // absent: measured, it returns one permission denial per call, which spends the
+      // invocation and answers nothing.
+      ...(this.mcp.servers.length === 0
+        ? []
+        : ['--allowedTools', ...this.mcp.servers.map((server) => `mcp__${server}`)]),
+      '--strict-mcp-config',
+    ];
   }
 
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {

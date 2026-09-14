@@ -214,3 +214,103 @@ describe('an adapter whose CLI has no such flag', () => {
     ).toEqual(['--only-mine']);
   });
 });
+
+/**
+ * A declared MCP set, which is the other half of PRI-18 rather than a hole in it.
+ *
+ * The blanket above buys reproducibility and, uncosted, sells capability with it: a
+ * repository that ships its own code index exposes it over MCP, and `--safe-mode` puts it
+ * out of reach — so the stage whose whole job is mapping the repository reads it file by
+ * file. One did, for fifteen minutes, until its timeout killed the run.
+ *
+ * **Every expectation here is a measurement, `claude 2.1.268`, against a stub MCP server
+ * returning a known marker.** With `--mcp-config` and `--strict-mcp-config` the tool
+ * answered; the same command plus `--safe-mode` made the model report no such tool; and
+ * without a grant the server loaded and then denied every call.
+ */
+describe('claude-code-cli takes a declared MCP set (PRI-18)', () => {
+  const withMcp = (proc: FakeProcessRunner, servers: readonly string[]) =>
+    new ClaudeCodeRunner({
+      id: 'claude',
+      processRunner: proc,
+      mcp: { config: '/repo/.agent-flow/mcp.json', servers },
+    });
+
+  it('names the config and confines the CLI to it', async () => {
+    const proc = new FakeProcessRunner();
+    const args = await argvOf(withMcp(proc, ['codegraph']), proc);
+
+    expect(args).toContain('--mcp-config');
+    expect(args[args.indexOf('--mcp-config') + 1]).toBe('/repo/.agent-flow/mcp.json');
+    // Without this the operator's own servers load beside the declared ones, and the run
+    // stops being the same on two machines — which is the whole reason PRI-18 exists.
+    expect(args).toContain('--strict-mcp-config');
+  });
+
+  it('drops --safe-mode, because the two cannot coexist', async () => {
+    // Not a preference. Measured: `--safe-mode` beside `--mcp-config` left the model
+    // reporting the tool did not exist. Keeping both would declare a capability the run
+    // does not have, which is worse than declaring none.
+    const proc = new FakeProcessRunner();
+    const args = await argvOf(withMcp(proc, ['codegraph']), proc);
+
+    expect(args).not.toContain('--safe-mode');
+  });
+
+  it('keeps the settings files shut, which is the leak that was measured', async () => {
+    // The `language` finding is about `--setting-sources`, not `--safe-mode`, so nothing
+    // about MCP re-opens it. This is the positive control on the test above: dropping one
+    // flag must not be read as dropping the isolation.
+    const proc = new FakeProcessRunner();
+    const args = await argvOf(withMcp(proc, ['codegraph']), proc);
+
+    expect(args).toContain('--setting-sources');
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('');
+  });
+
+  it('grants each declared server by name', async () => {
+    const proc = new FakeProcessRunner();
+    const args = await argvOf(withMcp(proc, ['codegraph', 'graphify']), proc);
+
+    expect(args).toContain('mcp__codegraph');
+    expect(args).toContain('mcp__graphify');
+  });
+
+  it('terminates the variadic grant before anything can be swallowed', async () => {
+    // `--allowedTools` eats the words after it. `RunnerConfig.args` rides after this list,
+    // so an option token has to close it here — the same hazard `--disallowedTools`
+    // already documents, one flag later.
+    const proc = new FakeProcessRunner();
+    const runner = new ClaudeCodeRunner({
+      id: 'claude',
+      processRunner: proc,
+      mcp: { config: 'mcp.json', servers: ['codegraph'] },
+      extraArgs: ['--settings', '/repo/x.json'],
+    });
+    const args = await argvOf(runner, proc);
+
+    expect(args.indexOf('--allowedTools')).toBeLessThan(args.indexOf('--strict-mcp-config'));
+    expect(args.indexOf('--strict-mcp-config')).toBeLessThan(args.indexOf('--settings'));
+  });
+
+  it('asks for no grant when none was declared', async () => {
+    // Legal, and it means "load them, grant nothing" — every call is then refused. Left
+    // legal because it is a coherent thing to want while debugging; asserted so that an
+    // empty list cannot silently become a blanket grant.
+    const proc = new FakeProcessRunner();
+    const args = await argvOf(withMcp(proc, []), proc);
+
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).not.toContain('--allowedTools');
+  });
+
+  it('still blocks the write tools on a read-only stage', async () => {
+    // MCP changes what the stage can read. It must not change what it can write.
+    const proc = new FakeProcessRunner();
+    const args = await argvOf(withMcp(proc, ['codegraph']), proc, readOnlyInput);
+
+    expect(args).toContain('--disallowedTools');
+    expect(args).toContain('--permission-mode');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+  });
+});

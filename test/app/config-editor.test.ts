@@ -45,11 +45,15 @@ describe('ConfigEditor', () => {
     const global = await editor.describe({ scope: 'global' });
     const project = await editor.describe({ scope: 'project', projectId: 'demo' });
 
-    expect(global.dynamicFields).toHaveLength(67);
-    expect(project.dynamicFields).toHaveLength(68);
+    expect(global.dynamicFields).toHaveLength(69);
+    expect(project.dynamicFields).toHaveLength(70);
     expect(global.dynamicFields.map((entry) => entry.path.join('.'))).toEqual(expect.arrayContaining([
       'runners.*.type', 'teams.*.members.*.runner', 'roles.architect.stages.*.runner',
       'fallback.roles.*.runner', 'quality.gates.*.category',
+      // The declared MCP set (`RunnerConfig.mcp`). Named as well as counted: a count on its
+      // own would let one field be swapped for another without this assertion noticing,
+      // which is the failure mode a bare length check invites.
+      'runners.*.mcp.config', 'runners.*.mcp.servers',
     ]));
     expect(project.dynamicFields.map((entry) => entry.path.join('.'))).toContain('validationCommands.*');
     expect(project.dynamicFields.find((entry) => entry.path.join('.') === 'teams.*.name')).toMatchObject({ editable: false, reason: 'global_only' });
