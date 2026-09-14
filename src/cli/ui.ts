@@ -486,14 +486,44 @@ async function openBrowser(
   processRunner: NodeProcessRunner,
   url: string,
 ): Promise<void> {
-  const command =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  const invocation = browserOpenInvocation(url);
 
   try {
-    await processRunner.run({ command, args: [url], cwd: process.cwd(), timeoutSeconds: 5 });
+    await processRunner.run({
+      command: invocation.command,
+      args: invocation.args,
+      cwd: process.cwd(),
+      timeoutSeconds: 5,
+    });
   } catch {
     // Nothing to report: the URL is already printed above.
   }
+}
+
+/**
+ * How to hand a URL to the desktop browser, on the host this is running on.
+ *
+ * **`start` is not a program.** It is a builtin of `cmd.exe`, so spawning it by name on
+ * Windows fails with ENOENT — which this function's caller swallows, leaving a flag that
+ * quietly does nothing on one of three platforms.
+ *
+ * The empty `""` is not decoration either: `start` reads its first quoted argument as the
+ * *window title*, so `start "http://…"` opens a console window titled with the URL and no
+ * browser at all. Passing the title explicitly is what makes the URL land as the URL.
+ *
+ * Exported for the test: the branch that matters is the one no machine here can run.
+ */
+export function browserOpenInvocation(url: string): {
+  readonly command: string;
+  readonly args: string[];
+} {
+  if (process.platform === 'win32') {
+    return { command: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', 'start', '""', url] };
+  }
+
+  return process.platform === 'darwin'
+    ? { command: 'open', args: [url] }
+    : { command: 'xdg-open', args: [url] };
 }
 
 /**
