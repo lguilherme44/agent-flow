@@ -23,6 +23,30 @@ describe('describe', () => {
     });
   });
 
+  it('puts a killed stage’s duration beside the limit it was killed at', () => {
+    // `timeout` alone was the whole sentence, and it is the one failure where the two
+    // numbers *are* the explanation: 15m against a 900s budget is a tight budget, 20s
+    // against the same budget is a runner that died on contact.
+    expect(
+      say(
+        {
+          at,
+          type: 'stage_failed',
+          detail: { stage: 'discovery', errorCode: 'timeout', durationMs: 900_004, timeoutSeconds: 900 },
+        },
+        en,
+      ),
+    ).toEqual({ title: 'discovery failed', detail: 'timeout · 15m / 900s', tone: 'bad' });
+  });
+
+  it('says nothing about a budget the line did not carry', () => {
+    // Positive control: the pair appears because the event carried it, never because the
+    // renderer defaulted one. A fabricated `0ms / 0s` would be worse than silence.
+    expect(
+      say({ at, type: 'stage_failed', detail: { stage: 'planning', errorCode: 'invalid_output' } }, en),
+    ).toEqual({ title: 'planning failed', detail: 'invalid_output', tone: 'bad' });
+  });
+
   it('carries a task’s finishing status verbatim and tones it once', () => {
     expect(say({ at, type: 'task_finished', detail: { task: 'TASK-002', status: 'review_required', runner: 'r1' } }, en)).toEqual({
       title: 'TASK-002 review required',

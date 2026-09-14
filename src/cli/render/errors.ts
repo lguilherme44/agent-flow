@@ -1,6 +1,8 @@
 import { ConfigError } from '../../config/loader.js';
 import { PromptError } from '../../app/prompt-loader.js';
-import { StageFailure } from '../../app/stage-runner.js';
+import { StageFailure, type StageBudget } from '../../app/stage-runner.js';
+import { roleConfigKeys, type WorkflowRole } from '../../contracts/index.js';
+import { formatElapsed } from './progress.js';
 import { PlanningRefusal } from '../../app/planning-pipeline.js';
 import { StateError } from '../../app/state-store.js';
 import { RoleResolutionError } from '../../core/role.js';
@@ -83,7 +85,7 @@ function renderStageFailure(error: StageFailure): string {
     quota_exceeded: 'The runner reported a usage limit. Retry later, or configure a fallback runner.',
     auth_required: 'The runner is not authenticated. Log in with its own CLI, then retry.',
     runner_unavailable: 'The runner could not be executed. Check `agent-flow doctor`.',
-    timeout: 'The runner exceeded its timeout. Raise timeoutSeconds for this role if this is expected.',
+    timeout: timeoutHint(error.budget),
     invalid_output:
       'The runner produced output that never satisfied the contract. This is not retried on ' +
       'another runner on purpose: a different model would hide the mismatch rather than fix it.',
@@ -132,7 +134,51 @@ function renderStageFailure(error: StageFailure): string {
     parts.push('', 'This did not spend one of the task’s attempts.');
   }
 
-  if (error.raw) parts.push('', '--- runner output (redacted) ---', error.raw.slice(0, 2000));
+  if (error.raw) {
+    parts.push('', '--- runner output (redacted) ---', error.raw.slice(0, 2000));
+  } else if (error.errorCode === 'timeout') {
+    // **Why there is nothing to show, said out loud.** A killed CLI whose output format
+    // buffers the whole response to the end leaves no bytes behind, and printing nothing
+    // about that invites the reader to look for a log that does not exist. The measured
+    // case: a 15-minute discovery stage whose entire artifact was the word `timeout`.
+    parts.push('', 'The runner wrote no output before it was stopped, so there is none to show.');
+  }
 
   return parts.join('\n');
+}
+
+/**
+ * What to do about a timeout, with the two numbers and the key that changes one of them.
+ *
+ * The old sentence — "Raise timeoutSeconds for this role if this is expected" — named
+ * neither the role, nor the key's path, nor how long the work had actually run, so
+ * deciding whether the budget was tight or the runner had hung meant reading the source.
+ * `roleConfigKeys` is the same translation the config editor uses, so the path printed
+ * here is the path that exists (`roles.executors.normal`, never `roles.executor.normal`).
+ *
+ * Degrades to the original sentence when no budget travelled with the failure, because a
+ * hint that invents numbers is worse than a vague one.
+ */
+/**
+ * The configuration path that changes a role's limit, spelled as the file spells it.
+ *
+ * Exported because two commands need the same sentence half: the timeout that already
+ * happened, and `init --warm`'s warning about the one that is about to. Deriving it twice
+ * would be two chances to print `roles.executor.normal`, a key no file has.
+ */
+export function roleTimeoutKey(role: WorkflowRole): string {
+  return `${roleConfigKeys(role).join('.')}.timeoutSeconds`;
+}
+
+function timeoutHint(budget: StageBudget | undefined): string {
+  if (budget === undefined) {
+    return 'The runner exceeded its timeout. Raise timeoutSeconds for this role if this is expected.';
+  }
+
+  const key = roleTimeoutKey(budget.role);
+  return (
+    `The runner ran for ${formatElapsed(budget.durationMs)} and was stopped at its ` +
+    `${String(budget.timeoutSeconds)}s budget. Raise \`${key}\` — in this repository's ` +
+    `.agent-flow/config.yaml, or in the global config — if the work genuinely takes longer.`
+  );
 }

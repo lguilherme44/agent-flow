@@ -45,6 +45,32 @@ const MAX_REPAIR_ATTEMPTS = 2;
  */
 const NEAR_TIMEOUT_SHARE = 0.8;
 
+/**
+ * What the invocation was allowed, and what it used.
+ *
+ * **The two numbers `runner_timeout` declares as its evidence, and nothing recorded.**
+ * `core/failure-classification.ts` names `['duration', 'configured timeout']` for that
+ * class; the failure path carried neither, so a killed stage's whole record was the word
+ * `timeout`. The success path had already learned to compare the two — that is what
+ * `stage_near_timeout` is (D8) — and the failure path, where the comparison stops being a
+ * warning and becomes the entire explanation, had not.
+ *
+ * Measured on a live run against a Vue/Express monorepo: discovery ran 15min00s against
+ * the 900 s default and left `errorCode=timeout` with an empty output block. Whether the
+ * budget was tight or the runner had hung was undecidable from the artifacts, so the next
+ * step was a guess.
+ *
+ * The role travels with the numbers because the key that changes the limit is the
+ * *role's* — `roles.architect.timeoutSeconds` — and a reader holding only the stage name
+ * cannot derive it. Populated for every failure and not only timeouts: an
+ * `execution_failed` at 2 s and one at 890 s are different problems.
+ */
+export interface StageBudget {
+  readonly role: WorkflowRole;
+  readonly timeoutSeconds: number;
+  readonly durationMs: number;
+}
+
 export class StageFailure extends Error {
   /**
    * Whether a fallback runner may be tried (§55).
@@ -88,6 +114,16 @@ export class StageFailure extends Error {
      */
     readonly execution?: StageExecution,
     classification?: RunnerFailureClassification,
+    /**
+     * The limit this ran against, and how much of it went. See {@link StageBudget}.
+     *
+     * Optional because two failures have no single invocation to report: the planning
+     * pipeline's own refusal, which never spawned one, and the repairs-exhausted exit,
+     * which spanned several and would have to pick one to speak for the rest. Absent
+     * means "not measured", never zero — a fabricated zero reads as a stage that failed
+     * on contact, which is the opposite of what a timeout is.
+     */
+    readonly budget?: StageBudget,
   ) {
     super(message);
     this.name = 'StageFailure';
@@ -691,13 +727,29 @@ export class StageRunner {
           {},
         );
 
+        const budget: StageBudget = {
+          role: stage.role,
+          timeoutSeconds: resolved.timeoutSeconds,
+          durationMs: result.durationMs,
+        };
+
         logLines.push(
-          `repair=${repair} failed errorCode=${result.errorCode} failureClass=${classification.failureClass}`,
+          // **The budget beside the duration, on the failure line too.** Without the pair
+          // this read `repair=1 failed errorCode=timeout` and said nothing about which
+          // limit was hit or how close the work came to fitting inside it.
+          `repair=${repair} failed errorCode=${result.errorCode} failureClass=${classification.failureClass}` +
+            ` durationMs=${String(result.durationMs)} timeoutSeconds=${String(resolved.timeoutSeconds)}`,
           // The full output, in the one place with room for it. This is the line whose
           // absence sent a person to read the vendor's own log directory.
-          '--- runner output (redacted) ---',
-          redactedRaw,
-          '--- end runner output ---',
+          //
+          // **Silence is stated, never framed.** A runner that produced nothing used to
+          // get the same two delimiters wrapped around an empty line, which reads as
+          // redaction having removed everything — and that is the wrong conclusion to
+          // hand someone. It is the ordinary shape of a killed CLI whose output format
+          // buffers the whole response to the end: there was never a byte to keep.
+          ...(redactedRaw.trim().length === 0
+            ? ['--- runner output: none (nothing was written before the runner stopped) ---']
+            : ['--- runner output (redacted) ---', redactedRaw, '--- end runner output ---']),
         );
         await this.writeLog(runId, stage, logLines);
         await store.appendEvent(runId, 'stage_failed', {
@@ -714,6 +766,10 @@ export class StageRunner {
           // A failure is provenance too: it ran somewhere, at some effort, and
           // possibly after a substitution that also failed.
           ...executionDetail(lastExecution),
+          // What it was allowed and what it used. The dashboard reads events and had no
+          // way to tell a stage killed at its limit from one that crashed on contact.
+          durationMs: budget.durationMs,
+          timeoutSeconds: budget.timeoutSeconds,
           repairs: repair - 1,
           startedAt,
           finishedAt: clock.now(),
@@ -726,6 +782,7 @@ export class StageRunner {
           redactedRaw,
           lastExecution,
           classification,
+          budget,
         );
       }
 

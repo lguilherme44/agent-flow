@@ -868,6 +868,108 @@ describe('a failed stage persists what actually happened (C-05, I-21)', () => {
 });
 
 /**
+ * The evidence `runner_timeout` declares, on the path that needs it.
+ *
+ * `failure-classification.ts` names `['duration', 'configured timeout']` as this class's
+ * evidence, and the failure path recorded neither. Measured against a Vue/Express
+ * monorepo: discovery ran 15min00s, the 900 s default killed it, and the artifacts held
+ * `repair=1 failed errorCode=timeout` over an empty output block — from which neither
+ * "the budget was tight" nor "the runner hung" could be told apart.
+ */
+describe('a killed stage records what it was allowed and what it used', () => {
+  /** A runner that answers nothing, for whatever it ran. The shape of a killed CLI. */
+  async function timeOut(raw: string, durationMs: number) {
+    const harnessed = await harness();
+    harnessed.runner.push({ ok: false, errorCode: 'timeout', raw, durationMs });
+
+    const error = await harnessed.stageRunner
+      .run(SDD_STAGE, harnessed.run.runId, { featureRequest: 'x' })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    return { ...harnessed, error };
+  }
+
+  it('carries the budget and the duration on the failure', async () => {
+    const { error } = await timeOut('', 900_004);
+
+    expect((error as StageFailure).budget).toEqual({
+      role: 'sdd',
+      // The role's configured limit, not the elapsed time — the pair is the point.
+      timeoutSeconds: 900,
+      durationMs: 900_004,
+    });
+  });
+
+  it('puts both numbers on stage_failed, where the dashboard reads', async () => {
+    const { store, run } = await timeOut('', 900_004);
+
+    const failed = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_failed',
+    );
+
+    expect(failed?.detail).toMatchObject({
+      errorCode: 'timeout',
+      failureClass: 'runner_timeout',
+      durationMs: 900_004,
+      timeoutSeconds: 900,
+    });
+  });
+
+  it('puts both numbers on the failure line in the log', async () => {
+    const { fs, run } = await timeOut('', 900_004);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    expect(log).toContain('errorCode=timeout');
+    expect(log).toContain('durationMs=900004');
+    expect(log).toContain('timeoutSeconds=900');
+  });
+
+  it('says the runner wrote nothing rather than framing an empty block', async () => {
+    // Positive control for the whole pair of assertions below: the delimiters were
+    // previously written around an empty line, which reads as redaction having removed
+    // the output — a conclusion the reader should never be invited to draw.
+    const { fs, run } = await timeOut('', 900_004);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    expect(log).toContain('runner output: none');
+    expect(log).not.toContain('--- runner output (redacted) ---');
+  });
+
+  it('still writes the delimited block when there was something to write', async () => {
+    // The other half of the control: the "none" line must be a consequence of emptiness,
+    // not a replacement of the block.
+    const { fs, run } = await timeOut('partial answer before the kill', 900_004);
+
+    const log = await fs.readFile(runPaths(PROJECT, run.runId).log('sdd'));
+    expect(log).toContain('--- runner output (redacted) ---');
+    expect(log).toContain('partial answer before the kill');
+    expect(log).not.toContain('runner output: none');
+  });
+
+  it('leaves the budget absent where no single invocation owns one', async () => {
+    // Repairs exhausted: several invocations, and picking one to speak for the rest would
+    // be a fabrication. Absent means not measured; a zero would read as failing on contact.
+    const harnessed = await harness();
+    harnessed.runner.pushText('not an SDD');
+    harnessed.runner.pushText('still not an SDD');
+    harnessed.runner.pushText('nor this');
+
+    const error = await harnessed.stageRunner
+      .run(
+        { ...SDD_STAGE, validate: () => ['missing every required section'] },
+        harnessed.run.runId,
+        { featureRequest: 'x' },
+      )
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as StageFailure).errorCode).toBe('invalid_output');
+    expect((error as StageFailure).budget).toBeUndefined();
+  });
+});
+
+/**
  * AR-09 — what the prompt was made of, per stage.
  *
  * A one-`grep` call in the evidence environment reported ≈49 000 input tokens before Agent

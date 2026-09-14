@@ -100,7 +100,21 @@ export function describe(event: RunEvent, t: Dictionary): Sentence {
     }
     case 'stage_failed': {
       const problems = Array.isArray(d['problems']) ? (d['problems'] as unknown[]).map(String) : [];
-      return { title: e.stageFailed(stage), detail: clip(problems[0] ?? text(d['errorCode']) ?? text(d['reason'])), tone: 'bad' };
+      const spent = num(d['durationMs']);
+      const budget = num(d['timeoutSeconds']);
+      // **`used / allowed`, when the line carries both.** A stage killed at its limit read
+      // as the bare word `timeout` here, which is the same blindness the terminal had: no
+      // way to tell a tight budget from a runner that hung. A slash rather than a word
+      // because `formatDuration` is deliberately language-free and this stays that way.
+      const against =
+        spent === undefined || budget === undefined
+          ? undefined
+          : `${formatDuration(spent)} / ${String(budget)}s`;
+      return {
+        title: e.stageFailed(stage),
+        detail: joined([clip(problems[0] ?? text(d['errorCode']) ?? text(d['reason'])), against]),
+        tone: 'bad',
+      };
     }
     case 'stage_reused':
       return { title: e.stageReused(stage), detail: word(t, text(d['reason'])), tone: 'ghost' };
