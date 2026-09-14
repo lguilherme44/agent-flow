@@ -146,11 +146,21 @@ describe('the published package', () => {
     // stage cheaper and that the product is designed to run without. They went to
     // `optionalDependencies` and the adapter imports them at first use, so this list is
     // unchanged and a consumer who never wanted them never pays for them.
+    // **`cross-spawn` is the one addition, and it is here to be argued with.** On
+    // Windows a CLI installed through npm is a `.cmd` shim, `.cmd` is not executable by
+    // `CreateProcess`, and Node has refused to guess since the CVE-2024-27980 fix — so
+    // `spawn('claude', …)` returned ENOENT on machines where `claude --version` worked,
+    // and `doctor` reported every npm-installed runner as "not installed". The two ways
+    // to avoid the dependency are both worse than paying for it: `shell: true` resolves
+    // no shim and is deprecated (DEP0190), and hand-writing the `cmd.exe` escaping is
+    // what that CVE was. It costs four packages under 15 KB — `path-key`,
+    // `shebang-command`, `which` — against the 50 MB this list turned away.
     const raw = readFileSync(join(ROOT, 'package.json'), 'utf8');
     const parsed = JSON.parse(raw) as { dependencies: Record<string, string> };
     expect(Object.keys(parsed.dependencies)).toEqual([
       '@fastify/static',
       'commander',
+      'cross-spawn',
       'fastify',
       'yaml',
       'zod',

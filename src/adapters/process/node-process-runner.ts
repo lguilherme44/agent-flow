@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
+import spawn from 'cross-spawn';
 import { agentEnvironment } from '../../core/process-environment.js';
 import type {
   ProcessResult,
@@ -136,6 +137,23 @@ export class NodeProcessRunner implements ProcessRunner {
       let killTimer: NodeJS.Timeout | undefined;
       let onAbort: (() => void) | undefined;
 
+      // `cross-spawn`, not `node:child_process.spawn`, and only for the child this
+      // runner owns — `taskkill` below still goes through the plain one.
+      //
+      // On Windows a CLI installed through npm is a `.cmd` shim, and `.cmd` is not an
+      // executable: `CreateProcess` cannot launch it, Node's own documentation says so,
+      // and since the CVE-2024-27980 fix Node refuses rather than guesses. So a bare
+      // `spawn('claude', …)` fails with ENOENT on a machine where `claude --version`
+      // works in the terminal — and `healthCheck` reads that ENOENT as `spawnFailed`
+      // and reports "not installed", sending the operator to reinstall what is already
+      // there. Every npm-installed runner arrived that way: claude, codex.
+      //
+      // `cross-spawn` resolves the name through PATH and PATHEXT and routes a shim
+      // through `cmd.exe` with the argument escaping that makes it safe. The two
+      // alternatives are worse: `shell: true` resolves nothing and is deprecated
+      // (DEP0190), and hand-rolling the `cmd` escaping is what CVE-2024-27980 *was*.
+      //
+      // A no-op on POSIX, where it delegates straight to `child_process.spawn`.
       const child = spawn(options.command, [...options.args], {
         cwd: options.cwd,
         // Built, not inherited, unless the caller asked for inheritance and said why
@@ -186,7 +204,10 @@ export class NodeProcessRunner implements ProcessRunner {
           }
 
           if (process.platform === 'win32' && child.pid !== undefined) {
-            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            // The plain `spawn`: `taskkill.exe` is a real executable in System32, so
+            // there is no shim to resolve, and the teardown path must not depend on
+            // the wrapper that the process it is tearing down went through.
+            nodeSpawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
               stdio: 'ignore',
               windowsHide: true,
             }).on('error', () => {
