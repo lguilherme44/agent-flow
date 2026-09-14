@@ -468,6 +468,18 @@ export const STAGE_EVENT_TYPES = [
    * first six were found by listing the directory by hand.
    */
   'read_only_workspace_retained',
+  /**
+   * `detail: { stage, bytes }`. A ranked repository index was built and handed to a stage.
+   *
+   * Recorded because the artifact exists to change a token bill, and a change to a bill is
+   * something somebody should be able to check rather than take on faith. `bytes` sits
+   * beside the `stage_context_measured` event for the same stage, so the share the map
+   * took of that prompt is a subtraction rather than a guess.
+   *
+   * Absent means no map: no Git, no recognised source, or a build that failed — three
+   * states the stage handles identically, by working the way it always did.
+   */
+  'repo_map_built',
 ] as const;
 export type StageEventType = (typeof STAGE_EVENT_TYPES)[number];
 

@@ -4962,3 +4962,97 @@ describe('the suite sorts itself into two lanes, and can still see the slow one'
     expect(codeOnly(read(join(ROOT, 'vitest.lanes.ts')).text)).toMatch(/export const COVERAGE\b/);
   });
 });
+
+/**
+ * The repository map reaches the stage that decides what to read, and no other.
+ *
+ * **This is a measured boundary, not a preference.** Structural context injected while an
+ * agent is *locating* work cut input tokens 25% and improved localisation; the same
+ * context injected while it was *writing code* cost 5 pp of Pass@1 and encouraged
+ * modifications nobody asked for, across four models (arXiv 2606.14061). A map in the
+ * implementation prompt would be a measured regression shipped as a feature.
+ *
+ * Held by a test because the alternative is a comment, and a comment does not fail.
+ */
+describe('the repository map feeds localisation and never the edit', () => {
+  const promptFiles = readdirSync(join(ROOT, 'prompts')).filter((file) => file.endsWith('.md'));
+
+  it('is carried by the discovery prompt', () => {
+    expect(read(join(ROOT, 'prompts/discovery.md')).text).toContain('{{repoMap}}');
+  });
+
+  it('is carried by no other prompt', () => {
+    const carriers = promptFiles.filter((file) =>
+      read(join(ROOT, 'prompts', file)).text.includes('{{repoMap}}'),
+    );
+
+    expect(carriers).toEqual(['discovery.md']);
+  });
+
+  it('is never a required variable, because having no map is a legitimate state', () => {
+    // The loader refuses a required variable that renders empty. A repository without Git,
+    // without recognised source, or whose parse failed must still be able to run the stage
+    // — which is exactly how every run worked before the map existed.
+    const prompt = read(join(ROOT, 'prompts/discovery.md')).text;
+    // `\r` tolerated: this repository is edited on Windows, where the front matter is CRLF
+    // and a `\n`-only pattern matches nothing — a rule that passes for the wrong reason
+    // rather than one that fails.
+    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(prompt)?.[1] ?? '';
+
+    expect(front).toMatch(/requiredVars:/);
+    expect(front).not.toMatch(/repoMap/);
+  });
+
+  it('is built in one place, which is the stage that uses it', () => {
+    // A second construction site is a second answer to "what is the map", and the one that
+    // drifts is the one nobody is watching.
+    const callers = sourceFiles('src')
+      .map(read)
+      // Calls, not the declaration: the module that exports it is not a second answer.
+      .filter(
+        ({ path, text }) =>
+          path !== 'src/app/repo-map.ts' && /\bbuildRepoMap\s*\(/.test(codeOnly(text)),
+      )
+      .map(({ path }) => path)
+      .sort();
+
+    expect(callers).toEqual(['src/app/execution-context.ts', 'src/cli/map.ts']);
+  });
+
+  it('keeps the ranking pure, so what a stage is shown can be proven without a machine', () => {
+    // §core: no Node built-in, no process, no clock. The ranking decides what a later stage
+    // is allowed to see, which is the last place to want a dependency on the environment.
+    const core = read(join(ROOT, 'src/core/repo-map.ts')).text;
+
+    expect(core).not.toMatch(/from 'node:/);
+    expect(core).not.toMatch(/\bprocess\./);
+    expect(codeOnly(core)).not.toMatch(/tree-sitter/);
+  });
+
+  it('keeps tree-sitter below the port, in one adapter', () => {
+    const importers = sourceFiles('src')
+      .map(read)
+      .filter(({ text }) => /from 'web-tree-sitter'/.test(text))
+      .map(({ path }) => path);
+
+    expect(importers).toEqual(['src/adapters/tagger/tree-sitter-tagger.ts']);
+  });
+
+  it('pins the grammar runtime exactly, because a caret is a silent break', () => {
+    // Measured: `tree-sitter-wasms@0.1.13` will not load under `web-tree-sitter@0.27` —
+    // it fails inside `getDylinkMetadata` with a bare Error and no message.
+    //
+    // Read from `optionalDependencies`, which is where `packaging.test.ts` sent them: 50 MB
+    // of grammars is not something a consumer of this CLI should be made to install for a
+    // stage accelerator. Optional does not mean unpinned — an optional dependency that
+    // resolves to an incompatible ABI fails exactly the same way, with the added charm that
+    // it only happens on the machines that did install it.
+    const manifest = JSON.parse(read(join(ROOT, 'package.json')).text) as {
+      optionalDependencies?: Record<string, string>;
+    };
+    const optional = manifest.optionalDependencies ?? {};
+
+    expect(optional['web-tree-sitter']).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(optional['tree-sitter-wasms']).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});

@@ -1,3 +1,5 @@
+import { buildRepoMap } from './repo-map.js';
+import { TreeSitterTagger } from '../adapters/tagger/tree-sitter-tagger.js';
 import {
   PlanSchema,
   type EffectiveConfig,
@@ -473,6 +475,17 @@ export async function buildExecutionContext(
  * function, two callers: the CLI command and the revise use case the write API
  * calls.
  */
+/**
+ * Tokens the repository map may occupy inside the discovery prompt.
+ *
+ * Sized against what that prompt already carries: 18.620 bytes of instructions and 15.572
+ * of AGENTS.md, roughly 9.000 tokens before a word about the repository. A comparable
+ * budget for the index buys several hundred ranked files and stays a small fraction of any
+ * modern window — and the stage records what it spent, so this number is checkable rather
+ * than permanent.
+ */
+const REPO_MAP_BUDGET_TOKENS = 8000;
+
 export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeline {
   return new PlanningPipeline({
     fs: context.fs,
@@ -481,6 +494,21 @@ export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeli
     stageRunner: context.stageRunner,
     processRunner: context.processRunner,
     git: context.git,
+    // The ranked index `discovery` starts from. A thunk rather than a built string,
+    // because the pipeline serves that stage from cache most of the time, and parsing a
+    // monorepo for a stage that is not going to run is this whole milestone's waste in
+    // miniature.
+    buildRepoMap: async () => {
+      const built = await buildRepoMap({
+        fs: context.fs,
+        git: context.git,
+        tagger: new TreeSitterTagger(),
+        projectDir: context.projectDir,
+        budgetTokens: REPO_MAP_BUDGET_TOKENS,
+        sourcePaths: context.config.project?.paths.source ?? [],
+      });
+      return built?.text;
+    },
     // §6.2's between-stage gate. Sequential and legacy runs never reach Git
     // through it: `checkWorktreePreconditions` returns satisfied for them before
     // asking anything.

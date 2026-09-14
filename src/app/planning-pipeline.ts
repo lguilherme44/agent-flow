@@ -95,6 +95,20 @@ export interface PlanningPipelineOptions {
   /** Maps a runner id to its provider, for judging review independence. */
   readonly providerOf: (runnerId: string) => string | undefined;
   readonly projectDir: string;
+  /**
+   * Builds the ranked repository index `discovery` starts from.
+   *
+   * **Optional, and it reaches exactly one stage.** Structural context earns its tokens
+   * where an agent is deciding *what to look at*, and costs correctness where it is writing
+   * code — measured across four models at 25% fewer input tokens in the localisation step
+   * and 5pp of Pass@1 lost in the editing step (arXiv 2606.14061). `discovery` is the
+   * former; `implementation` is the latter, and `test/architecture.test.ts` holds that line
+   * rather than this comment.
+   *
+   * Absent, every stage runs exactly as it did before — which is what the twenty-odd test
+   * wirings that predate this rely on, and what a repository without Git falls back to.
+   */
+  readonly buildRepoMap?: () => Promise<string | undefined>;
 }
 
 /**
@@ -625,10 +639,37 @@ export class PlanningPipeline {
     }
 
     context.onProgress?.('discovery', 'started');
+
+    // **Built here rather than passed in, because it is only worth building if the stage
+    // is about to run.** Every exit above this line served the map from cache, and parsing
+    // a monorepo to hand it to nobody is the waste in miniature.
+    //
+    // A failure costs the map and nothing else: the prompt says an absent map means the
+    // method applies without one, and that is exactly the behaviour every run had before
+    // this existed.
+    let repoMap = '';
+    try {
+      repoMap = (await this.options.buildRepoMap?.()) ?? '';
+    } catch {
+      repoMap = '';
+    }
+
+    if (repoMap.length > 0) {
+      // Recorded because it is a fact about what the stage was given, and because the
+      // whole reason for this artifact is a token bill somebody should be able to check.
+      await this.options.store.appendEvent(runId, 'repo_map_built', {
+        stage: 'discovery',
+        bytes: repoMap.length,
+      });
+    }
+
     const result = await this.options.stageRunner.run(DISCOVERY_STAGE, runId, {
       projectDir: this.options.projectDir,
       projectConfig: context.projectConfig,
       agentsMd: context.agentsMd,
+      // Always supplied, never in `requiredVars`: the loader refuses a required variable
+      // that is empty, and "no map" is a legitimate state rather than a misconfiguration.
+      repoMap,
     });
 
     await fs.mkdirp(agentFlowPaths(projectDir).cacheDir);

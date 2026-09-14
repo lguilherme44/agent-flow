@@ -33,11 +33,30 @@ that belongs to a different stage.
 
 {{projectDir}}
 
+## Repository map
+
+Every source file this repository tracks, ranked by how much the rest of the
+codebase depends on it, with what each one exports. It was built by parsing, not
+by a model, so it is accurate about *what exists* and says nothing about what any
+of it means. A file near the top is depended upon by many others; that is the
+only claim it makes.
+
+The list may be cut short — it says so when it is. Absent entirely means no map
+could be built here, and the Method below still applies without one.
+
+{{repoMap}}
+
 ## Method
 
-Read before concluding. Prefer reading a file over inferring from its name. When
-you are unsure whether a pattern holds, check a second example before stating it
-as a convention.
+**Start from the map, then read.** It already answers "what is here" and "what is
+central", so spend your reading on the files it points at rather than on finding
+them. Open the top-ranked modules of each area, and open a second example before
+stating any pattern as a convention.
+
+Read before concluding. The map is an index, not evidence: it carries a symbol's
+name and nothing about its behaviour, so every claim in your output still comes
+from a file you opened. Prefer reading a file over inferring from its name — and
+never infer one from its rank.
 
 Where you cannot determine something, write "unknown" rather than guessing. A
 confident wrong statement here propagates into every later stage; an honest gap
