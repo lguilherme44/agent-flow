@@ -10,6 +10,7 @@ import {
 } from '../adapters/git/git-workspaces.js';
 import {
   assessHealth,
+  classifyUnavailability,
   referencedRunners,
   withProbeEvidence,
   type HealthVerdict,
@@ -360,7 +361,17 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
   const shallow: ObservedRunnerReport[] = referencedRunners(config.global).map((id) => {
     const reported = health[id];
     return reported === undefined
-      ? { id, installed: false, executable: false, auth: 'not_configured' as const }
+      ? {
+          id,
+          installed: false,
+          executable: false,
+          auth: 'not_configured' as const,
+          // The registry never built this one, so nothing above was measured. Saying
+          // *which* configuration state caused that is the whole point: without it the
+          // report reads "not installed", and the remediation sends the reader to
+          // reinstall a CLI that was there all along.
+          unavailable: classifyUnavailability(config.global, id),
+        }
       : {
           id,
           installed: reported.installed,
@@ -864,6 +875,21 @@ export function generateRemediations(
   }
 
   for (const runner of observed) {
+    // Configuration first, and it returns: a disabled runner was never spawned, so
+    // "not installed or executable" below would be a claim about a binary nothing
+    // looked at, and the install guide the wrong fix.
+    if (runner.unavailable !== undefined) {
+      remediations.push(
+        runner.unavailable === 'disabled'
+          ? { problem: say.doctor.runnerDisabled(runner.id), fix: say.doctor.enableRunner(runner.id) }
+          : {
+              problem: say.doctor.runnerUndeclared(runner.id),
+              fix: say.doctor.declareRunner(runner.id),
+            },
+      );
+      continue;
+    }
+
     if (!runner.installed || !runner.executable) {
       const guide = getRunnerInstallGuide(runner.id, say);
       if (guide) {
@@ -895,7 +921,12 @@ function getRunnerInstallGuide(runnerId: string, say: Phrases): string | undefin
     case 'cursor':
       return say.doctor.installAndEnsurePath('Cursor CLI', 'cursor');
     case 'agy':
-      return 'curl -fsSL https://antigravity.run/install.sh | bash';
+      // Named rather than piped. The line here used to be
+      // `curl -fsSL https://antigravity.run/install.sh | bash`, which installs nothing:
+      // the host answers every path with the same HTML landing page — a fabricated one
+      // included — so the pipeline feeds a redirect stub to a shell. A URL belongs here
+      // again when somebody has fetched it and seen a script come back.
+      return say.doctor.installAndEnsurePath('Antigravity CLI', 'agy');
     default:
       return undefined;
   }

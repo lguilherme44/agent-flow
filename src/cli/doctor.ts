@@ -123,6 +123,25 @@ export function renderDiagnosis(diagnosis: Diagnosis, strict = false, say: Phras
 
   for (const runner of diagnosis.runners) {
     lines.push(runner.id);
+
+    // A runner the registry skipped was never spawned. Printing `installed ✗` here
+    // would assert something about a binary nothing looked at, so the configuration
+    // state replaces the three observations rather than joining them.
+    if (runner.unavailable !== undefined) {
+      lines.push(
+        `  ${CROSS} ${
+          runner.unavailable === 'disabled'
+            ? say.doctor.disabledInConfig(runner.id)
+            : say.doctor.notDeclaredInConfig(runner.id)
+        }`,
+      );
+      if (runner.unavailable === 'disabled') {
+        lines.push(`     ${say.doctor.nothingWasProbed(runner.id)}`);
+      }
+      lines.push('');
+      continue;
+    }
+
     lines.push(`  installed          ${runner.installed ? TICK : CROSS}`);
     lines.push(`  executable         ${runner.executable ? TICK : CROSS}`);
     lines.push(`  auth               ${renderAuth(runner.auth)}`);

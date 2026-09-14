@@ -27,11 +27,32 @@ import { en, type Phrases } from './phrases/index.js';
  * whole truth table without touching a process matters.
  */
 
+/**
+ * Why a referenced runner has no health observation at all.
+ *
+ * These are configuration facts, not measurements: a runner nobody enabled is never
+ * spawned, so nothing is known about whether it is installed. Reporting that silence as
+ * `installed: false` is the mistake this type exists to stop — it sends someone to install
+ * a CLI they already have, and the install changes nothing, because configuration was the
+ * thing saying no.
+ */
+export type RunnerUnavailability =
+  /** Declared under `runners:` with `enabled: false`. */
+  | 'disabled'
+  /** A role points at an id that no `runners:` entry declares. */
+  | 'undeclared';
+
 export interface ObservedRunner {
   readonly id: string;
   readonly installed: boolean;
   readonly executable: boolean;
   readonly auth: 'configured' | 'not_configured' | 'available' | 'unknown';
+  /**
+   * Absent when the health check actually ran — then the three fields above are
+   * observations. Present when it could not run, and they carry no information beyond
+   * "this role has nowhere to go".
+   */
+  readonly unavailable?: RunnerUnavailability;
 }
 
 export interface RoleRoute {
@@ -217,6 +238,18 @@ export function withProbeEvidence(
 }
 
 /** Runners referenced by configuration, in declaration order. */
+/**
+ * Why the registry produced no runner for an id some role points at.
+ *
+ * Only two things make the registry skip an id, and the difference decides the fix: an
+ * entry with `enabled: false` needs one line flipped, an id with no entry at all needs one
+ * written (or the role pointed elsewhere). Neither is repaired by installing anything —
+ * which is why this never returns a verdict about the binary.
+ */
+export function classifyUnavailability(config: GlobalConfig, id: string): RunnerUnavailability {
+  return config.runners[id] === undefined ? 'undeclared' : 'disabled';
+}
+
 export function referencedRunners(config: GlobalConfig): string[] {
   const seen = new Set<string>();
   for (const role of ALL_WORKFLOW_ROLES) seen.add(roleConfigOf(config.roles, role).runner);

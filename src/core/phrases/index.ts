@@ -135,6 +135,21 @@ export interface Phrases {
     readonly runnerNotInstalled: (runner: string) => string;
     readonly runnerMissingCredentials: (runner: string) => string;
     /**
+     * Said *instead of* "not installed", never beside it.
+     *
+     * A runner the registry skipped was never spawned, so the install sentence above
+     * would be a claim about a binary nothing looked at — and the expensive kind of
+     * wrong: it is followed, the install succeeds, and the report does not move.
+     */
+    readonly runnerDisabled: (runner: string) => string;
+    readonly enableRunner: (runner: string) => string;
+    readonly runnerUndeclared: (runner: string) => string;
+    readonly declareRunner: (runner: string) => string;
+    /** Rendered where `installed`/`executable` would be, with the file that decides it. */
+    readonly disabledInConfig: (runner: string) => string;
+    readonly nothingWasProbed: (runner: string) => string;
+    readonly notDeclaredInConfig: (runner: string) => string;
+    /**
      * Written around the command rather than about the runner (§3, §58).
      *
      * `src/core` names no provider, and these sentences would have named four. The

@@ -109,6 +109,20 @@ export const ptBR: Phrases = {
     installGit: 'Instale o Git 2.38+ (https://git-scm.com ou pelo seu gerenciador de pacotes)',
     runnerNotInstalled: (runner) => `O runner "${runner}" não está instalado ou não é executável`,
     runnerMissingCredentials: (runner) => `O runner "${runner}" está sem credenciais`,
+    runnerDisabled: (runner) =>
+      `O runner "${runner}" está desabilitado na configuração (não está faltando)`,
+    enableRunner: (runner) =>
+      `Defina \`runners.${runner}.enabled: true\`, ou aponte esses papéis para um runner habilitado`,
+    runnerUndeclared: (runner) =>
+      `Um papel aponta para o runner "${runner}", que nunca foi declarado`,
+    declareRunner: (runner) =>
+      `Declare "${runner}" em \`runners:\`, ou aponte esses papéis para um runner declarado`,
+    disabledInConfig: (runner) =>
+      `desabilitado na configuração — \`runners.${runner}.enabled: false\``,
+    nothingWasProbed: (runner) =>
+      `Nada foi sondado, então isto não diz nada sobre o "${runner}" estar instalado.`,
+    notDeclaredInConfig: (runner) =>
+      `não declarado — um papel aponta para "${runner}", mas nenhuma entrada em \`runners:\` o define`,
     installAndEnsurePath: (product, command) =>
       `Instale o ${product} e garanta que \`${command}\` esteja no PATH`,
     runLoginOrExport: (command, variable) => `Rode \`${command}\` ou exporte ${variable}`,

@@ -101,6 +101,17 @@ export const en: Phrases = {
     installGit: 'Install Git 2.38+ (https://git-scm.com or via your package manager)',
     runnerNotInstalled: (runner) => `Runner "${runner}" is not installed or executable`,
     runnerMissingCredentials: (runner) => `Runner "${runner}" is missing credentials`,
+    runnerDisabled: (runner) => `Runner "${runner}" is disabled in configuration (not missing)`,
+    enableRunner: (runner) =>
+      `Set \`runners.${runner}.enabled: true\`, or point those roles at an enabled runner`,
+    runnerUndeclared: (runner) => `Runner "${runner}" is referenced by a role but never declared`,
+    declareRunner: (runner) =>
+      `Declare "${runner}" under \`runners:\`, or point those roles at a declared runner`,
+    disabledInConfig: (runner) => `disabled in configuration — \`runners.${runner}.enabled: false\``,
+    nothingWasProbed: (runner) =>
+      `Nothing was probed, so this says nothing about whether "${runner}" is installed.`,
+    notDeclaredInConfig: (runner) =>
+      `not declared — a role points at "${runner}", but no \`runners:\` entry defines it`,
     installAndEnsurePath: (product, command) =>
       `Install ${product} and ensure \`${command}\` is available in PATH`,
     runLoginOrExport: (command, variable) => `Run \`${command}\` or export ${variable}`,
