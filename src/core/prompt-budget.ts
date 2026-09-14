@@ -114,7 +114,7 @@ export interface PromptParts {
  * question it answers is "is this close to the wall", and a tokenizer per model
  * would be precision nobody acts on differently.
  */
-const BYTES_PER_TOKEN = 3.8;
+export const BYTES_PER_TOKEN = 3.8;
 
 /**
  * How much of the window may be spent on the prompt before it is worth warning.

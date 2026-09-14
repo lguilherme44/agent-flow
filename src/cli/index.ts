@@ -14,6 +14,7 @@ import {
   runConfigUnsetCommand,
 } from './config.js';
 import { runStatusCommand } from './status.js';
+import { runMapCommand } from './map.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
 import { runRunCommand, runRetryCommand } from './run.js';
 import { runReviewCommand } from './review.js';
@@ -167,6 +168,17 @@ export async function main(argv: string[]): Promise<number> {
     .description('Show the active run, its progress and anything degraded')
     .action(async (_options: unknown, command: Command) => {
       exitCode = await runStatusCommand(globalOptions(command));
+    });
+
+  program
+    .command('map')
+    .description('Build the repository map discovery uses, and show what it cost')
+    .option('--budget <tokens>', 'how many tokens the rendered map may occupy')
+    .option('--write', 'also store it in .agent-flow/cache/repo-map.txt')
+    // Local and free, unlike every other command that touches a repository this size:
+    // it parses rather than prompts, so there is nothing to opt into.
+    .action(async (options: { budget?: string; write?: boolean }, command: Command) => {
+      exitCode = await runMapCommand(options, globalOptions(command));
     });
 
   program

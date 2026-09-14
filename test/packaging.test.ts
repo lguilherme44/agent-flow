@@ -26,6 +26,7 @@ interface Manifest {
   readonly bin: Record<string, string>;
   readonly files: string[];
   readonly dependencies: Record<string, string>;
+  readonly optionalDependencies?: Record<string, string>;
   readonly devDependencies: Record<string, string>;
 }
 
@@ -138,6 +139,13 @@ describe('the published package', () => {
   it('dependencies set is byte-identical to before the feature (NFR-003)', () => {
     // Reading package.json directly: catches added runtime dependencies like @fastify/cookie
     // or CORS plugins, which bareImports only catches if they were undeclared.
+    //
+    // **This list stopped a 50 MB addition, which is exactly what it is for.** The
+    // tree-sitter grammars that build the repository map measure larger than every
+    // dependency here put together — 50 MB against 23 — for an artifact that makes one
+    // stage cheaper and that the product is designed to run without. They went to
+    // `optionalDependencies` and the adapter imports them at first use, so this list is
+    // unchanged and a consumer who never wanted them never pays for them.
     const raw = readFileSync(join(ROOT, 'package.json'), 'utf8');
     const parsed = JSON.parse(raw) as { dependencies: Record<string, string> };
     expect(Object.keys(parsed.dependencies)).toEqual([
@@ -149,12 +157,51 @@ describe('the published package', () => {
     ]);
   });
 
+  it('keeps an optional dependency optional, in the manifest and in the code', () => {
+    // The positive control for the decision above: declaring something optional and then
+    // importing it at the top of a module is the same as requiring it, except the failure
+    // arrives as `Cannot find module` on a consumer's machine instead of at install time.
+    const parsed = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+      optionalDependencies?: Record<string, string>;
+    };
+
+    expect(Object.keys(parsed.optionalDependencies ?? {})).toEqual([
+      'tree-sitter-wasms',
+      'web-tree-sitter',
+    ]);
+
+    const tagger = readFileSync(join(ROOT, 'src/adapters/tagger/tree-sitter-tagger.ts'), 'utf8');
+    expect(tagger).toMatch(/await import\('web-tree-sitter'\)/);
+    // A value import would defeat the whole arrangement. `import type` is fine and is why
+    // the pattern is spelled that way — types are erased and cost a consumer nothing.
+    expect(tagger).not.toMatch(/^import Parser from 'web-tree-sitter'/m);
+
+    // **And the bundler has to leave it alone.** Bundling an optional dependency makes it
+    // mandatory: the bytes ship regardless, and the `import()` that was allowed to fail no
+    // longer can. Measured, when it was not external: the build succeeded and the command
+    // died with `Dynamic require of "fs" is not supported`, because the parser is
+    // emscripten glue and the bundle is ESM.
+    const bundler = readFileSync(join(ROOT, 'tsup.config.ts'), 'utf8');
+    expect(bundler).toMatch(/external:[\s\S]{0,120}'web-tree-sitter'/);
+    expect(bundler).toMatch(/external:[\s\S]{0,120}'tree-sitter-wasms'/);
+  });
+
   it('imports no devDependency at runtime', () => {
     // A devDependency is not installed for a consumer. Importing one from `src/`
     // produces a package that works in the checkout and throws `Cannot find module`
     // on the first machine that installs it — and the type checker cannot see the
     // difference, because in here they are all just installed.
-    const runtime = new Set(Object.keys(manifest.dependencies));
+    //
+    // **An optional dependency counts as declared, and only just.** It is installed for a
+    // consumer unless installation fails or they opted out, so importing one is legitimate
+    // — but only behind a guard, because the whole point is that it may be absent. That
+    // guard is not this rule's to check: the test above reads the tagger and requires the
+    // import to be dynamic. Two rules, because "declared" and "safe to import at the top of
+    // a module" stopped being the same question the moment this list grew a third entry.
+    const runtime = new Set([
+      ...Object.keys(manifest.dependencies),
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+    ]);
     const dev = new Set(Object.keys(manifest.devDependencies));
     const offenders: string[] = [];
 
