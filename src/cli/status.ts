@@ -12,6 +12,10 @@ import { renderEscalation } from './render/escalation.js';
 import { renderSpend, summariseSpend } from './render/spend.js';
 import { projectRun, type RunProjection } from '../core/run-projection.js';
 import { loadConfig } from '../config/loader.js';
+import { roleConfigForStage } from '../contracts/index.js';
+import { roleForStage } from '../app/stages/definitions.js';
+import { stalledRun, type RunLiveness } from '../core/run-liveness.js';
+import { formatElapsed } from './render/progress.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
 import { integrationRef } from '../core/worktree-policy.js';
 import { CollaborationStore } from '../app/collaboration-store.js';
@@ -200,6 +204,20 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
     // do, and the summary is the context that makes the instruction make sense.
     if (runtime.escalation !== undefined) {
       process.stdout.write(`\n${renderEscalation(runtime.escalation)}\n`);
+    }
+
+    // A run that says it is working when nothing is. Rendered here, beside the escalation
+    // and the spend, rather than through `render` — whose signature the comment above
+    // already calls a place where an argument could slip a position unnoticed.
+    const stalled = stalledRun({
+      status: state.status,
+      updatedAtMs: Date.parse(state.updatedAt),
+      // Unknown stage, or configuration that will not load, means no verdict at all.
+      budgetSeconds: await budgetForOpenStage(state, fs, globals),
+      nowMs: Date.now(),
+    });
+    if (stalled !== undefined) {
+      process.stdout.write(`\n${renderStalled(state, stalled)}\n`);
     }
 
     return ExitCode.OK;
@@ -611,4 +629,61 @@ async function integratedTrees(
   }
 
   return trees;
+}
+
+/**
+ * The budget the open stage is running against, or zero when that cannot be known.
+ *
+ * Zero is not a deadline — `stalledRun` treats it as "no verdict" — and every failure
+ * here funnels into it deliberately: an unrecognised stage, a stage whose role is chosen
+ * per task, or a configuration that will not parse. `status` must not fail, and must not
+ * accuse, because of any of those.
+ *
+ * Named with the stage, like `init --warm` is, so a per-stage override
+ * (`roles.architect.stages.discovery.timeoutSeconds`) is the number this measures against
+ * rather than a role-level figure nothing uses.
+ */
+async function budgetForOpenStage(
+  state: RunState,
+  fs: NodeFileSystem,
+  globals: GlobalOptions,
+): Promise<number> {
+  const role = roleForStage(state.stage);
+  if (role === undefined) return 0;
+
+  try {
+    const config = await loadConfig({
+      fs,
+      globalConfigPath: globals.globalConfigPath,
+      projectDir: globals.cwd,
+    });
+    return roleConfigForStage(config.global.roles, role, state.stage).timeoutSeconds;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * What to say about a run that claims to be working while nothing is.
+ *
+ * States the two numbers and stops short of the diagnosis. "The process died" is one
+ * explanation; an interrupted terminal is another, and a machine that slept is a third.
+ * The product cannot tell them apart from here, and a sentence that picked one would be
+ * the kind of confident wrong claim this codebase spends its comments avoiding.
+ *
+ * It does name the way out, because there was none: `cancel` is the supported close, and
+ * until `isRunActive` learned that `cancelled` is terminal it did not even lift `init`'s
+ * refusal.
+ */
+function renderStalled(state: RunState, liveness: RunLiveness): string {
+  return [
+    `Warning: this run says it is ${state.status}, and nothing has been written for ` +
+      `${formatElapsed(liveness.idleMs)}.`,
+    '',
+    `Stage "${state.stage}" is allowed ${formatElapsed(liveness.deadlineMs)} including the`,
+    'grace after its timeout, so it cannot still be running. Whatever was working on it is',
+    'gone — a finished process would have recorded how it ended.',
+    '',
+    `Close it with: agent-flow cancel`,
+  ].join('\n');
 }

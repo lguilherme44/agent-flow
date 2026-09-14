@@ -1,6 +1,7 @@
-import { PlanSchema } from '../../contracts/index.js';
+import { PlanSchema, type RunStage, type WorkflowRole } from '../../contracts/index.js';
 import { validateSdd } from '../../core/sdd-validator.js';
 import type { StageDefinition } from '../stage-runner.js';
+import { VERIFICATION_STAGE, FINAL_REVIEW_STAGE } from './final-review.js';
 
 /**
  * The planning pipeline, as data.
@@ -89,3 +90,29 @@ export const PLAN_REVIEW_SIMPLE_STAGE: StageDefinition = {
   role: 'planReviewer',
   prompt: 'plan-review-simple',
 };
+
+/**
+ * The role a stage answers to, derived from the definitions above rather than listed.
+ *
+ * Built from the shipped stages themselves, so it cannot drift: a stage whose role
+ * changes changes this with it, and a stage added without one is absent rather than
+ * wrong. `implementation` is deliberately not here — it has no single definition,
+ * because its role is chosen per task from the task's complexity (`core/router.ts`).
+ *
+ * `undefined` is a real answer and callers must treat it as one: it means "this module
+ * does not know", never "no role". The one caller today reads it to find a stage's
+ * timeout, and answers *nothing* rather than guessing when the stage is unknown.
+ */
+export function roleForStage(stage: RunStage): WorkflowRole | undefined {
+  const known: readonly StageDefinition[] = [
+    DISCOVERY_STAGE,
+    ARCHITECTURE_IMPACT_STAGE,
+    SDD_STAGE,
+    PLANNING_STAGE,
+    PLAN_REVIEW_SIMPLE_STAGE,
+    VERIFICATION_STAGE,
+    FINAL_REVIEW_STAGE,
+  ];
+
+  return known.find((definition) => definition.name === stage)?.role;
+}
