@@ -2351,6 +2351,29 @@ describe('the E2E suite crosses the real server (UI-31)', () => {
     expect(harness, 'the E2E harness no longer pins the Deck locale').toBe(deck);
   });
 
+  it('asserts the empty stage log in the words the dictionary chose, not the token', () => {
+    // The Deck prints `noLogFor(word(t, stage))`, and `word()` is a lookup: `final-review`
+    // reaches a reader as `final review`. `deck-control.spec.ts` asserted the raw token and
+    // nobody noticed, because until the language pin above landed the spec died one line
+    // earlier on Portuguese. The phrase is copied there for the same reason the key above
+    // is copied — the dictionary is a `.ts` in another workspace — and this is what stops
+    // the copy drifting: a retranslation would otherwise turn a wording change into a red
+    // E2E that reads like a broken feature.
+    const en = read(join(ROOT, 'apps/deck/src/lib/i18n/translations/en.ts')).text;
+    // Scoped to `words`, because `stageShort` and `stageLong` key the same stages and the
+    // Deck asks none of them here.
+    const words = /^ {2}words: \{$([\s\S]*?)^ {2}\},$/m.exec(en)?.[1] ?? '';
+    const stage = /'final-review': '([^']*)'/.exec(words)?.[1];
+    const sentence = /noLogFor: \(stage: string\) => `([^`]*)`/.exec(en)?.[1];
+
+    expect(stage, 'the Deck no longer gives `final-review` a word').toBeDefined();
+    expect(sentence, 'the Deck no longer has a sentence for a stage that wrote nothing').toBeDefined();
+
+    const spec = read(join(ROOT, 'apps/web/e2e/deck-control.spec.ts')).text;
+    expect(spec, 'the E2E no longer asserts the empty stage log the Deck actually draws')
+      .toContain((sentence ?? '').replace('${stage}', stage ?? ''));
+  });
+
   it('spends no quota', () => {
     // The runner is replaced at the executable boundary — `runners.<id>.command` —
     // and nowhere else. A spec that named a real CLI would be a spec that only

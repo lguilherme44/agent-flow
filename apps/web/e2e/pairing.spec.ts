@@ -175,7 +175,12 @@ test.describe('device pairing over a real socket', () => {
     expect(pairBody['pairedAt']).toBeDefined();
     expect(pairBody['secret']).toBeUndefined();
 
-    const setCookie = pairResponse.headers()['set-cookie'] ?? '';
+    // `allHeaders()` and not `headers()`: on a *network* `Response` — which is what
+    // `waitForResponse` hands back — `headers()` is documented to drop security-related
+    // headers, and `set-cookie` is one of them, so it read `''` here however well the
+    // server behaved. The `page.request.post` further down keeps `headers()` because an
+    // `APIResponse` carries every header; the two classes only look alike.
+    const setCookie = (await pairResponse.allHeaders())['set-cookie'] ?? '';
     expect(setCookie).toContain('agent-flow-session=');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('SameSite=Strict');

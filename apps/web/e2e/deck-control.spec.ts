@@ -86,8 +86,12 @@ test.describe('Deck run control', () => {
     const png = await page.screenshot({ path: join(REPO_ROOT, 'apps/web/e2e/.results', 'deck-stage-log.png') });
     await testInfo.attach('stage-log', { body: png, contentType: 'image/png' });
 
-    // A stage whose log belongs to its tasks says so rather than reading as empty.
+    // A stage with nothing written says so rather than reading as empty — and it says it
+    // in *language*, not in the token the `<option>` carries. `word()` turns `final-review`
+    // into whatever `words` in the Deck's dictionary holds for it, so the sentence below is
+    // the dictionary's phrase, copied. `test/architecture.test.ts` fails the moment the
+    // copy and the dictionary stop matching, which is the only thing that can drift here.
     await page.getByLabel('Stage log').selectOption('final-review');
-    await expect(page.locator('.stage-log')).toContainText(/No log for final-review/);
+    await expect(page.locator('.stage-log')).toContainText('No log for final review.');
   });
 });
