@@ -59,6 +59,28 @@ const serve = (
   return fetcher;
 };
 
+/**
+ * Clicks the submit button once it will actually do something.
+ *
+ * `findByRole` resolves on the button's *label*, and the label is final from the first
+ * paint — only `disabled` changes when the candidate walk answers. So a plain
+ * `fireEvent.click(await findByRole(...))` can land on the disabled button, and a click on
+ * a disabled button is dropped silently: no POST, and the assertion downstream reads as
+ * though the dialog names the wrong thing on the wire.
+ *
+ * Measured: with the candidates resolving a macrotask late, the button was still disabled
+ * at that moment 3 times in 40 under load, and CI's Node 20 job caught exactly that on
+ * 18/09/2026 — `expected false to be true`, the POST that never happened.
+ *
+ * The wait is the assertion: if the dialog never enables the button, this times out and
+ * says so, rather than clicking into the void and blaming the request.
+ */
+async function clickRegister(): Promise<void> {
+  const button = await screen.findByRole('button', { name: t.register.registerIt });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
+
 describe('the register-project dialog', () => {
   beforeEach(() => clearStore());
   afterEach(() => vi.unstubAllGlobals());
@@ -84,7 +106,7 @@ describe('the register-project dialog', () => {
   it('names only an id on the wire, never a directory (§93)', async () => {
     const fetcher = serve();
     render(<RegisterProjectDialog open onClose={() => undefined} />);
-    fireEvent.click(await screen.findByRole('button', { name: t.register.registerIt }));
+    await clickRegister();
 
     await waitFor(() => {
       expect(fetcher.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(true);
@@ -96,7 +118,7 @@ describe('the register-project dialog', () => {
   it('reports what was written, relative to the project', async () => {
     serve();
     render(<RegisterProjectDialog open onClose={() => undefined} />);
-    fireEvent.click(await screen.findByRole('button', { name: t.register.registerIt }));
+    await clickRegister();
 
     // Waits for the success panel before reading its contents: an exact-string query for
     // a path that has not been rendered yet resolves against the form, not the result.
@@ -110,7 +132,7 @@ describe('the register-project dialog', () => {
     // PRI-25, on the surface that has no terminal behind it.
     serve();
     render(<RegisterProjectDialog open onClose={() => undefined} />);
-    fireEvent.click(await screen.findByRole('button', { name: t.register.registerIt }));
+    await clickRegister();
 
     expect(await screen.findByText(t.register.installDirties)).toBeInTheDocument();
     expect(screen.getByText('npm install')).toBeInTheDocument();
@@ -120,7 +142,7 @@ describe('the register-project dialog', () => {
     // The positive control for the case above: same dialog, one field different.
     serve({ post: () => response({ ...REGISTERED, warnings: [] }, 201) });
     render(<RegisterProjectDialog open onClose={() => undefined} />);
-    fireEvent.click(await screen.findByRole('button', { name: t.register.registerIt }));
+    await clickRegister();
 
     expect(await screen.findByText(t.register.isAProjectNow('node'))).toBeInTheDocument();
     expect(screen.queryByText(t.register.installDirties)).toBeNull();
@@ -145,7 +167,7 @@ describe('the register-project dialog', () => {
     render(<RegisterProjectDialog open onClose={() => undefined} />);
 
     expect(screen.queryByText(t.register.proceedAnyway)).toBeNull();
-    fireEvent.click(await screen.findByRole('button', { name: t.register.registerIt }));
+    await clickRegister();
 
     expect(await screen.findByText(/Run AF-2026-004 is still active/)).toBeInTheDocument();
     expect(screen.getByText(t.register.proceedAnyway)).toBeInTheDocument();
