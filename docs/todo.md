@@ -373,7 +373,13 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       fixa os três valores (0 sem reparo, 1 com um, 2 com dois) contra
       `MAX_REPAIR_ATTEMPTS`.
 
-- [ ] **D7 · "The stages before X are kept" é falso para dois dos três** — `src/app/planning-pipeline.ts:301,315,328`
+- [x] **D7 · "The stages before X are kept" é falso para dois dos três** — `src/app/planning-pipeline.ts:301,315,328`
+      **Já estava fechado quando este item foi relido em 18/09/2026**, pelo primeiro dos dois
+      caminhos: a frase enumera. `resumeHint` (`src/cli/feature.ts`) renderiza o fold de
+      `core/resume.ts` — *Kept: …* e *Runs again: …* vêm de uma lista, não de prosa — e o
+      D17 tirou o default de classe que fazia a lista certa sair errada na superfície.
+      `test/cli/resume-hint.test.ts` fixa. O comportamento (os quatro estágios honrarem
+      `--from`) segue como estava; o que mudou é que a frase não mente mais sobre ele.
       O `skipUntil` chega em exatamente dois estágios — `architecture-impact` e `sdd` — via
       `stageOrExisting`. Os outros dois nunca o veem:
 
