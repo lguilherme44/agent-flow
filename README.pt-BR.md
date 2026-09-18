@@ -334,7 +334,10 @@ Detalhes, incluindo o que não ter autenticação significa e não significa:
 
 ## Requisitos
 
-- **Node 20+**
+- **Node 20+** para *rodar* o agent-flow; **Node 22.12+ para desenvolvê-lo**, porque o
+  Vitest 5 não sobe abaixo disso. São dois pisos porque são duas afirmações: a CLI é
+  compilada para node20 e o CI dirige o tarball instalado lá, enquanto o toolchain de teste
+  é problema de quem desenvolve e de instalação de ninguém.
 - **git** — qualquer versão para o modo sequencial; **2.33.0 ou mais novo** para o
   isolamento por worktree, que precisa de `git worktree add --lock --reason`. O
   `agent-flow doctor` reporta sua versão contra esse piso.
@@ -1121,9 +1124,12 @@ O [`docs/testing.md`](docs/testing.md) explica o que cada camada prova e o que n
 inclusive por que o smoke do gsd-browser não substitui o Playwright e por que ele roda
 local em vez de no CI.
 
-O CI roda a lane `node` no Node 20 e 22, `browser` e `visual` em um container fixado,
-`packaging` sozinha, e `coverage` como relatório em vez de gate. O smoke do gsd-browser é
-`required-release` e roda local — o `docs/testing.md` explica por quê.
+O CI roda a lane `node` no Node 22, `browser` e `visual` em um container fixado,
+`packaging` no Node 20 e 22, e `coverage` como relatório em vez de gate. A matriz de Node
+está na `packaging` porque o Vitest 5 não sobe abaixo do Node 22.12 enquanto a CLI
+publicada continua suportando o Node 20 — então o piso é provado dirigindo o tarball
+instalado, não o runner de quem desenvolve. O smoke do gsd-browser é `required-release` e
+roda local — o `docs/testing.md` explica por quê.
 
 ---
 

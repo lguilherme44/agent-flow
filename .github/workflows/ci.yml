@@ -22,24 +22,28 @@ concurrency:
 # environment. The version comment is what keeps the pin readable, and Dependabot rewrites
 # both halves together — see `.github/dependabot.yml`.
 jobs:
+  # One Node version, and the reason is the test toolchain rather than the product.
+  #
+  # Vitest 5 declares `engines.node: ^22.12.0 || ^24 || >=26` and will not start under
+  # Node 20 — so this lane, which is almost entirely Vitest, cannot answer on 20 at all.
+  # That is a statement about the *runner*, not about `agent-flow`: the CLI still targets
+  # node20 in `tsup.config.ts`, still declares `engines.node: '>=20'`, and its runtime
+  # dependencies never changed.
+  #
+  # The `>=20` claim is therefore proved where it is actually a claim — the `packaging`
+  # job below packs the tarball, installs it outside this checkout and drives the
+  # installed CLI on both 20 and 22. That is a better answer than this job ever gave:
+  # "the developer's Vitest starts on Node 20" was never the promise made to anybody
+  # running `npm i -g agent-flow`.
   check:
     runs-on: ubuntu-latest
-
-    strategy:
-      # One version failing should not hide the result on the others.
-      fail-fast: false
-      matrix:
-        # The floor declared in package.json engines, and the current LTS.
-        # Testing only what the maintainer happens to run locally is how a
-        # `>=20` claim quietly becomes untrue.
-        node: ['20', '22']
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node }}
+          node-version: '22'
           cache: npm
 
       # `ci` rather than `install`: the lockfile is the input, and a run that
@@ -186,15 +190,29 @@ jobs:
   # installs into a temporary root with the checkout hidden, and drives the CLI.
   #
   # It existed before this job and ran nowhere, which is the same as not existing.
+  #
+  # **And this is where `engines.node: '>=20'` is now proved.** The matrix moved here from
+  # `check` when Vitest 5 raised the test runner's own floor to Node 22.12. It is the
+  # stronger place for it: this job drives the *installed product* on the floor version,
+  # with the source tree hidden, which is exactly what the claim says. `test/packaging.test.ts`
+  # reads the matrix back out of this file and fails if the floor and the versions CI runs
+  # ever stop being one decision.
   packaging:
     runs-on: ubuntu-latest
+
+    strategy:
+      # One version failing should not hide the result on the others.
+      fail-fast: false
+      matrix:
+        # The floor declared in package.json engines, and the current LTS.
+        node: ['20', '22']
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - run: npm ci

@@ -51,9 +51,13 @@ export default defineConfig({
      *
      * The reboot this cap exists to prevent was therefore never actually prevented. It
      * is now.
+     *
+     * The `minWorkers: 1` that used to sit beside this is gone because Vitest 4 removed the
+     * option when it dropped tinypool. It was a floor, never the cap, so nothing about the
+     * ceiling this comment argues for changed; a pool that idles at zero workers costs the
+     * suite a process start, not a guarantee.
      */
     maxWorkers: 2,
-    minWorkers: 1,
     coverage: COVERAGE,
   },
 });

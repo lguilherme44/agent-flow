@@ -48,11 +48,11 @@ export default defineConfig({
     // Same cap as the root vitest.config.ts, for the same reason: up to 8
     // worktrees can run `npm run check` (which reaches this suite) at once, and
     // an auto-sized pool per invocation is what exhausted RAM on 2026-08-17.
-    poolOptions: {
-      threads: {
-        minThreads: 1,
-        maxThreads: 2,
-      },
-    },
+    //
+    // Spelled `maxWorkers` because Vitest 4 removed `poolOptions` with tinypool — and
+    // because the nested form it replaces named the `threads` pool, which this suite has
+    // not used since Vitest 2 made `forks` the default. It was the same silent no-op the
+    // root config documents: a cap read by nothing. `maxWorkers` is pool-agnostic.
+    maxWorkers: 2,
   },
 });

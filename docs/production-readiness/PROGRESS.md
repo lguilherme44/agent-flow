@@ -170,9 +170,24 @@ softened.
 - **Node.** `scripts/env-allowlist-probe.ts` and `scripts/live-runner-probe.ts` import
   TypeScript directly and need a Node that strips types (24 here, by default). They are
   evidence scripts, not CI gates, so this does not bind the package's `engines` floor.
-- **The dev-toolchain advisories are still open.** 2 critical, 1 high, 3 moderate, all in
-  `vitest`/`vite`, all needing major upgrades. They gate nothing today because the audit is
-  split — runtime blocks, toolchain reports — but `apps/web/dist` *is* built by `vite` and
-  shipped, so this is P1 rather than noise. It belongs in its own reviewed pull request.
+- **The dev-toolchain advisories are closed.** `npm audit` reports 0. The six that were open
+  — 2 critical, 1 high, 3 moderate — needed `vitest` 2 → 5 and `vite` 5 → 8, which is the
+  reviewed pull request this entry asked for. A seventh (low, `esbuild`, reached through
+  `tsup`, whose range cannot take the fixed version) is closed by an `overrides` entry in
+  the root `package.json`; the CLI build is what proves it, and it is green.
+
+  Three things moved with it, and each is a decision rather than a consequence:
+  - `poolOptions` and `minWorkers` are gone from every Vitest config — Vitest 4 removed both
+    with tinypool. The caps they were meant to express are now `maxWorkers`, which is
+    pool-agnostic and, in the two dashboard configs, in effect for the first time.
+  - The Node matrix moved from the `check` job to `packaging`. Vitest 5 does not start below
+    Node 22.12, so the `>=20` floor is now proved by driving the installed tarball there
+    rather than by starting the developer's test runner.
+  - `src/core/**` branch coverage reads 90.05% against its 90% floor, down from what the
+    older meter reported, because Vitest 4 made the v8 provider's AST-aware remapping the
+    default and it can see inside a template literal. **The threshold was not lowered**; the
+    phrase books' singular and empty-fragment branches — 25 of them, never executed — are
+    now rendered by `test/core/phrases.test.ts`. The margin is two branches, which is thin
+    enough to be worth knowing before the next change lands in `src/core`.
 - **Three lint warnings** in `test/core/repository-retriever.test.ts` predate this branch
   (unused `eslint-disable` directives). 0 errors.

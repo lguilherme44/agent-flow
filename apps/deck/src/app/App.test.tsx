@@ -15,7 +15,9 @@ describe('App 401 and pairing flow (FR-021)', () => {
     let workspaceReadCount = 0;
 
     const eventSourceInstances: { close: ReturnType<typeof vi.fn> }[] = [];
-    const EventSourceMock = vi.fn().mockImplementation(() => {
+    // `function`, not an arrow: since Vitest 4 a mock is constructible, and an arrow
+    // implementation throws when `live.ts` does `new EventSource(...)`.
+    const EventSourceMock = vi.fn().mockImplementation(function EventSourceStub() {
       const instance = {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),

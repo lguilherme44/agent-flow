@@ -22,6 +22,11 @@ type Leaf = readonly [path: string, en: string, ptBR: string];
  * the entries where agreement and interpolation make mistakes.
  */
 function leaves(): Leaf[] {
+  return entries((index) => (index === 0 ? 'ID' : 2));
+}
+
+/** Both books rendered, with `at` choosing what each parameter is given by position. */
+function entries(at: (index: number) => unknown): Leaf[] {
   const rendered: Leaf[] = [];
 
   for (const slice of Object.keys(en) as (keyof Phrases)[]) {
@@ -39,9 +44,7 @@ function leaves(): Leaf[] {
 
       if (typeof value !== 'function' || typeof other !== 'function') continue;
 
-      // `'ID'` for a string parameter and `2` for a count: two is the plural everywhere,
-      // and a book that only agreed in the singular would pass on 1.
-      const args = Array.from({ length: value.length }, (_, index) => (index === 0 ? 'ID' : 2));
+      const args = Array.from({ length: value.length }, (_, index) => at(index));
       rendered.push([
         `${slice}.${key}`,
         (value as (...rest: unknown[]) => string)(...args),
@@ -109,5 +112,42 @@ describe('the phrase book', () => {
     expect(ptBR.attention.blockingFindings('TASK-001', 3)).toContain('3 achados bloqueantes');
     expect(ptBR.board.changesRequested(1)).toContain('1 achado bloqueante');
     expect(ptBR.board.changesRequested(2)).toContain('2 achados bloqueantes');
+  });
+
+  it('renders in the singular too, and with the optional half declined', () => {
+    // `${n} finding${n === 1 ? '' : 's'}` is one entry with two shapes, and
+    // `${ownWorktree ? ' in its own worktree' : ''}` is a decision about *what to say*
+    // rather than formatting. Rendering only at `2` — which is all this suite did — read
+    // half of each: 25 agreement and fragment branches across the two books had never been
+    // executed. Nothing hid them; the coverage meter simply could not see inside a template
+    // literal until Vitest 4 made the v8 provider's AST-aware remapping the default.
+    //
+    // `1` is the singular, `''` a name there is nothing to print, `false` a flag that is
+    // off. What is asserted is what a fold can be held to without writing a second
+    // translation of it: the sentence still comes out, and nothing in it went missing.
+    //
+    // Rendered with the first parameter held as an identifier *and* given the same value as
+    // the rest, because the first parameter is not always an id — `remoteChecksFailed(red)`,
+    // `declared(total)` and `running(attempt, …)` take a count there, and a suite that always
+    // passed `'ID'` could reach neither their singular nor their plural.
+    const shapes = [2, 1, '', false].flatMap((argument) => [
+      [`id then ${JSON.stringify(argument)}`, (index: number) => (index === 0 ? 'ID' : argument)],
+      [`${JSON.stringify(argument)} throughout`, () => argument],
+    ]) as readonly (readonly [string, (index: number) => unknown])[];
+
+    for (const [shape, at] of shapes) {
+      for (const [path, english, portuguese] of entries(at)) {
+        for (const [book, sentence] of [
+          ['en', english],
+          ['pt-BR', portuguese],
+        ] as const) {
+          const where = `${book} ${path} — ${shape}`;
+
+          expect(sentence.trim(), where).not.toBe('');
+          // A forgotten branch does not throw — it interpolates the hole it left.
+          expect(sentence, where).not.toMatch(/undefined|\bNaN\b|\[object /);
+        }
+      }
+    }
   });
 });

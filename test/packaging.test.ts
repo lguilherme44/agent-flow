@@ -230,6 +230,11 @@ describe('the published package', () => {
     // Widening or narrowing `engines` silently is how a `>=20` claim becomes untrue.
     // The floor is declared here and the matrix is declared in the workflow; this is
     // the line that makes them one decision.
+    //
+    // The matrix moved from the `check` job to `packaging` when Vitest 5 raised the test
+    // runner's floor to Node 22.12 and `check` could no longer start on 20. Nothing about
+    // this assertion changed, and the proof got stronger: `packaging` drives the installed
+    // tarball on the floor version rather than the developer's runner.
     const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
     const matrix = /node:\s*\[([^\]]+)\]/.exec(workflow)?.[1] ?? '';
     const versions = [...matrix.matchAll(/'(\d+)'/g)].map((match) => Number(match[1]));

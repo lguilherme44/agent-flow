@@ -37,6 +37,5 @@ export default defineConfig({
      * trusts.
      */
     maxWorkers: 2,
-    minWorkers: 1,
   },
 });

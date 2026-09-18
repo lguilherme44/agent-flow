@@ -45,11 +45,8 @@ export default defineConfig({
     // vitest picking it up fails at collection — a red suite that says nothing about the
     // code. Run it with `npm run test:phone`.
     exclude: ['node_modules/**', 'dist/**', 'phone/**'],
-    poolOptions: {
-      threads: {
-        minThreads: 1,
-        maxThreads: 2,
-      },
-    },
+    // Same cap, same reason, same correction as the dashboard's config: Vitest 4 removed
+    // `poolOptions`, and the nested form it replaces capped a pool this suite does not run.
+    maxWorkers: 2,
   },
 });

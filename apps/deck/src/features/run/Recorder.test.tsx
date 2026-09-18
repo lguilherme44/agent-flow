@@ -97,7 +97,16 @@ function draw(overrides: Partial<RecorderProps> = {}) {
 describe('Recorder', () => {
   beforeEach(() => {
     const observer = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
-    vi.stubGlobal('ResizeObserver', vi.fn(() => observer));
+    // `function`, not an arrow. Vitest 4 made `vi.fn()` constructible, and the price is that
+    // a mock whose implementation is an arrow function now throws on `new` — which is
+    // exactly how the component asks for its observer. A constructor that returns an object
+    // hands that object back, so the spies below are still the ones the component calls.
+    vi.stubGlobal(
+      'ResizeObserver',
+      vi.fn(function ResizeObserverStub() {
+        return observer;
+      }),
+    );
     plotWidth(1200);
   });
 

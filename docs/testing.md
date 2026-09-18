@@ -180,10 +180,10 @@ inside them, and what each command's result is *worth* are declared once, in
 
 | Lane | Jobs | |
 |---|---|---|
-| `node` | `check` (Node 20, 22) | typecheck ×3, lint, Vitest, dashboard unit, both builds |
+| `node` | `check` (Node 22) | typecheck ×3, lint, Vitest, dashboard unit, both builds |
 | `browser` | `e2e` | Playwright E2E in the pinned Playwright container |
 | `visual` | `visual` | Screenshot regression against the Linux baselines, same container |
-| `packaging` | `packaging` | Pack, install elsewhere, drive the installed product |
+| `packaging` | `packaging` (Node 20, 22) | Pack, install elsewhere, drive the installed product |
 | `security` | `dependencies`, `secrets`, `codeql` | Advisories, secrets over history, static analysis |
 | `coverage` | `coverage` | A report, not a gate |
 
@@ -191,6 +191,15 @@ inside them, and what each command's result is *worth* are declared once, in
 Node 20 than under 22, and duplicating it would double the slowest job in the file to
 learn nothing. Both browser jobs upload the Playwright report — expected, actual and
 diff for every mismatch — when they fail.
+
+The Node matrix sits on `packaging`, not on `check`. Vitest 5 declares
+`engines.node: ^22.12.0 || ^24 || >=26` and does not start under Node 20, so a lane that is
+almost entirely Vitest cannot answer there — which is a fact about the runner, not about
+`agent-flow`: the CLI still builds for node20 and still declares `engines.node: '>=20'`.
+`packaging` proves that floor the way it is actually claimed, by installing the tarball
+outside the checkout and driving the installed CLI on both versions.
+`test/packaging.test.ts` reads the matrix back out of the workflow, so the floor and the
+versions CI runs stay one decision.
 
 ### What a result is worth
 

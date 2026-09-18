@@ -22,7 +22,6 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 120_000,
     maxWorkers: 2,
-    minWorkers: 1,
     coverage: COVERAGE,
   },
 });

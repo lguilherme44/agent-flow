@@ -296,7 +296,7 @@ export const GATES = [
     policy: 'report-only',
     recurrence: 'per-change-and-weekly',
     command: 'npm audit --audit-level=high',
-    why: 'vitest and vite carry advisories about dev servers nobody runs from a published package. Fixing them needs major upgrades that belong in their own reviewed change — so this reports, every time, and never blocks.',
+    why: 'The whole tree, not only what ships. Report-only because a dev-server advisory is not an advisory in anybody’s install, and because closing one can need a major upgrade of the test toolchain — which belongs in its own reviewed change rather than in whatever branch happened to run the audit.',
   },
   {
     id: 'secrets',

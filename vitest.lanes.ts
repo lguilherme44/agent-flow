@@ -1,4 +1,8 @@
-import type { UserConfig } from 'vitest/config';
+// `UserConfig` was Vite's config with Vitest's `test` key augmented onto it, and Vitest 5
+// no longer re-exports it under that name: the test half is its own `TestUserConfig`, which
+// is the half this file needs. Naming it directly also stops the coverage contract's type
+// from depending on a Vite-side augmentation that a Vite major can move.
+import type { TestUserConfig } from 'vitest/config';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 
@@ -151,7 +155,7 @@ export function subprocessLane(root: string): string[] {
  * of a floor is a floor that drifts downward on one side and nobody notices, since a
  * threshold only ever fails loudly when it is *too high*.
  */
-export const COVERAGE: NonNullable<NonNullable<UserConfig['test']>['coverage']> = {
+export const COVERAGE: NonNullable<TestUserConfig['coverage']> = {
   provider: 'v8',
   clean: true,
   include: ['src/**/*.ts'],

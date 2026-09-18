@@ -329,7 +329,10 @@ Details, including what having no authentication does and does not mean:
 
 ## Requirements
 
-- **Node 20+**
+- **Node 20+** to *run* agent-flow; **Node 22.12+ to work on it**, because Vitest 5 does not
+  start below that. Two floors because they are two claims: the CLI is built for node20 and
+  CI drives the installed tarball there, while the test toolchain is a developer's problem
+  and nobody's install.
 - **git** — any version for sequential mode; **2.33.0 or newer** for worktree
   isolation, which needs `git worktree add --lock --reason`. `agent-flow doctor`
   reports your version against that floor.
@@ -1111,9 +1114,12 @@ subjects, if the two lanes stop covering every file, or if coverage stops readin
 including why the gsd-browser smoke does not replace Playwright and why it runs locally
 rather than in CI.
 
-CI runs the `node` lane on Node 20 and 22, `browser` and `visual` in a pinned container,
-`packaging` on its own, and `coverage` as a report rather than a gate. The gsd-browser
-smoke is `required-release` and runs locally — see `docs/testing.md` for why.
+CI runs the `node` lane on Node 22, `browser` and `visual` in a pinned container,
+`packaging` on Node 20 and 22, and `coverage` as a report rather than a gate. The Node
+matrix is on `packaging` because Vitest 5 does not start below Node 22.12 while the
+shipped CLI still supports Node 20 — so the floor is proved by driving the installed
+tarball rather than the developer's runner. The gsd-browser smoke is `required-release`
+and runs locally — see `docs/testing.md` for why.
 
 ---
 
