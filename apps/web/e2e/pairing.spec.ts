@@ -259,8 +259,16 @@ test.describe('device pairing over a real socket', () => {
     }
 
     // ── 7. Same code presented by a second device is refused (FR-004, SDD 17) ────
+    // The client header is what makes this a test of FR-004 rather than a second test of
+    // §5 above. This context has never navigated anywhere, so its request carries no
+    // Origin, and a write with neither an Origin this server serves nor a client header is
+    // refused `origin_missing` before any route sees it — measured: 403 where this line
+    // asserts 401. That guard is the CSRF fix the hardening programme landed and §5
+    // already covers it deliberately; a real second device is a browser at the Deck and
+    // sends an Origin. Calling the API directly is the other supported way in, and the
+    // header is how this repository's other specs do it (degraded, security).
     const secondContext = await browser.newContext({
-      extraHTTPHeaders: { 'x-forwarded-for': '198.51.100.2' },
+      extraHTTPHeaders: { 'x-forwarded-for': '198.51.100.2', 'x-agent-flow-client': 'e2e' },
     });
     const secondPairRes = await secondContext.request.post(`${targetUrl}/api/v1/pair`, {
       data: { code: printedCode, label: 'Second Device' },

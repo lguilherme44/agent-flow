@@ -398,6 +398,45 @@ describe('session guard server behaviors (TASK-003)', () => {
     expect(secondPair.statusCode).toBe(401);
   });
 
+  it('exempt from the session stage is not exempt from the write guard (FR-008, SEC-005)', async () => {
+    // Every pairing test above sends `x-agent-flow-client`, and none of them said why.
+    // The E2E did not, and could not: it only ever reached this route through the Deck,
+    // which sends an Origin. When an earlier fix let it reach the route by API instead,
+    // it read 403 where it asserted 401 and the failure named the code rather than the
+    // header — the pairing route is exempt from *session* authentication, because an
+    // unpaired device has no session to present, and exemption stops there.
+    //
+    // A write with neither an Origin this server serves nor the client header is the
+    // CSRF shape the hardening programme closed: a bodyless cross-origin POST is a
+    // simple request, so the browser sends it and withholds only the reply.
+    const { server } = await serve({ remoteAccess: { admittedAddresses: ['192.168.1.9'] } });
+    const code = server.pairing!.code;
+
+    const naked = await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/pair',
+      remoteAddress: '192.168.1.5',
+      headers: { host: '192.168.1.9:4782', 'content-type': 'application/json' },
+      payload: { code, label: 'Scripted Device' },
+    });
+
+    expect(naked.statusCode).toBe(403);
+    expect(JSON.parse(naked.body).error).toBe('origin_missing');
+
+    // POSITIVE CONTROL. The same request with the header reaches the route and is
+    // answered by the *code*, so the refusal above is the guard rather than the pairing
+    // store refusing everything that arrives.
+    const admitted = await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/pair',
+      remoteAddress: '192.168.1.5',
+      headers: { host: '192.168.1.9:4782', 'content-type': 'application/json', 'x-agent-flow-client': '1' },
+      payload: { code, label: 'Scripted Device' },
+    });
+
+    expect(admitted.statusCode).toBe(200);
+  });
+
   it('GET /api/v1/sessions and POST /api/v1/sessions/:deviceId/revoke lifecycle (FR-011, FR-012, SEC-003)', async () => {
     const { server } = await serve({ remoteAccess: { admittedAddresses: ['192.168.1.9'] } });
 
