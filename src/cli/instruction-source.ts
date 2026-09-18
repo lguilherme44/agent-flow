@@ -29,12 +29,42 @@ export interface InstructionFlags {
 }
 
 /**
+ * What the text is called in a refusal, and what an empty one costs.
+ *
+ * Two commands read text this way and they are not the same text (D15). `revise` reads an
+ * instruction about a plan; `feature` reads the description the whole run is planned
+ * from — the measured one was 9 KB with backticks, quotes and paragraph breaks, and had
+ * to be launched from a Node script with `spawn` because no shell would carry it. A
+ * refusal that says "instruction" to somebody who typed `feature` sends them to the
+ * wrong command's help.
+ */
+export interface InstructionWording {
+  /** The noun in every refusal: `instruction`, `description`. */
+  readonly noun: string;
+  /** Why an empty text is refused rather than passed on. */
+  readonly empty: string;
+}
+
+export const REVISION_WORDING: InstructionWording = {
+  noun: 'instruction',
+  empty: 'The instruction is empty; nothing to revise against.',
+};
+
+export const DESCRIPTION_WORDING: InstructionWording = {
+  noun: 'description',
+  empty: 'The description is empty; there is nothing to plan a feature from.',
+};
+
+/**
  * Exactly one source, or a refusal.
  *
  * Two sources refuse rather than resolving by precedence. Precedence would discard one of
  * them silently, and the discarded one is the longer text about half the time.
  */
-export function chooseInstructionSource(flags: InstructionFlags): InstructionSource {
+export function chooseInstructionSource(
+  flags: InstructionFlags,
+  wording: InstructionWording = REVISION_WORDING,
+): InstructionSource {
   // A lone `-` means stdin, as it does in every other tool that reads text.
   const fromStdin = flags.argument === '-';
   const fromArgument = flags.argument !== undefined && !fromStdin;
@@ -46,7 +76,7 @@ export function chooseInstructionSource(flags: InstructionFlags): InstructionSou
   if (chosen > 1) {
     return {
       kind: 'refused',
-      reason: 'Give the instruction one way only: an argument, --file, --edit, or - for stdin.',
+      reason: `Give the ${wording.noun} one way only: an argument, --file, --edit, or - for stdin.`,
     };
   }
 
@@ -59,8 +89,7 @@ export function chooseInstructionSource(flags: InstructionFlags): InstructionSou
 
   return {
     kind: 'refused',
-    reason:
-      'No instruction. Pass it as an argument, or use --file <path>, --edit, or - to read stdin.',
+    reason: `No ${wording.noun}. Pass it as an argument, or use --file <path>, --edit, or - to read stdin.`,
   };
 }
 
@@ -78,6 +107,7 @@ export type ReadInstruction =
 export async function readInstruction(
   source: Exclude<InstructionSource, { kind: 'refused' }>,
   io: InstructionIO,
+  wording: InstructionWording = REVISION_WORDING,
 ): Promise<ReadInstruction> {
   const text = await textOf(source, io);
   if (text === undefined) {
@@ -94,7 +124,7 @@ export async function readInstruction(
     // An editor opened and closed without typing, or an empty pipe. Re-planning on an empty
     // revision spends the planner and returns roughly what was already there, which reads
     // to the person as though the tool ignored them.
-    return { ok: false, reason: 'The instruction is empty; nothing to revise against.' };
+    return { ok: false, reason: wording.empty };
   }
 
   return { ok: true, instruction };

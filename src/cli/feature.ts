@@ -17,6 +17,7 @@ import { runPaths } from '../app/paths.js';
 import { createRunWithIdentity, revise } from '../app/run-actions.js';
 import {
   chooseInstructionSource,
+  DESCRIPTION_WORDING,
   readInstruction,
   type InstructionFlags,
   type InstructionIO,
@@ -33,6 +34,46 @@ export interface FeatureOptions {
   readonly from?: string;
   readonly skipReview?: boolean;
   readonly workflow?: string;
+}
+
+/** The seams a test replaces: where the text is read from, and what runs once it is. */
+export interface FeatureSourceDeps {
+  readonly io: InstructionIO;
+  readonly run: typeof runFeatureCommand;
+}
+
+/**
+ * `feature` with its description read the way `revise` reads its instruction (D15).
+ *
+ * Measured on AF-2026-004, 11/09/2026: the description was 9 KB with backticks, quotes and
+ * paragraph breaks, and the run had to be started from a Node script calling `spawn` with
+ * an argv, because every shell mangled the text before Agent Flow saw it — the exact
+ * defect the comment beside `revise`'s argument already described. Same chooser, same
+ * reader, same three sources; only the noun in the refusals changes, so the person who
+ * typed `feature` is not told about an "instruction".
+ *
+ * Resolved before anything else runs: a refused invocation costs no context build, and
+ * `--edit` opens an editor only for a command that will use what gets typed.
+ */
+export async function runFeatureFromSource(
+  flags: InstructionFlags,
+  options: FeatureOptions,
+  globals: GlobalOptions,
+  deps: FeatureSourceDeps = { io: nodeInstructionIO(), run: runFeatureCommand },
+): Promise<ExitCodeValue> {
+  const source = chooseInstructionSource(flags, DESCRIPTION_WORDING);
+  if (source.kind === 'refused') {
+    process.stderr.write(`${source.reason}\n`);
+    return ExitCode.CONFIG_ERROR;
+  }
+
+  const read = await readInstruction(source, deps.io, DESCRIPTION_WORDING);
+  if (!read.ok) {
+    process.stderr.write(`${read.reason}\n`);
+    return ExitCode.CONFIG_ERROR;
+  }
+
+  return deps.run(read.instruction, options, globals);
 }
 
 /**

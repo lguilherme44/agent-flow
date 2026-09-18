@@ -227,7 +227,7 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       **Pronto quando:** o estágio de planejamento recebe os achados da última revisão como
       entrada, e um teste falha se um plano recusado for replanejado sem eles.
 
-- [ ] **D15 · `feature` só aceita a descrição como argumento de shell** — `src/cli/index.ts`
+- [x] **D15 · `feature` só aceita a descrição como argumento de shell** — `src/cli/index.ts`
       O `revise` aceita `--file`, `-` e `--edit`, e o comentário ao lado diz o porquê:
       *"A multi-paragraph revision does not survive being a shell argument (AR-08)."* Vale
       igual para a descrição de uma feature, e mais: a desta run tem 9 KB, com crases,
@@ -237,6 +237,11 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       `revise` já descreve.
       **Pronto quando:** `feature` lê a descrição de `--file`, de `-` ou do `$EDITOR`,
       pelo mesmo caminho que o `revise` já usa.
+      **Fechado em 18/09/2026.** `runFeatureFromSource` (`src/cli/feature.ts`) usa o mesmo
+      `chooseInstructionSource`/`readInstruction` do `revise`, com o substantivo trocado
+      (`DESCRIPTION_WORDING`) para a recusa não mandar quem digitou `feature` para a ajuda
+      do `revise`. `test/cli/feature-description-source.test.ts` fixa: cerca, apóstrofo e
+      parágrafos chegam byte a byte, e uma invocação recusada não alcança o comando.
 
 - [x] **D1 · A porta ocupada responde com stack trace de Node** — `src/cli/ui.ts`
       `Error: listen EADDRINUSE` mais quatro linhas de `node:internal`. O produto sabe que

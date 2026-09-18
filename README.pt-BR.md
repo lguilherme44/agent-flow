@@ -442,7 +442,7 @@ Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela p
 |---|---|
 | `init` | Prepara um repositório. Detecta a stack, lê os scripts que você realmente tem, nunca sobrescreve sem `--force`. |
 | `doctor` | Este ambiente consegue trabalhar? Reporta `OK` / `DEGRADED` / `FAIL`, mais a versão do Git contra o piso do modo worktree e se o seu comando de install deixa um checkout novo limpo. `--deep` faz um probe real em cada runner, o que gasta quota. |
-| `feature "<descrição>"` | Discovery → impacto → SDD → plano → review. Para no gate. |
+| `feature "<descrição>"` | Discovery → impacto → SDD → plano → review. Para no gate. Descrição longa vai num arquivo: `--file`, `-` para stdin, ou `--edit`, os mesmos três caminhos que o `revise` lê. |
 | `status` | Onde o run está, o que produziu, o que está degradado, e em qual modo de isolamento ele nasceu. |
 | `approve` | Abre o gate. Recusa review reprovado, a menos que `--force`. |
 | `reject` · `revise "<instrução>"` | Encerra um run, ou replaneja com orientação. |

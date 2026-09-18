@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
-import { runFeatureCommand, runReviseCommand } from './feature.js';
+import { runFeatureFromSource, runReviseCommand } from './feature.js';
 import { runDoctorCommand } from './doctor.js';
 import { runInitCommand } from './init.js';
 import { runSetupCommand } from './setup.js';
@@ -148,18 +148,35 @@ export async function main(argv: string[]): Promise<number> {
   program
     .command('feature')
     .description('Plan a feature: discovery → impact → SDD → plan → review')
-    .argument('<description>', 'what the feature should do')
+    // Optional for the same reason `revise`'s is (D15): a description with paragraphs,
+    // backticks and quotes does not survive being a shell argument, and the measured one
+    // was 9 KB.
+    .argument('[description]', 'what the feature should do, or - to read stdin')
+    .option('--file <path>', 'read the description from a file')
+    .option('--edit', 'write the description in $EDITOR')
     .option('--no-cache', 'ignore the cached repository map and re-run discovery')
     .option('--from <stage>', 'resume from a stage (discovery, architecture-impact, sdd, planning)')
     .option('--skip-review', 'stop after planning, without the automated review')
     .option('--workflow <class>', 'workflow class override: trivial, simple, standard, high-risk')
     .action(
       async (
-        description: string,
-        options: { cache?: boolean; from?: string; skipReview?: boolean; workflow?: string },
+        description: string | undefined,
+        options: {
+          file?: string;
+          edit?: boolean;
+          cache?: boolean;
+          from?: string;
+          skipReview?: boolean;
+          workflow?: string;
+        },
         command: Command,
       ) => {
-        exitCode = await runFeatureCommand(description, options, globalOptions(command));
+        const { file, edit, ...feature } = options;
+        exitCode = await runFeatureFromSource(
+          { argument: description, file, edit },
+          feature,
+          globalOptions(command),
+        );
       },
     );
 

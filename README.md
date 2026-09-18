@@ -441,7 +441,7 @@ Walked through with a real four-task feature, a DAG and the artifacts it produce
 |---|---|
 | `init` | Prepare a repository. Detects the stack, reads your real scripts, never overwrites without `--force`. |
 | `doctor` | Can this environment work? Reports `OK` / `DEGRADED` / `FAIL`, plus the Git version against the worktree floor and whether your install command leaves a fresh checkout clean. `--deep` probes each runner for real, which spends quota. |
-| `feature "<description>"` | Discovery → impact → SDD → plan → review. Stops at the gate. |
+| `feature "<description>"` | Discovery → impact → SDD → plan → review. Stops at the gate. A long description goes in a file: `--file`, `-` for stdin, or `--edit`, the same three ways `revise` reads. |
 | `status` | Where the run is, what it produced, what is degraded, and which isolation mode it was born in. |
 | `approve` | Open the gate. Refuses a failed review unless `--force`. |
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
