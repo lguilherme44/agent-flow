@@ -97,9 +97,18 @@ describe('App 401 and pairing flow (FR-021)', () => {
       expect(screen.getByRole('heading', { name: en.pairing.title })).toBeDefined();
     });
 
-    // The EventSource that was opened should be closed when AuthenticatedApp unmounted
-    expect(eventSourceInstances.length).toBeGreaterThanOrEqual(1);
-    expect(eventSourceInstances[0]?.close).toHaveBeenCalled();
+    // The EventSource that was opened should be closed when AuthenticatedApp unmounted.
+    // Waited for, not asserted outright: React commits the pairing screen to the DOM in one
+    // macrotask and runs the unmounted subtree's effect cleanups — where close() lives — in
+    // the next one, scheduled through MessageChannel. Testing Library's waitFor resolves on
+    // a MutationObserver microtask and then drains with a single setTimeout(0), and which of
+    // those two macrotasks the event loop picks up first depends on the machine. Measured:
+    // straight assertion passed 30/30 on an idle 12-core box, and failed 2/30 with 24 CPU
+    // burners running, the same red as CI's two-core runner.
+    await waitFor(() => {
+      expect(eventSourceInstances.length).toBeGreaterThanOrEqual(1);
+      expect(eventSourceInstances[0]?.close).toHaveBeenCalled();
+    });
 
     // No further read of /workspace happens while on the pairing screen
     const readCountBeforePair = workspaceReadCount;
