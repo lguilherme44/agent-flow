@@ -447,6 +447,7 @@ Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela p
 | `approve` | Abre o gate. Recusa review reprovado, a menos que `--force`. |
 | `reject` · `revise "<instrução>"` | Encerra um run, ou replaneja com orientação. |
 | `run` · `task TASK-004` · `retry TASK-004` | Executa o plano aprovado. |
+| `revalidate TASK-004` | Você consertou a worktree da tentativa na mão: reexecuta só os comandos de validação da tarefa sobre a árvore como ela está. Nenhum modelo é chamado e nenhum retry é gasto. Um passe vira uma tentativa cujo ator é `human`, com o mesmo recibo e o mesmo marker de qualquer tentativa, e o `run` integra normalmente. |
 | `review` | Roda a validação, inspeciona o código e o julga contra o SDD. No modo worktree os três leem a integration tree, sob o lock do run. `--fix` transforma os findings em tasks e revisa o plano corrigido. |
 | `ui [root]` | Serve o Deck em `127.0.0.1:4782`. Com um diretório, serve todo repositório inicializado abaixo dele como workspace. `--classic` serve o dashboard anterior. Veja [`docs/web-ui.md`](docs/web-ui.md). |
 | `clean` | Remove estado de runs antigos, e o namespace Git que vem junto: os worktrees e as refs de attempt deste run, nunca nada de terceiros. Mantém os cinco runs mais recentes, e nunca o ativo sem `--force`. Uma integration branch que não foi mergeada em lugar nenhum é **mantida e reportada** — `--branches` é a única flag que apaga trabalho. |

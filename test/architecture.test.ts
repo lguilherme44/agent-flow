@@ -1356,6 +1356,10 @@ describe('the isolation policy is decided in core, and switched on by nobody yet
       'src/app/run-actions.ts',
       'src/app/execution-context.ts',
       'src/app/task-workspaces.ts',
+      // D19: revalidation asks whether the run has an attempt worktree at all, because a
+      // sequential run has none and there is no tree "as it stands" for it to validate.
+      // It reads the run's own mode, exactly as `prepare` does, and assigns nothing.
+      'src/app/task-revalidation.ts',
       // M2-06: `prepare` and `openForReview` both answer `sequential` for a run
       // whose recorded mode is not `worktree`, so the mode is decided by the run
       // rather than by whether an Integrator happens to be wired.
@@ -2152,7 +2156,18 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
       (match) => match[1],
     );
 
-    expect(locked.sort()).toEqual(['approve', 'reject', 'retry', 'review', 'revise', 'run']);
+    // `revalidate` joined them in D19. It runs the task's validation commands inside an
+    // attempt worktree and then writes an attempt artifact, a marker and the task's state
+    // — every one of which the scheduler also writes, so the two must not run together.
+    expect(locked.sort()).toEqual([
+      'approve',
+      'reject',
+      'retry',
+      'revalidate',
+      'review',
+      'revise',
+      'run',
+    ]);
   });
 
   it('takes that lease only where review touches the integration tree (§18.2)', () => {

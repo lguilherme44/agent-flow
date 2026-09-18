@@ -213,7 +213,11 @@ export function decideTaskRecovery(input: {
       'retry.maxAttempts',
       `this task has already been attempted ${String(counters.unattendedAttempts)} times ` +
         'without anybody being asked',
-      'Review the attempt evidence, then retry the task',
+      // Two verbs, because the task has two shapes and only one of them needs a model.
+      // D19 measured the cost of naming one: a task stopped on nine unused imports, and
+      // the only path offered was twenty minutes of an executor deleting nine lines.
+      'Review the attempt evidence, then retry the task — or, if you have already fixed ' +
+        'its worktree yourself, revalidate it',
     );
   }
 
@@ -355,8 +359,16 @@ function exhausted(
  *
  * Bounded to one line each. An escalation is read, not paged through — the attempt log is
  * where the rest lives.
+ *
+ * **Structural in its parameter rather than nominal**, for the reason `isCompleteEscalation`
+ * above is: a `TaskResult` is the record of what a *runner* ran, and D19's revalidation runs
+ * the same commands with no runner behind them. Two implementations of "which line of this
+ * failure is worth showing" is the second one nobody keeps redacted.
  */
-export function escalationEvidence(result: TaskResult): string[] {
+export function escalationEvidence(result: {
+  readonly validation?: Pick<TaskResult['validation'], 'commands'>;
+  readonly errorCode?: string;
+}): string[] {
   const failing = (result.validation?.commands ?? [])
     .filter((command) => command.exitCode !== 0)
     .slice(0, MAX_ESCALATION_EVIDENCE)

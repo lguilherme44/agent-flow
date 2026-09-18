@@ -12,7 +12,12 @@ export const en: Phrases = {
     approval: 'Review the plan and run `agent-flow approve`',
     taskReview: (tasks) => `Review ${tasks}, then requeue with \`agent-flow retry\` or accept the outcome`,
     agentBlocked: (tasks) => `Answer what ${tasks} reported as blocking, then requeue`,
-    taskFailed: (tasks, waiting) => `Fix what stopped ${tasks}, then \`agent-flow retry\` it.${waiting}`,
+    // Both verbs, because "fix it" splits in two: fixing the plan or the prompt means
+    // running the model again, and fixing the worktree means only re-running the checks
+    // (D19). Naming one made a nine-line import fix cost an executor call.
+    taskFailed: (tasks, waiting) =>
+      `Fix what stopped ${tasks}, then \`agent-flow retry\` it — or \`agent-flow revalidate\` ` +
+      `it if you fixed its worktree yourself.${waiting}`,
     waitingOn: (tasks) => ` ${tasks} are waiting on it.`,
     finalAcceptance: 'Run `agent-flow review`, then accept and merge',
   },
@@ -282,6 +287,7 @@ export const en: Phrases = {
     beingApproved: 'approved',
     beingRejected: 'rejected',
     beingReviewed: 'reviewed',
+    beingRevalidated: 'revalidated by hand',
     heldByPidOn: (pid, hostname) => ` (pid ${pid} on ${hostname})`,
 
     noPlanYetToApprove: (runId) => `${runId} has no plan yet, so there is nothing to approve.`,
@@ -330,7 +336,8 @@ export const en: Phrases = {
     noRunnableInState: (runId, status) =>
       `${runId} has no runnable task in its current state (${status}).`,
     reviewEvidenceThenRetry: (taskId) =>
-      `Review the task's evidence, then \`agent-flow retry ${taskId}\`.`,
+      `Review the task's evidence, then \`agent-flow retry ${taskId}\` — or ` +
+      `\`agent-flow revalidate ${taskId}\` if you already fixed its worktree by hand.`,
     answerBlockedThenRetry: 'Answer what the blocked task reported, then retry it.',
     startNewOrCheckStatus:
       'Start a new run, or check `agent-flow status` for what this one is waiting on.',

@@ -16,7 +16,7 @@ import {
 import { runStatusCommand } from './status.js';
 import { runMapCommand } from './map.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
-import { runRunCommand, runRetryCommand } from './run.js';
+import { runRunCommand, runRetryCommand, runRevalidateCommand } from './run.js';
 import { runReviewCommand } from './review.js';
 import { runForgeCommand, type ForgeAction } from './forge.js';
 import { runCleanCommand } from './clean.js';
@@ -265,6 +265,16 @@ export async function main(argv: string[]): Promise<number> {
       command: Command,
     ) => {
       exitCode = await runRetryCommand(taskId, options, globalOptions(command));
+    });
+
+  program
+    .command('revalidate')
+    // D19. Beside `retry` because it is the other half of the same answer: `retry` runs the
+    // model again, and this runs only the checks over the worktree a person already fixed.
+    .description("Re-run a task's validation over the worktree you fixed by hand")
+    .argument('<taskId>', 'for example TASK-004')
+    .action(async (taskId: string, _options: unknown, command: Command) => {
+      exitCode = await runRevalidateCommand(taskId, globalOptions(command));
     });
 
   program

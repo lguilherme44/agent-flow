@@ -446,6 +446,7 @@ Walked through with a real four-task feature, a DAG and the artifacts it produce
 | `approve` | Open the gate. Refuses a failed review unless `--force`. |
 | `reject` · `revise "<instruction>"` | Close a run, or re-plan with guidance. |
 | `run` · `task TASK-004` · `retry TASK-004` | Execute the approved plan. |
+| `revalidate TASK-004` | You fixed the attempt's worktree by hand: re-run only that task's validation commands over it, as it stands. No model is invoked and no retry is spent. A pass is recorded as an attempt whose actor is `human`, with the same receipt and marker any attempt gets, and `run` integrates it normally. |
 | `review` | Run validation, inspect the code, judge it against the SDD. In worktree mode all three read the integration tree, under the run lock. `--fix` turns findings into tasks and reviews the corrected plan. |
 | `ui [root]` | Serve Deck on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. `--classic` serves the previous dashboard instead. See [`docs/web-ui.md`](docs/web-ui.md). |
 | `clean` | Remove old run state, and the Git namespace that goes with it: this run's worktrees and attempt refs, never anything foreign. Keeps the five most recent runs, and never the active one without `--force`. An integration branch that is merged nowhere is **kept and reported** — `--branches` is the only flag that deletes work. |

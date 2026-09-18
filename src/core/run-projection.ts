@@ -180,7 +180,27 @@ export function projectRun(input: ProjectionInput): RunProjection {
   }
 
   const exhausted = lastEventIndex(events, 'recovery_exhausted');
-  if (exhausted >= 0 && exhausted > lastEventIndex(events, 'task_requeued')) {
+  // Two events end an escalation, because there are two ways a person answers one: put the
+  // task back in the queue, or fix its worktree and revalidate it (D19). Reading only the
+  // first would leave a run that a human had already closed still reporting
+  // `auto_recovery_exhausted` — and `status` would go on offering the retry they chose not
+  // to spend.
+  //
+  // **A revalidation counts only when it passed**, and that condition is the whole of the
+  // second half. The failure branch writes the same event name — deliberately, because an
+  // attempt to answer is itself worth recording — and taking it as an answer would drop the
+  // escalation object the moment somebody fixed *half* of the problem: the run would fall
+  // through to `blocked_on_human` with none of C-22's counts, evidence or named action,
+  // for a question nobody had actually answered.
+  const answered = Math.max(
+    lastEventIndex(events, 'task_requeued'),
+    lastEventIndexWhere(
+      events,
+      'task_revalidated',
+      (event) => event.detail['passed'] === true,
+    ),
+  );
+  if (exhausted >= 0 && exhausted > answered) {
     // C-22: the status is the least of what termination owes the reader.
     return {
       ...base,
@@ -459,6 +479,28 @@ function projectReviewFreshness(input: ProjectionInput): RunProjection['reviewFr
 function lastEventIndex(events: readonly RunEvent[], type: string): number {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     if (events[index]?.type === type) return index;
+  }
+  return -1;
+}
+
+/**
+ * The last event of this type whose detail satisfies a predicate, or `-1`.
+ *
+ * Needed the moment one event name carried two outcomes. `task_revalidated` is written
+ * whether the human's fix worked or not — both are facts worth recording — so a reader
+ * asking "was the escalation answered" has to read `passed` rather than the name.
+ *
+ * Deliberately not solved by splitting the event into two names: the audit trail should
+ * show every attempt a person made to close a task, under one name, in order.
+ */
+function lastEventIndexWhere(
+  events: readonly RunEvent[],
+  type: string,
+  matches: (event: RunEvent) => boolean,
+): number {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event !== undefined && event.type === type && matches(event)) return index;
   }
   return -1;
 }

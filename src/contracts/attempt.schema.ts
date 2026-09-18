@@ -188,6 +188,22 @@ export const TaskAttemptResultSchema = z
     /** Present if and only if `validationJudgement === 'satisfied'`. */
     receipt: AttemptReceiptSchema.optional(),
 
+    /**
+     * Who produced the tree this attempt validated (D19).
+     *
+     * `'human'` means a person edited the previous attempt's worktree by hand and asked
+     * for its validation commands to be run again — no runner was invoked, and no work
+     * attempt was spent on a model. Recorded because a task closed by a person's hand
+     * must not read like one closed by the model: the artifact is what the history
+     * projection, the dashboard and any later audit have to tell them apart by.
+     *
+     * **Optional, and absence is not `'model'`** — it is "written before this field
+     * existed", the same discipline `isolationMode` carries. Nothing may promote one.
+     * Every attempt an agent produces omits it, so the field appears exactly when the
+     * thing it describes has happened.
+     */
+    closedBy: z.literal('human').optional(),
+
     errorCode: z.string().optional(),
   })
   .refine((attempt) => (attempt.validationJudgement === 'satisfied') === (attempt.receipt !== undefined), {

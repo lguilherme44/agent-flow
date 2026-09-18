@@ -186,6 +186,26 @@ describe('attempt history (AR-08)', () => {
     expect(history?.[1]?.runner).toBe('claude');
   });
 
+  it('tells an attempt a person closed apart from one the model closed (D19)', async () => {
+    // The positive control for the whole revalidation path. A task closed by hand must not
+    // read like one closed by the model, and this row is where a reader looks — so the
+    // actor has to survive the trip from the artifact to the projection rather than
+    // stopping at the file nobody opens.
+    const { fs, reader, run, paths } = await world();
+    fs.seed(paths.taskAttempt('TASK-001', 1), succeeded(run.runId, 1));
+    fs.seed(
+      paths.taskAttempt('TASK-001', 2),
+      succeeded(run.runId, 2, { runner: 'human', closedBy: 'human', model: undefined }),
+    );
+
+    const history = (await reader.taskDetail(PROJECT, run.runId, 'TASK-001'))?.attemptHistory;
+
+    expect(history?.[1]).toMatchObject({ attempt: 2, runner: 'human', closedBy: 'human' });
+    // And absence stays absence: a model attempt says nothing about who closed it, and
+    // nothing here may promote it into a claim (§25.2's discipline, on a new field).
+    expect(history?.[0]?.closedBy).toBeUndefined();
+  });
+
   it('keeps a finished attempt on its own model after the configuration moves (Issue #21)', async () => {
     // **The test above proves the artifact is read. It does not prove the artifact wins.**
     // `world()` seeds an empty global config and a project block with no `roles:`, so no

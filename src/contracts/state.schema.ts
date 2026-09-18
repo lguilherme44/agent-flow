@@ -604,6 +604,17 @@ export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];
 export const OPERATOR_EVENT_TYPES = [
   /** `detail: { action, actor }`. Who moved this run, and how they reached it. */
   'operator_action',
+  /**
+   * `detail: { task, attempt, passed, actor, validationIds }`. A person fixed the
+   * attempt's worktree by hand and its validation commands were run again over it (D19).
+   *
+   * Its own event rather than a flag on `task_requeued`, because it is its own fact and
+   * the opposite one: a requeue says "run the model again", and this says "nobody will
+   * — the tree is already what a person means it to be". An audit that could only read
+   * the second out of a field on the first would lose the distinction the whole path
+   * exists to record.
+   */
+  'task_revalidated',
 ] as const;
 
 export type OperatorEventType = (typeof OPERATOR_EVENT_TYPES)[number];

@@ -377,6 +377,45 @@ describe('runtime status overrides a persisted status that has moved on', () => 
     expect(resumed.status).toBe('implementing');
   });
 
+  it('keeps the escalation when the revalidation itself failed (D19)', () => {
+    // The failure branch writes the same event name — deliberately, because an attempt to
+    // close a task is worth recording — so reading the name alone would drop the
+    // escalation the moment somebody fixed *half* of the problem. The run would fall to
+    // `blocked_on_human` with none of C-22's counts, evidence or named action, for a
+    // question nobody had answered.
+    const stillExhausted = projectRun({
+      state: state({ tasks: [task('TASK-001', 'failed')] }),
+      nodes: [{ id: 'TASK-001', dependencies: [] }],
+      events: [
+        event('recovery_exhausted', '2026-08-17T15:00:00.000Z'),
+        { ...event('task_revalidated', '2026-08-17T15:05:00.000Z'), detail: { passed: false } },
+      ],
+    });
+
+    expect(stillExhausted.status).toBe('auto_recovery_exhausted');
+    // And the object survives with it: the status alone is the least of what C-22 owes.
+    expect(stillExhausted.escalation).toBeDefined();
+  });
+
+  it('also ends the escalation when a person revalidated instead of retrying (D19)', () => {
+    // There are two ways to answer an escalation and only one of them was read. A person
+    // who fixed the worktree by hand has answered it just as surely as one who pressed
+    // Retry — and leaving the run on `auto_recovery_exhausted` would go on offering them
+    // the model call they deliberately did not spend.
+    const answered = projectRun({
+      state: state({ tasks: [task('TASK-001', 'running')] }),
+      nodes: [{ id: 'TASK-001', dependencies: [] }],
+      events: [
+        event('recovery_exhausted', '2026-08-17T15:00:00.000Z'),
+        // `passed` is read, not the name: only a revalidation that actually closed the task
+        // has answered anything. The companion test above holds the other half.
+        { ...event('task_revalidated', '2026-08-17T15:05:00.000Z'), detail: { passed: true } },
+      ],
+    });
+
+    expect(answered.status).toBe('implementing');
+  });
+
   it('reports correcting while a corrective round has unfinished work', () => {
     const projection = projectRun({
       state: state({ tasks: [task('TASK-001', 'completed'), task('FIX-001', 'queued')] }),

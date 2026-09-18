@@ -53,6 +53,13 @@ import {
   type WorktreeRefusalCode,
 } from './run-git-identity.js';
 import type { IntegrationRefusalCode } from './integrator.js';
+import {
+  refuseUnrevalidatable,
+  revalidateTask,
+  type RevalidationDeps,
+  type RevalidationRefusalCode,
+  type RevalidationResult,
+} from './task-revalidation.js';
 import { en, type Phrases } from '../core/phrases/index.js';
 import { GitClient, renderChanges } from '../adapters/git/git-client.js';
 import {
@@ -186,7 +193,11 @@ export type ActionErrorCode =
   // stops, and it stops with the code that names what is wrong rather than with a
   // generic "gate not satisfied" — which is the difference between a person
   // knowing their branch was rewound and a person re-running the command.
-  | IntegrationRefusalCode;
+  | IntegrationRefusalCode
+  // D19. Why "I fixed it by hand; validate it again" could not be done, and each one names
+  // a precondition rather than a gate a person may overrule: a task the machine still
+  // intends to run, a run that never isolated anything, a worktree that is gone.
+  | RevalidationRefusalCode;
 
 export interface ActionError {
   readonly code: ActionErrorCode;
@@ -465,6 +476,8 @@ function gerund(operation: LockOperation, say: Phrases): string {
       return say.actions.beingRejected;
     case 'review':
       return say.actions.beingReviewed;
+    case 'revalidate':
+      return say.actions.beingRevalidated;
   }
 }
 
@@ -980,6 +993,61 @@ async function requeue(
   await recordActor(context.store, runId, 'retryTask', deps.actor);
 
   return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
+}
+
+// ---------------------------------------------------------------------------
+// revalidate
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-runs a task's validation over the tree a person fixed (D19).
+ *
+ * A thin adapter, and that is the whole of it: the preconditions, the commands, the
+ * receipt, the marker and the state transition live in `app/task-revalidation.ts`. What
+ * belongs here is the lease and the refusal shape, because those are what every other use
+ * case on this page also owes.
+ *
+ * **Refused before the lock, not inside it** (C-19), for the reason `start` is: every
+ * precondition is answerable from persisted state and the filesystem, so asking them under
+ * the lease would cost an acquire/refuse/release cycle and write two events about work that
+ * never happened.
+ */
+export async function revalidate(
+  deps: RunActionDeps,
+  runId: string,
+  taskId: string,
+): Promise<ActionOutcome<RevalidationResult>> {
+  const say = deps.say ?? en;
+  const store = storeFor(deps);
+  if ((await loadRun(store, runId)) === null) return failed(noSuchRun(runId, say));
+
+  const context = await buildExecutionContext(deps);
+  const revalidation: RevalidationDeps = {
+    fs: context.fs,
+    clock: context.clock,
+    host: context.host,
+    store: context.store,
+    workspaces: context.workspaces,
+    processRunner: context.processRunner,
+    config: context.config,
+    projectDir: context.projectDir,
+  };
+
+  const refused = await refuseUnrevalidatable(revalidation, runId, taskId);
+  if (refused !== undefined) return failed({ ...refused });
+
+  return withExecutionLock(deps, store, runId, 'revalidate', async () => {
+    const outcome = await revalidateTask(revalidation, runId, taskId, deps.actor);
+    if (!outcome.ok) return failed({ ...outcome.refusal });
+
+    // A human acted, so the unattended streak is over (C-22, AR §6.2), exactly as it is
+    // for a retry. Recorded on both branches: a person who looked at a failing tree and
+    // fixed part of it has intervened whether or not the fix was complete.
+    await clearAutonomy(context.store, runId);
+    await recordActor(context.store, runId, 'revalidateTask', deps.actor);
+
+    return done(outcome.value);
+  });
 }
 
 // ---------------------------------------------------------------------------

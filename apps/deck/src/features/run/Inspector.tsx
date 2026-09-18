@@ -192,6 +192,18 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
                       {attempt.failedCommands.length > 0 ? ` · ${t.inspector.failedCommands(attempt.failedCommands.join(', '))}` : ''}
                     </span>
                     <span className="attempt__meta">
+                      {/*
+                        D19: read from `closedBy`, never guessed from the runner string. The
+                        marker comes first because it changes what every field after it means
+                        — a duration and a runner describe a model call, and this attempt was
+                        not one.
+                      */}
+                      {attempt.closedBy === 'human' ? (
+                        <b data-testid="attempt-closed-by-human">
+                          {t.inspector.closedByHuman}
+                        </b>
+                      ) : null}
+                      {attempt.closedBy === 'human' ? ' · ' : ''}
                       {attempt.runner}
                       {attempt.model === undefined ? '' : ` · ${attempt.model}`} · {formatDuration(Date.parse(attempt.finishedAt) - Date.parse(attempt.startedAt))}
                     </span>

@@ -18,7 +18,8 @@ export const ptBR: Phrases = {
       `Revise ${tasks}, e então recoloque na fila com \`agent-flow retry\` ou aceite o resultado`,
     agentBlocked: (tasks) => `Responda o que ${tasks} apontou como impedimento, e recoloque na fila`,
     taskFailed: (tasks, waiting) =>
-      `Conserte o que parou ${tasks}, e então rode \`agent-flow retry\` nela.${waiting}`,
+      `Conserte o que parou ${tasks}, e então rode \`agent-flow retry\` nela — ou ` +
+      `\`agent-flow revalidate\` se você mesmo já consertou a worktree dela.${waiting}`,
     waitingOn: (tasks) => ` ${tasks} está esperando por ela.`,
     finalAcceptance: 'Rode `agent-flow review`, e então aceite e faça o merge',
   },
@@ -297,6 +298,7 @@ export const ptBR: Phrases = {
     beingApproved: 'aprovada',
     beingRejected: 'rejeitada',
     beingReviewed: 'revisada',
+    beingRevalidated: 'revalidada na mão',
     heldByPidOn: (pid, hostname) => ` (pid ${pid} em ${hostname})`,
 
     noPlanYetToApprove: (runId) => `${runId} ainda não tem plano, então não há o que aprovar.`,
@@ -346,7 +348,8 @@ export const ptBR: Phrases = {
     noRunnableInState: (runId, status) =>
       `${runId} não tem tarefa executável no estado atual (${status}).`,
     reviewEvidenceThenRetry: (taskId) =>
-      `Revise as evidências da tarefa, e então rode \`agent-flow retry ${taskId}\`.`,
+      `Revise as evidências da tarefa, e então rode \`agent-flow retry ${taskId}\` — ou ` +
+      `\`agent-flow revalidate ${taskId}\` se você mesmo já consertou a worktree dela.`,
     answerBlockedThenRetry: 'Responda o que a tarefa bloqueada apontou, e então recoloque na fila.',
     startNewOrCheckStatus:
       'Comece uma run nova, ou veja em `agent-flow status` o que esta está esperando.',

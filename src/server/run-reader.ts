@@ -861,6 +861,9 @@ export class RunReader {
       attempt: result.attempt,
       outcome: 'succeeded',
       runner: result.runner,
+      // D19: a task closed by a person's hand must not read like one closed by the model,
+      // and this row is where a reader looks. Copied, never derived from `runner`.
+      ...(result.closedBy === undefined ? {} : { closedBy: result.closedBy }),
       ...(result.model === undefined ? {} : { model: result.model }),
       reasoning: result.reasoning,
       reasoningClamped: result.reasoningClamped,

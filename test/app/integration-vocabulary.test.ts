@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { INTEGRATION_REFUSAL_CODES, MARKER_TRAILERS } from '../../src/app/integrator.js';
 import { RECOVERY_REFUSAL_CODES } from '../../src/app/worktree-recovery.js';
+import { OPERATOR_EVENT_TYPES } from '../../src/contracts/index.js';
 
 /**
  * The specification and the code, pinned to each other (Appendix A, §12.4).
@@ -277,6 +278,25 @@ describe('Appendix B is the canonical event vocabulary', () => {
   it('names no event twice', () => {
     const names = appendixB();
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe('the operator vocabulary names what a person did to a task (D19)', () => {
+  it('declares task_revalidated, and something emits it', () => {
+    // Declared in the layer that owns vocabulary rather than coined at the call site, for
+    // the reason every list beside it is: two spellings of one event is a read model that
+    // silently reports half of what happened.
+    expect(OPERATOR_EVENT_TYPES).toContain('task_revalidated');
+    expect(emittedEvents().has('task_revalidated')).toBe(true);
+  });
+
+  it('keeps it apart from task_requeued, which says the opposite thing', () => {
+    // A requeue says "run the model again"; a revalidation says "nobody will — the tree is
+    // already what a person means it to be". Folding the second into a flag on the first
+    // would lose the distinction the whole path exists to record.
+    const emitted = emittedEvents();
+    expect(emitted.has('task_requeued')).toBe(true);
+    expect(OPERATOR_EVENT_TYPES).not.toContain('task_requeued');
   });
 });
 

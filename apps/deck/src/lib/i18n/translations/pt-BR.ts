@@ -812,6 +812,7 @@ export const ptBR: Dictionary = {
     retryAnyway: 'Repetir mesmo assim',
     attemptsHeading: 'Tentativas',
     didNotSpend: 'não gastou uma tentativa',
+    closedByHuman: 'fechada por uma pessoa',
     failedCommands: (commands: string) => `falhou: ${commands}`,
     acceptance: 'Aceitação',
     filesChanged: 'Arquivos alterados',

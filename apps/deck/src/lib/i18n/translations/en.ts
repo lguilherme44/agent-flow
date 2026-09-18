@@ -830,6 +830,11 @@ export const en = {
     retryAnyway: 'Retry anyway',
     attemptsHeading: 'Attempts',
     didNotSpend: 'did not spend an attempt',
+    // D19. A task closed by a person's hand must not read like one closed by the model, and
+    // this row is where anybody looks first. Its own phrase rather than dressing up the
+    // runner string: a screen that inferred "human" from `runner === 'human'` would be
+    // wrong the day somebody configures a runner by that name.
+    closedByHuman: 'closed by a person',
     failedCommands: (commands: string) => `failed: ${commands}`,
     acceptance: 'Acceptance',
     filesChanged: 'Files changed',

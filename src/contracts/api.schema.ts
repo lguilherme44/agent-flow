@@ -721,6 +721,16 @@ export interface AttemptHistoryView {
   readonly outcome: 'succeeded' | 'failed';
   /** What actually ran, not what was configured — under a fallback the two differ. */
   readonly runner: string;
+  /**
+   * Present when a person closed this attempt by hand (D19).
+   *
+   * Carried up from the artifact rather than inferred from `runner`, because a screen that
+   * guessed from a string would guess wrong the day somebody configures a runner called
+   * `human`. Absent means "written by a model, or written before this field existed" — the
+   * two are not distinguished here and must not be: nothing may promote an old attempt
+   * into a claim about who made it.
+   */
+  readonly closedBy?: 'human';
   readonly model?: string;
   readonly reasoning: ReasoningLevel;
   readonly reasoningClamped: boolean;

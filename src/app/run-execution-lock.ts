@@ -94,6 +94,16 @@ export const LOCK_OPERATIONS = [
    * never existed at any single instant.
    */
   'review',
+  /**
+   * Added by D19, and held for the same reason `retry` is.
+   *
+   * A revalidation runs the task's validation commands inside an attempt worktree and
+   * then writes an attempt artifact, a marker and the task's state. Every one of those
+   * is something the scheduler also does, so doing it beside a running scheduler would
+   * be two writers on one run — and the one that lost would lose evidence rather than a
+   * race.
+   */
+  'revalidate',
 ] as const;
 export type LockOperation = (typeof LOCK_OPERATIONS)[number];
 

@@ -341,6 +341,7 @@ export interface Phrases {
     readonly beingApproved: string;
     readonly beingRejected: string;
     readonly beingReviewed: string;
+    readonly beingRevalidated: string;
     /** Appended to a resume refusal when the lock names a holder; empty when it does not. */
     readonly heldByPidOn: (pid: string, hostname: string) => string;
 

@@ -142,7 +142,7 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       Corrigido: `complex` 2400 s, `normal` 1800 s, `trivial` 900 s, com a medição escrita
       no comentário.
 
-- [ ] **D19 · Não existe "eu já consertei, só valida de novo"** — `src/cli/index.ts` + `src/app/run-actions.ts`
+- [x] **D19 · Não existe "eu já consertei, só valida de novo"** — `src/cli/index.ts` + `src/app/run-actions.ts`
       A TASK-004 parou com `recovery_exhausted` e a evidência inteira era:
 
       ```
@@ -161,6 +161,28 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       **Pronto quando:** existir um caminho que reexecuta só os comandos de validação sobre
       a árvore como ela está — e que registre no log que a correção foi humana, porque um
       task fechado por mão de gente não pode parecer um fechado pelo modelo.
+
+      Corrigido: `agent-flow revalidate <task>`, em `src/app/task-revalidation.ts`. Roda os
+      comandos de validação da própria task dentro da worktree da última tentativa, sem
+      spawnar modelo e sem resetar nada. O passe vira a tentativa *n+1* com `closedBy:
+      'human'` — recibo, marker e artefato pelo mesmo caminho de sempre, então o `run`
+      integra pelo Integrator como qualquer outra. A falha não gasta nada e não escreve
+      `attempt-<n>.json`: ninguém executou trabalho, e o caminho continua aberto para o
+      próximo conserto. O `retry.maxAttempts` fica intacto porque `attemptsBeforeHumanRetry`
+      anda junto com `attempts` — o que aquele orçamento limita é a sequência *sem ninguém
+      olhando*, e esta é o oposto disso.
+
+      Quatro defeitos saíram da revisão adversarial, e o primeiro era o perigoso: uma task
+      **sem validação declarada** — que é o formato normal de uma task BLOCKED, e `blocked`
+      era um estado aceito — passava direto pelo `judgeValidation`, que responde `completed`
+      para zero comandos. Uma palavra digitada fechava a task com recibo, marker e
+      integração, sem rodar nada. Agora `nothing_to_revalidate` recusa antes do lock, e o
+      caso de uso recusa de novo por dentro. Os outros três: o `task_revalidated` de
+      **falha** também limpava o `auto_recovery_exhausted` (agora só o `passed: true`
+      responde); o `closedBy` parava no contrato e nunca chegava à tela (agora o Inspector
+      do Deck marca "fechada por uma pessoa", nos dois idiomas); e o hand-off para o `run`
+      não tinha teste — agora tem um que roda Scheduler + Integrator + WorktreeRecovery com
+      git de verdade e um executor que *explode se for chamado*.
 
 - [x] **D17 · O D7 ficou aberto exatamente na superfície que importa** — `src/cli/feature.ts`
       O `resumeHint` recebeu a classe do workflow como parâmetro **com default

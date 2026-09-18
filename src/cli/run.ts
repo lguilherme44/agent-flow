@@ -1,6 +1,6 @@
 import { describeIsolation } from '../app/run-git-identity.js';
 import { buildExecutionContext, loadPlan } from '../app/execution-context.js';
-import { retryTask, start } from '../app/run-actions.js';
+import { retryTask, revalidate, start } from '../app/run-actions.js';
 import { explainRouting, routeTask } from '../core/router.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
@@ -139,6 +139,65 @@ export async function runRetryCommand(
         ? `\nRecorded: ${taskId} is meant to change nothing, so an empty diff will be accepted.\n`
         : '';
     process.stdout.write(`${taskId} is queued again.\n${declared}\nRun it with: agent-flow run\n`);
+    return ExitCode.OK;
+  } catch (error) {
+    const rendered = renderError(error);
+    process.stderr.write(`${rendered.message}\n`);
+    return rendered.exitCode;
+  }
+}
+
+/**
+ * `agent-flow revalidate <task>` — you fixed the worktree; run only the checks again (D19).
+ *
+ * A renderer and nothing else. It parses, calls the use case and prints — the preconditions,
+ * the commands, the receipt and the state transition all live in `app/task-revalidation.ts`.
+ *
+ * **This is the only adapter over that use case today.** Nothing in `src/server` or
+ * `apps/deck` calls it, and the placement is not a claim that something does: it is where
+ * §26.1 rule 12 puts a decision, so that the day a second surface wants this command it
+ * gets the same preconditions rather than its own.
+ */
+export async function runRevalidateCommand(
+  taskId: string,
+  globals: GlobalOptions,
+): Promise<ExitCodeValue> {
+  try {
+    const deps = actionDeps(globals);
+    const runId = await currentRunId(deps);
+    if (runId === null) {
+      process.stderr.write('No active run.\n');
+      return ExitCode.GATE_NOT_SATISFIED;
+    }
+
+    const outcome = await revalidate(deps, runId, taskId);
+
+    if (!outcome.ok) {
+      process.stderr.write(`${render(outcome.error)}\n`);
+      return exitCodeFor(outcome.error);
+    }
+
+    const result = outcome.value;
+
+    if (!result.passed) {
+      // Not an error the shell should treat as a crash, and not silence either: the person
+      // asked a question and the answer is "not yet", with the lines that say why.
+      process.stdout.write(
+        `${taskId} still does not pass its own validation. It stays where it was, ` +
+          'and no attempt was spent.\n\n',
+      );
+      for (const line of result.evidence) process.stdout.write(`  ${line}\n`);
+      process.stdout.write('\nFix what is left, then: agent-flow revalidate ' + taskId + '\n');
+      return ExitCode.GATE_NOT_SATISFIED;
+    }
+
+    // Said back, because it is what the log now records and the operator is on the record
+    // for it: this task was closed by a person's hand, not by the model.
+    process.stdout.write(
+      `${taskId} passed its validation over the tree as you left it.\n` +
+        `Recorded as attempt ${String(result.attempt)}, closed by a human — no model ran ` +
+        'and no retry was spent.\n\nIntegrate it with: agent-flow run\n',
+    );
     return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);
