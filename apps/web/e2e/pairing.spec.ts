@@ -90,6 +90,10 @@ function connectEventSource(
   });
 }
 
+// Steps 3 and 4 below read the pairing screen and the gate in English. See `deckLocale`
+// in `support/harness.ts`.
+test.use({ deckLocale: 'en' });
+
 test.describe('device pairing over a real socket', () => {
   test('proves the pairing lifecycle end to end', async ({ page, makeWorld, browser }) => {
     const world = await makeWorld({ dashboard: 'deck', pair: true, host: '0.0.0.0' });

@@ -20,8 +20,12 @@ const OUT = join(REPO_ROOT, 'apps/web/e2e/.results');
  * is a visual one and an assertion on the DOM cannot see a bar under a mark.
  */
 
-// The reader's language and the width the panel was designed against.
-test.use({ locale: 'pt-BR', viewport: { width: 1900, height: 1000 } });
+// The reader's language and the width the panel was designed against. `deckLocale` is
+// what puts the words on screen in Portuguese — stated rather than inherited from the
+// product's default, so the assertions below cannot be silently retargeted by a change to
+// which language the Deck opens in. `locale` is the browser's, which the Deck ignores for
+// its dictionary but still uses for dates and numbers.
+test.use({ deckLocale: 'pt-BR', locale: 'pt-BR', viewport: { width: 1900, height: 1000 } });
 
 async function openRun(page: Page, world: World): Promise<{ runId: string; recorder: Locator }> {
   const runId = await world.runIdOf(project);
@@ -64,14 +68,21 @@ test.describe('Deck recorder, on a real run', () => {
     const { recorder } = await openRun(page, world);
     await expect(recorder.getByText('AO VIVO').first()).toBeVisible();
     // Two agents parked means two lanes with a bar still open at the playhead.
-    await expect(recorder.locator('.svg-attempt[data-outcome="running"]')).toHaveCount(2);
+    //
+    // `[data-task]` is what makes this a count of *lanes*. `.svg-attempt` is drawn in
+    // three roles — the legend swatch, the stage tape and the task lanes — and only a lane
+    // bar names the task it belongs to. Written before b450059 added the legend, this
+    // counted 4 from CI: two lanes, the tape cell for the stage in flight, and the legend's
+    // own "em execução" swatch. Widening the expectation to 4 would have made it a count of
+    // decorations that changes whenever the legend does.
+    await expect(recorder.locator('.svg-attempt[data-outcome="running"][data-task]')).toHaveCount(2);
     await snap(page, recorder, testInfo, 'recorder-live');
 
     await world.release();
     await exited(coordinator);
     await page.reload();
     await expect(page.getByRole('heading', { name: await world.runIdOf(project) })).toBeVisible();
-    await expect(recorder.locator('.svg-attempt[data-outcome="running"]')).toHaveCount(0);
+    await expect(recorder.locator('.svg-attempt[data-outcome="running"][data-task]')).toHaveCount(0);
     await snap(page, recorder, testInfo, 'recorder-recorded');
 
     // The plan's titles reach the lanes; the legend names what the coordinator wrote.
@@ -99,7 +110,11 @@ test.describe('Deck recorder, on a real run', () => {
 
     const legend = recorder.getByRole('list', { name: 'Legenda' });
     await expect(legend).toContainText('falhou');
-    await expect(recorder.locator('.svg-attempt[data-outcome="failed"]').first()).toBeVisible();
+    // `[data-task]` for the same reason as above, and here it is the difference between a
+    // claim and a tautology: the legend entry asserted one line earlier is itself a
+    // `.svg-attempt[data-outcome="failed"]`, so without the scope this passes on a run
+    // where no attempt failed at all.
+    await expect(recorder.locator('.svg-attempt[data-outcome="failed"][data-task]').first()).toBeVisible();
     expect(problems, 'the browser logged an error').toEqual([]);
   });
 });

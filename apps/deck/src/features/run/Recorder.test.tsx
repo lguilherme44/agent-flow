@@ -161,6 +161,23 @@ describe('Recorder', () => {
     expect(kinds).toEqual(expect.arrayContaining(['created', 'approved', 'validated']));
   });
 
+  it('names the task only on a lane bar, so a count of attempts can leave the decoration out', () => {
+    const { container } = draw();
+    // `.svg-attempt` is drawn in three roles with the same class and the same
+    // `data-outcome`: the legend swatch, the stage tape cell and the lane bar. Only the
+    // lane bar belongs to a task, and `[data-task]` is what a caller counting attempts has
+    // to say — `deck-recorder.spec.ts` counted 4 running bars for 2 parked agents until it
+    // did.
+    const everywhere = container.querySelectorAll('.svg-attempt[data-outcome="completed"]');
+    const lanes = [...container.querySelectorAll('.svg-attempt[data-outcome="completed"][data-task]')];
+
+    // The control: the unscoped selector really does pick up more than the lanes here — a
+    // legend entry for `completed` and the `planning` tape cell — so the scope is doing
+    // work rather than describing a distinction the DOM does not make.
+    expect(everywhere.length).toBeGreaterThan(lanes.length);
+    expect(lanes.map((node) => node.getAttribute('data-task'))).toEqual(['TASK-001']);
+  });
+
   it('draws a task mark above its bar, not across it', () => {
     const { container } = draw();
     const bar = container.querySelector('.svg-attempt[data-task="TASK-001"]');

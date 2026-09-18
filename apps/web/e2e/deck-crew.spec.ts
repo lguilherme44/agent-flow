@@ -6,6 +6,10 @@ import { REPO_ROOT } from './support/world.js';
 
 const project = 'booking-api';
 
+// Every heading, label and button below is quoted in English, so the Deck is told to
+// open in it. See `deckLocale` in `support/harness.ts`.
+test.use({ deckLocale: 'en' });
+
 async function openCrew(page: import('@playwright/test').Page, url: string): Promise<void> {
   await page.goto(`${url}/crew?project=${project}`);
   await expect(page.getByRole('heading', { name: 'Configure the active crew' })).toBeVisible();

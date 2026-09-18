@@ -2318,6 +2318,24 @@ describe('the E2E suite crosses the real server (UI-31)', () => {
     );
   });
 
+  it('pins the Deck language through the key the Deck actually reads', () => {
+    // The Deck opens in pt-BR and decides that from `localStorage`, ignoring
+    // `navigator.language` — so Playwright's `locale` cannot make it speak English and the
+    // specs that assert English words set the stored preference instead. The harness
+    // cannot import that key: it lives in a `.tsx` in another workspace, behind React and
+    // the store. So it is copied, and this is what stops the copy drifting — a rename in
+    // the Deck would otherwise leave the pin writing a key nobody reads, and every English
+    // spec would fail on the language rather than on the feature.
+    const key = (text: string): string | undefined =>
+      /'(agent-flow:deck:[a-z-]+)'/.exec(text)?.[1];
+
+    const deck = key(read(join(ROOT, 'apps/deck/src/lib/i18n/i18n.tsx')).text);
+    const harness = key(read(join(ROOT, 'apps/web/e2e/support/harness.ts')).text);
+
+    expect(deck, 'the Deck no longer stores the locale under an `agent-flow:deck:` key').toBeDefined();
+    expect(harness, 'the E2E harness no longer pins the Deck locale').toBe(deck);
+  });
+
   it('spends no quota', () => {
     // The runner is replaced at the executable boundary — `runners.<id>.command` —
     // and nowhere else. A spec that named a real CLI would be a spec that only

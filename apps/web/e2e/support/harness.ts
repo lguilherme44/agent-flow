@@ -1,6 +1,20 @@
 import { expect, test as base, type Page, type Request } from '@playwright/test';
 import { createWorld, type World, type WorldOptions } from './world';
 
+/** Which language the Deck is asked to open in. The two the dictionary ships. */
+export type DeckLocale = 'en' | 'pt-BR';
+
+/**
+ * Where the Deck keeps the reader's chosen language.
+ *
+ * Mirrors `STORAGE_KEY` in `apps/deck/src/lib/i18n/i18n.tsx`, copied rather than
+ * imported: that module is a `.tsx` in another workspace, and reaching into it for one
+ * string would pull React, the store and the API client into a project typed for Node.
+ * The copy cannot drift in silence — `test/architecture.test.ts` reads both files and
+ * fails the moment the two strings stop matching.
+ */
+export const DECK_LOCALE_KEY = 'agent-flow:deck:locale';
+
 /**
  * The E2E fixture: a world per test, torn down whatever happened.
  *
@@ -13,8 +27,40 @@ import { createWorld, type World, type WorldOptions } from './world';
  * halfway must still leave no server holding a port and no directory in `/tmp`.
  */
 export const test = base.extend<{
+  deckLocale: DeckLocale | undefined;
   makeWorld: (options?: WorldOptions) => Promise<World>;
 }>({
+  /**
+   * The language a spec is reading the Deck in — `test.use({ deckLocale: 'en' })`.
+   *
+   * The Deck's language is a stored reader preference, not a browser locale: since
+   * 2113512 `initialLocale()` answers what this key holds and pt-BR otherwise, and it
+   * ignores `navigator.language` deliberately — so `locale: 'en-US'` in
+   * `playwright.e2e.config.ts` says nothing about the words on screen. A spec that reads
+   * English has to say so, once, rather than by loosening its assertions to regexes that
+   * accept both languages; those would go green on a screen in the wrong one, which is
+   * exactly the regression this has to keep catching.
+   *
+   * Unset by default, so a spec inherits whatever the product opens in.
+   */
+  deckLocale: [undefined, { option: true }],
+
+  page: async ({ page, deckLocale }, use) => {
+    // An init script and not a `page.evaluate` after `goto`: the provider reads the key
+    // while React first renders, so a value written once the page is up would arrive
+    // after the screen it is meant to describe.
+    if (deckLocale !== undefined) {
+      await page.addInitScript(
+        ({ key, locale }: { key: string; locale: string }) => {
+          window.localStorage.setItem(key, locale);
+        },
+        { key: DECK_LOCALE_KEY, locale: deckLocale },
+      );
+    }
+
+    await use(page);
+  },
+
   makeWorld: async ({}, use) => {
     const worlds: World[] = [];
 

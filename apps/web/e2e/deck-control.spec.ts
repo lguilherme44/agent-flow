@@ -13,6 +13,11 @@ const project = 'booking-api';
  * browser watching it could not — and a stage's log has been written to disk all along
  * while the only thing a browser could reach was a two-kilobyte excerpt on failure.
  */
+
+// Every control below is named in English — 'Pause', not 'Pausar'. See `deckLocale` in
+// `support/harness.ts`.
+test.use({ deckLocale: 'en' });
+
 test.describe('Deck run control', () => {
   test('pauses a run, says so, and resumes it', async ({ page, makeWorld }, testInfo) => {
     const world = await makeWorld({ dashboard: 'deck' });
