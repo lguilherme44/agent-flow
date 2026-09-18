@@ -246,16 +246,41 @@
 }
 
 @media (max-width: 720px) {
+  /**
+   * The bar may not depend on which fonts the machine has (measured, 14/09/2026).
+   *
+   * This layout was drawn on Windows, where `--font-mono` lands on Consolas. CI runs the
+   * phone gate in `mcr.microsoft.com/playwright:v1.62.1-noble`, which has neither
+   * JetBrains Mono nor Consolas, so the stack falls through to the generic `monospace` —
+   * DejaVu Sans Mono, wider per glyph. The same markup then measured 18px past 390 there
+   * and 0 here.
+   *
+   * The mechanism, not the fonts, is the bug. `auto` and `1fr` are both `minmax(min-content, …)`:
+   * neither track can be smaller than what it holds, so a status cluster that refuses to
+   * break — three items on one line — made the grid wider than its own box, and `.nav`,
+   * spanning every column, inherited that width and was reported as the offender.
+   * `minmax(0, …)` drops the floor and `flex-wrap` gives the cluster somewhere to put the
+   * overflow: it stacks onto a second line instead of pushing the frame sideways. No
+   * destination and no status is hidden to buy the width — they rearrange.
+   */
   .topbar {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
     grid-auto-rows: auto;
     height: auto;
     padding: var(--s-2) var(--s-4);
     row-gap: var(--s-1);
   }
+  /* `min-width: auto` on a grid item is the same floor as the track's, one level down. */
+  .wordmark,
+  .status-cluster,
+  .nav {
+    min-width: 0;
+  }
   .status-cluster {
     grid-column: 2;
     justify-content: flex-end;
+    flex-wrap: wrap;
+    row-gap: var(--s-1);
   }
   .nav {
     grid-column: 1 / -1;
@@ -306,6 +331,17 @@
   .nav__link[aria-current='page']::after {
     left: var(--s-2);
     right: var(--s-2);
+  }
+
+  /**
+   * `--s-4` between the three mono items is a rhythm drawn for a bar with 1200px to spend.
+   * At 390 those 32px of gap are what decides whether the clock shares a line with the
+   * connection state or starts a third one, so they come down to `--s-2` — enough to keep
+   * the items separate, cheap enough that the cluster still fits beside the wordmark on a
+   * machine with wider glyphs.
+   */
+  .status-cluster {
+    column-gap: var(--s-2);
   }
 
   .page {

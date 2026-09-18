@@ -28,6 +28,7 @@ apps/web/visual/.results/
 apps/web/e2e/.results/
 apps/web/playwright-report/
 apps/web/test-results/
+apps/deck/test-results/
 
 # Packaging smoke output: a tarball and the throwaway prefix it is installed into.
 .packaging/

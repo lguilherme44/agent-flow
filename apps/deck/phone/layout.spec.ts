@@ -138,6 +138,25 @@ async function rendered(page: Page, ...text: string[]): Promise<void> {
   expect(painted, 'the page rendered no text at all').toBeGreaterThan(200);
 }
 
+/**
+ * A font wider than the one the topbar was drawn with.
+ *
+ * This gate runs on Windows locally and inside `mcr.microsoft.com/playwright:v1.62.1-noble`
+ * in CI, and `--font-mono` ends in the generic `monospace`: neither JetBrains Mono nor
+ * Consolas exists in that image, so the container draws the bar in DejaVu Sans Mono, whose
+ * glyphs are wider than the ones this machine picks. On 14/09/2026 that difference alone
+ * pushed the shell 18px past 390 in CI while every local run stayed green.
+ *
+ * Forcing tracking is that difference made portable. 0.22em is wider than every
+ * letter-spacing the topbar declares — 0.16em on the wordmark, 0.14em on its tag, 0.06em
+ * in the status cluster, 0.02em on a nav link — so every glyph advance grows on any
+ * machine, whatever fonts it happens to have. Naming a wide family instead would only
+ * reproduce where that family is installed, which is the bug rather than a test for it.
+ */
+async function widerGlyphs(page: Page): Promise<void> {
+  await page.addStyleTag({ content: '.topbar, .topbar * { letter-spacing: 0.22em !important; }' });
+}
+
 test.describe('the Deck at 390px', () => {
   test('the run page does not scroll sideways', async ({ page }) => {
     await stub(page);
@@ -174,6 +193,26 @@ test.describe('the Deck at 390px', () => {
       // actually collapses.
       expect(box!.height, `nav link ${String(i)} is ${String(box!.height)}px tall`).toBeGreaterThanOrEqual(32);
     }
+  });
+
+  test('the topbar survives a wider font than the one it was drawn with', async ({ page }) => {
+    await stub(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await rendered(page, PROJECT);
+
+    await widerGlyphs(page);
+
+    // The wordmark, the language pair, the connection state and the clock all still have
+    // to be in the bar — the point is that they rearrange, not that any of them is
+    // dropped to buy the width back.
+    await expect(page.locator('.wordmark')).toBeVisible();
+    await expect(page.locator('.lang__pick')).toHaveCount(2);
+    await expect(page.locator('.conn')).toBeVisible();
+    await expect(page.locator('.clock')).toBeVisible();
+
+    expect(await offenders(page), 'these are wider than the screen').toEqual([]);
+    expect(await horizontalOverflow(page)).toBe(0);
   });
 
   test('the pairing screen is usable, since a phone is the reason it exists', async ({ page }) => {
