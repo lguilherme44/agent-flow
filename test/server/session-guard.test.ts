@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import Fastify from 'fastify';
 import {
   parseSessionCookie,
@@ -201,28 +203,41 @@ describe('session guard server behaviors (TASK-003)', () => {
   });
 
   it('Non-loopback peer receives 200 for GET / and client-side route with no secret/path (FR-009)', async () => {
-    // Server with real webDir configured from apps/deck/dist
+    // What is under test is the static/not-found wiring, not the Deck build. This used to
+    // point webDir at apps/deck/dist, so it asserted a build product and went red wherever
+    // nothing had built the Deck (the CI `check` job runs typecheck/lint/test, never
+    // build:deck). A temp webDir with a minimal index.html makes the test self-sufficient.
+    const webDir = await mkdtemp(join(tmpdir(), 'af-session-guard-web-'));
+    await writeFile(
+      join(webDir, 'index.html'),
+      '<!doctype html>\n<html lang="en">\n<head><title>Agent Flow</title></head>\n<body><h1>Agent Flow</h1></body>\n</html>\n',
+      'utf8',
+    );
+
     const fs = new InMemoryFileSystem();
     const clock = new FixedClock();
     const processRunner = new FakeProcessRunner().always({ exitCode: 0, stdout: '1.0.0' });
     const host = new FakeHost();
 
-    const staticServer = await buildServer({
-      fs,
-      clock,
-      processRunner,
-      registry: registryOf([PROJECT]),
-      globalConfigPath: '/home/.agent-flow/config.yaml',
-      version: '0.1.0',
-      host: '127.0.0.1',
-      port: 4782,
-      promptsDir: '/install/prompts',
-      processHost: host,
-      webDir: join(import.meta.dirname, '../../apps/deck/dist'),
-      remoteAccess: { admittedAddresses: ['192.168.1.9'] },
-    });
-
+    // Built inside the `try` so a server that refuses to start still removes the directory
+    // it was going to serve; the `finally` owns both.
+    let staticServer: Awaited<ReturnType<typeof buildServer>> | undefined;
     try {
+      staticServer = await buildServer({
+        fs,
+        clock,
+        processRunner,
+        registry: registryOf([PROJECT]),
+        globalConfigPath: '/home/.agent-flow/config.yaml',
+        version: '0.1.0',
+        host: '127.0.0.1',
+        port: 4782,
+        promptsDir: '/install/prompts',
+        processHost: host,
+        webDir,
+        remoteAccess: { admittedAddresses: ['192.168.1.9'] },
+      });
+
       const rootRes = await staticServer.app.inject({
         method: 'GET',
         url: '/',
@@ -246,7 +261,8 @@ describe('session guard server behaviors (TASK-003)', () => {
       expect(spaRes.body).not.toContain('demo');
       expect(spaRes.body).not.toContain('/repo');
     } finally {
-      await staticServer.close();
+      await staticServer?.close();
+      await rm(webDir, { recursive: true, force: true });
     }
   });
 

@@ -417,7 +417,9 @@ describe('DeviceSessionStore and Use Cases (TASK-002)', () => {
 
   it('records choice of unhashed in-memory secret in a comment naming SEC-002 (SEC-002)', () => {
     const srcPath = join(import.meta.dirname, '../../src/app/device-sessions.ts');
-    const src = readFileSync(srcPath, 'utf8');
+    // The Windows CI runner checks out with CRLF (core.autocrlf), so line endings are
+    // normalised here: the expected comment below is a single literal embedding \n.
+    const src = readFileSync(srcPath, 'utf8').replace(/\r\n/g, '\n');
 
     expect(src).toContain(
       'The in-memory secret is stored unhashed and that choice is recorded in a\n   * comment naming SEC-002: hashing would defend a store this design does not\n   * have, at the cost of putting node:crypto into a layer with no other use for it.',
