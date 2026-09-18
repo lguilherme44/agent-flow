@@ -213,7 +213,7 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       malformada. O roteamento voltou para Claude planejando e agy revisando, com o
       comentário do config reescrito dizendo por que mudou.
 
-- [ ] **D14 · Um plano recusado é replanejado sem lembrar por quê** — `src/app/run-actions.ts` + `src/app/planning-pipeline.ts`
+- [x] **D14 · Um plano recusado é replanejado sem lembrar por quê** — `src/app/run-actions.ts` + `src/app/planning-pipeline.ts`
       Medido em 10/09/2026 retomando a AF-2026-004. A revisão entre provedores escreveu
       `reviews/plan-review.json` com nove achados, cada um ancorado em arquivo e linha —
       e nem `revise` nem `feature --from` passam um único deles ao planejador. O
@@ -226,6 +226,34 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       mesmo motivo.
       **Pronto quando:** o estágio de planejamento recebe os achados da última revisão como
       entrada, e um teste falha se um plano recusado for replanejado sem eles.
+
+      Corrigido: `src/core/replan-input.ts` monta a entrada do planejador — pedido,
+      instrução humana (quando houver) e uma seção delimitada *"Findings from the previous
+      plan review"* com severidade, âncora `arquivo:linha` e texto de cada achado, limitada
+      a 12 achados e 400 caracteres por campo, dizendo quantos omitiu. Só entra quando o
+      veredito é `FAIL`: as observações de um `PASS` não são motivo para replanejar. O
+      `revise` e o `planFeature` leem `reviews/plan-review.json` pela store e passam o
+      resultado ao pipeline; o `revision_requested` ganhou `findingsForwarded` /
+      `findingsOmitted` e o `--from planning` emite `replan_findings_forwarded` (declarado
+      em `STAGE_EVENT_TYPES`). Dois guardas impedem citar uma revisão que já não fala do
+      plano em mãos: o `planHash` da revisão tem de existir e bater com o hash do plano em
+      disco — o mesmo que o `approval.ts` exige para aprovar (`review_unverifiable` /
+      `review_stale`) — e, no `--from planning`, a descrição redigitada tem de ser o
+      `request` guardado; pedido trocado invalida os achados como plano trocado invalida.
+      Só `--from planning`: `discovery`, `architecture-impact` e `sdd` rodam sobre o texto
+      antes de planejar, e não é com eles que os achados falam. Quando um guarda barra
+      achados que existem, a run registra `replan_findings_withheld { reason, findings }`
+      — `stale_review`, `unverifiable_review`, `request_changed` ou
+      `stage_before_planning` — porque guarda que ninguém enxerga é guarda que o operador
+      tem de adivinhar. Sem revisão, ou com revisão `PASS`, não escreve nada. O
+      `agent-flow status` mostra isso em uma linha dentro do bloco PLANNING, redigida por
+      `src/core/replan-report.ts` (que também lê o `findingsForwarded` do
+      `revision_requested`, senão o `revise` bem-sucedido não apareceria), e o `--json`
+      leva o mesmo objeto em `replan`. A seção é removida
+      do `request` antes de ser reescrita, senão a revisão três carregaria as duas
+      anteriores. Testes: `test/core/replan-input.test.ts` e
+      `test/app/replan-findings.test.ts` — este último cai em quatro asserções se o
+      encaminhamento for retirado.
 
 - [x] **D15 · `feature` só aceita a descrição como argumento de shell** — `src/cli/index.ts`
       O `revise` aceita `--file`, `-` e `--edit`, e o comentário ao lado diz o porquê:

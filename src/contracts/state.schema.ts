@@ -480,6 +480,49 @@ export const STAGE_EVENT_TYPES = [
    * states the stage handles identically, by working the way it always did.
    */
   'repo_map_built',
+  /**
+   * `detail: { from, findingsForwarded, findingsOmitted }`. A replan carried the last
+   * plan review's findings into the planning stage (D14).
+   *
+   * Declared here rather than coined where it is written, for the reason every list
+   * beside it is: two spellings of one event is a read model that reports half of what
+   * happened.
+   *
+   * It records a *quantity*, because the fact worth auditing is not that a replan
+   * occurred but that the planner was given the evidence — and how much of it. Measured
+   * on AF-2026-004: three replan cycles, nine anchored findings on disk, zero of them
+   * forwarded, and nothing on the run said so. `findingsOmitted` sits beside it because
+   * the forwarding is capped, and a cap nobody can see is a silent edit.
+   *
+   * Absent means nothing was forwarded — and when there were findings to forward,
+   * {@link STAGE_EVENT_TYPES} `replan_findings_withheld` says which guard stopped them.
+   * `revise` records the same two numbers inside its own `revision_requested` instead,
+   * so that path has one event rather than two.
+   */
+  'replan_findings_forwarded',
+  /**
+   * `detail: { reason, findings }`. A rejected review's findings existed and did not
+   * reach the planner (D14).
+   *
+   * **The counterpart, and the one that closes the silence.** Every guard around the
+   * forwarding is correct and every one of them was invisible: the operator could see
+   * nine findings in `reviews/plan-review.json`, ask for a replan, and get a planner
+   * that had never heard of them — with nothing on the run distinguishing "they were
+   * forwarded" from "they were withheld because you retyped the request". That is
+   * `plan.md`'s thesis, *o produto sabe e não conta*, and a guard nobody can see from
+   * the run is a guard the operator has to guess at.
+   *
+   * `reason` is one of `stage_before_planning` (the resume re-runs stages that come
+   * before planning), `request_changed` (the description is not the request the refused
+   * plan answered), `unverifiable_review` (the review names no plan, or names one that
+   * is not on disk) or `stale_review` (it names a different plan). `findings` is how
+   * many were on the record and did not travel.
+   *
+   * Written only when there was something to withhold. No review, a review that passed
+   * and a FAIL with no findings are all silent, because an event there would be noise
+   * about a non-event.
+   */
+  'replan_findings_withheld',
 ] as const;
 export type StageEventType = (typeof STAGE_EVENT_TYPES)[number];
 

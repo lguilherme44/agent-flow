@@ -86,6 +86,10 @@ import {
 } from '../core/definition-of-done.js';
 import { getCeremonyBudget } from '../core/adaptive-workflow.js';
 import { planningResume } from '../core/resume.js';
+import { renderReplanInput, sameReplanRequest, type ReplanInput } from '../core/replan-input.js';
+// The reason vocabulary is shared with the projection `status` reads it back through, so
+// the writer and the reader cannot drift into two spellings of one fact.
+import type { ReplanWithheldReason } from '../core/replan-report.js';
 
 /**
  * Every state transition a person can ask for, as use cases (UI-27).
@@ -1702,21 +1706,26 @@ async function replan(
   // broken by this one.
   await clearAutonomy(context.store, runId);
 
+  const request = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
+  const replan = await buildReplanInput(context.store, runId, request, {
+    instruction: trimmed,
+  });
+
   await context.store.appendEvent(runId, 'revision_requested', {
     instruction: trimmed,
     attemptedRevision: currentRevisions + 1,
     maxAllowed: budget.maxRevisionCycles,
+    // D14. What the planner was actually given, on the record — so `status` and the
+    // Deck can say the findings were forwarded instead of leaving a reader to trust it.
+    findingsForwarded: replan.findingsForwarded,
+    findingsOmitted: replan.findingsOmitted,
   });
+  await recordWithheldFindings(context.store, runId, replan);
   await recordActor(context.store, runId, 'revise', deps.actor);
 
-  const request = (await context.store.readArtifact(runId, 'request')) ?? state.feature;
   const pipeline = buildPlanningPipeline(context);
 
-  const result = await pipeline.run(
-    runId,
-    `${request.trim()}\n\n---\n\nRevision requested by the reviewer:\n${trimmed}`,
-    { from: 'planning', workflow },
-  );
+  const result = await pipeline.run(runId, replan.text, { from: 'planning', workflow });
 
   const nextRevisionCount = currentRevisions + 1;
   await context.store.updateRun(runId, (entry) => ({
@@ -1890,9 +1899,52 @@ export async function planFeature(
   const state = await loadRun(context.store, runId);
   if (state === null) return failed(noSuchRun(runId, say));
 
+  // D14. `--from planning` re-runs the planner over a plan a review may have just
+  // refused, and used to re-plan blind: the nine anchored findings sat in
+  // `reviews/plan-review.json` and the operator had to paste them into the description
+  // by hand.
+  //
+  // **`planning` and nothing else.** `--from discovery`, `--from architecture-impact`
+  // and `--from sdd` re-run those stages over this text first, and a discovery agent
+  // handed a block that says "address every one of them in the plan you return" is
+  // being told to do something it cannot do and does not own. A first `feature` has no
+  // review to forward; `revise` is the only other producer of a replan, and it carries
+  // its own forwarding.
+  //
+  // And only when this *is* the request the refused plan was built from. `revise` reads
+  // the stored artifact, but here the operator retypes the description — and findings
+  // describe tasks that answered one question, so a request that is no longer that
+  // question invalidates them the same way a changed plan does.
+  //
+  // Both refusals are named rather than taken, so `decideReplanReview` can write down
+  // which one applied. A guard nobody can see from the run is a guard the operator has
+  // to guess at.
+  const refusal: ReplanWithheldReason | undefined =
+    options.from !== 'planning'
+      ? 'stage_before_planning'
+      : sameReplanRequest(description, await context.store.readArtifact(runId, 'request'))
+        ? undefined
+        : 'request_changed';
+
+  const replan = await buildReplanInput(
+    context.store,
+    runId,
+    description,
+    refusal === undefined ? {} : { refusal },
+  );
+
+  if (replan.findingsForwarded > 0) {
+    await context.store.appendEvent(runId, 'replan_findings_forwarded', {
+      from: options.from,
+      findingsForwarded: replan.findingsForwarded,
+      findingsOmitted: replan.findingsOmitted,
+    });
+  }
+  await recordWithheldFindings(context.store, runId, replan);
+
   const pipeline = buildPlanningPipeline(context);
   try {
-    const result = await pipeline.run(runId, description, {
+    const result = await pipeline.run(runId, replan.text, {
       ...(options.noCache === true ? { noCache: true } : {}),
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.skipReview === true ? { skipReview: true } : {}),
@@ -2626,6 +2678,116 @@ async function loadReview(store: StateStore, runId: string): Promise<ReviewResul
   } catch {
     return null;
   }
+}
+
+/**
+ * The planner input for a replan, with the last review's findings when it refused (D14).
+ *
+ * One helper for both producers of a replan — `revise` and `--from planning` — because
+ * the defect was precisely that two paths hand text to the same planner and neither
+ * carried the evidence. Read through the store, like every other artifact this layer
+ * touches; a use case that opens a file has stopped being a use case.
+ *
+ * A review that will not parse is treated as absent by {@link loadReview}: a replan
+ * without findings is what happened before this existed, and refusing to replan over a
+ * malformed artifact would be a worse answer than the old one.
+ */
+async function buildReplanInput(
+  store: StateStore,
+  runId: string,
+  request: string,
+  options: {
+    readonly instruction?: string;
+    /** A refusal the caller has already decided, checked before the artifact's freshness. */
+    readonly refusal?: ReplanWithheldReason;
+  } = {},
+): Promise<ReplanDecision> {
+  const decision = await decideReplanReview(store, runId, options.refusal);
+
+  return {
+    ...renderReplanInput({
+      request,
+      ...(options.instruction === undefined ? {} : { instruction: options.instruction }),
+      ...(decision.review === null ? {} : { review: decision.review }),
+    }),
+    ...(decision.withheld === undefined ? {} : { withheld: decision.withheld }),
+  };
+}
+
+interface Withholding {
+  readonly reason: ReplanWithheldReason;
+  /** How many findings were on the record and did not travel. */
+  readonly findings: number;
+}
+
+interface ReplanDecision extends ReplanInput {
+  readonly withheld?: Withholding;
+}
+
+/**
+ * Decides whether the last review travels with the replan, and says why when it does not.
+ *
+ * **The silence is the defect this closes.** Every guard below is correct and every one
+ * of them used to be invisible: the operator saw nine findings in
+ * `reviews/plan-review.json`, asked for a replan, and got a planner that had never heard
+ * of them — with nothing on the run distinguishing "the findings were forwarded" from
+ * "they were withheld because you retyped the request". That is `plan.md`'s thesis, *o
+ * produto sabe e não conta*, in one function.
+ *
+ * Silent only where there is genuinely nothing to report: no review, a review that
+ * passed, or a FAIL with no findings. An event there would be noise about a non-event.
+ */
+async function decideReplanReview(
+  store: StateStore,
+  runId: string,
+  callerRefusal?: ReplanWithheldReason,
+): Promise<{ review: ReviewResult | null; withheld?: Withholding }> {
+  const review = await loadReview(store, runId);
+  if (review === null || review.verdict !== 'FAIL' || review.findings.length === 0) {
+    return { review: null };
+  }
+
+  const withheld = (reason: ReplanWithheldReason) => ({
+    review: null,
+    withheld: { reason, findings: review.findings.length },
+  });
+
+  // The caller's own gate first: with `--from sdd`, "those stages run before planning"
+  // is the answer to the operator's question, and the review's freshness is beside it.
+  if (callerRefusal !== undefined) return withheld(callerRefusal);
+
+  // **`planHash` exists for exactly this.** `approval.ts` already refuses to *approve*
+  // over a review whose hash is absent (`review_unverifiable`) or different
+  // (`review_stale`); quoting such a review at the planner is the same mistake pointed
+  // the other way, and two live paths reach it — a FAIL review a person overruled with
+  // `approve --force`, whose findings a later `revise` would hand back as mandatory work
+  // the human had deliberately accepted as residual risk; and `feature --skip-review`,
+  // which writes no new artifact, so the next replan would quote the *previous* plan's
+  // findings at line anchors the current plan never had.
+  //
+  // An absent hash is treated exactly as a mismatch, for the reason `approval.ts` gives
+  // at length: nothing connects such a review to the plan in hand, and the courtesy of
+  // assuming it does covers precisely the case worth catching.
+  if (review.planHash === undefined) return withheld('unverifiable_review');
+
+  const plan = await loadPlanArtifact(store, runId);
+  if (plan === null) return withheld('unverifiable_review');
+
+  return review.planHash === planHash(plan) ? { review } : withheld('stale_review');
+}
+
+/** Writes the withholding down, so `status` can answer it from the event log. */
+async function recordWithheldFindings(
+  store: StateStore,
+  runId: string,
+  replan: ReplanDecision,
+): Promise<void> {
+  if (replan.withheld === undefined) return;
+
+  await store.appendEvent(runId, 'replan_findings_withheld', {
+    reason: replan.withheld.reason,
+    findings: replan.withheld.findings,
+  });
 }
 
 /** Short digest of an artifact's bytes. Neither the SDD nor the plan has a version. */

@@ -15,6 +15,7 @@ import { loadConfig } from '../config/loader.js';
 import { roleConfigForStage } from '../contracts/index.js';
 import { roleForStage } from '../app/stages/definitions.js';
 import { stalledRun, type RunLiveness } from '../core/run-liveness.js';
+import { describeReplanReport, lastReplanReport } from '../core/replan-report.js';
 import { formatElapsed } from './render/progress.js';
 import { describeIsolation, type IsolationReport } from '../app/run-git-identity.js';
 import { integrationRef } from '../core/worktree-policy.js';
@@ -83,6 +84,9 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
       if (typeof stage === 'string' && typeof bytes === 'number') contextBytes.set(stage, bytes);
     }
 
+    // D14, selected by type from the same log the stage markers come from.
+    const replan = lastReplanReport(events);
+
     const planRaw = await store.readArtifact(state.runId, 'plan');
     const reviewRaw = await store.readArtifact(state.runId, 'planReview');
     const plan = planRaw === null ? null : PlanSchema.safeParse(JSON.parse(planRaw));
@@ -101,6 +105,9 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
             taskCount: plan?.success ? plan.data.tasks.length : 0,
             completedStages,
             review: review?.success ? review.data : null,
+            // The same projection the human rendering reads, so the two surfaces cannot
+            // disagree about whether the planner saw the findings.
+            replan: replan ?? null,
             telemetry: {
               entries: telemetry.entries,
               summary: summariseTelemetry(telemetry.entries),
@@ -177,6 +184,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         startedStages,
         reusedStages,
         contextBytes,
+        replan === undefined ? undefined : describeReplanReport(replan),
       )}\n`,
     );
 
@@ -382,6 +390,17 @@ export function render(
   startedStages: readonly string[] = [],
   reusedStages: readonly string[] = [],
   contextBytes: ReadonlyMap<string, number> = new Map(),
+  /**
+   * The D14 line, already worded by `core/replan-report.ts`.
+   *
+   * A fourteenth positional, which the telemetry comment below rightly calls a call site
+   * where an argument can slip. It is here anyway because this belongs *inside* the
+   * planning block — printed after the whole body, as spend and the escalation are, it
+   * would read as a fact about the run rather than about the stage it describes. A
+   * pre-worded string keeps the rule the rest of the signature follows: `render` places
+   * text, it never decides it.
+   */
+  replanNote?: string,
 ): string {
   const lines: string[] = [
     `Feature: ${state.feature}`,
@@ -394,6 +413,11 @@ export function render(
   lines.push(...renderPlanningProgress(completedStages, state.stage, state.status, startedStages, reusedStages, contextBytes));
 
   lines.push(`  ${'Approval'.padEnd(16)}${state.approved ? '✓' : '·'}`);
+
+  // D14. Whether the planner was given the previous review's findings — the one fact
+  // about a replan the operator could previously only get by reading `events.jsonl`.
+  if (replanNote !== undefined) lines.push('', `  ${replanNote}`);
+
   lines.push('');
 
   // §21.4: the run's mode and the current configuration are two different facts,

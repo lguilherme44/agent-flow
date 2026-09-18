@@ -9,6 +9,7 @@ import {
   type RunState,
 } from '../../src/contracts/index.js';
 import { renderCollaboration } from '../../src/cli/render/collaboration.js';
+import { describeReplanReport } from '../../src/core/replan-report.js';
 
 /**
  * Found by killing a run mid-discovery, not by reading the code.
@@ -364,5 +365,85 @@ describe('the collaboration section (M4-07)', () => {
     });
 
     expect(rendered).toContain('1 live blackboard entry');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D14. The planner receiving — or not receiving — the previous review's findings
+// was written to `events.jsonl` and shown nowhere. `status` filters events by
+// type; this is one more filter, worded by `core/replan-report.ts`.
+// ---------------------------------------------------------------------------
+
+describe('status says whether the last replan got the previous findings', () => {
+  const state = (): RunState =>
+    RunStateSchema.parse({
+      runId: 'AF-2026-004',
+      feature: 'recurring-bookings',
+      stage: 'plan-review',
+      status: 'plan_rejected',
+      createdAt: '2026-09-18T13:34:15.000Z',
+      updatedAt: '2026-09-18T17:38:44.000Z',
+    });
+
+  const projection = (): RunProjection => ({
+    status: 'plan_rejected_revisable',
+    resumable: true,
+    paused: false,
+    reviewFreshness: 'current',
+    progress: { workflow: { done: 4, total: 7 }, implementation: { done: 0, total: 0 } },
+  });
+
+  const statusWith = (note?: string): string =>
+    render(
+      state(),
+      projection(),
+      2,
+      null,
+      ['discovery', 'architecture-impact', 'sdd', 'planning'],
+      null,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [],
+      [],
+      new Map(),
+      note === undefined ? undefined : note,
+    );
+
+  it('prints the line when the findings were forwarded', () => {
+    const rendered = statusWith(describeReplanReport({ kind: 'forwarded', findings: 9 }));
+
+    expect(rendered).toContain('Last replan received 9 finding(s) from the previous plan review.');
+  });
+
+  it('prints the reason and the remedy when they were withheld', () => {
+    const rendered = statusWith(
+      describeReplanReport({ kind: 'withheld', findings: 9, reason: 'request_changed' }),
+    );
+
+    expect(rendered).toContain('did not receive the 9 finding(s)');
+    expect(rendered).toContain('request_changed');
+    expect(rendered).toContain('agent-flow revise');
+  });
+
+  it('puts it in the planning block, not at the end of the report', () => {
+    // It is a fact about the stage above it. Printed after the body — as spend and the
+    // escalation are — it would read as a fact about the whole run.
+    const rendered = statusWith(describeReplanReport({ kind: 'forwarded', findings: 9 }));
+    const lines = rendered.split('\n');
+
+    expect(lines.findIndex((line) => line.includes('Last replan'))).toBeGreaterThan(
+      lines.indexOf('PLANNING'),
+    );
+    expect(lines.findIndex((line) => line.includes('Last replan'))).toBeLessThan(
+      lines.findIndex((line) => line.startsWith('Status:')),
+    );
+  });
+
+  it('POSITIVE CONTROL: says nothing when no replan has happened', () => {
+    // The three tests above would all pass against a `status` that printed the line
+    // unconditionally with a placeholder count.
+    expect(statusWith(undefined)).not.toContain('Last replan');
   });
 });
