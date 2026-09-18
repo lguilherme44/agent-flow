@@ -454,7 +454,7 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
 
 ---
 
-- [ ] **D9 · O gate pisca: `bornDirty` falha ~1 em 2 execuções da lane completa** — `test/fixtures/temp-repo.ts`
+- [x] **D9 · O gate pisca: `bornDirty` falha ~1 em 2 execuções da lane completa** — `test/fixtures/temp-repo.ts`
       Medido em 10/09/2026 com a máquina ociosa: uma execução completa da lane de
       subprocesso falhou em *"names the checkout phase when a fresh checkout is born
       dirty"*; a execução seguinte, também completa, passou (2657 ms); e o arquivo passou
@@ -473,6 +473,20 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       **Pronto quando:** a lane completa roda dez vezes seguidas verde, ou a causa está
       nomeada e fixada. Guardar a saída inteira em arquivo, sem filtro, é o que falta —
       `npx vitest run --config vitest.subprocess.config.ts > d9.log 2>&1`.
+
+      **Medido em 18/09/2026: dez execuções completas, dez verdes**, cada uma com a saída
+      inteira num arquivo próprio — 785 passando e 5 puladas nas dez, o mesmo conjunto
+      toda vez, e o teste que o item nomeia executando (conferido com `--reporter=verbose`,
+      não deduzido do silêncio do reporter resumido).
+
+      **O que isso prova, e o que não prova.** A 1 em 8 do texto acima daria 26% de chance
+      de dez verdes seguidas; dez verdes derrubam a taxa para abaixo do que dez execuções
+      conseguem enxergar, e não para zero. A causa nunca foi nomeada, então o item fecha
+      por medição e não por diagnóstico — e três coisas mudaram debaixo dele desde que foi
+      escrito: o `bornDirty` virou uma fixture só, sem processo (8.5); o `temp-repo` passou
+      a conferir com o Git como ele soletra o repositório antes de entregar qualquer
+      caminho; e o runner inteiro trocou de major. Se voltar a piscar, o log completo de
+      cada execução é o que faltava da última vez, e agora é o procedimento.
 
 ---
 
