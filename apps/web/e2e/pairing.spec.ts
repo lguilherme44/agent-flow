@@ -115,6 +115,14 @@ test.describe('device pairing over a real socket', () => {
     const remotePeerHeaders = { 'x-forwarded-for': '198.51.100.1' };
     await page.setExtraHTTPHeaders(remotePeerHeaders);
 
+    // Every write below calls the API directly rather than driving the Deck, and
+    // `page.request` carries no Origin — so without this header the write guard refuses
+    // `origin_missing` before the route is reached, and the assertion reads as though the
+    // *feature* answered wrongly. Measured: 403 where §7 asserts 401 and where §8 asserts
+    // 200. The refusals this spec means to prove are §5's cross-origin write and §6's
+    // host filtering, and both name their own header.
+    const apiWriteHeaders = { ...remotePeerHeaders, 'x-agent-flow-client': 'e2e' };
+
     // ── 1. Unpaired remote read is 401 on every /api/v1 route (FR-008, SDD 10) ──
     const apiRoutes = [
       `${targetUrl}/api/v1/projects`,
@@ -291,14 +299,19 @@ test.describe('device pairing over a real socket', () => {
     await sse.waitForConnect();
     expect(sse.isClosed()).toBe(false);
 
-    const revokeRes = await page.request.post(`${targetUrl}/api/v1/sessions/${deviceId}/revoke`);
+    const revokeRes = await page.request.post(`${targetUrl}/api/v1/sessions/${deviceId}/revoke`, {
+      headers: apiWriteHeaders,
+    });
     expect(revokeRes.status()).toBe(200);
     expect(((await revokeRes.json()) as { status: string }).status).toBe('revoked');
 
     await expect.poll(() => sse.isClosed(), { timeout: 3_000 }).toBe(true);
     sse.close();
 
-    const unknownRevokeRes = await page.request.post(`${targetUrl}/api/v1/sessions/unknown-device/revoke`);
+    const unknownRevokeRes = await page.request.post(
+      `${targetUrl}/api/v1/sessions/unknown-device/revoke`,
+      { headers: apiWriteHeaders },
+    );
     expect(unknownRevokeRes.status()).toBe(404);
 
     const postRevokeReq = await page.request.get(`${targetUrl}/api/v1/runs?project=${project}`);
@@ -335,14 +348,14 @@ test.describe('device pairing over a real socket', () => {
 
     const oldCodePairRes = await page.request.post(`${newTargetUrl}/api/v1/pair`, {
       data: { code: preStopCode, label: 'Pre-Restart Device' },
-      headers: remotePeerHeaders,
+      headers: apiWriteHeaders,
     });
     expect(oldCodePairRes.status()).toBe(401);
     expect(((await oldCodePairRes.json()) as { error: string }).error).toBe('unauthorized');
 
     const newPairRes = await page.request.post(`${newTargetUrl}/api/v1/pair`, {
       data: { code: newPairingCode, label: 'Post-Restart Device' },
-      headers: remotePeerHeaders,
+      headers: apiWriteHeaders,
     });
     expect(newPairRes.status()).toBe(200);
     const newCookieHeader = newPairRes.headers()['set-cookie'] ?? '';
