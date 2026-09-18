@@ -917,6 +917,8 @@ export const en = {
       approved: 'approval',
       rejected: 'refusal',
       revision: 'plan revision',
+      operator: 'operator action',
+      workspace: 'workspace',
       assigned: 'assignment',
       validated: 'validation',
       integrated: 'integration',

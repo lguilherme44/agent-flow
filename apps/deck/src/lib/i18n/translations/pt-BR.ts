@@ -895,6 +895,8 @@ export const ptBR: Dictionary = {
       approved: 'aprovação',
       rejected: 'recusa',
       revision: 'revisão do plano',
+      operator: 'ação do operador',
+      workspace: 'workspace',
       assigned: 'atribuição',
       validated: 'validação',
       integrated: 'integração',

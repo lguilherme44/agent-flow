@@ -56,6 +56,8 @@ export type MarkerKind =
   | 'approved'
   | 'rejected'
   | 'revision'
+  | 'operator'
+  | 'workspace'
   | 'assigned'
   | 'validated'
   | 'integrated'
@@ -110,17 +112,41 @@ function taskOf(event: RunEvent): string | undefined {
   return text(event.detail['task']) ?? text(event.detail['taskId']);
 }
 
+/*
+  The coordinator's vocabulary, as marks.
+
+  What is *missing* here is the failure mode, not what is wrong: an unmapped type still
+  draws, as `other`, so a gap is a tape of anonymous ticks rather than a crash. A run under
+  worktree isolation used to arrive nine-of-twenty-seven `other` — the whole isolation
+  vocabulary (`run_git_identity_assigned`, `workflow_classified`, `task_workspace_created`,
+  `integration_branch_created`, `operator_action`) had a sentence in `sentence.ts` and a
+  word in the dictionary, and only this table had not learned it. `deck-recorder.spec.ts`
+  holds the ratio down so the next gap is caught the same way.
+*/
 const MARKERS: Readonly<Record<string, MarkerKind>> = {
   run_created: 'created',
+  // The birth of a run is three events in the same second; one mark would lose two of them
+  // and three kinds would invent distinctions a reader does not have.
+  workflow_classified: 'created',
+  run_git_identity_assigned: 'created',
   run_approved: 'approved',
   run_rejected: 'rejected',
   revision_requested: 'revision',
   revision_completed: 'revision',
+  // A person touched the run. Which person, and to do what, is in the tooltip.
+  operator_action: 'operator',
+  // A task's own checkout, before any agent can be pointed at it. Only worktree isolation
+  // writes these, which is why the tape read fine until a parallel run was recorded.
+  task_workspace_created: 'workspace',
+  workspace_prepared: 'workspace',
+  task_workspace_preparation_failed: 'workspace',
   task_assigned: 'assigned',
   reviewer_assigned: 'assigned',
   task_attempt_validated: 'validated',
   task_attempt_marker_created: 'validated',
   task_integrated: 'integrated',
+  // The branch every task is integrated *onto*. Same square, same tone, one run earlier.
+  integration_branch_created: 'integrated',
   task_requeued: 'requeued',
   task_unblocked: 'unblocked',
   recovery_started: 'recovery',

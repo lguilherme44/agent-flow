@@ -24,6 +24,8 @@ export const MARK_KINDS: readonly MarkerKind[] = [
   'approved',
   'rejected',
   'revision',
+  'operator',
+  'workspace',
   'assigned',
   'validated',
   'integrated',
@@ -44,12 +46,20 @@ export const MARK_KINDS: readonly MarkerKind[] = [
   Eight shapes over six tones, and no two kinds that can share a lane share a glyph. The
   pairs that do share one mean the same thing to a reader: approval and refusal are one
   diamond in two tones, and `other` is the plain tick a mark falls back to.
+
+  The diamond is the *a person decided* shape, which is why `operator` takes it in the
+  neutral tone: approval and refusal are the two decisions that have an outcome, and an
+  operator action is the same gesture before one is known.
 */
 const GLYPHS: Readonly<Record<MarkerKind, MarkGlyph>> = {
   created: { tone: 'idle', shape: 'circle' },
   approved: { tone: 'warn', shape: 'diamond' },
   rejected: { tone: 'bad', shape: 'diamond' },
   revision: { tone: 'warn', shape: 'tri' },
+  operator: { tone: 'idle', shape: 'diamond' },
+  // Ghost, like `lock` and `other`: plumbing a reader scans past until it is what went
+  // wrong. It shares the circle with `created`, which never appears on a task lane.
+  workspace: { tone: 'ghost', shape: 'circle' },
   assigned: { tone: 'idle', shape: 'tick' },
   validated: { tone: 'ok', shape: 'tick' },
   integrated: { tone: 'ok', shape: 'square' },

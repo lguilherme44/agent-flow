@@ -36,6 +36,26 @@ const LOG: RunEvent[] = [
   event(4_401, 'task_attempt_validated', { task: 'TASK-001' }),
 ];
 
+/**
+ * The same run under worktree isolation, which writes five event types the plain run does
+ * not: a git identity, a classification, the operator's own audit line, the integration
+ * branch and a task's workspace. Every one of them reached the tape as `other` until the
+ * fold in `replay.ts` learned them.
+ */
+const ISOLATED_LOG: RunEvent[] = [
+  event(0, 'run_created'),
+  event(0, 'run_git_identity_assigned', { isolationMode: 'worktree' }),
+  event(0, 'workflow_classified', { workflow: 'standard' }),
+  event(1, 'execution_lock_acquired', { operation: 'approve' }),
+  event(1, 'run_approved'),
+  event(1, 'operator_action', { action: 'approve', actor: 'cli' }),
+  event(2, 'integration_branch_created', { branch: 'agent-flow/AF-1/integration' }),
+  event(2, 'task_workspace_created', { task: 'TASK-001' }),
+  event(3, 'task_started', { task: 'TASK-001' }),
+  event(2_400, 'task_finished', { task: 'TASK-001', status: 'completed' }),
+  event(2_401, 'task_attempt_validated', { task: 'TASK-001' }),
+];
+
 const TITLE = 'Parse the config file before the first read';
 
 function plotWidth(width: number): void {
@@ -159,6 +179,38 @@ describe('Recorder', () => {
     const { container } = draw();
     const kinds = [...container.querySelectorAll('.svg-mark')].map((node) => node.getAttribute('data-kind'));
     expect(kinds).toEqual(expect.arrayContaining(['created', 'approved', 'validated']));
+  });
+
+  it('names every mark a run under worktree isolation draws, and none of them is `other`', () => {
+    // The run `deck-recorder.spec.ts` records, in miniature. It reached CI nine marks of
+    // twenty-seven as `other`, because the whole isolation vocabulary — the git identity,
+    // the classification, the operator's own action, the integration branch and a task's
+    // workspace — had a sentence and a dictionary word and no entry in the fold's table.
+    // "The legend names it" was true the whole time: `other` is a name, and naming
+    // everything `other` is the failure. So this asserts the stronger thing.
+    const { container } = draw({
+      timeline: buildTimeline(ISOLATED_LOG, T0 + 10 * HOUR),
+      rows: [{ id: 'TASK-001', title: TITLE }],
+    });
+    const legend = screen.getByRole('list', { name: t.recorder.legend });
+    const named = [...legend.querySelectorAll('.recorder__legend-item span')].map((node) => node.textContent);
+    const kinds = [...container.querySelectorAll('.svg-mark')].map((node) => node.getAttribute('data-kind') ?? '');
+    const marks: Readonly<Record<string, string | undefined>> = t.recorder.marks;
+
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(kinds).not.toContain('other');
+    for (const kind of new Set(kinds)) {
+      expect(named, `the legend does not name ${kind}`).toContain(marks[kind]);
+    }
+
+    // The control: `other` is still reachable, so the assertion above is a claim about
+    // this vocabulary rather than about a bucket that was quietly deleted.
+    const stranger = draw({
+      timeline: buildTimeline([...ISOLATED_LOG, event(4, 'something_new', { task: 'TASK-001' })], T0 + 10 * HOUR),
+      rows: [{ id: 'TASK-001', title: TITLE }],
+    });
+    const strangerKinds = [...stranger.container.querySelectorAll('.svg-mark')].map((node) => node.getAttribute('data-kind'));
+    expect(strangerKinds).toContain('other');
   });
 
   it('names the task only on a lane bar, so a count of attempts can leave the decoration out', () => {
