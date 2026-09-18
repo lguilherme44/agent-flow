@@ -8,6 +8,7 @@ import {
   checkWorktreePreconditions,
   composeRunIdentity,
   decideNamespace,
+  deriveRepoKey,
   projectWorstCaseWorktreePath,
   describeIsolation,
   observePlanningBaseDrift,
@@ -1098,7 +1099,7 @@ describe('every precondition code, and the order §6.3 fixes', () => {
     expect(result.satisfied).toBe(true);
   });
 
-  it('6 — a short home with a very deep tracked path is refused', async () => {
+  it('6 — a short home with a very deep tracked path is refused', async (ctx) => {
     // The term §23 names explicitly and that nothing else can bound: the
     // repository's own deepest tracked file. Same home, same limit, same
     // everything — only the repository changed.
@@ -1106,22 +1107,87 @@ describe('every precondition code, and the order §6.3 fixes', () => {
     ignoreAgentFlowState(repo);
 
     const host = new FakeHost(1000, 'test-host', [1000], '/home/dev', 'a93f085c23dd9321', 260);
-    const before = await checkWorktreePreconditions(
-      { ...repositoryDeps(repo), host },
-      isolatedState(repo),
-    );
+    const deps = { ...repositoryDeps(repo), host };
+    const before = await checkWorktreePreconditions(deps, isolatedState(repo));
     expect(before.satisfied).toBe(true);
 
-    // A real tracked file, nested deeply enough to consume the remaining budget.
-    const deepDir = join(repo.dir, ...Array.from({ length: 12 }, () => 'a-nested-directory-name'));
-    mkdirSync(deepDir, { recursive: true });
-    writeFileSync(join(deepDir, 'a-file-with-a-long-name.ts'), 'export {};\n');
-    repo.commitAll('a deeply nested tracked file');
+    /**
+     * The **shortest** tracked path that still refuses, derived from §23's own
+     * projection instead of guessed at.
+     *
+     * A fixed twelve levels was the guess, and it made the deepest file 314
+     * characters *relative* to the repository — on its own already past Windows'
+     * 260-character MAX_PATH, before any temp prefix. Measured on CI run
+     * 35343705604's Windows runner: Git answered `warning: could not open directory
+     * 'a-nested-directory-name/…/': Filename too long`, so `add -A` staged nothing
+     * and exited zero, and `commit` then died with "nothing to commit, working tree
+     * clean". The test failed in its own preparation, on a platform limit, while
+     * reading as a verdict on §23.
+     *
+     * Derived, it lands at 6 levels and 170 characters relative — measured here as
+     * 231 absolute under `os.tmpdir()`, and unchanged at 170 relative wherever the
+     * fixture's temp prefix happens to sit, which is the length Git actually works
+     * in. The budget it clears is `260 - overhead`, and `overhead` is §23's own
+     * projection with the repository contributing nothing, so this cannot drift if
+     * a term of that projection changes.
+     *
+     * **This divergence is not reproducible on every developer's machine, which is
+     * why the premise below is verified rather than trusted.** Measured on this
+     * Windows 11 machine: `HKLM\…\FileSystem\LongPathsEnabled` is 0, yet Git tracked
+     * a 314-character relative path in a scratch repository with `core.longpaths`
+     * set to `false` at repository level — so the CI runner's refusal cannot be
+     * recreated here by configuration, and a green run here proves nothing about a
+     * machine where MAX_PATH bites.
+     */
+    const repoKey = await deriveRepoKey(deps);
+    if (repoKey === null) throw new Error('the temp repository produced no repoKey');
+    const overhead = projectWorstCaseWorktreePath({
+      homeDir: host.homeDir,
+      repoKey,
+      deepestTrackedPathLength: 0,
+      measure: (value) => host.measurePathLength(value),
+    });
+    if (overhead === null) throw new Error('§23 could not compose its worst case');
 
-    const after = await checkWorktreePreconditions(
-      { ...repositoryDeps(repo), host },
-      isolatedState(repo),
-    );
+    const fileName = 'a-file-with-a-long-name.ts';
+    const dirs: string[] = [];
+    const trackedPath = (): string => [...dirs, fileName].join('/');
+    while (overhead + host.measurePathLength(trackedPath()) <= host.maxPathLength) {
+      dirs.push('a-nested-directory-name');
+    }
+
+    mkdirSync(join(repo.dir, ...dirs), { recursive: true });
+    writeFileSync(join(repo.dir, ...dirs, fileName), 'export {};\n');
+    let refusedByPlatform: string | null = null;
+    try {
+      repo.commitAll('a deeply nested tracked file');
+    } catch (error) {
+      refusedByPlatform = error instanceof Error ? error.message : String(error);
+    }
+
+    // The premise, verified rather than assumed: Git must really be TRACKING that
+    // path, because `add -A` reports a path it cannot open as a warning and exits
+    // zero. Without this the assertion below would read as a §23 regression on any
+    // machine that simply cannot hold the file.
+    const tracked = repo
+      .userGit(['ls-files', '--cached'])
+      .split('\n')
+      .map((line) => line.trim());
+    if (refusedByPlatform !== null || !tracked.includes(trackedPath())) {
+      const absolute = host.measurePathLength(join(repo.dir, ...dirs, fileName));
+      console.warn(
+        `Skipping "6 — a short home with a very deep tracked path is refused": ` +
+          `Git on ${process.platform} would not track a ` +
+          `${String(host.measurePathLength(trackedPath()))}-character repository-relative path ` +
+          `(${String(absolute)} characters absolute) — the platform's path limit is below what ` +
+          `§23's premise needs here, which is a repository contributing more than ` +
+          `${String(host.maxPathLength - overhead)} characters.` +
+          (refusedByPlatform === null ? '' : ` Git said: ${refusedByPlatform.trim()}`),
+      );
+      ctx.skip();
+    }
+
+    const after = await checkWorktreePreconditions(deps, isolatedState(repo));
 
     expect(after).toMatchObject({ satisfied: false, code: 'worktree_path_too_long' });
   });

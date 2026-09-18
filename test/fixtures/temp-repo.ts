@@ -24,10 +24,25 @@ import { createGitWorkspaces, type GitWorkspaces } from '../../src/adapters/git/
  *     worktree and every ref with it — so a failing assertion cannot leave a
  *     registered worktree behind anywhere that matters.
  *
- * `realpathSync` on the root is not decoration: on macOS `mkdtemp` returns a path
- * under `/var`, which is a symlink to `/private/var`, and `git worktree list`
+ * `realpathSync.native` on the root is not decoration: on macOS `mkdtemp` returns a
+ * path under `/var`, which is a symlink to `/private/var`, and `git worktree list`
  * reports the resolved form. A containment check between the two spellings would
  * fail on a path that is genuinely inside the root.
+ *
+ * **`.native`, and the suffix is the whole fix.** Measured on Windows: the JS
+ * `fs.realpathSync` walks components with `lstat` and therefore leaves an 8.3 short
+ * name exactly as it found it — `realpathSync('…/Temp/AGENTF~1')` answers
+ * `…\Temp\AGENTF~1`, while `realpathSync.native` and `fs/promises.realpath` (libuv,
+ * which is what `NodeFileSystem.realPath` and hence `provisionGitHome` use) both
+ * answer `…\Temp\agent flow shortpath probe dir`. Git expands too. So on a machine
+ * whose `TEMP` carries an 8.3 component — a GitHub Windows runner does, because
+ * `runneradmin` is over eight characters and Windows hands out `RUNNER~1` — the
+ * sync spelling made this fixture the only thing in the room still speaking short
+ * paths, and a `join(repo.home, …)` expectation could never equal what Git printed.
+ * That is CI run 35343705604's `namespace-reclaim` failure, and it was the fixture,
+ * not the product: `provisionGitHome` and `ownWorktrees` both canonicalise through
+ * the libuv realpath, so both sides of §20.2's containment check speak one
+ * vocabulary.
  */
 export interface TempRepo {
   /** The repository's working directory. */
@@ -65,7 +80,7 @@ export interface TempRepo {
 }
 
 export async function makeTempRepo(): Promise<TempRepo> {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'agent-flow-git-')));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'agent-flow-git-')));
   const dir = join(root, 'repo');
   const home = join(root, 'home');
   mkdirSync(dir);
@@ -85,6 +100,25 @@ export async function makeTempRepo(): Promise<TempRepo> {
     });
 
   userGit(['init', '--quiet', '--initial-branch=main', '.']);
+
+  // The premise every path assertion in this suite rests on, verified rather than
+  // assumed: the paths this fixture hands out are spelled the way Git spells them.
+  // Tests compare `join(repo.home, …)` against `git worktree list --porcelain`, and
+  // when the two vocabularies diverge — `\` against `/`, an 8.3 short name against
+  // its long form — the mismatch reads as a product regression in the §20.2
+  // containment rules rather than as the preparation failure it is. Checked here,
+  // once, where the message can name the real cause. Positive control: swap
+  // `realpathSync.native` above for `realpathSync` and run this suite on a Windows
+  // machine whose `TEMP` holds an 8.3 component, and this throws.
+  const gitSpelling = userGit(['rev-parse', '--show-toplevel']).trim();
+  if (gitSpelling !== dir.replace(/\\/g, '/')) {
+    throw new Error(
+      `the fixture and Git disagree on how to spell the repository: the fixture says ` +
+        `"${dir.replace(/\\/g, '/')}" and Git says "${gitSpelling}". Every path assertion ` +
+        `built on this fixture would compare two spellings of one directory.`,
+    );
+  }
+
   userGit(['config', 'user.name', 'Temp']);
   userGit(['config', 'user.email', 'temp@example.invalid']);
   // Pinned so that a developer with a global `core.hooksPath` cannot make the
