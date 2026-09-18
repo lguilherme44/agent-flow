@@ -175,6 +175,31 @@ export class NodeFileSystem implements FileSystem {
    * hands back `\`. A containment check between one of each would decide that
    * nothing is inside anything — which fails safe, but silently and wrongly.
    */
+  /**
+   * The one canonical spelling of a path — and the asynchronous API is load-bearing.
+   *
+   * `fs.promises.realpath` is libuv's, which expands an 8.3 short name;
+   * `fs.realpathSync` is a JavaScript `lstat` walk that does **not**. Measured on
+   * Windows 11 against a directory whose name has spaces:
+   *
+   * ```
+   * fs.realpathSync        → C:\…\Temp\AGENTF~1
+   * fs.realpathSync.native → C:\…\Temp\agent flow shortpath probe dir
+   * fs/promises.realpath   → C:\…\Temp\agent flow shortpath probe dir
+   * ```
+   *
+   * Git expands too: `git worktree list --porcelain` prints the long form whatever
+   * form the worktree was added under. So §20.2's containment check has both sides
+   * speaking one vocabulary only because this call does — swap it for the sync API
+   * and a machine whose TEMP or home carries an 8.3 form gets `ownWorktrees()`
+   * returning nothing, every candidate skipped as foreign, no failure recorded, and
+   * `clean` deleting a run's state while leaving every worktree on disk. Silently.
+   *
+   * That is §8.1's defect — two ports answering in different path vocabularies —
+   * in its worst direction, and the change that would reintroduce it reads as a
+   * stylistic one. `test/architecture.test.ts` fails if this file reaches for the
+   * synchronous spelling.
+   */
   async realPath(path: string): Promise<string | null> {
     try {
       return (await fs.realpath(path)).replace(/\\/g, '/');

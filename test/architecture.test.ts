@@ -2074,6 +2074,35 @@ describe('a workspace has one registry (UI-29, §93)', () => {
   });
 });
 
+describe('a path has one spelling, and one call decides it (§8.1, §20.2)', () => {
+  it('canonicalises through the asynchronous realpath, which expands an 8.3 short name', () => {
+    // `fs.promises.realpath` is libuv's and expands `AGENTF~1` to the long name;
+    // `fs.realpathSync` is a JavaScript lstat walk and returns the short form
+    // unchanged. Git always prints the long form, so §20.2's containment check —
+    // `ownWorktrees` against what `git worktree list` said — has both sides speaking
+    // one vocabulary only because this adapter asks the expanding API.
+    //
+    // Measured 18/09/2026 by reproducing the condition: with TEMP pointed at an 8.3
+    // directory, a run's worktree root still canonicalised to the long form and
+    // reclamation claimed its own checkouts. Under the synchronous spelling it would
+    // not have, and §20.2 fails *open*: no candidate is recognised, none is recorded
+    // as a failure, and `clean` removes the state while every worktree stays on disk.
+    //
+    // The rule reads imports and calls rather than prose, because the change that
+    // reintroduces this reads as a stylistic one — `realpathSync` in a file that is
+    // otherwise all `await`.
+    const adapter = read('src/adapters/fs/node-file-system.ts');
+    const code = codeOnly(adapter.text);
+
+    expect(code, 'the filesystem adapter reached for the synchronous realpath').not.toMatch(
+      /realpathSync/,
+    );
+    expect(code, 'the filesystem adapter no longer canonicalises through realpath').toMatch(
+      /await fs\.realpath\(/,
+    );
+  });
+});
+
 describe('there is exactly one run execution lock (AF-L01)', () => {
   // The brief's requirement, made checkable: CLI and server must go through the same
   // service. Two locks would be no lock at all — each process would be excluding a
