@@ -299,20 +299,30 @@ test.describe('device pairing over a real socket', () => {
     await sse.waitForConnect();
     expect(sse.isClosed()).toBe(false);
 
-    const revokeRes = await page.request.post(`${targetUrl}/api/v1/sessions/${deviceId}/revoke`, {
-      headers: apiWriteHeaders,
-    });
-    expect(revokeRes.status()).toBe(200);
-    expect(((await revokeRes.json()) as { status: string }).status).toBe('revoked');
-
-    await expect.poll(() => sse.isClosed(), { timeout: 3_000 }).toBe(true);
-    sse.close();
-
+    // Before revoking our own, while this context still holds a live session: revoking a
+    // device that does not exist is a 404 from the route. After the revoke below it could
+    // not be — the cookie names a deleted device, so the session guard answers 401 for
+    // every route that is not pairing, and this assertion would be reading the guard
+    // rather than the route. Order is load-bearing here, which is why it is written down.
     const unknownRevokeRes = await page.request.post(
       `${targetUrl}/api/v1/sessions/unknown-device/revoke`,
       { headers: apiWriteHeaders },
     );
     expect(unknownRevokeRes.status()).toBe(404);
+
+    const revokeRes = await page.request.post(`${targetUrl}/api/v1/sessions/${deviceId}/revoke`, {
+      headers: apiWriteHeaders,
+    });
+    expect(revokeRes.status()).toBe(200);
+    // The shape the product actually agrees on, at both ends: the route sends
+    // `{ ok, deviceId, label }` and the Deck's own client is typed for it. This line
+    // asked for `{ status: 'revoked' }`, which nothing has ever sent or read — it could
+    // only have been written against an imagined API, and it never ran until the write
+    // guard above let it through.
+    expect(await revokeRes.json()).toMatchObject({ ok: true, deviceId });
+
+    await expect.poll(() => sse.isClosed(), { timeout: 3_000 }).toBe(true);
+    sse.close();
 
     const postRevokeReq = await page.request.get(`${targetUrl}/api/v1/runs?project=${project}`);
     expect(postRevokeReq.status()).toBe(401);
