@@ -52,6 +52,13 @@ rather than absorbing it into the scope.
 Where you must assume something, state the assumption in the relevant section.
 An unstated assumption becomes a defect nobody can trace.
 
+- **External integrations and contracts:** When third-party services, OAuth, or APIs are involved,
+  the design must explicitly enumerate every external endpoint called and the exact permissions,
+  scopes, or credentials required for each.
+- **No silent fallbacks or fake identity data:** Never design placeholder values or fallback strings
+  (e.g., fake emails, mock tokens) that mask missing permissions, authentication failures, or missing
+  external contract data in production flows. Error behavior (401, 403, etc.) must be explicit.
+
 ## Required format
 
 Return **only** the document below. Every heading must be present, in this order,

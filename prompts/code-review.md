@@ -56,6 +56,11 @@ the commands cannot see.
   boundaries this repository already has?
 - **Maintainability** — will the next person understand why, not just what?
 - **Test gaps** — is there behaviour here that no test would catch breaking?
+- **No silent fallbacks** — does the code introduce dummy values, placeholder emails/strings,
+  or fake data to mask missing permissions, auth errors, or external API failures instead
+  of handling or surfacing them properly?
+- **Third-party contracts & scopes** — are third-party endpoints called with the exact scopes,
+  permissions, and headers they require? Are external errors properly handled rather than swallowed?
 
 ## What not to do
 

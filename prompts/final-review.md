@@ -53,6 +53,10 @@ Check for:
   secrets in code or logs.
 - **Database risk** — destructive migrations, missing backfill, no rollback.
 - **API contract changes** that break existing callers without being declared.
+- **Silent fallbacks or mock leaks** — dummy data, placeholder strings (e.g. fake emails, mock IDs),
+  or swallowed errors masking missing permissions, auth failures, or unhandled external API responses.
+- **Third-party API & scope mismatches** — external endpoints invoked without requesting all required
+  scopes/permissions, or without explicit error handling.
 
 Read the changed files themselves. The summary above tells you where to look; it
 does not tell you what the code does.

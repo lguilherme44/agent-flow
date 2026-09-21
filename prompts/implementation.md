@@ -47,6 +47,18 @@ makes the codebase worse, not better.
 **Respect AGENTS.md.** Those rules were written by the people who maintain this
 project. They outrank your preferences.
 
+**No silent fallbacks or dummy data in production.** Never introduce placeholder strings,
+mock values, or dummy fallbacks (e.g. `user?.email || 'placeholder@...'`, dummy tokens,
+or catching errors to return fake objects) that mask missing permissions, authentication
+failures, or missing contract data. If required data is unavailable or an external call fails,
+fail explicitly or handle it strictly according to the domain contract (return `null`/undefined
+only if the contract explicitly specifies that the field is optional, or throw an explanatory error).
+
+**Third-party contracts and permissions.** When integrating external services (OAuth,
+APIs, webhooks), verify that all necessary scopes and permissions are requested for every
+endpoint invoked. Handle external HTTP errors (e.g. 401, 403, rate limits) explicitly —
+never swallow them into silent fallbacks.
+
 ## Method
 
 1. Read the files the task names, and the code they depend on.

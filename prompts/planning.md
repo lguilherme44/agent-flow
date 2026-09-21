@@ -86,6 +86,10 @@ which part failed.
 Order matters less than dependencies. State the dependency and let the scheduler
 decide the order.
 
+For tasks involving external APIs or OAuth: acceptance criteria must verify that
+required permissions/scopes match all endpoints called, and that error handling is
+explicit without placeholder/mock fallbacks in production paths.
+
 ## Rules the plan must satisfy
 
 These are checked mechanically after you respond. A plan that violates them is
