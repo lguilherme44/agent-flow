@@ -140,7 +140,9 @@ export function isFieldShown(field: ConfigEditorFieldView, edited: boolean, show
 }
 
 export function operationForField(field: ConfigEditorFieldView, raw: string, inherit = false): ConfigEditorOperation {
-  if (inherit) return { kind: 'unset', path: field.path };
+  if (inherit || (field.valueType === 'string' && raw.trim() === '') || ((field.valueType === 'integer' || field.valueType === 'number') && raw.trim() === '')) {
+    return { kind: 'unset', path: field.path };
+  }
   return { kind: 'set', path: field.path, value: parseFieldValue(field.valueType, raw) };
 }
 

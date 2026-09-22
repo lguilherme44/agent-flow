@@ -41,7 +41,7 @@ export function RoutingEditor({ view, roles, types, models, operations, onChange
         : roles.loading
           ? <Skeleton rows={4} />
           : <>
-            <AssignAll view={view} roles={roles.data ?? []} types={types} runners={runners} operations={operations} onOperations={onOperations} />
+            <AssignAll view={view} roles={roles.data ?? []} types={types} runners={runners} models={models} operations={operations} onOperations={onOperations} />
             <div className="table-wrap"><table className="table crew-roles__table">
             <thead><tr><th>{t.crew.colRole}</th><th>{t.crew.colNeeds}</th><th>{t.inspector.runner}</th><th>{t.inspector.model}</th><th>{t.crew.colEffort}</th><th>{t.crew.colResolves}</th></tr></thead>
             <tbody>{(roles.data ?? []).map((role) => (
@@ -66,16 +66,18 @@ export function RoutingEditor({ view, roles, types, models, operations, onChange
  * skipped the six read-only posts and blamed a missing working directory — the opposite of
  * the truth, since `agy` is the runner that writes. The reason is derived per role now.
  */
-function AssignAll({ view, roles, types, runners, operations, onOperations }: {
+function AssignAll({ view, roles, types, runners, models, operations, onOperations }: {
   readonly view: ConfigEditorView;
   readonly roles: readonly RoleRouteView[];
   readonly types: readonly RunnerTypeView[] | undefined;
   readonly runners: readonly string[];
+  readonly models: readonly RunnerModelsView[] | undefined;
   readonly operations: readonly ConfigEditorOperation[];
   readonly onOperations: (operations: ConfigEditorOperation[]) => void;
 }) {
   const t = useT();
   const [pick, setPick] = useState('');
+  const [modelPick, setModelPick] = useState('');
   const capabilities = runnerCapabilities(view.fields, types, pick);
   const eligible = roles.filter((role) => refusalFor(role, capabilities) === undefined);
   const skipped = roles.length - eligible.length;
@@ -90,16 +92,113 @@ function AssignAll({ view, roles, types, runners, operations, onOperations }: {
       ...eligible.map((role): ConfigEditorOperation => ({ kind: 'set', path: [...role.configKeys, 'runner'], value: pick })),
     ]);
   };
+
+  const allModelSuggestions = [...new Set(models?.flatMap((entry) => entry.models) ?? [])];
+  const hasAnyExplicitOrSetModel = roles.some((role) => {
+    const label = pathLabel([...role.configKeys, 'model']);
+    const op = [...operations].reverse().find((entry) => pathLabel(entry.path) === label);
+    if (op?.kind === 'set') return true;
+    if (op?.kind === 'unset') return false;
+    const field = view.fields.find((f) => pathLabel(f.path) === label);
+    return field?.explicitValue !== undefined;
+  });
+
+  const [customModelMode, setCustomModelMode] = useState(false);
+  const availableModels = pick !== ''
+    ? (models?.find((entry) => entry.id === pick)?.models ?? [])
+    : allModelSuggestions;
+
+  const assignModel = (): void => {
+    if (modelPick.trim() === '') return;
+    const modelPaths = roles.map((role) => [...role.configKeys, 'model']);
+    const pathLabels = new Set(modelPaths.map(pathLabel));
+    onOperations([
+      ...operations.filter((operation) => !pathLabels.has(pathLabel(operation.path))),
+      ...modelPaths.map((path): ConfigEditorOperation => ({ kind: 'set', path, value: modelPick.trim() })),
+    ]);
+  };
+
+  const clearAllModels = (): void => {
+    const modelPaths = roles.map((role) => [...role.configKeys, 'model']);
+    const pathLabels = new Set(modelPaths.map(pathLabel));
+    onOperations([
+      ...operations.filter((operation) => !pathLabels.has(pathLabel(operation.path))),
+      ...modelPaths.map((path): ConfigEditorOperation => ({ kind: 'unset', path })),
+    ]);
+    setModelPick('');
+  };
+
   return (
     <div className="crew-bulk">
-      <label htmlFor="assign-all">{t.crew.assignEveryRole}</label>
-      <select id="assign-all" className="input mono" value={pick} onChange={(event) => setPick(event.target.value)}>
-        <option value="">{t.crew.chooseRunner}</option>
-        {runners.map((id) => <option key={id} value={id}>{id}</option>)}
-      </select>
-      <button type="button" className="btn btn--sm" disabled={pick === '' || eligible.length === 0} onClick={assign}>
-        {t.crew.applyToRoles(eligible.length)}
-      </button>
+      <div className="crew-bulk__group">
+        <label htmlFor="assign-all">{t.crew.assignEveryRole}</label>
+        <select id="assign-all" className="input mono" value={pick} onChange={(event) => setPick(event.target.value)}>
+          <option value="">{t.crew.chooseRunner}</option>
+          {runners.map((id) => <option key={id} value={id}>{id}</option>)}
+        </select>
+        <button type="button" className="btn btn--sm" disabled={pick === '' || eligible.length === 0} onClick={assign}>
+          {t.crew.applyToRoles(eligible.length)}
+        </button>
+      </div>
+
+      <div className="crew-bulk__group">
+        <label htmlFor="assign-model-all">{t.crew.modelForEveryRole}</label>
+        {customModelMode || availableModels.length === 0 ? (
+          <div className="field-suggestion-custom">
+            <input
+              id="assign-model-all"
+              type="text"
+              className="input mono"
+              placeholder={t.crew.chooseOrTypeModel}
+              value={modelPick}
+              list="bulk-model-suggestions"
+              onChange={(event) => setModelPick(event.target.value)}
+            />
+            {availableModels.length > 0 ? (
+              <>
+                <datalist id="bulk-model-suggestions">
+                  {availableModels.map((m) => <option key={m} value={m} />)}
+                </datalist>
+                <button
+                  type="button"
+                  className="btn btn--sm btn--ghost"
+                  title={t.crew.selectFromList}
+                  aria-label={t.crew.selectFromList}
+                  onClick={() => setCustomModelMode(false)}
+                >
+                  ▾
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : (
+          <select
+            id="assign-model-all"
+            className="input mono"
+            value={modelPick}
+            onChange={(event) => {
+              if (event.target.value === '__custom__') {
+                setCustomModelMode(true);
+              } else {
+                setModelPick(event.target.value);
+              }
+            }}
+          >
+            <option value="">{t.crew.chooseModel}</option>
+            {availableModels.map((m) => <option key={m} value={m}>{m}</option>)}
+            <option value="__custom__">{t.crew.typeCustomModel}</option>
+          </select>
+        )}
+        <button type="button" className="btn btn--sm" disabled={modelPick.trim() === ''} onClick={assignModel}>
+          {t.crew.applyModelToRoles}
+        </button>
+        {hasAnyExplicitOrSetModel ? (
+          <button type="button" className="btn btn--sm btn--ghost" onClick={clearAllModels}>
+            {t.crew.clearAllModels}
+          </button>
+        ) : null}
+      </div>
+
       {pick !== '' && skipped > 0
         ? <small>
             {t.crew.leftAsIs(skipped, pick)}{' '}
@@ -270,20 +369,33 @@ function RoutingCell({ role, view, leaf, options, suggestions, operations, onCha
     : operation?.kind === 'unset'
       ? ''
       : field.explicitValue === undefined ? '' : String(field.explicitValue);
-  const inherited = field.explicitValue === undefined && operation === undefined;
+  const inherited = (field.explicitValue === undefined && operation === undefined) || operation?.kind === 'unset';
   const id = `route-${label}`;
   return (
     <td>
       <label className="visually-hidden" htmlFor={id}>{label}</label>
-      <FieldControl
-        id={id}
-        field={field}
-        raw={raw}
-        inherited={inherited}
-        {...(options === undefined ? {} : { options })}
-        {...(suggestions === undefined ? {} : { suggestions })}
-        onChange={(value, inherit) => onChange(field, value, inherit)}
-      />
+      <div className="crew-roles__cell-input">
+        <FieldControl
+          id={id}
+          field={field}
+          raw={raw}
+          inherited={inherited}
+          {...(options === undefined ? {} : { options })}
+          {...(suggestions === undefined ? {} : { suggestions })}
+          onChange={(value, inherit) => onChange(field, value, inherit)}
+        />
+        {leaf === 'model' && !inherited ? (
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost crew-roles__clear-btn"
+            title={t.crew.inherit}
+            aria-label={`${t.crew.inherit} (${label})`}
+            onClick={() => onChange(field, '', true)}
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
       <small className="crew-roles__origin">{originNote(t, field, inherited)}</small>
     </td>
   );

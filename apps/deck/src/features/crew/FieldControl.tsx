@@ -120,7 +120,7 @@ function TextControl({ id, field, raw, inherited, suggestions, onChange }: Field
   const t = useT();
   const offered = suggestions ?? [];
   return (
-    <>
+    <div className="field-text-with-suggestions">
       <input
         id={id}
         type="text"
@@ -131,10 +131,30 @@ function TextControl({ id, field, raw, inherited, suggestions, onChange }: Field
         {...(offered.length === 0 ? {} : { list: `${id}-suggestions` })}
         onChange={(event) => onChange(event.target.value)}
       />
-      {offered.length === 0
-        ? null
-        : <datalist id={`${id}-suggestions`}>{offered.map((value) => <option key={value} value={value} />)}</datalist>}
-    </>
+      {offered.length === 0 ? null : (
+        <>
+          <datalist id={`${id}-suggestions`}>
+            {offered.map((value) => <option key={value} value={value} />)}
+          </datalist>
+          <select
+            className="input mono field-suggestions-select"
+            aria-label={`${t.crew.chooseModel} (${field.path.join('.')})`}
+            value=""
+            disabled={!field.editable}
+            onChange={(event) => {
+              if (event.target.value) {
+                onChange(event.target.value);
+              }
+            }}
+          >
+            <option value="">{t.crew.chooseModel}</option>
+            {offered.map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </>
+      )}
+    </div>
   );
 }
 

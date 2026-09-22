@@ -33,9 +33,11 @@ roles:
     trivial:
       runner: agy
       timeoutSeconds: 900
+      effort: high
     normal:
       runner: agy
       timeoutSeconds: 1800
+      effort: high
     complex:
       runner: agy
       timeoutSeconds: 2400
@@ -54,6 +56,7 @@ roles:
   verification:
     runner: agy
     timeoutSeconds: 2400
+    effort: high
   e2e:
     enabled: true
     runner: agy
@@ -62,3 +65,4 @@ roles:
   finalReviewer:
     runner: agy
     timeoutSeconds: 2400
+    effort: high

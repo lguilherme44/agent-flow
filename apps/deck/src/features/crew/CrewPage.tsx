@@ -151,7 +151,12 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
   };
 
   const updateField = (field: ConfigEditorFieldView, raw: string, inherit = false): void => {
-    validate([...operations.filter((operation) => pathLabel(operation.path) !== pathLabel(field.path)), operationForField(field, raw, inherit)]);
+    const withoutField = operations.filter((operation) => pathLabel(operation.path) !== pathLabel(field.path));
+    if (field.explicitValue === undefined && !inherit && raw.trim() === '') {
+      validate(withoutField);
+      return;
+    }
+    validate([...withoutField, operationForField(field, raw, inherit)]);
   };
 
   const apply = (): void => {
@@ -262,14 +267,15 @@ function ConfigField({ field, operations, onChange }: { field: ConfigEditorField
   const t = useT();
   const pending = pendingFor(field, operations);
   const raw = pending?.kind === 'set' ? Array.isArray(pending.value) ? pending.value.join(', ') : String(pending.value) : pending?.kind === 'unset' ? '' : fieldInputValue(field);
-  const inherited = field.explicitValue === undefined && pending === undefined;
+  const inherited = (field.explicitValue === undefined && pending === undefined) || pending?.kind === 'unset';
   const label = pathLabel(field.path);
   const timing = effectNote(t, field.effect);
+  const canInherit = field.editable && (!inherited || field.explicitValue !== undefined);
   return <div className="crew-field" data-inherited={inherited}>
     <label htmlFor={`config-${label}`}><code>{label}</code></label>
     <div className="crew-field__input">
       <FieldControl id={`config-${label}`} field={field} raw={raw} inherited={inherited} onChange={(value, inherit) => onChange(field, value, inherit)} />
-      {field.explicitValue === undefined ? null : <button type="button" className="btn btn--sm" disabled={!field.editable} onClick={() => onChange(field, '', true)}>{t.crew.inheritButton}</button>}
+      {canInherit ? <button type="button" className="btn btn--sm" onClick={() => onChange(field, '', true)}>{t.crew.inheritButton}</button> : null}
     </div>
     <small>{originLabel(t, field, inherited)}{timing === undefined ? '' : ` · ${timing}`}</small>
   </div>;

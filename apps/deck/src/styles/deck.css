@@ -698,6 +698,15 @@ input[type='checkbox'].field-switch:disabled {
   width: auto;
   min-width: 150px;
 }
+.crew-bulk input[type='text'] {
+  width: auto;
+  min-width: 160px;
+}
+.crew-bulk__group {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
 .crew-bulk small {
   flex-basis: 100%;
   color: var(--ink-4);
@@ -877,6 +886,32 @@ input[type='checkbox'].field-switch:disabled {
 .crew-roles__name {
   color: var(--ink);
   font-size: var(--fs-1);
+}
+.crew-roles__cell-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.field-text-with-suggestions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.field-suggestions-select {
+  width: auto;
+  max-width: 150px;
+  font-size: var(--fs-0);
+  color: var(--ink-2);
+}
+.crew-roles__clear-btn {
+  padding: 2px 6px;
+  font-size: var(--fs-1);
+  line-height: 1;
+  color: var(--ink-3);
+  border-radius: var(--r-1);
+}
+.crew-roles__clear-btn:hover {
+  color: var(--bad);
 }
 .crew-roles__table tr[data-off='true'] td {
   opacity: 0.6;

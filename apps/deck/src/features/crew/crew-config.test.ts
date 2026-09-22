@@ -31,6 +31,9 @@ const field = (path: string[], overrides: Partial<ConfigEditorFieldView> = {}): 
 describe('crew configuration model', () => {
   it('uses unset to inherit and parses booleans, integers and lists for explicit edits', () => {
     expect(operationForField(field(['fallback', 'enabled']), '', true)).toEqual({ kind: 'unset', path: ['fallback', 'enabled'] });
+    expect(operationForField(field(['roles', 'architect', 'model'], { valueType: 'string' }), '')).toEqual({ kind: 'unset', path: ['roles', 'architect', 'model'] });
+    expect(operationForField(field(['roles', 'architect', 'model'], { valueType: 'string' }), '   ')).toEqual({ kind: 'unset', path: ['roles', 'architect', 'model'] });
+    expect(operationForField(field(['parallelism', 'maxTasks'], { valueType: 'integer' }), '')).toEqual({ kind: 'unset', path: ['parallelism', 'maxTasks'] });
     expect(operationForField(field(['fallback', 'enabled'], { effectiveValue: true, valueType: 'boolean' }), 'false')).toEqual({ kind: 'set', path: ['fallback', 'enabled'], value: false });
     expect(operationForField(field(['parallelism', 'maxTasks'], { effectiveValue: 2, valueType: 'integer' }), '3')).toEqual({ kind: 'set', path: ['parallelism', 'maxTasks'], value: 3 });
     expect(operationForField(field(['fallback', 'on'], { effectiveValue: ['quota_exceeded'], valueType: 'string_list' }), 'quota_exceeded, auth_required')).toEqual({
