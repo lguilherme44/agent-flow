@@ -86,6 +86,7 @@ export const en = {
     implementation: 'build',
     'code-review': 'code rev',
     verification: 'verify',
+    e2e: 'e2e',
     'final-review': 'final',
   },
 
@@ -100,6 +101,7 @@ export const en = {
     implementation: 'implementation',
     'code-review': 'code review',
     verification: 'verification',
+    e2e: 'e2e testing',
     'final-review': 'final review',
   },
 

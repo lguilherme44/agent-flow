@@ -94,7 +94,7 @@ export function runnerLeafFields(fields: readonly ConfigEditorFieldView[], id: s
 
 /** The paths a role-routing table already edits, so no accordion repeats them. */
 export function routedFieldPaths(roles: readonly { readonly configKeys: readonly string[] }[]): ReadonlySet<string> {
-  return new Set(roles.flatMap(({ configKeys }) => ['runner', 'model', 'effort'].map((leaf) => pathLabel([...configKeys, leaf]))));
+  return new Set(roles.flatMap(({ configKeys }) => ['runner', 'model', 'effort', 'enabled'].map((leaf) => pathLabel([...configKeys, leaf]))));
 }
 
 /** The items of a list value, whatever shape the source stored it in. */

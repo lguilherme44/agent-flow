@@ -102,7 +102,14 @@ export function assessHealth(
   const fallbackUsed = new Set<string>();
 
   for (const role of ALL_WORKFLOW_ROLES) {
-    const primary = roleConfigOf(config.roles, role).runner;
+    const roleConfig = roleConfigOf(config.roles, role);
+    const primary = roleConfig.runner;
+
+    // Disabled roles are not executed, so having no usable runner for them is not a failure.
+    if (!roleConfig.enabled) {
+      routes.push({ role, primary, effective: null, viaFallback: false });
+      continue;
+    }
 
     if (usable.has(primary)) {
       routes.push({ role, primary, effective: primary, viaFallback: false });
@@ -252,7 +259,10 @@ export function classifyUnavailability(config: GlobalConfig, id: string): Runner
 
 export function referencedRunners(config: GlobalConfig): string[] {
   const seen = new Set<string>();
-  for (const role of ALL_WORKFLOW_ROLES) seen.add(roleConfigOf(config.roles, role).runner);
+  for (const role of ALL_WORKFLOW_ROLES) {
+    const rc = roleConfigOf(config.roles, role);
+    if (rc.enabled) seen.add(rc.runner);
+  }
   for (const roleConfig of Object.values(config.fallback.roles)) seen.add(roleConfig.runner);
   return [...seen];
 }

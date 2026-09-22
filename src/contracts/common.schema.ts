@@ -26,6 +26,7 @@ export const WORKFLOW_ROLES = [
   'executor.normal',
   'executor.complex',
   'verification',
+  'e2e',
   'finalReviewer',
 ] as const;
 
@@ -217,6 +218,7 @@ export const ARTIFACT_NAMES = [
   'plan',
   'planReview',
   'verification',
+  'e2e',
   'finalReview',
 ] as const;
 

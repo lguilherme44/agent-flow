@@ -156,11 +156,29 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
   // every runner's models here would suggest a Gemini id for a role routed to Claude.
   const routed = String(view.fields.find((field) => pathLabel(field.path) === pathLabel([...role.configKeys, 'runner']))?.effectiveValue ?? '');
   const suggested = models?.find((entry) => entry.id === routed)?.models;
+
+  const enabledLabel = pathLabel([...role.configKeys, 'enabled']);
+  const enabledField = view.fields.find((field) => pathLabel(field.path) === enabledLabel);
+  const enabledOp = [...operations].reverse().find((entry) => pathLabel(entry.path) === enabledLabel);
+  const isEnabled = enabledOp?.kind === 'set'
+    ? enabledOp.value === true || enabledOp.value === 'true'
+    : enabledOp?.kind === 'unset'
+      ? enabledField?.effectiveValue === true
+      : (enabledField?.explicitValue ?? enabledField?.effectiveValue ?? (role.configured.enabled ?? true));
+
   return (
-    <tr data-pending={pending} data-unresolved={role.error !== undefined}>
+    <tr data-pending={pending} data-unresolved={role.error !== undefined} data-off={!isEnabled}>
       <td>
-        {/* The role id is the configuration key this row edits. Never translated. */}
-        <span className="crew-roles__name mono">{role.role}</span>
+        <div className="crew-roles__title">
+          {enabledField !== undefined ? (
+            <RoutingSwitch
+              field={enabledField}
+              operations={operations}
+              onChange={onChange}
+            />
+          ) : null}
+          <span className="crew-roles__name mono">{role.role}</span>
+        </div>
         <small>{role.prompts.join(', ')}</small>
       </td>
       <td>
@@ -173,17 +191,49 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
       <RoutingCell role={role} view={view} leaf="model" {...(suggested === undefined ? {} : { suggestions: suggested })} operations={operations} onChange={onChange} />
       <RoutingCell role={role} view={view} leaf="effort" operations={operations} onChange={onChange} />
       <td className="crew-roles__resolved">
-        {role.error === undefined
-          ? <>
+        {!isEnabled ? (
+          <span className="tag">{t.crew.disabled}</span>
+        ) : role.error === undefined ? (
+          <>
             <span className="mono">{role.resolved?.runner ?? t.common.none}{role.resolved?.model === undefined ? '' : ` · ${role.resolved.model}`}</span>
             {role.resolved?.reasoningClamped === true
               ? <small>{t.crew.clampedEffort(level(t, role.configured.reasoning), level(t, role.resolved.reasoning))}</small>
               : null}
           </>
-          : <span className="crew-roles__error">{role.error.message}</span>}
+        ) : (
+          <span className="crew-roles__error">{role.error.message}</span>
+        )}
         {pending ? <small className="crew-roles__pending">{t.crew.unsavedResolves}</small> : null}
       </td>
     </tr>
+  );
+}
+
+function RoutingSwitch({ field, operations, onChange }: {
+  readonly field: ConfigEditorFieldView;
+  readonly operations: readonly ConfigEditorOperation[];
+  readonly onChange: (field: ConfigEditorFieldView, raw: string, inherit?: boolean) => void;
+}) {
+  const label = pathLabel(field.path);
+  const operation = [...operations].reverse().find((entry) => pathLabel(entry.path) === label);
+  const raw = operation?.kind === 'set'
+    ? String(operation.value)
+    : operation?.kind === 'unset'
+      ? ''
+      : field.explicitValue === undefined ? '' : String(field.explicitValue);
+  const inherited = field.explicitValue === undefined && operation === undefined;
+  const id = `route-${label}`;
+  return (
+    <span className="crew-roles__switch">
+      <label className="visually-hidden" htmlFor={id}>{label}</label>
+      <FieldControl
+        id={id}
+        field={field}
+        raw={raw}
+        inherited={inherited}
+        onChange={(value, inherit) => onChange(field, value, inherit)}
+      />
+    </span>
   );
 }
 

@@ -28,7 +28,7 @@ describe('the pipeline is read out of the run, not stored on it', () => {
     // Ten rather than nine since M6: `code-review` executes, once per task like
     // `implementation`, and it is the phase a person watching a run most expects to
     // see — leaving it out of the picture would hide what the milestone adds.
-    expect(buildStageTimeline([], state())).toHaveLength(10);
+    expect(buildStageTimeline([], state())).toHaveLength(11);
   });
 
   it('marks a stage completed only when the log says it finished', () => {

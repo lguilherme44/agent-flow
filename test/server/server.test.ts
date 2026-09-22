@@ -346,8 +346,8 @@ describe('UI-04 — the run read API', () => {
       await server.app.inject(`/api/v1/runs/${run.runId}/stages`)
     ).json<StageViewResponse[]>();
 
-    // Ten since M6: `code-review` executes per task and shows as a phase.
-    expect(stages).toHaveLength(10);
+    // Eleven since e2e: `code-review` executes per task, `e2e` tests browser flows.
+    expect(stages).toHaveLength(11);
     expect(stages.find((stage) => stage.stage === 'discovery')).toMatchObject({
       status: 'completed',
       runner: 'claude',
@@ -920,6 +920,7 @@ describe('UI-23 — the role routing table', () => {
       'executor.normal',
       'executor.complex',
       'verification',
+      'e2e',
       'finalReviewer',
     ]);
 
@@ -959,8 +960,8 @@ describe('UI-23 — the role routing table', () => {
 
     expect(planner?.error?.kind).toBe('unknown_runner');
     expect(planner?.resolved).toBeUndefined();
-    // And the other eight still resolve.
-    expect(routes.filter((route) => route.error === undefined)).toHaveLength(8);
+    // And the other nine still resolve.
+    expect(routes.filter((route) => route.error === undefined)).toHaveLength(9);
   });
 
   it('says why a role has no fallback, rather than leaving it blank', async () => {

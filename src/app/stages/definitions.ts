@@ -1,7 +1,7 @@
 import { PlanSchema, type RunStage, type WorkflowRole } from '../../contracts/index.js';
 import { validateSdd } from '../../core/sdd-validator.js';
 import type { StageDefinition } from '../stage-runner.js';
-import { VERIFICATION_STAGE, FINAL_REVIEW_STAGE } from './final-review.js';
+import { VERIFICATION_STAGE, E2E_STAGE, FINAL_REVIEW_STAGE } from './final-review.js';
 
 /**
  * The planning pipeline, as data.
@@ -111,6 +111,7 @@ export function roleForStage(stage: RunStage): WorkflowRole | undefined {
     PLANNING_STAGE,
     PLAN_REVIEW_SIMPLE_STAGE,
     VERIFICATION_STAGE,
+    E2E_STAGE,
     FINAL_REVIEW_STAGE,
   ];
 

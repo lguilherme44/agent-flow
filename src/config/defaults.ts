@@ -90,6 +90,11 @@ roles:
     runner: claude
     effort: medium
 
+  e2e:
+    enabled: false
+    runner: claude
+    effort: high
+
   finalReviewer:
     runner: claude
     effort: very_high

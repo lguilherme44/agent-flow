@@ -20,7 +20,7 @@ import {
   SDD_STAGE,
 } from './stages/definitions.js';
 import { PLAN_REVIEW_STAGE } from './stages/plan-review.js';
-import { FINAL_REVIEW_STAGE, VERIFICATION_STAGE } from './stages/final-review.js';
+import { E2E_STAGE, FINAL_REVIEW_STAGE, VERIFICATION_STAGE } from './stages/final-review.js';
 
 /**
  * What each logical role would actually run, without running anything.
@@ -65,6 +65,7 @@ export const PROMPTS_BY_ROLE: Readonly<Record<WorkflowRole, readonly string[]>> 
     PLANNING_STAGE,
     PLAN_REVIEW_STAGE,
     VERIFICATION_STAGE,
+    E2E_STAGE,
     FINAL_REVIEW_STAGE,
   ]) {
     map.set(stage.role, [...(map.get(stage.role) ?? []), stage.prompt]);
@@ -108,6 +109,7 @@ export const STAGES_BY_PROMPT: Readonly<Record<string, readonly string[]>> = (()
     PLANNING_STAGE,
     PLAN_REVIEW_STAGE,
     VERIFICATION_STAGE,
+    E2E_STAGE,
     FINAL_REVIEW_STAGE,
   ]) {
     map.set(stage.prompt, [...(map.get(stage.prompt) ?? []), stage.name]);
@@ -134,6 +136,7 @@ export interface RoleRoute {
   /** Requirements the union of those prompts imposes. */
   readonly requirements: RoleRequirements;
   readonly configured: {
+    readonly enabled?: boolean;
     readonly runner: string;
     readonly model?: string;
     readonly reasoning: ReasoningLevel;
@@ -167,6 +170,7 @@ export async function describeRoleRoutes(
       prompts,
       requirements,
       configured: {
+        enabled: roleConfig.enabled,
         runner: roleConfig.runner,
         ...(roleConfig.model === undefined ? {} : { model: roleConfig.model }),
         reasoning: roleConfig.effort,

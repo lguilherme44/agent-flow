@@ -71,6 +71,7 @@ import {
 } from './verification-commands.js';
 import { prepareWorkspace, type PreparationOutcome } from './workspace-preparation.js';
 import {
+  E2E_STAGE,
   FINAL_REVIEW_STAGE,
   ReviewResponseSchema,
   VERIFICATION_STAGE,
@@ -2082,7 +2083,7 @@ export interface ReviewOptions {
   readonly fix?: boolean;
   /** Progress, for an adapter that streams. Decides nothing. */
   readonly onVerificationStep?: (step: string, passed: boolean) => void;
-  readonly onStage?: (stage: 'verification' | 'inspection' | 'final-review') => void;
+  readonly onStage?: (stage: 'verification' | 'inspection' | 'e2e' | 'final-review') => void;
 }
 
 export interface ReviewOutcome {
@@ -2104,6 +2105,7 @@ export interface ReviewOutcome {
   /** Why the commands did not run, when they did not. Names the install and its exit code. */
   readonly environmentFailure?: { readonly phase: string; readonly detail: string };
   readonly verificationReview: { verdict: 'PASS' | 'FAIL'; findings: ReviewResult['findings'] };
+  readonly e2eReview?: ReviewResult;
   readonly finalReview: ReviewResult;
   readonly done: DoneCheck;
   readonly degradations: RunState['degradations'];
@@ -2312,6 +2314,47 @@ async function judgeRun(
     `${JSON.stringify(verificationResponse, null, 2)}\n`,
   );
 
+  // ---- E2E: run agent-browser e2e tests when enabled
+  const e2eConfig = context.config.global.roles.e2e;
+  let e2eReview: ReviewResult | undefined;
+
+  if (e2eConfig.enabled) {
+    options.onStage?.('e2e');
+    const e2eResult = await context.stageRunner.run(
+      E2E_STAGE,
+      runId,
+      {
+        sdd: effectiveSdd,
+        changedFiles,
+        agentsMd: await readAgentsMd(context, tree.value.cwd),
+      },
+      { workingDirectory: tree.value.cwd },
+    );
+    const e2eResponse = ReviewResponseSchema.parse(e2eResult.data);
+    const authors = authorsOf(await context.store.readEvents(runId));
+    const independence = assessIndependence(
+      authors,
+      e2eResult.execution.runner,
+      context.providerOf,
+    );
+    e2eReview = buildReview(
+      e2eResponse,
+      {
+        runner: e2eResult.execution.runner,
+        ...(e2eResult.execution.model === undefined ? {} : { model: e2eResult.execution.model }),
+        reasoning: e2eResult.execution.reasoning,
+      },
+      independence,
+      tree.value.integration?.head,
+    );
+
+    await context.store.writeArtifact(
+      runId,
+      'e2e',
+      `${JSON.stringify(e2eReview, null, 2)}\n`,
+    );
+  }
+
   // ---- Final review: the implementation against the approved SDD.
   const authors = authorsOf(await context.store.readEvents(runId));
 
@@ -2374,15 +2417,20 @@ async function judgeRun(
   // that cannot see it will say done while a `critical` is open (§43, I-44).
   const fromCodeReview = await codeReviewFindings(context, runId, plan);
 
+  const e2eBlockingFindings =
+    e2eReview?.findings.filter((f) => f.severity === 'critical' || f.severity === 'high') ?? [];
+  const openBlockingFindings = [
+    ...(fromCodeReview?.review.findings.map(idOf) ?? []),
+    ...e2eBlockingFindings.map(idOf),
+  ];
+
   // ---- Definition of Done, evaluated as code (§42), over the same tree.
   const doneCheck = checkDefinitionOfDone({
     approved: state.approved,
     taskStates: state.tasks.map((task) => task.state),
     mechanicalVerification,
     finalReviewVerdict: finalReview.verdict,
-    ...(fromCodeReview === undefined
-      ? {}
-      : { openBlockingFindings: fromCodeReview.review.findings.map(idOf) }),
+    ...(openBlockingFindings.length > 0 ? { openBlockingFindings } : {}),
   });
   await recordActor(context.store, runId, 'review', deps.actor);
 
@@ -2407,14 +2455,23 @@ async function judgeRun(
   // work". Two rounds would mean two plan reviews, two budget draws and a second plan built
   // on the first one's output. Only the provenance differs, and `originFor` keeps that.
   const mergedReview: ReviewResult =
-    fromCodeReview === undefined
+    fromCodeReview === undefined && e2eReview === undefined
       ? finalReview
       : {
           ...finalReview,
-          findings: [...finalReview.findings, ...fromCodeReview.review.findings],
+          findings: [
+            ...finalReview.findings,
+            ...(fromCodeReview?.review.findings ?? []),
+            ...(e2eReview?.findings ?? []),
+          ],
           // A run-level `PASS` beside a blocking finding is not a pass. The generator only
           // reads `findings`, but the value is persisted and read by people.
-          verdict: 'FAIL',
+          verdict:
+            finalReview.verdict === 'FAIL' ||
+            fromCodeReview !== undefined ||
+            e2eReview?.verdict === 'FAIL'
+              ? 'FAIL'
+              : 'PASS',
         };
 
   const corrective =
@@ -2453,6 +2510,7 @@ async function judgeRun(
     finalReview,
     done: doneCheck,
     degradations: finalState.degradations,
+    ...(e2eReview === undefined ? {} : { e2eReview }),
     ...(corrective === undefined ? {} : { corrective }),
     ...(tree.value.integration === undefined ? {} : { integration: tree.value.integration }),
   });

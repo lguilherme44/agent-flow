@@ -100,6 +100,7 @@ const ARTIFACT_LABELS: Record<ArtifactName, string> = {
   plan: 'Plan',
   planReview: 'Plan Review',
   verification: 'Verification',
+  e2e: 'E2E Testing',
   finalReview: 'Final Review',
 };
 
@@ -109,6 +110,7 @@ const ARTIFACT_ORDER: ArtifactName[] = [
   'architectureImpact',
   'planReview',
   'verification',
+  'e2e',
   'finalReview',
   'request',
 ];

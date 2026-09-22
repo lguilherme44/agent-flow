@@ -26,48 +26,9 @@ runners:
     dangerouslySkipPermissions: true
   claude:
     type: claude-code-cli
-    enabled: true
+    enabled: false
 
-# Claude Opus carries the judgement; agy writes code.
-#
-# Every role that *decides* something — what the architecture is, what the contract says,
-# what the plan is, whether the work is done — is Claude on Opus, pinned. The executors
-# are agy, which is the one job where a cheaper model's output is checked by somebody
-# else before it counts: the code it writes is read by a review and run by the validation
-# commands.
-#
-# `model: opus` is pinned deliberately, against AD-13's general advice that pinned names
-# rot. The reason is that this repository's dogfood is a measurement, and a measurement
-# whose model changed under it is not one. Never a smaller Claude for these roles: the
-# whole point of putting Claude here is the judgement, and a downgrade would keep the
-# provider and lose the thing it was chosen for.
-#
-# `planReviewer` is the exception, and it has to be: §3.2 requires a HIGH-RISK plan review
-# from a *different provider* than the planner, because one model confirming its own
-# hypothesis is not a review. Claude plans; agy reviews.
-#
-# **This was the other way round until 11/09/2026, on a measurement that was an artifact.**
-# The comment here used to argue that agy could not review — "289 s, SUCCESS, empty
-# response" — and put agy on the plan instead. It was not a model with nothing to say. It
-# was `agy --print-timeout`, whose default is 5m0s and whose expiry exits 0 with
-# `status: SUCCESS` and a placeholder. The Claude roles had `timeoutSeconds: 2400`; agy
-# had five minutes that no flag asked for. The two were never compared on equal terms.
-#
-# Confirmed by the same failure in the other seat: agy as *planner* returned 299.4 s,
-# SUCCESS, `"Waiting for task completion."`. Same cap, same silence, other role. The
-# adapter now sends the role's own budget as `--print-timeout`, and both seats get the
-# time they were configured with.
 roles:
-  # The executors were left on the 900 s default by omission while every role that judges
-  # got 2400 s — and the omission killed a task. Measured on AF-2026-004: TASK-004, a
-  # `complex` task, was cut at 15min01 — 901 s, the default to the second — and that kill
-  # spent one of its two attempts. The second attempt did the work in 23min54 and failed
-  # on nine unused imports, so the budget was never the disagreement; it was the clock.
-  #
-  # Same reasoning as the roles above: a multiple of the worst case seen, not a round
-  # number near it. Observed per task on this repository — TASK-001 22min25, TASK-003
-  # 21min55, TASK-004 23min54 — so 900 s was under half of typical and 2400 s bounds a
-  # runaway without turning a normal task into a coin flip.
   executors:
     trivial:
       runner: agy
@@ -78,40 +39,26 @@ roles:
     complex:
       runner: agy
       timeoutSeconds: 2400
-  # 2400 s, not the 900 s default, and the number comes from measurement rather than
-  # caution. The SDD stage on this repository took 15min03 in AF-2026-003 and 15min02 in
-  # AF-2026-004 — one side of the 900 s default each. Discovery was 10min17 and the
-  # architecture impact 9min17. So the honest ceiling is a multiple of the worst case seen,
-  # not a round number near it: 40 min bounds a runaway without turning a normal stage into
-  # a coin flip.
   architect:
-    runner: claude
-    model: opus
+    runner: agy
     timeoutSeconds: 2400
   sdd:
-    runner: claude
-    model: opus
+    runner: agy
     timeoutSeconds: 2400
-  # Claude writes the plan, which is what the operator asked for and what the cap made look
-  # unaffordable. The one measurement that still stands from the earlier pass is that Claude
-  # reviewing produced 11 findings anchored in file and line, one of them a contradiction
-  # inside the SDD itself — a real review. Whether agy reviews as well is now an open
-  # question rather than a settled one, because the run that said no was capped at five
-  # minutes. It is measured again from here, on equal terms.
   planner:
-    runner: claude
-    model: opus
+    runner: agy
     timeoutSeconds: 2400
-  # 2400 s on agy too, which before this change bought nothing: the CLI stopped at 300 s
-  # whatever the role said. The adapter forwards it now.
   planReviewer:
     runner: agy
     timeoutSeconds: 2400
   verification:
-    runner: claude
-    model: opus
+    runner: agy
+    timeoutSeconds: 2400
+  e2e:
+    enabled: true
+    runner: agy
+    effort: high
     timeoutSeconds: 2400
   finalReviewer:
-    runner: claude
-    model: opus
+    runner: agy
     timeoutSeconds: 2400

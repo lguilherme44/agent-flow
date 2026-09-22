@@ -29,7 +29,7 @@ describe('the prompts that need a filesystem', () => {
   it('are exactly the three the openai-runner refuses to serve', () => {
     // Change this list only together with the comment in
     // `src/adapters/runners/openai-runner.ts` and the README's count.
-    expect(promptsNeedingWorkingDirectory()).toEqual(['code-review', 'discovery', 'implementation']);
+    expect(promptsNeedingWorkingDirectory()).toEqual(['code-review', 'discovery', 'e2e', 'implementation']);
   });
 
   it('are named in the adapter that turns them away', () => {

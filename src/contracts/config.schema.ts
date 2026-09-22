@@ -154,6 +154,7 @@ export const StageOverrideSchema = z.object({
 export type StageOverride = z.infer<typeof StageOverrideSchema>;
 
 export const RoleConfigSchema = z.object({
+  enabled: z.boolean().default(true),
   runner: z.string().min(1),
   /**
    * Optional on purpose (AD-13). Pinned model names rot: when omitted the
@@ -195,6 +196,13 @@ export const RolesConfigSchema = z.object({
     complex: RoleConfigSchema,
   }),
   verification: RoleConfigSchema,
+  e2e: RoleConfigSchema.default({
+    enabled: false,
+    runner: 'claude',
+    effort: 'high',
+    timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
+    stages: {},
+  }),
   finalReviewer: RoleConfigSchema,
 });
 export type RolesConfig = z.infer<typeof RolesConfigSchema>;
@@ -615,6 +623,8 @@ export function roleConfigOf(roles: RolesConfig, role: WorkflowRole): RoleConfig
       return roles.executors.normal;
     case 'executor.complex':
       return roles.executors.complex;
+    case 'e2e':
+      return roles.e2e;
     default:
       return roles[role];
   }
@@ -637,6 +647,8 @@ export function roleConfigKeys(role: WorkflowRole): readonly string[] {
       return ['roles', 'executors', 'normal'];
     case 'executor.complex':
       return ['roles', 'executors', 'complex'];
+    case 'e2e':
+      return ['roles', 'e2e'];
     default:
       return ['roles', role];
   }

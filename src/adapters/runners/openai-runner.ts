@@ -24,8 +24,8 @@ import type {
  * **What it is for.** Nine of the eleven shipped prompts already carry their whole input:
  * `sdd`, `planning` (all three variants), `plan-review` (both), `verification`,
  * `final-review` and `architecture-impact` receive text and produce text or JSON, and
- * touch no file. The three that do are `discovery` — whose prompt says "prefer reading a
- * file over inferring from its name" — `implementation`, and `code-review`. The last is the
+ * touch no file. The four that do are `discovery` — whose prompt says "prefer reading a
+ * file over inferring from its name" — `implementation`, `code-review`, and `e2e`. The last is the
  * one that bites: it lands on `finalReviewer`, so pointing that role at an endpoint fails at
  * the end of a run rather than at its start. `test/contracts/prompt-requirements.test.ts`
  * fails if a new prompt declares `workingDirectory: true` without this list following. A local endpoint can serve

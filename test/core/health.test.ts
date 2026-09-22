@@ -257,7 +257,7 @@ describe('FAIL — a role has nowhere to run', () => {
 describe('routes', () => {
   it('covers every workflow role', () => {
     const verdict = assessHealth(config(), [healthy('claude'), healthy('codex')]);
-    expect(verdict.routes).toHaveLength(9);
+    expect(verdict.routes).toHaveLength(10);
   });
 });
 

@@ -79,6 +79,7 @@ export async function runReviewCommand(
 const STAGE_HEADINGS = {
   verification: 'Running validation commands',
   inspection: '\nInspecting the implementation',
+  e2e: '\nRunning e2e browser tests',
   'final-review': 'Reviewing against the approved SDD',
 } as const;
 

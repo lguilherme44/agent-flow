@@ -128,6 +128,7 @@ describe('crew configuration model', () => {
       'roles.executors.trivial.runner',
       'roles.executors.trivial.model',
       'roles.executors.trivial.effort',
+      'roles.executors.trivial.enabled',
     ]);
   });
 

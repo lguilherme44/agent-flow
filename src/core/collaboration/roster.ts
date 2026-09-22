@@ -65,6 +65,7 @@ const DISPLAY_NAMES: Readonly<Record<WorkflowRole, string>> = {
   'executor.normal': 'Executor (normal)',
   'executor.complex': 'Executor (complex)',
   verification: 'Verifier',
+  e2e: 'E2E Tester',
   finalReviewer: 'Final Reviewer',
 };
 

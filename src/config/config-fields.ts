@@ -45,6 +45,7 @@ const enumField = (path: string, options: readonly string[], scopes: readonly Co
   ...field(path, 'enum', scopes), options,
 });
 const roleFields = (prefix: string, scopes = GLOBAL): ConfigFieldDefinition[] => [
+  field(`${prefix}.enabled`, 'boolean', scopes),
   field(`${prefix}.runner`, 'string', scopes), field(`${prefix}.model`, 'string', scopes),
   field(`${prefix}.effort`, 'reasoning_level', scopes), field(`${prefix}.timeoutSeconds`, 'integer', scopes),
   field(`${prefix}.stages.*.runner`, 'string', scopes), field(`${prefix}.stages.*.model`, 'string', scopes),
@@ -60,7 +61,7 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   // hands a runner the repository's own index — and `servers` is a list rather than a
   // boolean because a grant nobody can read back is not a grant anybody can audit.
   field('runners.*.mcp.config', 'string'), field('runners.*.mcp.servers', 'string_list'),
-  ...['architect', 'sdd', 'planner', 'planReviewer', 'executors.trivial', 'executors.normal', 'executors.complex', 'verification', 'finalReviewer'].flatMap((role) => roleFields(`roles.${role}`)),
+  ...['architect', 'sdd', 'planner', 'planReviewer', 'executors.trivial', 'executors.normal', 'executors.complex', 'verification', 'e2e', 'finalReviewer'].flatMap((role) => roleFields(`roles.${role}`)),
   field('fallback.enabled', 'boolean'), field('fallback.on', 'string_list'), ...roleFields('fallback.roles.*'),
   field('parallelism.maxTasks', 'integer'), field('retry.maxAttempts', 'integer'),
   field('recovery.enabled', 'boolean'),

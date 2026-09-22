@@ -162,7 +162,7 @@ describe('GET /runs/:runId/collaboration', () => {
     const { view } = await serve();
     const collaboration = await view();
 
-    expect(collaboration.agents).toHaveLength(9);
+    expect(collaboration.agents).toHaveLength(10);
     const executor = collaboration.agents.find((agent) => agent.id === 'executor.normal');
     expect(executor?.displayName).toBe('Executor (normal)');
     expect(executor?.runner).toBe('claude');

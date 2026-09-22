@@ -58,6 +58,7 @@ export interface RunPaths {
   readonly reviewsDir: string;
   readonly planReview: string;
   readonly verification: string;
+  readonly e2e: string;
   readonly finalReview: string;
   readonly tasksDir: string;
   readonly logsDir: string;
@@ -140,6 +141,7 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     reviewsDir,
     planReview: `${reviewsDir}/plan-review.json`,
     verification: `${reviewsDir}/verification.json`,
+    e2e: `${reviewsDir}/e2e.json`,
     finalReview: `${reviewsDir}/final-review.json`,
     tasksDir,
     logsDir,

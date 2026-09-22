@@ -75,6 +75,7 @@ export const ptBR: Dictionary = {
     implementation: 'build',
     'code-review': 'rev cód',
     verification: 'verif',
+    e2e: 'e2e',
     'final-review': 'final',
   },
 
@@ -88,6 +89,7 @@ export const ptBR: Dictionary = {
     implementation: 'implementação',
     'code-review': 'revisão de código',
     verification: 'verificação',
+    e2e: 'testes e2e',
     'final-review': 'revisão final',
   },
 

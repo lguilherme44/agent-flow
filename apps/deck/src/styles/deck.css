@@ -866,9 +866,20 @@ input[type='checkbox'].field-switch:disabled {
   color: var(--ink-3);
   font-size: var(--fs-0);
 }
+.crew-roles__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.crew-roles__switch .field-bool__word {
+  display: none;
+}
 .crew-roles__name {
   color: var(--ink);
   font-size: var(--fs-1);
+}
+.crew-roles__table tr[data-off='true'] td {
+  opacity: 0.6;
 }
 .crew-roles__table tr[data-pending='true'] td {
   background: var(--warn-dim);

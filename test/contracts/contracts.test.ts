@@ -61,6 +61,7 @@ describe('WorkflowRole (§3)', () => {
         'executor.normal',
         'executor.complex',
         'verification',
+        'e2e',
         'finalReviewer',
       ].sort(),
     );

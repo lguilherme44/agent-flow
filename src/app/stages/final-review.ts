@@ -33,6 +33,13 @@ export const VERIFICATION_STAGE: StageDefinition = {
   outputSchema: ReviewResponseSchema,
 };
 
+export const E2E_STAGE: StageDefinition = {
+  name: 'e2e',
+  role: 'e2e',
+  prompt: 'e2e',
+  outputSchema: ReviewResponseSchema,
+};
+
 export const FINAL_REVIEW_STAGE: StageDefinition = {
   name: 'final-review',
   role: 'finalReviewer',

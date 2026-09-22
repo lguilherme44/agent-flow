@@ -21,6 +21,7 @@ export const RUN_STAGE_ORDER = [
   'implementation',
   'code-review',
   'verification',
+  'e2e',
   'final-review',
 ] as const;
 
@@ -41,6 +42,7 @@ export const PIPELINE_STAGE_ORDER = [
   'implementation',
   'code-review',
   'verification',
+  'e2e',
   'final-review',
 ] as const;
 

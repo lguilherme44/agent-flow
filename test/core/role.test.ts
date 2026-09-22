@@ -49,6 +49,7 @@ describe('resolveRole', () => {
       'executor.normal',
       'executor.complex',
       'verification',
+      'e2e',
       'finalReviewer',
     ] as const;
 

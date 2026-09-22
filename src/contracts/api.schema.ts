@@ -928,6 +928,7 @@ export interface RoleRouteView {
   readonly requiresWorkingDirectory: boolean;
   readonly requiresNativeStructuredOutput: boolean;
   readonly configured: {
+    readonly enabled?: boolean;
     readonly runner: string;
     readonly model?: string;
     readonly reasoning: ReasoningLevel;

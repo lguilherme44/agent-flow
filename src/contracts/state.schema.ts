@@ -27,6 +27,7 @@ export const RUN_STAGES = [
    */
   'code-review',
   'verification',
+  'e2e',
   'final-review',
 ] as const;
 
@@ -56,6 +57,7 @@ export const PIPELINE_STAGES = [
   'implementation',
   'code-review',
   'verification',
+  'e2e',
   'final-review',
 ] as const;
 

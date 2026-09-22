@@ -45,8 +45,8 @@ describe('ConfigEditor', () => {
     const global = await editor.describe({ scope: 'global' });
     const project = await editor.describe({ scope: 'project', projectId: 'demo' });
 
-    expect(global.dynamicFields).toHaveLength(69);
-    expect(project.dynamicFields).toHaveLength(70);
+    expect(global.dynamicFields).toHaveLength(74);
+    expect(project.dynamicFields).toHaveLength(75);
     expect(global.dynamicFields.map((entry) => entry.path.join('.'))).toEqual(expect.arrayContaining([
       'runners.*.type', 'teams.*.members.*.runner', 'roles.architect.stages.*.runner',
       'fallback.roles.*.runner', 'quality.gates.*.category',

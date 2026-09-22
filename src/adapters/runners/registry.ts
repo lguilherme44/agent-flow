@@ -326,7 +326,9 @@ export function buildRegistry(
       const problems: string[] = [];
 
       for (const role of ALL_WORKFLOW_ROLES) {
-        const runnerId = roleConfigOf(target.roles, role).runner;
+        const roleConfig = roleConfigOf(target.roles, role);
+        if (!roleConfig.enabled) continue;
+        const runnerId = roleConfig.runner;
         if (runners.has(runnerId)) continue;
 
         const declared = target.runners[runnerId];
