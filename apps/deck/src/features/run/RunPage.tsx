@@ -3,7 +3,7 @@ import type { ActionJobView, ApprovalGateView, AttentionItem, ControlSnapshotVie
 import { ApiError, api, keys } from '../../lib/api';
 import { buildTimeline, stateAt } from '../../lib/replay';
 import { invalidate, useResource } from '../../lib/store';
-import { formatClock, formatDuration, formatRelative, formatStamp, ms } from '../../lib/time';
+import { formatDuration, formatRelative, formatStamp, ms } from '../../lib/time';
 import { runtimeTone } from '../../lib/tone';
 import { useT, word } from '../../lib/i18n';
 import { useNow } from '../../lib/use-now';
@@ -17,6 +17,8 @@ import { StageLog } from './StageLog';
 import { ConfirmCancel } from './ConfirmCancel';
 import { GateDialog } from './GateDialog';
 import { Outcome, tabForFocus, type OutcomeTab } from './Outcome';
+import { Kanban } from './Kanban';
+import { ExecutionProgress } from './ExecutionProgress';
 
 /** Runtime statuses after which nothing moves, and the recorder's right edge stands still. */
 const FINISHED = new Set(['complete', 'failed', 'cancelled']);
@@ -106,6 +108,30 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
     setScrub(instant);
     if (id !== undefined) setSelected(id);
   }, []);
+
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [viewMode, setViewMode] = useState<'kanban' | 'graph' | 'feed'>('kanban');
+
+  const tasksCount = useMemo(() => {
+    let completed = 0;
+    let running = 0;
+    let attentionCount = 0;
+    let queued = 0;
+    for (const row of rows) {
+      const state = stateOf(row.id);
+      if (state === 'completed') completed++;
+      else if (state === 'running') running++;
+      else if (['blocked', 'failed', 'interrupted', 'review_required'].includes(state ?? '')) attentionCount++;
+      else queued++;
+    }
+    return {
+      total: rows.length,
+      completed,
+      running,
+      attention: attentionCount,
+      queued,
+    };
+  }, [rows, stateOf]);
 
   const refreshRun = (): void => invalidate((key) => key.includes(`/runs/${runId}`) || key.includes('/workspace'));
 
@@ -419,85 +445,163 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         </div>
       )}
 
-      {timeline === undefined ? (
-        log.error !== undefined ? (
-          <Empty error>{dict.run.logCouldNotRead}</Empty>
+      <ExecutionProgress
+        stages={stages.data}
+        activeStage={detail?.stage}
+        onOpenStageLog={onOpenStageLog}
+        domain={domain}
+        t={t}
+        live={live}
+        finished={finished}
+        onScrub={onScrub}
+        tasksCount={tasksCount}
+        showTimeline={showTimeline}
+        onToggleTimeline={() => setShowTimeline((prev) => !prev)}
+      />
+
+      {showTimeline ? (
+        timeline === undefined ? (
+          log.error !== undefined ? (
+            <Empty error>{dict.run.logCouldNotRead}</Empty>
+          ) : (
+            <div className="panel">
+              <Skeleton rows={4} />
+            </div>
+          )
         ) : (
-          <div className="panel">
-            <Skeleton rows={4} />
-          </div>
+          <Recorder
+            timeline={timeline}
+            domain={domain}
+            t={t}
+            live={live}
+            finished={finished}
+            truncated={log.data?.truncated === true}
+            onScrub={onScrub}
+            selected={selected}
+            onSelect={onSelect}
+            rows={rows}
+            liveStates={liveStates}
+            past={past}
+          />
         )
-      ) : (
-        <Recorder
-          timeline={timeline}
-          domain={domain}
-          t={t}
-          live={live}
-          finished={finished}
-          truncated={log.data?.truncated === true}
-          onScrub={onScrub}
-          selected={selected}
-          onSelect={onSelect}
-          rows={rows}
-          liveStates={liveStates}
-          past={past}
-        />
-      )}
+      ) : null}
 
-      <div className="run-grid">
-        <section className="panel" aria-labelledby="graph-h">
-          <div className="panel__head">
-            <span id="graph-h" className="eyebrow">
-              {dict.run.graph}{past === undefined ? '' : ` · ${dict.run.asOf(formatClock(t))}`}
-            </span>
-            <span className="section__count">
-              {dict.run.tasksAndEdges(dag.data?.nodes.length ?? 0, dag.data?.edges.length ?? 0)}
-            </span>
+      <div className="tasks-workspace">
+        <div className="tasks-workspace__head">
+          <div className="tasks-workspace__tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              className="tasks-workspace__tab"
+              aria-selected={viewMode === 'kanban'}
+              onClick={() => setViewMode('kanban')}
+            >
+              📋 {dict.run.viewKanban}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className="tasks-workspace__tab"
+              aria-selected={viewMode === 'graph'}
+              onClick={() => setViewMode('graph')}
+            >
+              🕸 {dict.run.viewGraph}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className="tasks-workspace__tab"
+              aria-selected={viewMode === 'feed'}
+              onClick={() => setViewMode('feed')}
+            >
+              📄 {dict.run.viewFeed}
+            </button>
           </div>
-          <div className="panel__body">
-            <Graph dag={dag.data} rows={rows} stateOf={stateOf} selected={selected} onSelect={onSelect} {...(dag.error === undefined ? {} : { error: dag.error })} />
+          <div className="tasks-workspace__meta">
+            {viewMode === 'graph' ? (
+              <span className="section__count">
+                {dict.run.tasksAndEdges(dag.data?.nodes.length ?? 0, dag.data?.edges.length ?? 0)}
+              </span>
+            ) : viewMode === 'kanban' ? (
+              <span className="section__count">
+                {rows.length} {dict.run.axisTasks}
+              </span>
+            ) : null}
           </div>
-        </section>
+        </div>
 
-        <section className="panel" aria-labelledby="task-h">
-          <div className="panel__head">
-            <span id="task-h" className="eyebrow">
-              {dict.run.task}
-            </span>
-            {selected === undefined ? null : (
-              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setSelected(undefined)}>
-                {dict.common.clear}
-              </button>
+        <div className={selected !== undefined ? 'tasks-workspace__layout tasks-workspace__layout--with-inspector' : 'tasks-workspace__layout'}>
+          <div className="tasks-workspace__main">
+            {viewMode === 'kanban' ? (
+              <Kanban
+                tasks={tasks.data}
+                rows={rows}
+                stateOf={stateOf}
+                selected={selected}
+                onSelect={onSelect}
+                cards={cards}
+              />
+            ) : viewMode === 'graph' ? (
+              <Graph
+                dag={dag.data}
+                rows={rows}
+                stateOf={stateOf}
+                selected={selected}
+                onSelect={onSelect}
+                {...(dag.error === undefined ? {} : { error: dag.error })}
+              />
+            ) : (
+              <section className="panel" aria-labelledby="feed-h">
+                <div className="panel__head">
+                  <div className="panel__tabs" role="tablist" aria-labelledby="feed-h">
+                    <span id="feed-h" className="visually-hidden">{dict.inspector.log}</span>
+                    <button type="button" role="tab" aria-selected={logTab === 'events'} onClick={() => setLogTab('events')}>{dict.run.events}</button>
+                    <button type="button" role="tab" aria-selected={logTab === 'stage'} onClick={() => setLogTab('stage')}>{dict.run.stageOutput}</button>
+                  </div>
+                  <span className="section__count">
+                    {logTab === 'stage' ? '' : log.data === undefined ? '' : dict.inspector.lines(log.data.total)}
+                    {logTab === 'stage' ? '' : log.data?.truncated ? ` · ${dict.run.originCut}` : ''}
+                  </span>
+                </div>
+                <div className="panel__body">
+                  {logTab === 'events'
+                    ? <Feed timeline={timeline ?? buildTimeline([], now)} t={t} live={live} onJump={onJump} selected={selected} runId={runId} onOpenStageLog={onOpenStageLog} />
+                    : <StageLog address={address} stage={selectedStage} onStageChange={setSelectedStage} />}
+                </div>
+              </section>
             )}
           </div>
-          <div className="panel__body">
-            <Inspector address={address} taskId={selected} card={selected === undefined ? undefined : cards.get(selected)} attention={attentionFor(selected)} past={past} liveState={selected === undefined ? undefined : liveStates.get(selected)} />
-          </div>
-        </section>
 
-        <section className="panel" aria-labelledby="feed-h">
-          <div className="panel__head">
-            {/*
-              Two logs, and they answer different questions: the tape of facts this run
-              recorded, and what a runner actually said inside one stage. The event feed
-              carries two kilobytes of the second on a failure and none of it otherwise.
-            */}
-            <div className="panel__tabs" role="tablist" aria-labelledby="feed-h">
-              <span id="feed-h" className="visually-hidden">{dict.inspector.log}</span>
-              <button type="button" role="tab" aria-selected={logTab === 'events'} onClick={() => setLogTab('events')}>{dict.run.events}</button>
-              <button type="button" role="tab" aria-selected={logTab === 'stage'} onClick={() => setLogTab('stage')}>{dict.run.stageOutput}</button>
-            </div>
-            <span className="section__count">
-              {logTab === 'stage' ? '' : log.data === undefined ? '' : dict.inspector.lines(log.data.total)}
-              {logTab === 'stage' ? '' : log.data?.truncated ? ` · ${dict.run.originCut}` : ''}
-            </span>
-          </div>
-          <div className="panel__body">
-            {logTab === 'events'
-              ? <Feed timeline={timeline ?? buildTimeline([], now)} t={t} live={live} onJump={onJump} selected={selected} runId={runId} onOpenStageLog={onOpenStageLog} />
-              : <StageLog address={address} stage={selectedStage} onStageChange={setSelectedStage} />}
-          </div>
-        </section>
+          {selected !== undefined ? (
+            <aside className="tasks-workspace__inspector" aria-labelledby="task-h">
+              <section className="panel">
+                <div className="panel__head">
+                  <span id="task-h" className="eyebrow">
+                    {dict.run.task}: <b>{selected}</b>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setSelected(undefined)}
+                    title={dict.run.closeInspector}
+                  >
+                    ✕ {dict.common.clear}
+                  </button>
+                </div>
+                <div className="panel__body">
+                  <Inspector
+                    address={address}
+                    taskId={selected}
+                    card={cards.get(selected)}
+                    attention={attentionFor(selected)}
+                    past={past}
+                    liveState={liveStates.get(selected)}
+                  />
+                </div>
+              </section>
+            </aside>
+          ) : null}
+        </div>
       </div>
 
       <Outcome address={address} tab={outcomeTab} onTab={setOutcomeTab} reviewFreshness={rt?.reviewFreshness} />

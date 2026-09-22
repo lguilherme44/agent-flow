@@ -134,8 +134,31 @@ export async function runUiCommand(
     // was right while registering a project meant stopping the server; it stops being
     // right the moment the Deck can register one, because the write would succeed and the
     // list would still be missing it.
-    const registry = discoveredRegistry({ fs, roots: [workspace], depth });
+    const globalDir = dirname(globals.globalConfigPath);
+    const projectsFile = join(globalDir, 'projects.json');
+    let savedRoots: string[] = [];
+    try {
+      if (await fs.exists(projectsFile)) {
+        const raw = await fs.readFile(projectsFile);
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          savedRoots = parsed.filter((p: unknown): p is string => typeof p === 'string');
+        }
+      }
+    } catch {
+      // safe fallback if projects.json is unreadable or malformed
+    }
+
+    const allRoots = Array.from(new Set([workspace, ...savedRoots]));
+    const registry = discoveredRegistry({ fs, roots: allRoots, depth });
     const discovered = await registry.rescan();
+
+    try {
+      const knownPaths = Array.from(new Set([...savedRoots, ...discovered.projects.map((p) => p.path)]));
+      await fs.writeFileAtomic(projectsFile, JSON.stringify(knownPaths, null, 2));
+    } catch {
+      // safe fallback if writing projects.json fails
+    }
 
     // Only when there is nothing at all. A workspace holding repositories that have never
     // been through `init` is now a workspace worth opening: the Deck can register them,
