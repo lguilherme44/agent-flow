@@ -601,3 +601,26 @@ describe('output limits', () => {
     expect(result.stderr).toContain('truncated');
   });
 });
+
+describe('a configured command line through the host shell (verification commands)', () => {
+  it('reaches the child with its quotes and colons intact', async () => {
+    // Measured 23/09/2026 on Windows: a project `test` command
+    // `docker run -v "%CD%\server:/src:ro" …` arrived as a mangled `-v` argument ("too many
+    // colons", exit 125 in 83 ms) — Node escaped the inner quotes the MSVCRT way (`\"`), and
+    // `cmd` does not undo that. Every configured command with a quoted argument was broken on
+    // Windows, and the failure read as the project's tests failing.
+    const { shellInvocation } = await import('../../src/app/verification-commands.js');
+    const node = process.execPath;
+    const line = `"${node}" -e "console.log(process.argv[1])" "C:\\x y\\server:/src:ro"`;
+
+    const result = await new NodeProcessRunner().run({
+      ...shellInvocation(line),
+      cwd: tmpdir(),
+      timeoutSeconds: 30,
+      envMode: 'inherit',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('C:\\x y\\server:/src:ro');
+  });
+});

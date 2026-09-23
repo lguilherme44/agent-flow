@@ -33,13 +33,14 @@ runners:
   # An OpenAI-compatible inference endpoint — a local llama.cpp or vLLM server,
   # or any hosted one. **Not a coding agent**: it has no working directory and
   # cannot write, and it declares both, so \`agent-flow doctor\` will refuse it for
-  # \`discovery\` and the executors and accept it everywhere else.
+  # every stage that reads the repository and accept it for the rest.
   #
-  # That "everywhere else" is most of the workflow. Nine of the eleven shipped
-  # prompts carry their whole input — sdd, planning, both reviews, verification,
-  # final-review, architecture-impact — so pointing them at a local model costs
-  # no quota and makes the two review stages genuinely independent of whichever
-  # provider wrote the code.
+  # The rest is planning and the plan review: five of the thirteen shipped prompts —
+  # planning (all three) and plan-review (both) — carry their whole input, so pointing
+  # them at a local model costs no quota and makes the plan review independent of
+  # whichever provider wrote the plan. Every other stage reads the repository: the
+  # impact stage is where a request's claims meet the code, and verification and
+  # final-review read the changed files.
   #
   # \`apiKeyEnv\` names an environment variable, never the key itself (§7.1).
   #

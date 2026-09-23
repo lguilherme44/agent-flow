@@ -1,5 +1,6 @@
 import nodePath from 'node:path';
 import { agentFlowPaths } from '../app/paths.js';
+import { samePath } from '../app/project-hub.js';
 import type { FileSystem } from '../ports/index.js';
 import { isAtOrUnderRoot, type PathFlavour } from '../core/path-containment.js';
 
@@ -44,6 +45,14 @@ export interface DiscoverOptions {
    * name the flavour it is making a claim about.
    */
   readonly path?: WalkFlavour;
+  /**
+   * The global configuration file, whose directory is never a project.
+   *
+   * `~/.agent-flow/config.yaml` is the global configuration and also exactly the project
+   * marker, so a walk that reached the home directory listed it as a project — measured the
+   * first time the dashboard started from home, which is what autostart does.
+   */
+  readonly globalConfigPath?: string;
 }
 
 /** What the walk needs from a path implementation. `node:path` satisfies it. */
@@ -149,7 +158,9 @@ export async function discoverProjects(options: DiscoverOptions): Promise<Discov
     if (seen.has(resolved)) return;
     seen.add(resolved);
 
-    if (await options.fs.exists(flavour.join(dir, '.agent-flow', 'config.yaml'))) {
+    const marker = flavour.join(dir, '.agent-flow', 'config.yaml');
+    const isGlobalConfig = options.globalConfigPath !== undefined && samePath(marker, options.globalConfigPath);
+    if (!isGlobalConfig && (await options.fs.exists(marker))) {
       // The resolved path, not the one the walk arrived by. A project reached
       // through a link inside the workspace is the same project, and registering
       // it under the link would give it an id from the link's name — `current`
@@ -268,7 +279,18 @@ export function registryOf(projects: readonly RegisteredProject[]): ProjectRegis
  * walk is re-run under the same roots, the same depth and the same containment rule, so a
  * project can only appear because the filesystem says it is there.
  */
-export function discoveredRegistry(options: DiscoverOptions): ProjectRegistry & {
+export function discoveredRegistry(options: DiscoverOptions & {
+  /**
+   * Asked for the roots again on every rescan (the project hub).
+   *
+   * A dashboard started at logon lives for days, and the hub it serves grows while it runs:
+   * a project `init`ed in another terminal is added to the hub, not to this process. Walking
+   * a startup snapshot of the roots would leave that project off the screen until a restart.
+   * The walk and its containment rule are unchanged — only the list of directories the
+   * operator chose is read fresh.
+   */
+  readonly refreshRoots?: () => Promise<readonly string[]>;
+}): ProjectRegistry & {
   rescan(): Promise<DiscoveryResult>;
 } {
   let current: DiscoveryResult = { projects: [], candidates: [], skipped: [] };
@@ -285,7 +307,10 @@ export function discoveredRegistry(options: DiscoverOptions): ProjectRegistry & 
     get: (id) => byId.get(id),
     primary: () => current.projects[0],
     candidates: () => [...current.candidates],
-    rescan: async () => index(await discoverProjects(options)),
+    rescan: async () => {
+      const roots = options.refreshRoots === undefined ? options.roots : await options.refreshRoots();
+      return index(await discoverProjects({ ...options, roots }));
+    },
   };
 }
 

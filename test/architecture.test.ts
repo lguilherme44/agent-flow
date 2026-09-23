@@ -316,22 +316,72 @@ describe('nothing a model wrote reaches a shell (V-01)', () => {
   // to enforce. Agent Flow cannot intercept what a runner executes inside its
   // sandbox — but it absolutely can refuse to run model-authored text itself.
   //
-  // Only two modules may name a shell, and both take strings that came from
-  // configuration a human wrote.
-  const ALLOWED_TO_SHELL = ['src/app/verification-commands.ts'];
+  // Each module allowed to name a shell, and why what reaches it is not model output.
+  const ALLOWED_TO_SHELL: Record<string, string> = {
+    'src/app/verification-commands.ts': 'runs the commands a human wrote in the project config',
+    'src/cli/autostart.ts': 'the logon script runs this CLI’s own `ui`: machine paths and the operator’s flags',
+    'src/cli/feature.ts': 'opens $EDITOR, the operator’s own environment, on a file agent-flow created',
+    'src/cli/ui.ts': 'opens the dashboard URL agent-flow built, through `cmd /c start`',
+  };
 
-  it('spawns a shell from one module only', () => {
+  // Shell targets are strings, so this scan keeps string literals and drops only comments.
+  // It used to run on `codeOnly`, which blanks strings: `'cmd.exe'`, `'/bin/sh'` and a quoted
+  // `'powershell'` were all invisible to it, and three modules spawned a shell unlisted while
+  // it passed (measured 23/09/2026).
+  //
+  // PowerShell is matched as a quoted executable name, not as a word: Claude Code names its
+  // Windows command tool `PowerShell`, and the claude adapter parses `PowerShell(...)` grants.
+  // `exec` counts only as a bare call — `child_process.exec` always goes through a shell —
+  // never as `.exec(`, which is how every regular expression in this codebase is read. A
+  // `shell:` option counts unless it is literally `false`.
+  const SPAWNS_A_SHELL =
+    /\/bin\/sh|\b(?:ba|z)?sh['"`]\s*,\s*\[\s*['"`]-c|cmd\.exe|['"`](?:powershell|pwsh)(?:\.exe)?['"`]|(?<![.\w])exec(?:Sync)?\(|\bshell\s*:\s*(?!false\b)[\w'"`!(]/i;
+
+  /**
+   * Comments out, strings kept, in one pass: a string is consumed whole before anything
+   * inside it can read as a comment, so `'/**'` does not blank the code up to the next `*\/`
+   * and `https://` stays a URL.
+   */
+  const withoutComments = (text: string): string =>
+    text.replace(
+      /('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+      (match, literal: string | undefined) => literal ?? ' ',
+    );
+
+  const spawnsAShell = (text: string): boolean => SPAWNS_A_SHELL.test(withoutComments(text));
+
+  it('sees a shell spawned from a string, and not a tool name or a comment', () => {
+    // The positive control for the rule below, through the same stripping it scans with.
+    expect(spawnsAShell("spawn('powershell', ['-Command', line])")).toBe(true);
+    expect(spawnsAShell('spawn("pwsh.exe", args)')).toBe(true);
+    expect(spawnsAShell("spawn('/bin/sh', ['-c', line])")).toBe(true);
+    expect(spawnsAShell("spawn(process.env.ComSpec ?? 'cmd.exe', ['/c', line])")).toBe(true);
+    expect(spawnsAShell("spawnSync(editor, [file], { shell: true })")).toBe(true);
+    expect(spawnsAShell("spawn(command, args, { shell: useShell })")).toBe(true);
+    expect(spawnsAShell("spawn('bash', ['-c', line])")).toBe(true);
+    expect(spawnsAShell('exec(line, callback)')).toBe(true);
+    expect(spawnsAShell("const glob = '/**'; spawn('/bin/sh', ['-c', line]); // */")).toBe(true);
+    expect(spawnsAShell('/^PowerShell(\\(|$)/.test(entry)')).toBe(false);
+    expect(spawnsAShell("// spawns cmd.exe, as the comment says")).toBe(false);
+    expect(spawnsAShell("const url = 'https://example.test/path'")).toBe(false);
+    expect(spawnsAShell('const match = /^v(\\d+)/.exec(raw)')).toBe(false);
+    expect(spawnsAShell("spawn(command, args, { shell: false })")).toBe(false);
+  });
+
+  it('spawns a shell only from the modules that say why', () => {
     const offenders: string[] = [];
+    const seen = new Set<string>();
 
     for (const file of sourceFiles('src')) {
       const { path, text } = read(file);
-      if (ALLOWED_TO_SHELL.includes(path)) continue;
-      if (/\/bin\/sh|\bsh\b\s*['"`]?\s*,\s*\[\s*['"`]-c|cmd\.exe|powershell/i.test(codeOnly(text))) {
-        offenders.push(path);
-      }
+      if (!spawnsAShell(text)) continue;
+      if (path in ALLOWED_TO_SHELL) seen.add(path);
+      else offenders.push(path);
     }
 
     expect(offenders).toEqual([]);
+    // An entry whose module stopped naming a shell is a permission nobody uses.
+    expect([...seen].sort()).toEqual(Object.keys(ALLOWED_TO_SHELL).sort());
   });
 
   it('takes the setup command from project config and from nowhere else (S-11)', () => {

@@ -95,10 +95,11 @@ export interface RoleRequirements {
   /**
    * True when the stage's prompt reads or writes the repository.
    *
-   * Declared by the prompt rather than assumed of every role. `discovery` explores the
-   * project and `implementation` changes it; the other nine shipped prompts receive their
-   * whole input as variables and open no file — which is what makes an inference endpoint
-   * a legitimate runner for them, and not for these two.
+   * Declared by the prompt rather than assumed of every role. Eight shipped prompts read the
+   * repository (`discovery`, `architecture-impact`, `sdd`, `implementation`, `verification`,
+   * `final-review`, `code-review`, `e2e`); the other five receive their whole input as
+   * variables and open no file — which is what makes an inference endpoint a legitimate
+   * runner for them, and not for the eight.
    */
   readonly workingDirectory?: boolean;
 }
@@ -301,15 +302,15 @@ export function resolveRole(
 
   // **Only when the role's prompts actually read the repository.**
   //
-  // This used to say "which every role requires", and the prompts disprove it: nine of the
-  // eleven shipped ones carry their whole input — `sdd`, `planning`, both reviews,
-  // `verification`, `final-review`, `architecture-impact` all receive text and produce text
-  // or JSON, and open no file. The two that do are `discovery`, whose prompt says "prefer
-  // reading a file over inferring from its name", and `implementation`.
+  // This used to say "which every role requires", and the prompts disprove it: five of the
+  // thirteen shipped ones carry their whole input — the planning prompts and both plan
+  // reviews receive text and produce text or JSON, and open no file. The eight that read
+  // the repository declare it: `discovery`, `architecture-impact`, `sdd`, `implementation`,
+  // `verification`, `final-review`, `code-review` and `e2e`.
   //
   // The requirement therefore comes from the prompt, exactly as `readOnly` already does,
   // rather than from a blanket claim. That is what lets an inference endpoint — which has
-  // no filesystem and says so — serve the nine while being refused for the two.
+  // no filesystem and says so — serve the five while being refused for the eight.
   if (requirements.workingDirectory === true && !runnerCapabilities.supportsWorkingDirectory) {
     throw new RoleResolutionError(
       'missing_capability',

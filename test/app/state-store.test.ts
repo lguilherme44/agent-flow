@@ -165,14 +165,14 @@ describe('degradations survive resume (R-16)', () => {
     const run = await store.createRun('f');
 
     await store.recordDegradation(run.runId, {
-      kind: 'single_provider',
+      kind: 'reasoning_clamped',
       reason: 'only claude is healthy',
       impact: 'plan review and final review cannot be cross-provider',
     });
 
     const reloaded = await store.loadRun(run.runId);
     expect(reloaded.degradations).toHaveLength(1);
-    expect(reloaded.degradations[0]?.kind).toBe('single_provider');
+    expect(reloaded.degradations[0]?.kind).toBe('reasoning_clamped');
     expect(reloaded.degradations[0]?.detectedAt).toBe('2026-08-09T20:00:00.000Z');
   });
 
@@ -180,7 +180,7 @@ describe('degradations survive resume (R-16)', () => {
     const { store } = makeStore();
     const run = await store.createRun('f');
     const degradation = {
-      kind: 'single_provider' as const,
+      kind: 'reasoning_clamped' as const,
       reason: 'only claude is healthy',
       impact: 'reviews are same-provider',
     };

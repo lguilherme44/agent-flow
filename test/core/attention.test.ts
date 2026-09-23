@@ -52,7 +52,7 @@ const input = (overrides: Partial<AttentionInput> = {}): AttentionInput => ({
   runId: 'AF-2026-001',
   runtime: runtime(),
   tasks: [],
-  run: { updatedAt: NOW, degradations: [], integrationConflicts: [] },
+  run: { updatedAt: NOW, integrationConflicts: [] },
   events: [],
   ...overrides,
 });
@@ -107,6 +107,46 @@ describe('M8-ACC-09 … 13 — the queue contains the blockers it claims to', ()
     expect(gated[0]?.why).toContain('agent-flow approve');
 
     expect(kinds(projectAttention(input()))).not.toContain('approval_required');
+  });
+
+  it('raises the final review a finished run is waiting on', () => {
+    // Measured 23/09/2026: AF-2026-005 had every task done and sat at `final_acceptance`;
+    // its lane said "parado, esperando por você" and the queue beside it said 0.
+    const held = projectAttention(
+      input({
+        tasks: [task('TASK-001', 'completed')],
+        runtime: runtime({
+          status: 'blocked_on_human',
+          resumable: false,
+          gate: { gate: 'final_acceptance', action: 'Run `agent-flow review`, then accept and merge', tasks: [] },
+        }),
+      }),
+    );
+
+    expect(kinds(held)).toEqual(['final_review_required']);
+    expect(held[0]?.priority).toBe('P1');
+    expect(held[0]?.action.kind).toBe('review');
+    expect(held[0]?.why).toContain('agent-flow review');
+
+    // And not for a run still implementing.
+    expect(kinds(projectAttention(input()))).not.toContain('final_review_required');
+  });
+
+  it('does not ask for a final review that is already running', () => {
+    // The gate stays up for the whole of `review`; the projection says when it is running,
+    // and a run being reviewed is not waiting for a person to start the review.
+    const held = (reviewing: boolean) => kinds(projectAttention(input({
+      tasks: [task('TASK-001', 'completed')],
+      runtime: runtime({
+        status: 'blocked_on_human',
+        resumable: false,
+        gate: { gate: 'final_acceptance', action: 'Run `agent-flow review`', tasks: [] },
+        ...(reviewing ? { reviewInProgress: true as const } : {}),
+      }),
+    })));
+
+    expect(held(false)).toContain('final_review_required');
+    expect(held(true)).not.toContain('final_review_required');
   });
 
   it('M8-ACC-10 raises recovery exhaustion, carrying the escalation’s own action', () => {
@@ -401,9 +441,6 @@ describe('the order is a function of the facts, not of the reader', () => {
         run: {
           updatedAt: NOW,
           pauseRequestedAt: NOW,
-          degradations: [
-            { kind: 'forced_approval', reason: 'a gate was forced', impact: 'the gate did not pass', detectedAt: NOW },
-          ],
           integrationConflicts: [{ task: 'TASK-004', attempt: 1, paths: ['src/a.ts'] }],
         },
         delivery: delivery({ state: 'checks_pending', checkSummary: { total: 2, green: 0, red: 0, pending: 2 } }),
@@ -414,6 +451,15 @@ describe('the order is a function of the facts, not of the reader', () => {
     // And the ladder actually orders: P0 integrity first, P4 information last.
     expect(raised[0]?.priority).toBe('P0');
     expect(raised.at(-1)?.priority).toBe('P4');
+  });
+});
+
+describe('a degradation is information, not a request', () => {
+  it('has no queue item for a recorded degradation', () => {
+    // Measured 23/09/2026: every finished run in the hub sat in "Precisa de você" as a P3
+    // for a degradation nobody could act on. The run page still shows it; the queue is for
+    // what a person has to do, so the kind is gone rather than filtered.
+    expect(ATTENTION_KINDS as readonly string[]).not.toContain('degradation_recorded');
   });
 });
 

@@ -63,6 +63,8 @@ export const ATTENTION_KINDS = [
   'ownership_conflict',
   // P1 — a person is the blocker
   'approval_required',
+  // Every task done, held at `final_acceptance` until someone runs the final review.
+  'final_review_required',
   'task_review_required',
   'agent_blocked',
   'recovery_exhausted',
@@ -86,7 +88,8 @@ export const ATTENTION_KINDS = [
   'review_stale',
   'capacity_starvation',
   'run_paused',
-  'degradation_recorded',
+  // `degradation_recorded` was here until 23/09/2026. A degradation is something to
+  // know, shown on the run; it is never something a person has to do.
   // P4 — informational
   'checks_pending',
   'delivery_not_published',
@@ -106,6 +109,8 @@ export const ATTENTION_ACTIONS = [
   'retry',
   'resume',
   'start',
+  /** `agent-flow review`: verification, the reviewers and the Definition of Done. */
+  'review',
   'cancel',
   'forge_publish',
   'forge_sync',

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assessIndependence, explainIndependence } from '../../src/core/independence.js';
+import { assessIndependence } from '../../src/core/independence.js';
 
 /**
  * The provider half of AF-R01.
@@ -68,25 +68,5 @@ describe('assessIndependence', () => {
     expect(assessIndependence(['codex', 'mystery'], 'claude', providerOfWithUnknown)).toBe(
       'same-provider-fresh-context',
     );
-  });
-});
-
-describe('explainIndependence', () => {
-  it('names the reviewer, its provider, and the authors', () => {
-    const explanation = explainIndependence(['claude', 'claude'], 'claudeBackup', providerOf);
-
-    expect(explanation).toContain('claudeBackup');
-    expect(explanation).toContain('claude-code-cli');
-    // Deduplicated: three tasks on one runner is one author, not three.
-    expect(explanation.match(/claude,/g)).toBeNull();
-  });
-
-  it('says so plainly when there are no recorded authors', () => {
-    expect(explainIndependence([], 'codex', providerOf)).toContain('(none)');
-  });
-
-  it('handles unknown reviewer provider gracefully', () => {
-    const explanation = explainIndependence(['claude'], 'unknownRunner', providerOf);
-    expect(explanation).toContain('(unknown)');
   });
 });

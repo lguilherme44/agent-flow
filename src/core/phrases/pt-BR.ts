@@ -111,7 +111,7 @@ export const ptBR: Phrases = {
       'comando. Este projeto declara commands, e install, lint, test e build seriam todos ' +
       'recusados, sem aprovação, numa sessão não-interativa. Conceda os binários que esses ' +
       `commands já nomeiam, ex.: runners.${runner}.args: ` +
-      "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)']",
+      "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)'] — no Windows declare cada regra também para o PowerShell, ex. 'PowerShell(npm:*)': é por ele que o Claude Code roda comandos lá",
     nodeMissing: 'O Node.js não está no PATH',
     installNode: 'Instale o Node.js 20+ (https://nodejs.org ou via fnm/nvm)',
     gitMissingOrOld: 'O Git não existe ou é mais antigo que 2.38',
@@ -209,7 +209,8 @@ export const ptBR: Phrases = {
       'Use uma instalação que respeite o lockfile — no npm, `commands.install: npm ci`.',
     belowWorktreeFloor: (floor) => `abaixo do mínimo ${floor} exigido pelo modo worktree`,
     worktreeNeedsVersion: (floor) => `o modo worktree precisa de ${floor} ou mais novo`,
-    belowNodeFloor: (floor) => `o dashboard precisa de ${floor} ou mais novo; o \`ui\` vai recusar`,
+    belowNodeFloor: (floor) => `o dashboard precisa de ${floor} ou mais novo, e nenhum Node instalado atende`,
+    dashboardRunsOn: (version) => `o dashboard roda no Node ${version}`,
     nodeNeedsVersion: (floor) => `o \`ui\` precisa de ${floor} ou mais novo`,
 
     authConfigured: 'configurada',
@@ -218,17 +219,11 @@ export const ptBR: Phrases = {
     authNotVerifiedShort: 'não verificada (use --deep)',
     verdictOkWithNote: 'OK — nada aqui impede uma run, mas veja a nota acima',
 
-    planReviewSameProvider:
-      'a revisão do plano é do mesmo provedor: uma suposição errada feita no planejamento ' +
-      'pode ser repetida em vez de pega',
-    finalReviewSameProvider:
-      'a revisão final é do mesmo provedor: o modelo que escreveu o código é também quem o julga',
-
     stageRoutingHeading: 'Roteamento de estágios (qual runner serve o quê)',
     readsRepository: 'lê o repositório',
-    textInTextOut: 'texto entra, texto sai',
+    textInTextOut: 'trabalha a partir dos documentos anteriores',
     stageOpensNoFile:
-      'este estágio não abre arquivo — um runner `openai-compatible` daria conta',
+      'não exige o repositório — um runner `openai-compatible` serviria, mas sem conferir nada no código',
     configuredAndUnrouted: 'Configurados e sem rota',
     noRolePointsAtIt: 'nenhum papel aponta para ele',
     pointARoleAtOne:
@@ -390,6 +385,8 @@ export const ptBR: Phrases = {
     alreadyBeing: (runId, operation, owner, where, since) =>
       `${runId} já está sendo ${operation} pelo ${owner} (${where}), desde ${since}.`,
     waitForExecution: 'Espere a execução em andamento terminar.',
+    useSeparateWorktree:
+      'Espere ela terminar, ou comece a feature nova numa worktree separada (`git worktree add`), para as duas runs não dividirem a run atual.',
     lockOnAnotherHost:
       'O Agent Flow não julga um lock de outra máquina. Pare a execução naquele host, ou — se ' +
       'aquele host não existe mais — apague aqui o arquivo execution.lock.* de maior número no ' +
@@ -591,6 +588,8 @@ export const ptBR: Phrases = {
     reviewOwnership: 'Revisar as áreas de propriedade',
 
     planWaiting: 'o plano está esperando uma decisão',
+    finalReviewWaiting: 'todas as tarefas terminaram; falta a revisão final',
+    runTheFinalReview: 'Rodar a revisão final',
     nothingRunsUntilGate: 'nada roda enquanto o portão não abrir',
     reviewThePlan: 'Revisar o plano',
     exhaustedRecovery: (task) => `${task} esgotou a recuperação automática`,
@@ -641,13 +640,10 @@ export const ptBR: Phrases = {
     readyAndNobodyTakes: (task) => `${task} está pronta e ninguém pode pegá-la`,
     everyMemberAtCapacity: 'todo membro com as habilidades que servem está em maxConcurrentTasks',
     openTheTeam: 'Abrir a equipe',
-    runIsDegraded: (kind) => `esta run está degradada: ${kind}`,
-    reasonAndImpact: (reason, impact) => `${reason} — ${impact}`,
     finishedNothingPublished: 'esta run terminou e nada foi publicado',
     runForgePublish: 'Rode `agent-flow forge publish`',
     checksPending: (pending) => `${String(pending)} checagens remotas ainda não reportaram`,
     checksAreObservation: 'checagens remotas são observação, nunca um veredito local',
-    openTheRunSummary: 'Abrir o resumo da run',
   },
   pairing: {
     title: 'Parear Dispositivo',

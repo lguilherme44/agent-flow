@@ -4,6 +4,7 @@ import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import {
   assignIds,
   discoverProjects,
+  discoveredRegistry,
   registryOf,
   slug,
 } from '../../src/server/project-registry.js';
@@ -300,5 +301,53 @@ describe('registryOf', () => {
 
   it('defaults to the first, which is where the UI was started', () => {
     expect(registryOf(projects).primary()?.id).toBe('api');
+  });
+});
+
+describe('discoveredRegistry with roots that change (the project hub)', () => {
+  it('asks for its roots again on every rescan, so a project registered elsewhere appears', async () => {
+    // A dashboard started at logon lives for days. A project `init`ed in another terminal
+    // lands in the hub, and a registry that walked a startup snapshot of the roots would
+    // never list it — the screen would be right at boot and wrong by lunch.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/wk/api/.agent-flow/config.yaml', CONFIG);
+    fs.seed('/other/web/.agent-flow/config.yaml', CONFIG);
+
+    let roots = ['/wk/api'];
+    const registry = discoveredRegistry({ fs, roots, depth: 1, path: posix, refreshRoots: async () => roots });
+
+    expect((await registry.rescan()).projects.map((project) => project.id)).toEqual(['api']);
+
+    roots = ['/wk/api', '/other/web'];
+    expect((await registry.rescan()).projects.map((project) => project.id).sort()).toEqual(['api', 'web']);
+    expect(registry.get('web')?.path).toBe('/other/web');
+  });
+
+  it('keeps the roots it was built with when nothing refreshes them', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed('/wk/api/.agent-flow/config.yaml', CONFIG);
+    const registry = discoveredRegistry({ fs, roots: ['/wk'], depth: 1, path: posix });
+
+    expect((await registry.rescan()).projects.map((project) => project.id)).toEqual(['api']);
+  });
+});
+
+describe('discoverProjects and the global configuration', () => {
+  it('does not list the directory whose .agent-flow holds the global config', async () => {
+    // The home directory: `~/.agent-flow/config.yaml` is the global configuration, and it
+    // is also the project marker. Found by starting the dashboard from home, as autostart does.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/home/me/.agent-flow/config.yaml', 'ui: {}\n');
+    fs.seed('/home/me/api/.agent-flow/config.yaml', CONFIG);
+
+    const found = await discoverProjects({
+      fs,
+      roots: ['/home/me'],
+      depth: 1,
+      path: posix,
+      globalConfigPath: '/home/me/.agent-flow/config.yaml',
+    });
+
+    expect(found.projects.map((project) => project.path)).toEqual(['/home/me/api']);
   });
 });

@@ -271,6 +271,12 @@ export const RunStateSchema = z.object({
   stage: RunStageSchema,
   status: RunStatusSchema,
   workflow: WorkflowClassSchema.optional(),
+  /**
+   * The request arrived with its own investigation (`agent-flow feature --grounded`).
+   * Kept on the run so a `revise` or a resume, which pass the options of their own call,
+   * do not buy the repository map the first plan deliberately skipped.
+   */
+  grounded: z.boolean().optional(),
   revisionCount: z.number().int().min(0).default(0),
 
   approved: z.boolean().default(false),
@@ -308,7 +314,13 @@ export const RunStateSchema = z.object({
    */
   cancelledAt: IsoTimestampSchema.optional(),
 
-  degradations: z.array(DegradationSchema).default([]),
+  // `single_provider` is dropped on read (retired 23/09/2026): one provider is the
+  // operator's choice, and runs written before carry it in state.json. The kind stays in
+  // DEGRADATION_KINDS so those files still parse; nothing records it on a run any more.
+  degradations: z
+    .array(DegradationSchema)
+    .default([])
+    .transform((all) => all.filter((degradation) => degradation.kind !== 'single_provider')),
   tasks: z.array(TaskProgressSchema).default([]),
 
   /**
@@ -442,6 +454,16 @@ export const STAGE_EVENT_TYPES = [
   'stage_failed',
   /** Satisfied by an artifact that already existed; no agent ran. */
   'stage_reused',
+  /**
+   * `detail: { stage, reason }`. Deliberately not run, and nothing stands in for it.
+   *
+   * Beside `stage_reused` rather than folded into it: reused means an artifact answered
+   * the stage; skipped means the stage was judged unnecessary. Today only `discovery`,
+   * for a grounded request (`reason: 'grounded_request'`).
+   */
+  'stage_skipped',
+  /** `detail: {}`. `review` began, before workspace preparation and its commands. */
+  'run_review_started',
   'stage_context_measured',
   /**
    * `detail: { stage, role, durationMs, timeoutSeconds, share }`. A stage that nearly ran out.

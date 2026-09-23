@@ -99,13 +99,6 @@ export function checkApproval(
     return { allowed: false, refusal: { kind: 'review_stale', review }, warnings };
   }
 
-  if (review.independence === 'same-provider-fresh-context') {
-    warnings.push(
-      'the plan review was same-provider: it does not protect against an assumption ' +
-        'repeated from planning',
-    );
-  }
-
   if (review.verdict === 'FAIL') {
     return { allowed: false, refusal: { kind: 'review_failed', review }, warnings };
   }

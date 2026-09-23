@@ -229,7 +229,10 @@ export function projectRun(input: ProjectionInput): RunProjection {
   }
 
   const gate = projectGate(tasks, resumable, say);
-  if (gate !== undefined) return { ...base, status: 'blocked_on_human', gate };
+  if (gate !== undefined) {
+    const reviewing = gate.gate === 'final_acceptance' && reviewInProgress(events);
+    return { ...base, status: 'blocked_on_human', gate, ...(reviewing ? { reviewInProgress: true as const } : {}) };
+  }
 
   // Read from the log, not from the field — see `currentStage`.
   const stage = currentStage(events, state);
@@ -467,6 +470,28 @@ function projectReviewFreshness(input: ProjectionInput): RunProjection['reviewFr
 
   if (lastStageStart === undefined) return 'current';
   return lastStageStart > written ? 'superseded' : 'current';
+}
+
+/**
+ * Whether `review` has started since the last task finished and is still going.
+ *
+ * `run_review_started` is written first thing, before workspace preparation and the
+ * mechanical commands — often the longest part — so it, not a stage start, is what marks the
+ * review. A stage of the review failing ends it: that run needs a person again. Position
+ * rather than timestamp, because events in one write can share a millisecond.
+ */
+function reviewInProgress(events: readonly RunEvent[]): boolean {
+  let finished = -1;
+  let started = -1;
+  let failed = -1;
+  events.forEach((event, index) => {
+    const stage = event.detail['stage'];
+    const reviewStage = stage === 'verification' || stage === 'final-review';
+    if (event.type === 'task_finished') finished = index;
+    if (event.type === 'run_review_started' || (event.type === 'stage_started' && reviewStage)) started = index;
+    if (event.type === 'stage_failed' && reviewStage) failed = index;
+  });
+  return started > finished && started > failed;
 }
 
 /**

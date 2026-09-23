@@ -1,6 +1,5 @@
 import type { Plan, ReviewResult, RunEvent } from '../contracts/index.js';
-import { en, type Phrases } from '../core/phrases/index.js';
-import { assessIndependence, explainIndependence, type ProviderOf } from '../core/independence.js';
+import { assessIndependence, type ProviderOf } from '../core/independence.js';
 import { planHash } from './approval.js';
 import type { StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -16,17 +15,6 @@ export interface PlanReviewServiceOptions {
   readonly stageRunner: StageRunner;
   /** Maps a runner id to its provider, for judging review independence. */
   readonly providerOf: ProviderOf;
-  /**
-   * The language a degradation recorded here is written in.
-   *
-   * `phrases/index.ts` once argued that a run's evidence stays English "like a commit
-   * message", because translating it would make the record depend on who pressed the
-   * button. That premise held while language was a personal setting. It is not one: it is
-   * `config.language`, declared in the repository, identical for everyone who opens it —
-   * so the record is as reproducible in Portuguese as it was in English, and the reader
-   * of the Deck no longer gets a Portuguese sentence with an English clause inside it.
-   */
-  readonly say?: Phrases;
 }
 
 export interface PlanReviewRequest {
@@ -79,17 +67,6 @@ export class PlanReviewService {
     // planner's runner still produced an artifact claiming independence.
     const independence = assessIndependence(request.authors, result.execution.runner, providerOf);
 
-    if (independence === 'same-provider-fresh-context') {
-      // §56 allows this, but the protection cross-provider review exists to
-      // provide is simply absent — so it is recorded on the run rather than
-      // left for a reader to infer (R-16).
-      await store.recordDegradation(request.runId, {
-        kind: 'single_provider',
-        reason: explainIndependence(request.authors, result.execution.runner, providerOf),
-        impact: (this.options.say ?? en).doctor.planReviewSameProvider,
-      });
-    }
-
     const review = buildReviewResult(
       response,
       {
@@ -121,14 +98,6 @@ export class PlanReviewService {
     const response = PlanReviewResponseSchema.parse(result.data);
 
     const independence = assessIndependence(request.authors, result.execution.runner, providerOf);
-
-    if (independence === 'same-provider-fresh-context') {
-      await store.recordDegradation(request.runId, {
-        kind: 'single_provider',
-        reason: explainIndependence(request.authors, result.execution.runner, providerOf),
-        impact: (this.options.say ?? en).doctor.planReviewSameProvider,
-      });
-    }
 
     const review = buildReviewResult(
       response,

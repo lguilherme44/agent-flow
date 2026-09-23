@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto';
-import { phrasesFor } from '../core/phrases/index.js';
 import { stringify as toYaml } from 'yaml';
 import type { EffectiveConfig, Plan, ReviewResult, RunStage } from '../contracts/index.js';
 import { PlanSchema } from '../contracts/index.js';
 import type { Clock, FileSystem, ProcessRunner } from '../ports/index.js';
 import type { GitCommand } from '../adapters/git/git-command.js';
 import type { PlanningBaseMoment } from './run-git-identity.js';
-import { unreviewableHighRisk } from './run-git-identity.js';
 import type { StageRunner } from './stage-runner.js';
 import { StageFailure } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -35,6 +33,7 @@ import {
   getCeremonyBudget,
   type WorkflowClass,
 } from '../core/adaptive-workflow.js';
+import { readProjectInstructions } from './project-instructions.js';
 
 /** Ordered stages of the planning half of the workflow. */
 export const PLANNING_STAGES: readonly RunStage[] = [
@@ -145,6 +144,26 @@ export interface PlanningRefusalFacts {
  */
 export type PlanningRefusalKind = 'configuration' | 'repository';
 
+/**
+ * What `architecture-impact` and `sdd` receive in place of the map for a grounded request.
+ *
+ * Instructions rather than a map, because the stages that read it are the ones that found
+ * what changed the plans on 23/09/2026, by reading code rather than the map. Both declare
+ * `workingDirectory: true`, so they can do exactly what this asks.
+ */
+export const GROUNDED_DISCOVERY_NOTE = [
+  '# Repository map',
+  '',
+  'Discovery did not run: this request is grounded. Whoever wrote it has already investigated',
+  'the repository, and the request carries that investigation.',
+  '',
+  'Treat every file, symbol, line, value and behaviour the request cites as a claim, and confirm',
+  'it in the code before relying on it. Map only what this change touches: the functions it',
+  'changes, their callers (search for them: a consumer the request does not name is the most',
+  'likely thing it missed), the tests that cover them, and any other reader of their output.',
+  'Where the code contradicts the request, say so plainly.',
+].join('\n');
+
 export class PlanningRefusal extends Error {
   constructor(
     readonly code: string,
@@ -166,9 +185,16 @@ export interface PipelineOptions {
   readonly skipReview?: boolean;
   /** Explicit workflow override or predetermined workflow. */
   readonly workflow?: WorkflowClass;
+  /**
+   * The request carries its own investigation, written by an orchestrating model that
+   * already read the code. A fresh discovery is skipped (a valid cached map is still
+   * used), and the impact is told to confirm the request's claims in the repository.
+   * Persisted on the run; see `RunState.grounded`.
+   */
+  readonly grounded?: boolean;
   readonly onProgress?: (
     stage: RunStage,
-    status: 'started' | 'completed' | 'cached' | 'stale' | 'repairing',
+    status: 'started' | 'completed' | 'cached' | 'stale' | 'repairing' | 'skipped',
   ) => void;
 }
 
@@ -271,7 +297,8 @@ export class PlanningPipeline {
       // two answers to "what was this run's budget", and the whole defect this closes was
       // a budget that was written down and not used.
       const budget = getCeremonyBudget(workflow);
-      await store.updateRun(runId, (s) => ({ ...s, workflow, status: 'running' }));
+      const grounded = options.grounded === true || state.grounded === true;
+      await store.updateRun(runId, (s) => ({ ...s, workflow, status: 'running', ...(grounded ? { grounded: true } : {}) }));
       await store.appendEvent(runId, 'workflow_classified', {
         workflow,
         rationale: classification.rationale,
@@ -349,16 +376,6 @@ export class PlanningPipeline {
         return { runId, plan, stagesRun, review };
       }
 
-      // ---- HIGH-RISK Workflow Guard: Enforce strict cross-provider independence
-      // Still here, and now only as the backstop for the case the caller could not have
-      // answered: a workflow the *classifier* elevated to high-risk from signals in the
-      // description. When the class was asked for explicitly, `refuseUnreviewable` has
-      // already refused it before the run existed.
-      if (workflow === 'high-risk') {
-        const refusal = unreviewableHighRisk(this.options.config.global.roles, this.options.providerOf);
-        if (refusal !== undefined) throw refusal;
-      }
-
       // ---- STANDARD / HIGH-RISK workflows: Full ceremony
       // Discovery: feature-agnostic, therefore cacheable across runs (R-07).
       // In HIGH-RISK, discovery cache is refreshed to avoid stale assumptions.
@@ -367,6 +384,8 @@ export class PlanningPipeline {
         projectConfig,
         agentsMd,
         useCache: useDiscoveryCache,
+        resumingPast: skipUntil > PLANNING_STAGES.indexOf('discovery'),
+        grounded,
         onProgress: options.onProgress,
         stagesRun,
       });
@@ -587,7 +606,6 @@ export class PlanningPipeline {
       store: this.options.store,
       stageRunner: this.options.stageRunner,
       providerOf: this.options.providerOf,
-      say: phrasesFor(this.options.config.global.language),
     });
   }
 
@@ -597,12 +615,42 @@ export class PlanningPipeline {
       projectConfig: string;
       agentsMd: string;
       useCache: boolean;
+      /**
+       * `--from` names a stage after discovery. The operator asked to resume past it, so a
+       * map that exists is kept even when its fingerprint no longer matches — the same
+       * promise `stageOrExisting` keeps for the impact and the SDD. Measured: without it,
+       * `revise --from sdd` re-ran a 10-minute discovery because AGENTS.md had been edited.
+       */
+      resumingPast?: boolean;
+      /** See `PipelineOptions.grounded`. Checked after every cache exit: a valid map is free. */
+      grounded?: boolean;
       onProgress: PipelineOptions['onProgress'];
       stagesRun: RunStage[];
     },
   ): Promise<string> {
     const { fs, projectDir } = this.options;
     const cachePath = agentFlowPaths(projectDir).architectureCache;
+
+    if (context.resumingPast === true && (await fs.exists(cachePath))) {
+      const current = await computeFingerprint({
+        fs,
+        git: this.options.git,
+        projectDir,
+        projectConfig: context.projectConfig,
+      });
+      const cached = await readFingerprint(fs, projectDir);
+      const stale = cached === null || !fingerprintsMatch(cached, current);
+      context.onProgress?.('discovery', 'cached');
+      // Staleness recorded, not acted on: the operator chose to resume past this stage,
+      // and the trace is what lets anyone reading the run see the map was kept anyway.
+      await this.options.store.appendEvent(runId, 'stage_reused', {
+        stage: 'discovery',
+        reason: 'resumed_from_later_stage',
+        stale,
+        ...(stale && cached !== null ? { changed: fingerprintDifferences(cached, current) } : {}),
+      });
+      return fs.readFile(cachePath);
+    }
 
     // The repository map does not change because a different feature was
     // requested, so reusing it saves one expensive call per feature. It very
@@ -638,6 +686,15 @@ export class PlanningPipeline {
           changed: fingerprintDifferences(cached, fingerprint),
         });
       }
+    }
+
+    if (context.grounded === true) {
+      await this.options.store.appendEvent(runId, 'stage_skipped', {
+        stage: 'discovery',
+        reason: 'grounded_request',
+      });
+      context.onProgress?.('discovery', 'skipped');
+      return GROUNDED_DISCOVERY_NOTE;
     }
 
     context.onProgress?.('discovery', 'started');
@@ -747,11 +804,9 @@ export class PlanningPipeline {
       .join('\n');
   }
 
+  /** AGENTS.md, or CLAUDE.md when AGENTS.md has nothing of the repository's — see the module. */
   private async readAgentsMd(): Promise<string> {
-    const path = `${this.options.projectDir}/AGENTS.md`;
-    return (await this.options.fs.exists(path))
-      ? this.options.fs.readFile(path)
-      : 'No AGENTS.md in this repository.';
+    return (await readProjectInstructions(this.options.fs, this.options.projectDir)).text;
   }
 }
 

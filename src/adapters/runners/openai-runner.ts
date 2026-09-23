@@ -21,16 +21,18 @@ import type {
  * existing capability gates do the rest. `supportsWorkingDirectory: false` is not a
  * limitation to be worked around; it is the fact that decides which roles may use it.
  *
- * **What it is for.** Nine of the eleven shipped prompts already carry their whole input:
- * `sdd`, `planning` (all three variants), `plan-review` (both), `verification`,
- * `final-review` and `architecture-impact` receive text and produce text or JSON, and
- * touch no file. The four that do are `discovery` — whose prompt says "prefer reading a
- * file over inferring from its name" — `implementation`, `code-review`, and `e2e`. The last is the
- * one that bites: it lands on `finalReviewer`, so pointing that role at an endpoint fails at
- * the end of a run rather than at its start. `test/contracts/prompt-requirements.test.ts`
- * fails if a new prompt declares `workingDirectory: true` without this list following. A local endpoint can serve
- * the nine, which puts the two review stages on a genuinely independent provider at no
- * quota cost, and that is the point rather than a consolation.
+ * **What it is for.** Five of the thirteen shipped prompts carry their whole input:
+ * `planning` (all three variants) and `plan-review` (both) receive text and produce text or
+ * JSON. The eight that need the repository are `discovery` — whose prompt says "prefer
+ * reading a file over inferring from its name" — `architecture-impact` and `sdd`, which
+ * confirm the request against the code (measured 23/09/2026: the impact stage found, by
+ * reading code, the facts that changed the plan), `verification` and `final-review`, which
+ * read the changed files (`changedFiles` is only their paths), `implementation`,
+ * `code-review`, and `e2e`. `code-review` is the one that bites: it lands on `finalReviewer`,
+ * so pointing that role at an endpoint fails at the end of a run rather than at its start.
+ * `test/contracts/prompt-requirements.test.ts` fails if a new prompt declares
+ * `workingDirectory: true` without this list following. A local endpoint can serve the
+ * five, which puts the plan review on a genuinely independent provider at no quota cost.
  *
  * Provider-neutral above this file, as every adapter is: nothing here leaks upward, and
  * `model` is whatever the server was started with.

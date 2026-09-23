@@ -427,6 +427,27 @@ describe('Degradation and RunState (R-16)', () => {
     expect(parsed.degradations).toEqual([]);
   });
 
+  it('drops a legacy single_provider warning when a run is read', () => {
+    // Retired on 23/09/2026: one provider is the operator's choice, never a loss. Runs
+    // written before that carry it in state.json, and every surface that reads the run
+    // (the Deck queue, `status`, approval) would keep raising it. Dropped on read, so
+    // the history heals without rewriting a file anyone is holding.
+    const at = '2026-08-09T20:00:00.000Z';
+    const parsed = RunStateSchema.parse({
+      runId: 'AF-2026-001',
+      feature: 'f',
+      stage: 'final-review',
+      status: 'completed',
+      createdAt: at,
+      updatedAt: at,
+      degradations: [
+        { kind: 'single_provider', reason: 'r', impact: 'i', detectedAt: at },
+        { kind: 'forced_approval', reason: 'a gate was forced', impact: 'i', detectedAt: at },
+      ],
+    });
+    expect(parsed.degradations.map((d) => d.kind)).toEqual(['forced_approval']);
+  });
+
   it('enforces the AF-YYYY-NNN run id format', () => {
     const base = {
       feature: 'f',
@@ -862,5 +883,13 @@ describe('the artifact route names the artifacts the run produces, and no second
         artifact,
       ).toBe(false);
     }
+  });
+});
+
+describe('a grounded plan request', () => {
+  it('says so explicitly, and defaults to not grounded', async () => {
+    const { PlanRequestSchema } = await import('../../src/contracts/index.js');
+    expect(PlanRequestSchema.parse({ description: 'fix it' }).grounded).toBe(false);
+    expect(PlanRequestSchema.parse({ description: 'fix it', grounded: true }).grounded).toBe(true);
   });
 });

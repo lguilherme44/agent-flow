@@ -121,6 +121,26 @@ describe('the parent session, which is not a credential', () => {
     expect(dropped).toContain('CLAUDE_CODE_MESSAGING_TOKEN');
   });
 
+  it('drops the rest of what describes the calling session, measured from inside one', () => {
+    // `env` inside a Claude Code 2.1.280 session on 23/09/2026 carried four more names the
+    // list let through. None authenticates anything: they describe the *orchestrating*
+    // session — whether a person is attending it, which SDK drives it, which of its features
+    // are on — and a fresh agent told that a human is attending is not a fresh agent.
+    expect(
+      droppedNames({
+        CLAUDE_CODE_SESSION_ATTENDED: '1',
+        CLAUDE_CODE_ENABLE_TASKS: '1',
+        CLAUDE_AGENT_SDK_VERSION: '0.2.0',
+        CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
+      }).slice().sort(),
+    ).toEqual([
+      'CLAUDE_AGENT_SDK_VERSION',
+      'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
+      'CLAUDE_CODE_ENABLE_TASKS',
+      'CLAUDE_CODE_SESSION_ATTENDED',
+    ]);
+  });
+
   it('drops an inherited effort, because effort is a kernel decision', () => {
     // PRI-03. The role's configuration decides effort, `clampReasoning` narrows it to what
     // the (runner, model) pair supports, and `reasoningClamped` records the difference. An

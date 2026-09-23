@@ -181,6 +181,7 @@ export interface Phrases {
     readonly belowWorktreeFloor: (floor: string) => string;
     readonly worktreeNeedsVersion: (floor: string) => string;
     readonly belowNodeFloor: (floor: string) => string;
+    readonly dashboardRunsOn: (version: string) => string;
     readonly nodeNeedsVersion: (floor: string) => string;
 
     readonly authConfigured: string;
@@ -188,9 +189,6 @@ export interface Phrases {
     readonly authNotConfigured: string;
     readonly authNotVerifiedShort: string;
     readonly verdictOkWithNote: string;
-
-    readonly planReviewSameProvider: string;
-    readonly finalReviewSameProvider: string;
 
     readonly stageRoutingHeading: string;
     readonly readsRepository: string;
@@ -406,6 +404,8 @@ export interface Phrases {
       since: string,
     ) => string;
     readonly waitForExecution: string;
+    /** A second feature while the current run is being executed elsewhere. */
+    readonly useSeparateWorktree: string;
     readonly lockOnAnotherHost: string;
     readonly beingExecuted: string;
     readonly beingReplanned: string;
@@ -579,6 +579,8 @@ export interface Phrases {
     readonly reviewOwnership: string;
 
     readonly planWaiting: string;
+    readonly finalReviewWaiting: string;
+    readonly runTheFinalReview: string;
     readonly nothingRunsUntilGate: string;
     readonly reviewThePlan: string;
     readonly exhaustedRecovery: (task: string) => string;
@@ -619,13 +621,10 @@ export interface Phrases {
     readonly readyAndNobodyTakes: (task: string) => string;
     readonly everyMemberAtCapacity: string;
     readonly openTheTeam: string;
-    readonly runIsDegraded: (kind: string) => string;
-    readonly reasonAndImpact: (reason: string, impact: string) => string;
     readonly finishedNothingPublished: string;
     readonly runForgePublish: string;
     readonly checksPending: (pending: number) => string;
     readonly checksAreObservation: string;
-    readonly openTheRunSummary: string;
   };
   /**
    * Device pairing and remote access phrases (FR-002..FR-029).

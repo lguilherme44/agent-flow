@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { FileSystem } from '../ports/file-system.js';
 import { GIT_TIMEOUT_SECONDS, type GitCommand } from '../adapters/git/git-command.js';
 import { agentFlowPaths } from './paths.js';
+import { readProjectInstructions } from './project-instructions.js';
 
 /**
  * Fingerprint of the repository state a cached discovery describes.
@@ -99,10 +100,10 @@ export async function computeFingerprint(
   // and the other two inputs carry the signal.
   const head = (await git('rev-parse', ['HEAD'])) || EMPTY;
 
-  const agentsMdPath = `${projectDir}/AGENTS.md`;
-  const agentsMd = (await fs.exists(agentsMdPath))
-    ? digest(await fs.readFile(agentsMdPath))
-    : EMPTY;
+  // The same text the stages receive, so a CLAUDE.md that stands in for AGENTS.md
+  // invalidates the map when it changes, exactly as AGENTS.md always did.
+  const instructions = await readProjectInstructions(fs, projectDir);
+  const agentsMd = instructions.source === 'none' ? EMPTY : digest(instructions.text);
 
   return { head, agentsMd, projectConfig: digest(inputs.projectConfig) };
 }
@@ -120,7 +121,7 @@ export function fingerprintDifferences(
 ): string[] {
   const labels: Record<keyof CacheFingerprint, string> = {
     head: 'the checked-out commit',
-    agentsMd: 'AGENTS.md',
+    agentsMd: 'the project instructions (AGENTS.md, or CLAUDE.md in its place)',
     projectConfig: 'the project configuration',
   };
 

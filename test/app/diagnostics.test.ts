@@ -116,3 +116,72 @@ describe('diagnostics remoteAccess projection (FR-023)', () => {
     expect('enabled' in diagnosis.remoteAccess).toBe(false);
   });
 });
+
+describe('the note about an executor that cannot run commands (D-9)', () => {
+  async function withExecutorArgs(args: readonly string[]) {
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/.agent-flow/config.yaml', 'project:\n  name: demo\n  type: node\ncommands:\n  test: npm test\n');
+    fs.seed('/home/.agent-flow/config.yaml', [
+      'runners:',
+      '  claude:',
+      '    type: claude-code-cli',
+      `    args: [${args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
+      'roles:',
+      '  architect: { runner: claude }',
+      '  executors:',
+      '    trivial: { runner: claude }',
+      '    normal: { runner: claude }',
+      '    complex: { runner: claude }',
+      '',
+    ].join('\n'));
+    const base = await createOptions();
+    const config = await loadConfig({ fs, globalConfigPath: '/home/.agent-flow/config.yaml', projectDir: '/repo' });
+    return JSON.stringify(await diagnose({ ...base, fs: base.fs, config }));
+  }
+  const NOTE = 'granted no tool beyond editing files';
+
+  it('reads the grant the way the executor does, whichever spelling the flag has', async () => {
+    // It checked the args for `--allowedTools` alone: `--allowed-tools` with a real grant
+    // got the note, and a Windows grant naming only `Bash(...)` did not.
+    expect(await withExecutorArgs(['--allowed-tools', 'Bash(npm test:*)', 'PowerShell(npm test:*)'])).not.toContain(NOTE);
+    expect(await withExecutorArgs([])).toContain(NOTE);
+  });
+});
+
+const nodeOf = (diagnosis: Awaited<ReturnType<typeof diagnose>>) => diagnosis.tools.find((tool) => tool.name === 'node');
+
+describe('the Node the dashboard runs on', () => {
+  /**
+   * Measured 23/09/2026: Diagnóstico showed "Node v20.10.0 · abaixo de 20.19" in amber on a
+   * dashboard that was being served, at that moment, by Node 22.23.2 — `agent-flow ui`
+   * re-runs itself under a newer Node that nvm keeps. The PATH Node is still reported; the
+   * verdict now says where the dashboard actually runs.
+   */
+  it('names the Node the dashboard runs on when the PATH one is below the floor', async () => {
+    const options = await createOptions();
+    const diagnosis = await diagnose({
+      ...options,
+      processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: 'v20.10.0' }),
+      dashboardNode: () => '22.23.2',
+    });
+
+    expect(nodeOf(diagnosis)?.belowFloor).toBe(true);
+    expect(nodeOf(diagnosis)?.dashboardNode).toBe('22.23.2');
+  });
+
+  it('asks nothing when the PATH Node already meets the floor', async () => {
+    let asked = false;
+    const diagnosis = await diagnose({
+      ...(await createOptions()),
+      processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: 'v22.12.0' }),
+      dashboardNode: () => {
+        asked = true;
+        return '22.23.2';
+      },
+    });
+
+    expect(nodeOf(diagnosis)?.belowFloor).toBe(false);
+    expect(nodeOf(diagnosis)?.dashboardNode).toBeUndefined();
+    expect(asked).toBe(false);
+  });
+});

@@ -75,7 +75,6 @@ export class ControlReader {
       tasks: taskList,
       run: {
         updatedAt: run.updatedAt,
-        degradations: run.degradationDetail,
         integrationConflicts: run.integrationConflicts,
       },
       ...(review === null ? {} : { review }),

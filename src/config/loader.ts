@@ -8,6 +8,7 @@ import {
   type EffectiveConfig,
 } from '../contracts/index.js';
 import type { FileSystem } from '../ports/index.js';
+import { samePath } from '../core/path-containment.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from './defaults.js';
 import { PROJECT_OVERRIDABLE_KEYS, resolveConfigSources } from './resolver.js';
 
@@ -80,7 +81,10 @@ export async function loadConfig(options: LoadConfigOptions): Promise<EffectiveC
   const defaults = (parseYaml(DEFAULT_GLOBAL_CONFIG_YAML) ?? {}) as Record<string, unknown>;
   const globalRaw = await readYaml(fs, globalConfigPath);
   const projectPath = projectConfigPath(projectDir);
-  const projectRaw = await readYaml(fs, projectPath);
+  // From the home directory the project path *is* the global file. Reading it twice made the
+  // global configuration fail the project schema ("project: expected object") for every
+  // command typed in home — which is where a dashboard started at logon lives.
+  const projectRaw = samePath(projectPath, globalConfigPath) ? undefined : await readYaml(fs, projectPath);
 
   const merged = resolveConfigSources({ defaults, global: globalRaw, project: projectRaw }).effectiveGlobal;
 

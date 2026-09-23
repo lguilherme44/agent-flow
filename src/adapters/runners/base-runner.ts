@@ -107,7 +107,8 @@ export abstract class BaseRunner implements AgentRunner {
   readonly id: string;
   protected readonly processRunner: ProcessRunner;
   protected readonly command: string;
-  private readonly extraArgs: readonly string[];
+  /** `RunnerConfig.args`. Protected so an adapter can report what they grant (claude's D-9). */
+  protected readonly extraArgs: readonly string[];
   /** `execution.passEnv`, carried so every spawn of this runner sees the same list. */
   protected readonly envPass: readonly string[] | undefined;
   /** `execution.isolateRunnerSettings` (PRI-18). Read by {@link isolationArgs}. */

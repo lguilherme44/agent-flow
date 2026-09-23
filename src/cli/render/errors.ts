@@ -54,11 +54,16 @@ export function renderError(error: unknown): RenderedError {
   // here. AR-01's C-01 requires `CONFIG_ERROR` for an uninitialised project, and every
   // repository refusal keeps `EXECUTION_ERROR`; which of the two a code is belongs to
   // the layer that raised it, not to the renderer.
+  // `run_busy` is the one refusal that means "wait", and it has its own code everywhere
+  // else (`approve`, `run`): a script driving `feature` told 1 could not tell it from a
+  // broken repository, while the README promised 5.
   if (error instanceof PlanningRefusal) {
     return {
       message: `${error.message}\n\n${error.action}`,
       exitCode:
-        error.kind === 'configuration' ? ExitCode.CONFIG_ERROR : ExitCode.EXECUTION_ERROR,
+        error.code === 'run_busy'
+          ? ExitCode.RUN_BUSY
+          : error.kind === 'configuration' ? ExitCode.CONFIG_ERROR : ExitCode.EXECUTION_ERROR,
     };
   }
 

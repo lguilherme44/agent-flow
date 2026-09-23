@@ -73,6 +73,13 @@ export function writeProgress(label: string, status: ProgressStatus, verbose = f
     return;
   }
 
+  // Said once, on its own line: a stage that was deliberately not run is news, and a
+  // blank where discovery used to be reads as a stall.
+  if (status === 'skipped') {
+    process.stdout.write(`  · ${label} (skipped: the request is grounded)\n`);
+    return;
+  }
+
   if (status === 'started') {
     startedAt.set(label, Date.now());
     process.stdout.write(`  → ${label}${interactive() ? '' : '\n'}`);

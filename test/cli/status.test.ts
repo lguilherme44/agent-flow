@@ -121,6 +121,23 @@ describe('the headline comes from the runtime projection, not the persisted stat
     expect(rendered).not.toContain('agent-flow revise');
   });
 
+  it('marks discovery skipped from the skip event, not from the grounded flag', () => {
+    // `grounded` is on the state from the first write, before discovery has run or been
+    // skipped; only the recorded `stage_skipped` says it was skipped. A cache hit reads as
+    // cached either way.
+    const planning = (skipped: readonly string[], reused: readonly string[]) => render(
+      state({ status: 'running', grounded: true }),
+      projection({ status: 'planning' }),
+      0, null, [], null, [], undefined, undefined, undefined,
+      [], reused, new Map(), undefined, skipped,
+    );
+    const discoveryLine = (rendered: string) => rendered.split('\n').find((line) => /Repository map|discovery/i.test(line));
+
+    expect(discoveryLine(planning(['discovery'], []))).toContain('skipped (grounded request)');
+    expect(discoveryLine(planning([], []))).not.toContain('skipped');
+    expect(discoveryLine(planning([], ['discovery']))).toContain('(cached)');
+  });
+
   it('shows IMPLEMENTING, not APPROVED, once implementation has started', () => {
     const rendered = render(
       state({ status: 'approved', stage: 'implementation' }),

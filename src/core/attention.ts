@@ -4,7 +4,6 @@ import type {
   AttentionKind,
   AttentionPriority,
   DeliveryView,
-  Degradation,
   IntegrationConflictView,
   QualityGateResult,
   ReviewView,
@@ -45,7 +44,6 @@ export interface AttentionInput {
   readonly run: {
     readonly updatedAt: string;
     readonly pauseRequestedAt?: string;
-    readonly degradations: readonly Degradation[];
     readonly integrationConflicts: readonly IntegrationConflictView[];
   };
   readonly review?: ReviewView;
@@ -70,6 +68,7 @@ const PRIORITY: Readonly<Record<AttentionKind, AttentionPriority>> = {
   ownership_conflict: 'P0',
 
   approval_required: 'P1',
+  final_review_required: 'P1',
   task_review_required: 'P1',
   agent_blocked: 'P1',
   recovery_exhausted: 'P1',
@@ -84,7 +83,6 @@ const PRIORITY: Readonly<Record<AttentionKind, AttentionPriority>> = {
   review_stale: 'P3',
   capacity_starvation: 'P3',
   run_paused: 'P3',
-  degradation_recorded: 'P3',
 
   checks_pending: 'P4',
   delivery_not_published: 'P4',
@@ -202,6 +200,23 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
         since: lastEventAt(input.events, 'approval_requested') ?? input.run.updatedAt,
         action: { kind: 'approve', label: say.attention.reviewThePlan, destructive: false },
         focus: 'plan',
+      }),
+    );
+  }
+
+  // The gate holds from the last task until the run completes, so it is also up while
+  // `review` runs and after a review that did not pass. Only the first is work for a person
+  // to start; the other two would ask for a review that is running or already read.
+  if (runtime.gate?.gate === 'final_acceptance' && runtime.reviewInProgress !== true) {
+    items.push(
+      item({
+        kind: 'final_review_required',
+        runId,
+        what: say.attention.finalReviewWaiting,
+        why: runtime.gate.action,
+        since: lastEventAt(input.events, 'task_finished') ?? input.run.updatedAt,
+        action: { kind: 'review', label: say.attention.runTheFinalReview, destructive: false },
+        focus: 'review',
       }),
     );
   }
@@ -457,22 +472,6 @@ function degradedItems(input: AttentionInput): AttentionItem[] {
         since: lastEventAt(input.events, 'wave_deferred_for_capacity') ?? input.run.updatedAt,
         action: { kind: 'inspect', label: say.attention.openTheTeam, destructive: false },
         focus: 'team',
-      }),
-    );
-  }
-
-  for (const degradation of input.run.degradations) {
-    items.push(
-      item({
-        kind: 'degradation_recorded',
-        runId,
-        what: say.attention.runIsDegraded(degradation.kind),
-        // Both halves. `reason` is what happened and `impact` is what it costs, and a
-        // reader given only the first has to guess whether it matters.
-        why: say.attention.reasonAndImpact(degradation.reason, degradation.impact),
-        since: degradation.detectedAt,
-        action: { kind: 'inspect', label: say.attention.openTheRunSummary, destructive: false },
-        focus: 'run',
       }),
     );
   }

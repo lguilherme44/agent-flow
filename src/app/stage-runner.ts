@@ -393,7 +393,9 @@ export function languageInstructionFor(locale: Locale): string | undefined {
     `Do NOT translate: identifiers, file paths, directory names, commands, flags, code, ` +
     `log lines, quoted output, or the structured ids other stages match on (requirement ` +
     `ids such as FR-001 and NFR-002, task ids such as TASK-004, and any enum value a ` +
-    `schema fixes). Keep every one of those byte-for-byte as they appear in the ` +
+    `schema fixes), nor the markdown headings and report labels a prompt prescribes ` +
+    `(for example "## Functional Requirements", "## RESULT", "STATUS: BLOCKED", "NOTES:") — ` +
+    `those are parsed, not read. Keep every one of those byte-for-byte as they appear in the ` +
     `repository or the schema. A field whose value is constrained by a schema keeps its ` +
     `schema value; only the prose around it is written in ${name}.`
   );

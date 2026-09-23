@@ -9,6 +9,7 @@ import { ConfigError } from '../../src/config/loader.js';
 import { StageFailure } from '../../src/app/stage-runner.js';
 import { RoleResolutionError } from '../../src/core/role.js';
 import { StateError } from '../../src/app/state-store.js';
+import { PlanningRefusal } from '../../src/app/planning-pipeline.js';
 
 function captureOutput() {
   const out: string[] = [];
@@ -61,6 +62,16 @@ describe('exit codes', () => {
     expect(
       renderError(new StageFailure('sdd', 'execution_failed', 'boom')).exitCode,
     ).toBe(ExitCode.EXECUTION_ERROR);
+  });
+
+  it('gives a busy refusal from `feature` the code `approve` and `run` give it', () => {
+    // The README promises 5 for a second `feature` while a run executes; it exited 1,
+    // the code of a broken repository, so a script could not tell "wait" from "fix".
+    const busy = new PlanningRefusal('run_busy', 'AF-2026-001 is running', 'use a separate worktree');
+    expect(renderError(busy).exitCode).toBe(ExitCode.RUN_BUSY);
+    // Every other repository refusal keeps the execution code.
+    const dirty = new PlanningRefusal('dirty_worktree', 'uncommitted changes', 'commit or stash');
+    expect(renderError(dirty).exitCode).toBe(ExitCode.EXECUTION_ERROR);
   });
 
   it('treats a role resolution failure as a configuration error', () => {

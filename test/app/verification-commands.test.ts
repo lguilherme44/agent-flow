@@ -30,8 +30,9 @@ describe('running the project commands (AD-10)', () => {
     await run(proc, { build: 'b', test: 't', lint: 'l', typecheck: 'tc' });
 
     // The command line is the last argument on every platform: `sh -c <line>` and
-    // `cmd /d /s /c <line>` differ in what comes before it, not in where it lands.
-    const executed = proc.calls.map((call) => call.args.at(-1));
+    // `cmd /d /s /c "<line>"` differ in what comes before it, not in where it lands (on
+    // Windows it is wrapped in one pair of quotes that `/s` strips).
+    const executed = proc.calls.map((call) => call.args.at(-1)?.replace(/^"(.*)"$/, '$1'));
     expect(executed).toEqual(['l', 'tc', 't', 'b']);
     expect(VERIFICATION_ORDER).toEqual(['lint', 'typecheck', 'test', 'build']);
   });
@@ -52,7 +53,9 @@ describe('running the project commands (AD-10)', () => {
     const expected = shellInvocation('npm test -- --coverage');
     expect(proc.lastCall?.command).toBe(expected.command);
     expect(proc.lastCall?.args).toEqual(expected.args);
-    expect(proc.lastCall?.args.at(-1)).toBe('npm test -- --coverage');
+    // The line itself, unwrapped: on Windows it travels inside one pair of quotes that
+    // `cmd /s` strips (see `shellInvocation`).
+    expect(proc.lastCall?.args.at(-1)?.replace(/^"(.*)"$/, '$1')).toBe('npm test -- --coverage');
   });
 
   it('costs no LLM call at all', async () => {

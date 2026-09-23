@@ -296,3 +296,13 @@ describe('the install command a new project is given (§8.4)', () => {
     expect((await detectStack(fs, '/repo')).commands.lint).toBe('flutter analyze');
   });
 });
+
+describe('detectStack on a Windows path', () => {
+  it('names the project after its directory, not after the whole path', async () => {
+    // Measured: `agent-flow init` in C:\Users\me\wk\_wt\billing-fix wrote
+    // `project.name: C:\Users\me\wk\_wt\billing-fix` — the split was on `/` only.
+    const fs = new InMemoryFileSystem();
+    const detected = await detectStack(fs, 'C:\\Users\\me\\wk\\_wt\\billing-fix');
+    expect(detected.name).toBe('billing-fix');
+  });
+});

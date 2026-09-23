@@ -1,4 +1,5 @@
 import { stringify as toYaml } from 'yaml';
+import { AGENTS_BEGIN, AGENTS_END, AGENTS_MD_SCAFFOLD, readProjectInstructions } from './project-instructions.js';
 import type { FileSystem } from '../ports/file-system.js';
 import { detectStack, type DetectedStack } from '../config/stack-detection.js';
 import { agentFlowPaths } from './paths.js';
@@ -80,9 +81,6 @@ export async function findActiveRun(store: StateStore): Promise<ActiveRunFinding
   return undefined;
 }
 
-/** Marks the block `init` owns inside an existing AGENTS.md. */
-const AGENTS_BEGIN = '<!-- agent-flow:begin -->';
-const AGENTS_END = '<!-- agent-flow:end -->';
 
 const GITIGNORE_BEGIN = '# agent-flow';
 
@@ -156,6 +154,15 @@ export type InitWarning =
       readonly kind: 'instructions_unread';
       /** Repository-relative names, in the order they are looked for. */
       readonly paths: readonly string[];
+    }
+  | {
+      /**
+       * AGENTS.md is still the scaffold, so stages receive this file in its place
+       * (`project-instructions.ts`). Said so the operator knows which file is live — the
+       * old message claimed the opposite, that it was never read.
+       */
+      readonly kind: 'instructions_fallback';
+      readonly path: string;
     };
 
 export interface InitResult {
@@ -303,6 +310,9 @@ async function warningsFor(
   const unread = await unreadInstructions(fs, projectDir);
   if (unread.length > 0) warnings.push({ kind: 'instructions_unread', paths: unread });
 
+  const instructions = await readProjectInstructions(fs, projectDir);
+  if (instructions.source === 'CLAUDE.md') warnings.push({ kind: 'instructions_fallback', path: 'CLAUDE.md' });
+
   return warnings;
 }
 
@@ -321,9 +331,14 @@ async function unreadInstructions(fs: FileSystem, projectDir: string): Promise<s
   const agentsPath = `${projectDir}/AGENTS.md`;
   const agents = (await fs.exists(agentsPath)) ? normalise(await fs.readFile(agentsPath)) : '';
 
+  // A file the stages actually receive is not unread — CLAUDE.md stands in for a scaffold
+  // AGENTS.md (project-instructions.ts), and warning about it would be the old, false claim.
+  const source = (await readProjectInstructions(fs, projectDir)).source;
+
   const found: string[] = [];
   for (const name of UNREAD_INSTRUCTION_FILES) {
     const path = `${projectDir}/${name}`;
+    if (name === source) continue;
     if (!(await fs.exists(path))) continue;
     if (normalise(await fs.readFile(path)) === agents) continue;
     found.push(name);
@@ -399,26 +414,7 @@ async function writeAgentsMd(
   ].join('\n');
 
   if (!(await fs.exists(path))) {
-    await fs.writeFileAtomic(
-      path,
-      [
-        '# Project Instructions',
-        '',
-        'Standing rules for anyone — human or agent — working in this repository.',
-        'Everything outside the agent-flow block below is yours to write.',
-        '',
-        '## Architecture',
-        '',
-        '- Describe the boundaries that must not be crossed.',
-        '',
-        '## Tests',
-        '',
-        '- Say when a change requires a test.',
-        '',
-        block,
-        '',
-      ].join('\n'),
-    );
+    await fs.writeFileAtomic(path, [...AGENTS_MD_SCAFFOLD, block, ''].join('\n'));
     return 'created';
   }
 

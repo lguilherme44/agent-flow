@@ -47,7 +47,9 @@ const SOURCE_CANDIDATES = ['src', 'lib', 'app', 'internal', 'cmd'];
 const TEST_CANDIDATES = ['test', 'tests', '__tests__', 'spec'];
 
 export async function detectStack(fs: FileSystem, projectDir: string): Promise<DetectedStack> {
-  const directoryName = projectDir.split('/').filter(Boolean).at(-1) ?? 'project';
+  // Either separator: split on `/` alone named a Windows project after its whole path
+  // (`project.name: C:\Users\…\billing-fix`), measured on the first `init` there.
+  const directoryName = projectDir.split(/[\\/]/).filter(Boolean).at(-1) ?? 'project';
 
   let type = 'unknown';
   for (const marker of MARKERS) {

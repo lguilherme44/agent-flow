@@ -1,3 +1,4 @@
+import { dashboardNode } from './node-runtime.js';
 import { loadConfig } from '../config/loader.js';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../adapters/process/node-process-runner.js';
@@ -83,6 +84,7 @@ export async function runDoctorCommand(
       // what makes a runner authenticated by `apiKeyEnv` report `configured` in a
       // terminal, and what the report's `readsEnvironment` flag is telling a reader.
       env: (name) => process.env[name],
+      dashboardNode: () => dashboardNode()?.version,
       ...(options.deep === undefined ? {} : { deep: options.deep }),
       // Announced before it runs, because it is the slowest thing `doctor` does by an
       // order of magnitude: a throwaway checkout plus the project's own install command.
@@ -422,7 +424,9 @@ function renderTool(tool: ToolCheck, say: Phrases = en): string {
       ? undefined
       : tool.floor === undefined
         ? tool.version
-        : tool.belowFloor === true
+        : tool.belowFloor === true && tool.dashboardNode !== undefined
+          ? `${tool.version}  (${say.doctor.dashboardRunsOn(tool.dashboardNode)})`
+          : tool.belowFloor === true
           ? `${tool.version}  ⚠ ${belowSentence(tool.floor)}`
           : `${tool.version}  (${needsSentence(tool.floor)})`;
 

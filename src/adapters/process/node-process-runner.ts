@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, type SpawnOptionsWithStdioTuple, type StdioPipe } from 'node:child_process';
 import spawn from 'cross-spawn';
 import { agentEnvironment } from '../../core/process-environment.js';
 import type {
@@ -154,7 +154,7 @@ export class NodeProcessRunner implements ProcessRunner {
       // (DEP0190), and hand-rolling the `cmd` escaping is what CVE-2024-27980 *was*.
       //
       // A no-op on POSIX, where it delegates straight to `child_process.spawn`.
-      const child = spawn(options.command, [...options.args], {
+      const spawnOptions: SpawnOptionsWithStdioTuple<StdioPipe, StdioPipe, StdioPipe> = {
         cwd: options.cwd,
         // Built, not inherited, unless the caller asked for inheritance and said why
         // (PRI-17). The runners still receive each CLI's own local authentication (§54);
@@ -172,7 +172,15 @@ export class NodeProcessRunner implements ProcessRunner {
         //
         // Not unref'd: the parent must stay alive to collect the output.
         detached: SUPPORTS_PROCESS_GROUPS,
-      });
+      };
+      // The one exception to cross-spawn: a shell command line for `cmd /c`, handed over
+      // verbatim. Its argv escaping is right for argv and wrong for a line that is already
+      // shell syntax (`ProcessSpawnOptions.verbatimArguments`), and `cmd.exe` is a real
+      // executable, so the shim resolution cross-spawn exists for is not needed here.
+      const child =
+        options.verbatimArguments === true && process.platform === 'win32'
+          ? nodeSpawn(options.command, [...options.args], { ...spawnOptions, windowsVerbatimArguments: true })
+          : spawn(options.command, [...options.args], spawnOptions);
 
       /**
        * Signals the whole tree, by whichever mechanism the platform has.

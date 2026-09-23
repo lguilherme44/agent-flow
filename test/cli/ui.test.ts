@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { NetworkInterfaceInfo } from 'node:os';
+import { posix } from 'node:path';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import {
+  describeRunningDashboard,
   parseDepth,
   parsePort,
   resolveDepth,
@@ -9,6 +11,7 @@ import {
   enumerateBoundAddresses,
   formatPairingCode,
   runUiCommand,
+  workspaceRoots,
 } from '../../src/cli/ui.js';
 import { main } from '../../src/cli/index.js';
 import { ExitCode } from '../../src/cli/exit-codes.js';
@@ -52,6 +55,22 @@ const at = (fs: InMemoryFileSystem) => ({
   fs,
   globalConfigPath: '/home/.agent-flow/config.yaml',
   projectDir: '/wk',
+});
+
+describe('describeRunningDashboard', () => {
+  const running = (ignoredFlags: readonly string[], serverVersion = '0.1.0') =>
+    describeRunningDashboard({ url: 'http://127.0.0.1:4782', projects: 3, serverVersion, version: '0.1.0', ignoredFlags });
+
+  it('says which typed flags the running dashboard did not take', () => {
+    // It used to open the running one and drop `--depth` / `--classic` / `--pair` silently.
+    expect(running(['--depth'])).toContain('--depth applies when a dashboard starts and was not applied');
+    expect(running(['--depth', '--classic'])).toContain('--depth, --classic apply when a dashboard starts and were not applied');
+  });
+
+  it('says nothing about flags when none was typed, and still names a version mismatch', () => {
+    expect(running([])).not.toContain('not applied');
+    expect(running([], '0.0.9')).toContain('That server is agent-flow 0.0.9; this command is 0.1.0.');
+  });
 });
 
 describe('parsePort', () => {
@@ -413,5 +432,34 @@ describe('agent-flow ui --pair startup output and notifications (FR-002, FR-003,
     } finally {
       repo.cleanup();
     }
+  });
+});
+
+describe('workspaceRoots — what `agent-flow ui` scans (the project hub)', () => {
+  const hub = ['/wk/api', '/wk/web'];
+
+  it('serves only the hub when started outside any repository, as autostart at logon is', () => {
+    // A home directory is not a workspace. Walking it two levels deep offered every
+    // repository under it as a candidate and listed nothing the operator had asked for.
+    expect(workspaceRoots({ cwd: '/home/me', hub, cwdIsRepository: false })).toEqual(hub);
+  });
+
+  it('adds the current directory when it is a repository, first', () => {
+    expect(workspaceRoots({ cwd: '/wk/new', hub, cwdIsRepository: true })).toEqual(['/wk/new', ...hub]);
+  });
+
+  it('still scans the current directory when the hub is empty, as it always did', () => {
+    // The first run on a machine has no hub; refusing to scan here would turn `ui` in a
+    // folder of repositories into "no project found".
+    expect(workspaceRoots({ cwd: '/wk', hub: [], cwdIsRepository: false })).toEqual(['/wk']);
+  });
+
+  it('scans an explicit root, resolved against the current directory, plus the hub', () => {
+    expect(workspaceRoots({ root: 'repos', cwd: '/wk', hub, cwdIsRepository: false, resolvePath: posix.resolve }))
+      .toEqual(['/wk/repos', ...hub]);
+  });
+
+  it('does not list a directory twice when the hub already has it', () => {
+    expect(workspaceRoots({ cwd: '/wk/api', hub, cwdIsRepository: true })).toEqual(hub);
   });
 });

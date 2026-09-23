@@ -96,9 +96,16 @@ export async function runInitCommand(
         lines.push(
           '',
           `Warning: ${warning.paths.join(', ')} ${warning.paths.length > 1 ? 'hold' : 'holds'} instructions agent-flow never reads.`,
-          'Every stage receives AGENTS.md and only AGENTS.md, so anything that lives only',
-          'in the other file is invisible to planning — including the tools this repository',
-          'expects an agent to use. Mirror what still applies into AGENTS.md.',
+          'Every stage receives AGENTS.md, so anything that lives only in the other file is',
+          'invisible to planning — including the tools this repository expects an agent to',
+          'use. Mirror what still applies into AGENTS.md.',
+        );
+      }
+      if (warning.kind === 'instructions_fallback') {
+        lines.push(
+          '',
+          `Note: AGENTS.md is still the scaffold, so every stage reads ${warning.path} in its place.`,
+          'Write AGENTS.md only when the rules for agent-flow should differ from it.',
         );
       }
     }

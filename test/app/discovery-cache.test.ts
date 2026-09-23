@@ -107,7 +107,20 @@ describe('what the fingerprint covers', () => {
     fs.seed(`${PROJECT}/AGENTS.md`, '# Rules');
     const after = await compute(fs, git('abc'));
 
-    expect(fingerprintDifferences(before, after)).toContain('AGENTS.md');
+    expect(fingerprintDifferences(before, after)).toContain('the project instructions (AGENTS.md, or CLAUDE.md in its place)');
+  });
+
+  it('changes when a CLAUDE.md standing in for AGENTS.md changes', async () => {
+    // With no AGENTS.md the stages read CLAUDE.md; a map cached against the old rules would
+    // be planned against rules the repository no longer has.
+    const fs = new InMemoryFileSystem();
+    fs.seed(`${PROJECT}/CLAUDE.md`, '# Rules\n- tests in a container\n');
+    const before = await compute(fs, git('abc'));
+
+    fs.seed(`${PROJECT}/CLAUDE.md`, '# Rules\n- tests in a container\n- never TRUNCATE\n');
+    const after = await compute(fs, git('abc'));
+
+    expect(fingerprintsMatch(before, after)).toBe(false);
   });
 
   it('changes when the project configuration changes', async () => {

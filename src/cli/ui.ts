@@ -1,5 +1,7 @@
-import { existsSync } from 'node:fs';
-import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
+import { existsSync, readdirSync } from 'node:fs';
+import { get as httpGet } from 'node:http';
+import { homedir, networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
+import { nvmNodes, pickNode, rerunUnder } from './node-runtime.js';
 import { dirname, join, resolve } from 'node:path';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +17,7 @@ import {
   discoveredRegistry,
 } from '../server/project-registry.js';
 import { loadConfig } from '../config/loader.js';
+import { isProjectDirectory, projectHubPath, readProjectHub, rememberProjects, samePath } from '../app/project-hub.js';
 import { isLoopbackHost, extractHostname } from '../core/device-session.js';
 import type { FileSystem } from '../ports/index.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
@@ -112,12 +115,32 @@ export async function runUiCommand(
     // of agent-flow genuinely supports.
     const nodeFloor = nodeBelow(process.versions.node, 20, 19);
     if (nodeFloor !== undefined) {
+      // Re-run under a newer Node that nvm already has, rather than send the operator off to
+      // type a node.exe path — `ui` is the command meant to be typed from anywhere, and on a
+      // machine whose default Node is older it used to fail from everywhere.
+      const newer = pickNode(
+        { path: process.execPath, version: process.versions.node },
+        nvmNodes({
+          env: process.env,
+          platform: process.platform,
+          home: homedir(),
+          readDir: (path) => readdirSync(path),
+          exists: (path) => existsSync(path),
+        }),
+        { major: 20, minor: 19 },
+      );
+      if (newer !== undefined && newer.path !== process.execPath) {
+        process.stderr.write(`The dashboard needs Node 20.19 or newer and this is ${nodeFloor}; running it under Node ${newer.version} (${newer.path}).\n`);
+        return (await rerunUnder(newer.path)) as ExitCodeValue;
+      }
+
       process.stderr.write(
         `The dashboard needs Node 20.19 or newer; this is ${nodeFloor}.\n\n` +
           'Its server stack `require()`s an ESM-only module, which Node learned to do in\n' +
           '20.19. On an older Node the process exits with ERR_REQUIRE_ESM naming a\n' +
           'dependency rather than the runtime.\n\n' +
-          'Everything else in agent-flow runs on Node 20. Only `ui` needs the newer one.\n',
+          'Everything else in agent-flow runs on Node 20. Only `ui` needs the newer one.\n' +
+          'Install one beside it (`nvm install 22`) and `ui` will find it on its own.\n',
       );
       return ExitCode.CONFIG_ERROR;
     }
@@ -160,6 +183,29 @@ export async function runUiCommand(
       return ExitCode.CONFIG_ERROR;
     }
 
+    // **Already running is the common case, not an error** (the project hub). The dashboard
+    // is meant to be left up — at logon, by `agent-flow autostart` — and `agent-flow ui`
+    // typed anywhere is then a request to *see* it. Asked after the refusals, which are
+    // about what was typed, and before any walk, so it answers in a second.
+    const existing = await probeDashboard(host, port);
+    if (existing !== undefined) {
+      const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${String(port)}`;
+      process.stdout.write(describeRunningDashboard({
+        url,
+        projects: existing.projects,
+        serverVersion: existing.version,
+        version: readVersion(),
+        ignoredFlags: [
+          ...(root === undefined ? [] : [`the root ${root}`]),
+          ...(options.depth === undefined ? [] : ['--depth']),
+          ...(options.classic === true ? ['--classic'] : []),
+          ...(options.pair === true ? ['--pair'] : []),
+        ],
+      }));
+      if (options.open !== false) await openBrowser(processRunner, url);
+      return ExitCode.OK;
+    }
+
     const depth = await resolveDepth(options.depth, {
       fs,
       globalConfigPath: globals.globalConfigPath,
@@ -172,35 +218,36 @@ export async function runUiCommand(
       projectDir: workspace,
     });
 
-    // A registry that can look again (7.6). The workspace used to be walked once, which
-    // was right while registering a project meant stopping the server; it stops being
-    // right the moment the Deck can register one, because the write would succeed and the
-    // list would still be missing it.
-    const globalDir = dirname(globals.globalConfigPath);
-    const projectsFile = join(globalDir, 'projects.json');
-    let savedRoots: string[] = [];
-    try {
-      if (await fs.exists(projectsFile)) {
-        const raw = await fs.readFile(projectsFile);
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          savedRoots = parsed.filter((p: unknown): p is string => typeof p === 'string');
-        }
-      }
-    } catch {
-      // safe fallback if projects.json is unreadable or malformed
-    }
-
-    const allRoots = Array.from(new Set([workspace, ...savedRoots]));
-    const registry = discoveredRegistry({ fs, roots: allRoots, depth });
+    // A registry that can look again (7.6), over roots that can change (the project hub).
+    // The hub is every directory any agent-flow command ran in, plus what `projects add`
+    // named; the current directory joins it only when it is a repository, so a dashboard
+    // started from a home directory — as autostart does — serves the hub and nothing else.
+    const cwdIsRepository =
+      root !== undefined ||
+      (await isProjectDirectory(fs, workspace, globals.globalConfigPath)) ||
+      (await fs.exists(join(workspace, '.git')));
+    const rootsNow = async (): Promise<string[]> =>
+      workspaceRoots({
+        ...(root === undefined ? {} : { root }),
+        cwd: globals.cwd,
+        hub: await readProjectHub(fs, globals.globalConfigPath),
+        cwdIsRepository,
+      });
+    const allRoots = await rootsNow();
+    const registry = discoveredRegistry({
+      fs,
+      roots: allRoots,
+      depth,
+      refreshRoots: rootsNow,
+      globalConfigPath: globals.globalConfigPath,
+    });
     const discovered = await registry.rescan();
 
-    try {
-      const knownPaths = Array.from(new Set([...savedRoots, ...discovered.projects.map((p) => p.path)]));
-      await fs.writeFileAtomic(projectsFile, JSON.stringify(knownPaths, null, 2));
-    } catch {
-      // safe fallback if writing projects.json fails
-    }
+    // What this walk found joins the hub, so a project first seen under a workspace root is
+    // listed from anywhere afterwards. Best effort: bookkeeping must not stop the server.
+    await rememberProjects(fs, globals.globalConfigPath, discovered.projects.map((project) => project.path)).catch(
+      () => false,
+    );
 
     // Only when there is nothing at all. A workspace holding repositories that have never
     // been through `init` is now a workspace worth opening: the Deck can register them,
@@ -209,11 +256,12 @@ export async function runUiCommand(
     if (discovered.projects.length === 0 && discovered.candidates.length === 0) {
       process.stderr.write(
         [
-          `No Agent Flow project or Git repository found under ${workspace}.`,
+          `No Agent Flow project or Git repository found under ${allRoots.join(', ')}.`,
           '',
-          'Run `agent-flow init` in a repository first, or point the UI at a',
-          'directory that contains one:',
+          'Run `agent-flow init` in a repository first, add a folder of repositories',
+          'to the project hub, or point the UI at one:',
           '',
+          '  agent-flow projects add ~/work',
           '  agent-flow ui ~/work',
           '',
           ...(discovered.skipped.length === 0
@@ -319,8 +367,8 @@ export async function runUiCommand(
     }
 
     lines.push(
-      `${String(discovered.projects.length)} project(s) under ${workspace}:`,
-      ...discovered.projects.map((project) => `  ${project.id.padEnd(24)}${project.path}`),
+      `${String(discovered.projects.length)} project(s) from ${String(allRoots.length)} root(s) (the project hub is ${projectHubPath(globals.globalConfigPath)}):`,
+      ...discovered.projects.map((project) => `  ${project.id.padEnd(24)} ${project.path}`),
       '',
     );
 
@@ -330,7 +378,7 @@ export async function runUiCommand(
       // and got three needs to know the other two are one click away, not missing.
       lines.push(
         `${String(discovered.candidates.length)} repositor${discovered.candidates.length === 1 ? 'y has' : 'ies have'} never been through \`init\` and can be registered from the Deck:`,
-        ...discovered.candidates.map((candidate) => `  ${candidate.id.padEnd(24)}${candidate.path}`),
+        ...discovered.candidates.map((candidate) => `  ${candidate.id.padEnd(24)} ${candidate.path}`),
         '',
       );
     }
@@ -389,8 +437,25 @@ export async function runUiCommand(
       void server.close();
     };
 
+    // The hub changes while this runs — `init` in another terminal, `projects add` — and
+    // the registry re-reads it on rescan. Polling the file is the whole mechanism: it is a
+    // few hundred bytes, and a watcher would be one more platform difference to get wrong.
+    let lastHub = JSON.stringify(allRoots);
+    const hubWatch = setInterval(() => {
+      void rootsNow()
+        .then(async (roots) => {
+          const next = JSON.stringify(roots);
+          if (next === lastHub) return;
+          lastHub = next;
+          await registry.rescan();
+        })
+        .catch(() => undefined);
+    }, HUB_REFRESH_MS);
+    hubWatch.unref();
+
     const originalClose = server.close.bind(server);
     server.close = async () => {
+      clearInterval(hubWatch);
       try {
         await originalClose();
       } finally {
@@ -427,6 +492,128 @@ export async function runUiCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+/** How often a running dashboard re-reads the project hub. */
+const HUB_REFRESH_MS = 5_000;
+
+/**
+ * The directories `agent-flow ui` walks (the project hub).
+ *
+ * An explicit root is always walked. Without one the current directory is walked only when
+ * it is a repository — or when the hub is empty, which is the first run on a machine and
+ * exactly what `ui` always did. A home directory is not a workspace: walking it offered
+ * every repository under it as a candidate and listed none the operator had asked for.
+ */
+export function workspaceRoots(input: {
+  readonly root?: string;
+  readonly cwd: string;
+  readonly hub: readonly string[];
+  readonly cwdIsRepository: boolean;
+  /** `path.resolve` of the platform; a test names the flavour it asserts. */
+  readonly resolvePath?: (from: string, to: string) => string;
+}): string[] {
+  const here = input.root === undefined ? input.cwd : (input.resolvePath ?? resolve)(input.cwd, input.root);
+  const includeHere = input.root !== undefined || input.cwdIsRepository || input.hub.length === 0;
+
+  const roots: string[] = [];
+  for (const candidate of includeHere ? [here, ...input.hub] : input.hub) {
+    if (!roots.some((kept) => samePath(kept, candidate))) roots.push(candidate);
+  }
+  return roots;
+}
+
+/**
+ * What `agent-flow ui` says when a dashboard already answers on the port.
+ *
+ * The flags that configure a start are named when they were typed: the running server was
+ * started with its own, and opening it silently dropped `--depth`, `--classic` and `--pair`
+ * — the command looked like it had honoured them.
+ */
+export function describeRunningDashboard(input: {
+  readonly url: string;
+  readonly projects: number;
+  readonly serverVersion: string;
+  readonly version: string;
+  readonly ignoredFlags: readonly string[];
+}): string {
+  const flags = input.ignoredFlags;
+  return [
+    `Agent Flow UI is already running on ${input.url} (${String(input.projects)} project(s)).`,
+    ...(input.serverVersion === input.version
+      ? []
+      : [
+          `That server is agent-flow ${input.serverVersion}; this command is ${input.version}.`,
+          'Stop it and start `agent-flow ui` again to serve this build.',
+        ]),
+    ...(flags.length === 0
+      ? []
+      : [
+          `${flags.join(', ')} ${flags.length === 1 ? 'applies' : 'apply'} when a dashboard starts and ` +
+            `${flags.length === 1 ? 'was' : 'were'} not applied to the one running. ` +
+            'Stop it and run `agent-flow ui` again to use them.',
+        ]),
+    '',
+  ].join('\n');
+}
+
+/**
+ * An `agent-flow ui` answering on `host:port`, or nothing.
+ *
+ * `/api/v1/health` rather than "something holds the port": the answer has to be ours to be
+ * worth opening, and it carries the version that says whether it is the build just
+ * installed. Bounded, because this runs before every start and a port that swallows the
+ * connection must not stall it.
+ */
+export function probeDashboard(
+  host: string,
+  port: number,
+  timeoutMs = 1_500,
+): Promise<{ readonly version: string; readonly projects: number } | undefined> {
+  const target = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+
+  // `node:http` with no agent rather than `fetch`: measured, `fetch` left its socket in
+  // undici's pool after the abort, and a listener that never answers — whatever else holds
+  // the port — then could not close. One request, one socket, destroyed on every exit.
+  return new Promise((resolveProbe) => {
+    let settled = false;
+    const done = (value: { readonly version: string; readonly projects: number } | undefined): void => {
+      if (settled) return;
+      settled = true;
+      // A FIN, never a reset. A reset was tried and it crashed a holder that had no socket
+      // error handler (`ECONNRESET`, unhandled) — this probe must not be able to take down
+      // whatever else owns the port.
+      request.destroy();
+      resolveProbe(value);
+    };
+
+    const request = httpGet(
+      { host: target, port, path: '/api/v1/health', agent: false, timeout: timeoutMs, headers: { connection: 'close' } },
+      (response) => {
+        let raw = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          raw += chunk;
+          if (raw.length > 64_000) done(undefined);
+        });
+        response.on('end', () => {
+          try {
+            const body = JSON.parse(raw) as { status?: unknown; version?: unknown; projects?: unknown };
+            done(
+              response.statusCode === 200 && body.status === 'ok' && typeof body.version === 'string'
+                ? { version: body.version, projects: typeof body.projects === 'number' ? body.projects : 0 }
+                : undefined,
+            );
+          } catch {
+            done(undefined);
+          }
+        });
+        response.on('error', () => done(undefined));
+      },
+    );
+    request.on('timeout', () => done(undefined));
+    request.on('error', () => done(undefined));
+  });
 }
 
 export function parsePort(raw: string | undefined): number {

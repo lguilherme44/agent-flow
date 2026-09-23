@@ -1,3 +1,4 @@
+import { featureTitle } from '../contracts/feature-title.js';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { planningResume } from '../core/resume.js';
 import { tmpdir } from 'node:os';
@@ -34,6 +35,8 @@ export interface FeatureOptions {
   readonly from?: string;
   readonly skipReview?: boolean;
   readonly workflow?: string;
+  /** `--grounded`: see `PipelineOptions.grounded`. */
+  readonly grounded?: boolean;
 }
 
 /** The seams a test replaces: where the text is read from, and what runs once it is. */
@@ -142,13 +145,15 @@ export async function runFeatureCommand(
     // wirings of one pipeline is how the two stop being identical.
     const pipeline = buildPlanningPipeline(context);
 
-    process.stdout.write(`Run ${run.runId} — ${description}\n`);
+    // The title, not the request: a 5 KB description echoed here was the run's whole name.
+    process.stdout.write(`Run ${run.runId} — ${featureTitle(description)}\n`);
     process.stdout.write('Planning feature...\nNo implementation will occur before approval.\n\n');
 
     const result = await pipeline.run(run.runId, description, {
       ...(options.cache === false ? { noCache: true } : {}),
       ...(from === undefined ? {} : { from }),
       ...(options.skipReview === true ? { skipReview: true } : {}),
+      ...(options.grounded === true ? { grounded: true } : {}),
       ...(workflowOverride !== undefined ? { workflow: workflowOverride } : {}),
       onProgress: (stage, status) => {
         if (status === 'started') lastStarted = stage;

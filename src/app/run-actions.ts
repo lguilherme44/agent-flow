@@ -47,7 +47,6 @@ import {
   observePlanningBaseDrift,
   renderPlanningRefusal,
   resolveRunGitIdentity,
-  unreviewableHighRisk,
   worktreeRefusalAction,
   type PlanningBaseMoment,
   type WorktreeRefusalCode,
@@ -70,6 +69,8 @@ import {
   type VerificationOutcome,
 } from './verification-commands.js';
 import { prepareWorkspace, type PreparationOutcome } from './workspace-preparation.js';
+import { readProjectInstructions } from './project-instructions.js';
+import { isRunActive } from './init-project.js';
 import {
   E2E_STAGE,
   FINAL_REVIEW_STAGE,
@@ -83,7 +84,7 @@ import { ReviewStore } from './review-store.js';
 import { CollaborationStore } from './collaboration-store.js';
 import { projectFindings } from '../core/review/findings.js';
 import { correctiveLinks, correctiveSelection } from '../core/review/corrective.js';
-import { assessIndependence, explainIndependence } from '../core/independence.js';
+import { assessIndependence } from '../core/independence.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
 import { extractRequirementIds } from '../core/sdd-validator.js';
 import { isResumable } from '../core/run-projection.js';
@@ -1869,6 +1870,26 @@ export async function createRunWithIdentity(
     say,
   };
 
+  // **A live process executing the current run is not superseded from under it.**
+  // `createRun` re-points `current-run`, and `approve`/`run` with no id act on it — so a
+  // second chat typing `feature` here re-aimed every later command of the first, silently.
+  // Refused only while the execution lock has a live holder: a plan that was rejected or
+  // is waiting for approval can still be superseded by a new run, as the docs tell people
+  // to do. Parallel work belongs in a separate worktree.
+  const current = await context.store.loadCurrentRun();
+  if (current !== null && isRunActive(current)) {
+    const held = await new RunExecutionLock({
+      fs: context.fs,
+      clock: context.clock,
+      host: context.host,
+      projectDir: context.projectDir,
+    }).describe(current.runId);
+    if (held?.holderAlive === true) {
+      const refusal = busy(held, 'run', say);
+      throw new PlanningRefusal(refusal.code, refusal.message, say.actions.useSeparateWorktree, 'repository');
+    }
+  }
+
   const preflight = await checkPlanningPreflight(deps);
   if (!preflight.satisfied) {
     // Rendered by the module that owns the codes, so `bug` and every future verb say the
@@ -1908,13 +1929,6 @@ export interface CreateFeatureRunResult {
 export async function createFeatureRun(
   deps: RunActionDeps,
   description: string,
-  /**
-   * The workflow class the caller asked for, when it asked for one.
-   *
-   * Taken here rather than only at `planFeature`, because one refusal is answerable from it
-   * alone and used to arrive too late — see below.
-   */
-  workflow?: WorkflowClass,
 ): Promise<ActionOutcome<CreateFeatureRunResult>> {
   const say = deps.say ?? en;
   const trimmed = description.trim();
@@ -1928,29 +1942,15 @@ export async function createFeatureRun(
 
   const context = await buildExecutionContext(deps);
 
-  // **Refused before the run exists, not inside the pipeline** (C-19, §3.2).
-  //
-  // Measured: a run asked for in `high-risk` on a single-provider setup was created,
-  // refused 2.2 seconds later, and left in the history with no plan and no stages. The
-  // refusal itself was good — it named both roles and the provider and said what to change
-  // — but both facts it rests on were known here, before anything was created. A corpse in
-  // the run history is the residue of a question answered in the wrong place.
-  //
-  // Only when the caller *asked* for the class. A workflow the classifier elevates from
-  // signals in the description is not knowable until the description is read, and the
-  // pipeline keeps its own check for exactly that case.
-  if (workflow === 'high-risk') {
-    const unreviewable = unreviewableHighRisk(
-      context.config.global.roles,
-      context.providerOf,
-    );
-    if (unreviewable !== undefined) return failed(planningRefused(unreviewable));
-  }
-
   try {
     const run = await createRunWithIdentity(context, trimmed, say);
     return done({ runId: run.runId });
   } catch (error) {
+    // Busy is "wait", not "the plan was refused": kept as `run_busy` so the Deck and the
+    // exit code say the same thing they say for every other command a live run blocks.
+    if (error instanceof PlanningRefusal && error.code === 'run_busy') {
+      return failed({ code: 'run_busy', message: error.message, action: error.action });
+    }
     if (error instanceof PlanningRefusal) return failed(planningRefused(error));
     throw error;
   }
@@ -1960,6 +1960,8 @@ export interface PlanFeatureOptions {
   readonly workflow?: WorkflowClass;
   readonly skipReview?: boolean;
   readonly noCache?: boolean;
+  /** See `PipelineOptions.grounded`. */
+  readonly grounded?: boolean;
   /** Resume an existing run from a stage, keeping the artifacts before it. */
   readonly from?: RunStage;
   readonly onProgress?: PipelineOptions['onProgress'];
@@ -2042,6 +2044,7 @@ export async function planFeature(
       ...(options.noCache === true ? { noCache: true } : {}),
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.skipReview === true ? { skipReview: true } : {}),
+      ...(options.grounded === true ? { grounded: true } : {}),
       ...(options.workflow === undefined ? {} : { workflow: options.workflow }),
       ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
     });
@@ -2250,6 +2253,10 @@ async function judgeRun(
   // can never be met. Nor is `npm ci` in a person's working tree something this run may
   // decide to do: the dependencies are already installed there, and the `exit 127` this
   // preparation exists to prevent is a property of a freshly created worktree.
+  // Every refusal is behind us and nothing has run yet: from here the run is being reviewed,
+  // and the queue and the Deck must not ask a person to start the review. Recorded before
+  // preparation and the commands, which are often the longest part (`reviewInProgress`).
+  await context.store.appendEvent(runId, 'run_review_started', {});
   const install = context.config.project?.commands?.install;
   const isolated = tree.value.integration !== undefined;
   const prepared: PreparationOutcome = isolated
@@ -2409,14 +2416,6 @@ async function judgeRun(
     finalResult.execution.runner,
     context.providerOf,
   );
-
-  if (independence === 'same-provider-fresh-context') {
-    await context.store.recordDegradation(runId, {
-      kind: 'single_provider',
-      reason: explainIndependence(authors, finalResult.execution.runner, context.providerOf),
-      impact: context.say.doctor.finalReviewSameProvider,
-    });
-  }
 
   const reviewedIntegrationHead = tree.value.integration?.head;
   const finalReview = buildReview(
@@ -2599,10 +2598,8 @@ async function openReviewTree(
 
 /** `AGENTS.md` of the tree under review, not of whatever the user has open. */
 async function readAgentsMd(context: ExecutionContext, cwd: string): Promise<string> {
-  const path = `${cwd}/AGENTS.md`;
-  return (await context.fs.exists(path))
-    ? context.fs.readFile(path)
-    : 'No AGENTS.md in this repository.';
+  // AGENTS.md, or CLAUDE.md when AGENTS.md has nothing of the repository's (project-instructions.ts).
+  return (await readProjectInstructions(context.fs, cwd)).text;
 }
 
 /** A finding's id when it has one — run-level findings do not. */

@@ -977,7 +977,15 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       return referencedRunners(config.global).map((id) => {
         const reported = health[id];
         return reported === undefined
-          ? { id, installed: false, executable: false, auth: 'not_configured' }
+          ? {
+              id,
+              installed: false,
+              executable: false,
+              auth: 'not_configured',
+              // Configuration said no, so nothing was spawned — say which, rather than let
+              // `installed: false` read as "go install it".
+              unavailable: config.global.runners[id] === undefined ? 'undeclared' : 'disabled',
+            }
           : {
               id,
               installed: reported.installed,
@@ -1086,6 +1094,8 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       projectDir: project.path,
       promptsDir: options.promptsDir,
       installProbe: query.data.install === true,
+      // This process is the dashboard, so its own runtime is the answer.
+      dashboardNode: () => process.versions.node,
       say: sayFor(request.query),
       remoteAccess: options.remoteAccess !== undefined
         ? {
@@ -1373,19 +1383,18 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     if (!body.success) return badRequest(reply, say(request).featureNeedsDescription);
 
     const deps = depsFor(project, sayFor(request.query), request);
-    // The requested class travels with the description, so the one refusal answerable
-    // from configuration alone lands before a run is created (§3.2, C-19).
-    const created = await createFeatureRun(deps, body.data.description, body.data.workflow);
+    const created = await createFeatureRun(deps, body.data.description);
     if (!created.ok) return rejectAction(reply, created.error);
 
     const runId = created.value.runId;
-    const { description, workflow, skipReview, noCache } = body.data;
+    const { description, workflow, skipReview, noCache, grounded } = body.data;
 
     return await startJob(reply, project, 'plan', runId, say(request), async () => {
       const outcome = await planFeature(deps, runId, description, {
         ...(workflow === undefined ? {} : { workflow }),
         ...(skipReview ? { skipReview: true } : {}),
         ...(noCache ? { noCache: true } : {}),
+        ...(grounded ? { grounded: true } : {}),
       });
       if (!outcome.ok) return { error: outcome.error };
 

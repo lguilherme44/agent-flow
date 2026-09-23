@@ -27,6 +27,8 @@ import {
   type UiOptions,
 } from './ui.js';
 import { readVersion } from './version.js';
+import { rememberCurrentProject, runProjectsCommand } from './projects.js';
+import { runAutostartCommand, type AutostartOptions } from './autostart.js';
 import {
   runCancelCommand,
   runPauseCommand,
@@ -158,6 +160,10 @@ export async function main(argv: string[]): Promise<number> {
     .option('--from <stage>', 'resume from a stage (discovery, architecture-impact, sdd, planning)')
     .option('--skip-review', 'stop after planning, without the automated review')
     .option('--workflow <class>', 'workflow class override: trivial, simple, standard, high-risk')
+    .option(
+      '--grounded',
+      'the request carries its own investigation: skip a fresh repository map and confirm its claims in the code',
+    )
     .action(
       async (
         description: string | undefined,
@@ -168,6 +174,7 @@ export async function main(argv: string[]): Promise<number> {
           from?: string;
           skipReview?: boolean;
           workflow?: string;
+          grounded?: boolean;
         },
         command: Command,
       ) => {
@@ -344,6 +351,45 @@ export async function main(argv: string[]): Promise<number> {
     .action(async (root: string | undefined, options: UiOptions, command: Command) => {
       exitCode = await runUiCommand(root, options, globalOptions(command));
     });
+
+  program
+    .command('projects')
+    .description('List, add or remove directories in the project hub the dashboard shows')
+    .argument('[action]', 'list (default), add or remove')
+    .argument('[dirs...]', 'directories: a project, or a folder of repositories')
+    .action(async (action: string | undefined, dirs: string[], _options: unknown, command: Command) => {
+      const chosen = action ?? 'list';
+      if (chosen !== 'list' && chosen !== 'add' && chosen !== 'remove') {
+        process.stderr.write(`Unknown action "${chosen}". Use list, add or remove.\n`);
+        exitCode = ExitCode.CONFIG_ERROR;
+        return;
+      }
+      exitCode = await runProjectsCommand(chosen, dirs, globalOptions(command));
+    });
+
+  program
+    .command('autostart')
+    .description('Start the dashboard at logon, serving every project in the hub')
+    .argument('[action]', 'status (default), install or uninstall')
+    .option('--node <path>', 'Node executable to run it with (default: this one, or the newest nvm install ≥ 20.19)')
+    .option('--port <port>', `port to listen on (default ${String(DEFAULT_UI_PORT)})`)
+    .action(async (action: string | undefined, options: AutostartOptions, command: Command) => {
+      const chosen = action ?? 'status';
+      if (chosen !== 'status' && chosen !== 'install' && chosen !== 'uninstall') {
+        process.stderr.write(`Unknown action "${chosen}". Use status, install or uninstall.\n`);
+        exitCode = ExitCode.CONFIG_ERROR;
+        return;
+      }
+      exitCode = await runAutostartCommand(chosen, options, globalOptions(command));
+    });
+
+  // The project hub fills itself: every command that ran in a project adds it, so the
+  // dashboard lists it from anywhere afterwards. `projects` is left out on purpose —
+  // `projects remove .` run inside the project would otherwise be undone on its way out.
+  program.hook('postAction', async (_program, action) => {
+    if (action.name() === 'projects') return;
+    await rememberCurrentProject(globalOptions(action));
+  });
 
   program
     .command('clean')

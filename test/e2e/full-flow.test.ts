@@ -443,7 +443,7 @@ describe('resume after the process is killed', () => {
 });
 
 describe('the environment is degraded', () => {
-  it('runs to a plan with one provider, and says what was lost', async () => {
+  it('runs to a plan with one provider, and does not nag about it', async () => {
     // Same-provider review is permitted (§56) but is a weaker guarantee, and
     // the run has to carry that fact rather than leaving it to be inferred.
     const singleProvider = config({
@@ -474,12 +474,12 @@ describe('the environment is degraded', () => {
     expect(planning.review?.independence).toBe('same-provider-fresh-context');
 
     const state = await w.store.loadRun(run.runId);
-    expect(state.degradations.map((d) => d.kind)).toContain('single_provider');
+    expect(state.degradations.map((d) => d.kind)).not.toContain('single_provider');
 
-    // And the person approving is told before they sign.
+    // And the person approving is not nagged about a provider choice they made.
     const check = checkApproval(state, planning.plan, planning.review ?? null);
     expect(check.allowed).toBe(true);
-    expect(check.warnings.join(' ')).toMatch(/same-provider/i);
+    expect(check.warnings.join(' ')).not.toMatch(/same-provider/i);
   });
 
   it('reports FAIL when a role has nowhere to run', async () => {

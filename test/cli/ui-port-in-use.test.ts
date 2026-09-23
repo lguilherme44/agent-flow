@@ -49,9 +49,21 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-/** A port nobody else on the machine is using, held open. */
+/**
+ * A port nobody else on the machine is using, held open by something that is not
+ * `agent-flow ui`.
+ *
+ * **It reads what it is sent, as any real server does.** `ui` now asks the port's holder
+ * whether it is a dashboard before trying to bind, and a listener that never reads its
+ * sockets never sees that client's FIN — so its `close()` waited forever and this file's
+ * `afterEach` timed out. That is a property of a listener nothing real resembles, not of
+ * the command under test.
+ */
 async function occupied(): Promise<number> {
-  const server = createServer();
+  const server = createServer((socket) => {
+    socket.on('error', () => undefined);
+    socket.resume();
+  });
   squatter = server;
   await new Promise<void>((resolve) => {
     server.listen(0, '127.0.0.1', resolve);

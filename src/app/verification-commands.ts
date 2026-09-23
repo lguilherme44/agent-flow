@@ -21,16 +21,25 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
  *
  * `/d /s /c` is the invocation `cmd.exe` wants for one command line: `/d` skips AutoRun
  * commands out of the registry — someone else's `HKCU\…\Command Processor\AutoRun` is not
- * part of this run — and `/s` makes `cmd` strip the outer quotes Node puts around the
- * line, which is what keeps `npm run lint` from arriving as a single quoted token.
+ * part of this run — and `/s` makes `cmd` strip the outer quotes this module puts around
+ * the line (passed verbatim, so nothing re-escapes it), which is what keeps
+ * `npm run lint` from arriving as a single quoted token.
  *
  * This is deliberately *not* in the `ProcessRunner`. The runner spawns argv; deciding that
  * a configured string needs a shell is this module's decision, and a runner that rewrote
  * `/bin/sh` into `cmd` would be silently reinterpreting every caller's argv.
  */
-export function shellInvocation(commandLine: string): { command: string; args: string[] } {
+export function shellInvocation(commandLine: string): {
+  command: string;
+  args: string[];
+  verbatimArguments?: boolean;
+} {
+  // Windows: the line wrapped in one pair of quotes and handed over verbatim, which `/s`
+  // strips — Node's own `shell: true` shape. Passing it as an ordinary argument let the
+  // argv escaping turn every inner `"` into `\"`, and `cmd` ran a mangled line: measured on
+  // a `docker run -v "%CD%\server:/src:ro"` test command ("too many colons").
   return process.platform === 'win32'
-    ? { command: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', commandLine] }
+    ? { command: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', `"${commandLine}"`], verbatimArguments: true }
     : { command: '/bin/sh', args: ['-c', commandLine] };
 }
 

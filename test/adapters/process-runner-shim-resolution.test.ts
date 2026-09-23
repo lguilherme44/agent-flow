@@ -34,9 +34,15 @@ describe('the runner resolves an executable the way each platform needs (Windows
     // for `taskkill` only.
     expect(source).toMatch(/^import spawn from 'cross-spawn';$/m);
 
-    const call = /const child = (\w+)\(options\.command/.exec(source);
-    expect(call, 'the child spawn call moved — this rule no longer reads it').not.toBeNull();
-    expect(call?.[1]).toBe('spawn');
+    // Every child goes through the wrapper, except a `cmd /c` command line handed over
+    // verbatim — and that exception must stay exactly that narrow (see `verbatimArguments`).
+    expect(source, 'the child spawn call moved — this rule no longer reads it').toMatch(
+      /:\s*spawn\(options\.command, \[\.\.\.options\.args\], spawnOptions\)/,
+    );
+    const plain = [...source.matchAll(/nodeSpawn\(options\.command[^\n]*/g)].map((match) => match[0]);
+    expect(plain).toHaveLength(1);
+    expect(plain[0]).toContain('windowsVerbatimArguments: true');
+    expect(source).toMatch(/options\.verbatimArguments === true && process\.platform === 'win32'\s*\n\s*\? nodeSpawn/);
   });
 
   it('keeps taskkill on the plain spawn, so teardown does not depend on the wrapper', () => {

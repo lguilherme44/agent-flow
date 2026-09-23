@@ -128,7 +128,7 @@ describe('warnings shown before signing off (R-16)', () => {
     expect(result.warnings.join(' ')).toContain('ran on claude');
   });
 
-  it('warns when the review was not genuinely independent', () => {
+  it('does not warn about a same-provider review: one provider is a choice (23/09/2026)', () => {
     const result = checkApproval(
       state(),
       plan(),
@@ -136,7 +136,7 @@ describe('warnings shown before signing off (R-16)', () => {
     );
 
     expect(result.allowed).toBe(true);
-    expect(result.warnings.join(' ')).toMatch(/same-provider/i);
+    expect(result.warnings).toEqual([]);
   });
 
   it('stays silent when nothing was lost', () => {

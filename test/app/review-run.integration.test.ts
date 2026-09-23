@@ -239,6 +239,12 @@ describe('review runs over the integration tree (§19.1, §19.2)', () => {
     expect(outcome.value.finalReview.verdict).toBe('PASS');
     expect((await current.store.loadRun(current.runId)).status).toBe('completed');
     expect(await current.store.readArtifact(current.runId, 'finalReview')).not.toBeNull();
+
+    // Recorded before preparation and the commands, so the run reads as being reviewed
+    // from the first moment rather than once the model stage starts.
+    const types = (await current.store.readEvents(current.runId)).map((event) => event.type);
+    expect(types).toContain('run_review_started');
+    expect(types.indexOf('run_review_started')).toBeLessThan(types.indexOf('workspace_prepared'));
   });
 
   it('still reads the project directory for a sequential run (§25.1)', async () => {

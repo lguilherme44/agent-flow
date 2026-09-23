@@ -317,6 +317,68 @@ describe('discovery cache (R-07)', () => {
   });
 });
 
+/**
+ * A grounded request: an orchestrating model has already investigated, and says so.
+ *
+ * Measured 23/09/2026 on two runs: discovery (the feature-agnostic map) took 5–23 min and
+ * the facts that changed the plans came from `architecture-impact` reading code — the
+ * uncalled pricing helper, the search index consuming the same pricing. With the
+ * investigation already in the request, the map is redundant; the claims are what need
+ * checking. A cached map is still free, so it is still used.
+ */
+describe('a grounded request', () => {
+  it('skips a fresh discovery and asks the impact to confirm the request in the code', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushText('# Impact');
+    runner.pushText(SDD_TEXT);
+    runner.pushJson(goodPlan);
+    runner.pushJson(PASSING_REVIEW);
+
+    const result = await pipeline.run(run.runId, 'Add recurring bookings', { grounded: true });
+
+    expect(result.stagesRun).toEqual(['architecture-impact', 'sdd', 'planning', 'plan-review']);
+    expect(runner.calls).toHaveLength(4);
+    expect(runner.calls[0]?.prompt).toContain('Discovery did not run');
+    expect(runner.calls[0]?.prompt).toContain('callers');
+
+    const events = await store.readEvents(run.runId);
+    expect(events.find((e) => e.type === 'stage_skipped')?.detail).toMatchObject({
+      stage: 'discovery',
+      reason: 'grounded_request',
+    });
+    expect((await store.loadRun(run.runId)).grounded).toBe(true);
+  });
+
+  it('still uses a valid cached map, which costs nothing', async () => {
+    const { pipeline, run, runner, fs, processRunner, store } = await harness();
+    await seedValidCache(fs, processRunner, '# Architecture\n\nCached.');
+    runner.pushText('# Impact');
+    runner.pushText(SDD_TEXT);
+    runner.pushJson(goodPlan);
+    runner.pushJson(PASSING_REVIEW);
+
+    await pipeline.run(run.runId, 'Add recurring bookings', { grounded: true });
+
+    expect(runner.calls[0]?.prompt).toContain('Cached.');
+    const events = await store.readEvents(run.runId);
+    expect(events.some((e) => e.type === 'stage_skipped')).toBe(false);
+  });
+
+  it('stays grounded when the run is planned again without saying so', async () => {
+    // `revise` and a resume call the pipeline with the options of *that* call. A run that
+    // forgot it was grounded would buy the 20-minute map on its second plan.
+    const { pipeline, run, runner } = await harness();
+    runner.pushText('# Impact').pushText(SDD_TEXT).pushJson(goodPlan).pushJson(PASSING_REVIEW);
+    await pipeline.run(run.runId, 'Add recurring bookings', { grounded: true });
+
+    runner.pushText('# Impact again').pushText(SDD_TEXT).pushJson(goodPlan).pushJson(PASSING_REVIEW);
+    const again = await pipeline.run(run.runId, 'Add recurring bookings', { from: 'architecture-impact' });
+
+    expect(again.stagesRun).not.toContain('discovery');
+    expect(runner.calls).toHaveLength(8);
+  });
+});
+
 describe('checkpointing (R-08)', () => {
   it('keeps completed artifacts when a later stage fails', async () => {
     // Four expensive calls; losing the first three to a failure in the fourth
@@ -345,6 +407,43 @@ describe('checkpointing (R-08)', () => {
 
     expect(result.stagesRun).toEqual(['planning', 'plan-review']);
     expect(runner.calls).toHaveLength(2);
+  });
+
+  it('keeps a stale map when resuming past discovery, and says it is stale', async () => {
+    // Measured on AF-2026-001 (a Python service, 23/09/2026): `revise --from sdd` re-ran a
+    // 10-minute discovery because AGENTS.md and the project config had been edited. The
+    // impact and SDD stages honour `--from`; discovery did not, so asking to resume from
+    // the SDD still paid for the most expensive stage. The operator asked to resume past
+    // it: the map is kept, and its staleness is recorded rather than acted on.
+    const { pipeline, run, runner, store, fs } = await harness();
+    fs.seed(agentFlowPaths(PROJECT).architectureCache, '# Architecture\n\nA Node service.');
+    // No fingerprint at all — the strictest "stale" there is.
+    await store.writeArtifact(run.runId, 'architectureImpact', '# Impact');
+
+    runner.pushText(SDD_TEXT);
+    runner.pushJson(goodPlan);
+    runner.pushJson(PASSING_REVIEW);
+    const result = await pipeline.run(run.runId, 'Add recurring bookings', { from: 'sdd' });
+
+    expect(result.stagesRun).toEqual(['sdd', 'planning', 'plan-review']);
+    const reused = (await store.readEvents(run.runId)).find(
+      (e) => e.type === 'stage_reused' && e.detail['stage'] === 'discovery',
+    );
+    expect(reused?.detail['reason']).toBe('resumed_from_later_stage');
+    expect(reused?.detail['stale']).toBe(true);
+  });
+
+  it('still runs discovery when resuming past it with no map to keep', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    await store.writeArtifact(run.runId, 'architectureImpact', '# Impact');
+
+    runner.pushText('# Architecture\n\nA Node service.');
+    runner.pushText(SDD_TEXT);
+    runner.pushJson(goodPlan);
+    runner.pushJson(PASSING_REVIEW);
+    const result = await pipeline.run(run.runId, 'Add recurring bookings', { from: 'sdd' });
+
+    expect(result.stagesRun[0]).toBe('discovery');
   });
 
   it('reports progress per stage', async () => {
@@ -770,62 +869,46 @@ describe('Adaptive Workflow Pipeline Execution', () => {
     expect(updated.status).toBe('waiting_for_approval');
   });
 
-  it('rejects HIGH-RISK workflow when cross-provider independence cannot be satisfied', async () => {
-    const { store } = await harness();
-    const fs = new InMemoryFileSystem();
-    seedRealPrompts(fs);
-    const clock = new FixedClock();
-    const runner = new FakeAgentRunner('claude');
-    const stageRunner = new StageRunner({
-      fs,
-      clock,
-      store,
-      config: globalConfig,
-      capabilities: CAPABILITIES,
-      promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
-      getRunner: () => runner,
-      projectDir: PROJECT,
-    });
+  /**
+   * One provider is a choice, not a defect (23/09/2026). HIGH-RISK used to refuse a
+   * single-provider setup outright, so a repository whose request mentioned auth, payment or
+   * a migration could not be planned at all without a second provider installed. The loss is
+   * real but it is information: the review records `same-provider-fresh-context` and every
+   * surface that renders a review says so. It is never a gate.
+   */
+  it('plans a HIGH-RISK workflow on a single provider, and records the review as same-provider', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    scriptHappyPath(runner);
 
-    const pipeline = new PlanningPipeline({
-      fs,
-      clock,
-      store,
-      stageRunner,
-      processRunner: new FakeProcessRunner(),
-      git: testGitCommand(new FakeProcessRunner()),
-      config: { global: globalConfig, project: PROJECT_CONFIG },
-      capabilities: CAPABILITIES,
-      providerOf: () => 'anthropic', // Both planner and planReviewer resolve to anthropic
-      projectDir: PROJECT,
-    });
+    const result = await pipeline.run(run.runId, 'Add user authentication with JWT token');
 
-    const run = await store.createRun('Add user authentication with JWT token');
-    await expect(pipeline.run(run.runId, 'Add user authentication with JWT token')).rejects.toThrow(
-      PlanningRefusal,
-    );
+    expect(result.stagesRun).toEqual([
+      'discovery',
+      'architecture-impact',
+      'sdd',
+      'planning',
+      'plan-review',
+    ]);
+    expect(result.review?.independence).toBe('same-provider-fresh-context');
 
-    const raised = await pipeline
-      .run(run.runId, 'Add user authentication with JWT token')
-      .catch((err: unknown) => err);
-    expect(raised).toBeInstanceOf(PlanningRefusal);
-    expect((raised as PlanningRefusal).code).toBe('cross_provider_required');
-    expect(runner.calls).toHaveLength(0); // Fails safely with 0 model calls
+    const updated = await store.loadRun(run.runId);
+    expect(updated.workflow).toBe('high-risk');
+    expect(updated.status).toBe('waiting_for_approval');
+
+    const events = await store.readEvents(run.runId);
+    expect(events.some((e) => e.type === 'planning_refused')).toBe(false);
   });
 
   it('detects sensitive repository paths (auth, db/migrations, payment) and escalates to HIGH-RISK', async () => {
-    const { pipeline, run, runner, fs } = await harness();
-    // Seed sensitive paths
+    const { pipeline, run, runner, fs, store } = await harness();
     fs.seed(`${PROJECT}/src/auth/token.ts`, 'export const token = "xyz";');
     fs.seed(`${PROJECT}/db/migrations/001_init.sql`, 'CREATE TABLE users();');
+    scriptHappyPath(runner);
 
-    // Pipeline with same provider will refuse when escalated to high-risk
-    const raised = await pipeline
-      .run(run.runId, 'Update user login session handling')
-      .catch((err: unknown) => err);
-    expect(raised).toBeInstanceOf(PlanningRefusal);
-    expect((raised as PlanningRefusal).code).toBe('cross_provider_required');
-    expect(runner.calls).toHaveLength(0);
+    await pipeline.run(run.runId, 'Update user login session handling');
+
+    const updated = await store.loadRun(run.runId);
+    expect(updated.workflow).toBe('high-risk');
   });
 });
 

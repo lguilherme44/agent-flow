@@ -312,6 +312,8 @@ export const PlanRequestSchema = z.object({
   skipReview: z.boolean().default(false),
   /** Ignore the cached repository map, as `--no-cache` does. */
   noCache: z.boolean().default(false),
+  /** The request carries its own investigation, as `--grounded` does. */
+  grounded: z.boolean().default(false),
 });
 
 export const ResumePlanningRequestSchema = z.object({
@@ -891,6 +893,15 @@ export interface RunnerHealthView {
   readonly auth: string;
   readonly version?: string;
   readonly detail?: string;
+  /**
+   * Why nothing was observed: the runner is turned off, or no `runners:` entry declares it.
+   *
+   * Present only then, and it outranks `installed` for anything shown to a person — a runner
+   * nobody enabled is never spawned, so `installed: false` beside it is silence, not a
+   * measurement (see `core/health.ts`). Measured: the Crew page called an installed claude
+   * "absent" because of exactly that.
+   */
+  readonly unavailable?: 'disabled' | 'undeclared';
 }
 
 /** One end of a configured route: a runner, a model, an effort. */
@@ -1023,8 +1034,9 @@ export interface ProjectRegisteredView {
    * cleanliness assertion, which refuses every task in worktree mode. A live run
    * discovered that after paying for planning.
    *
-   * `instructions_unread` is the quiet one: agent-flow reads AGENTS.md and nothing else,
-   * so rules kept in another tool's file are rules no stage ever sees. Measured — a
+   * `instructions_unread` is the quiet one: stages read AGENTS.md (CLAUDE.md only stands in
+   * for a scaffold), so rules kept in another tool's file beside a real AGENTS.md are rules
+   * no stage ever sees. Measured — a
    * monorepo whose AGENTS.md had drifted 641 lines behind its CLAUDE.md lost the section
    * naming its own code index, and discovery read the repository by hand until it was
    * killed at its timeout.
@@ -1033,6 +1045,8 @@ export interface ProjectRegisteredView {
     | { readonly kind: 'install_dirties_tree'; readonly command: string }
     | { readonly kind: 'no_validation_commands' }
     | { readonly kind: 'instructions_unread'; readonly paths: readonly string[] }
+    /** AGENTS.md is still the scaffold, so every stage reads `path` (CLAUDE.md) in its place. */
+    | { readonly kind: 'instructions_fallback'; readonly path: string }
     | { readonly kind: 'active_run'; readonly runId: string; readonly status: string }
   )[];
 }
@@ -1063,6 +1077,8 @@ export interface DoctorToolView {
   /** Git only: the worktree-mode floor, so the answer sits beside the question. */
   readonly floor?: string;
   readonly belowFloor?: boolean;
+  /** Node below the floor: the version the dashboard runs on instead. */
+  readonly dashboardNode?: string;
 }
 
 export interface DoctorCapabilityView {

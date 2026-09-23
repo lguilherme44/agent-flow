@@ -646,6 +646,23 @@ describe('UI-04 — the run read API', () => {
     expect(health[0]).toHaveProperty('installed');
   });
 
+  it('says a runner is turned off, never that it is missing, when configuration is what says no', async () => {
+    // Measured on the Crew page, 23/09/2026: `runners.claude.enabled: false` in the global
+    // file made the card read "AUSENTE" (absent) next to a claude 2.1.280 that was installed
+    // and executable. `core/health.ts` names exactly this as the mistake to avoid — it sends
+    // someone to install a CLI they already have, and the install changes nothing.
+    const { server, fs } = await serve();
+    fs.seed(
+      '/home/.agent-flow/config.yaml',
+      'runners:\n  claude:\n    enabled: false\nroles:\n  sdd:\n    runner: ghost\n',
+    );
+
+    const health = (await server.app.inject('/api/v1/runners/health?projectId=demo')).json<RunnerHealthView[]>();
+
+    expect(health.find((entry) => entry.id === 'claude')?.unavailable).toBe('disabled');
+    expect(health.find((entry) => entry.id === 'ghost')?.unavailable).toBe('undeclared');
+  });
+
   it('serves telemetry derived from the run', async () => {
     const { server, run } = await serve();
 

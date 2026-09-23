@@ -65,7 +65,6 @@ function entries(at: (index: number) => unknown): Leaf[] {
  */
 const IDENTICAL = [
   'actions.atPid', // `pid 2` — a Unix word and a number
-  'attention.reasonAndImpact', // `${reason} — ${impact}`: punctuation, no words
   'config.fallback', // the setting is spelled `fallback` in the file too
   'config.runners',
   'config.workspace',

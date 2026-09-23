@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { ClaudeCodeRunner } from '../../src/adapters/runners/claude-code-runner.js';
 import type { AgentRunInput } from '../../src/ports/index.js';
 
@@ -56,13 +57,155 @@ describe('capabilities', () => {
   });
 });
 
+describe('command execution grant (D-9)', () => {
+  it('is not granted by default: acceptEdits alone runs no command in -p', () => {
+    expect(makeRunner().runner.capabilities().nonInteractiveToolGrants?.commandExecution).toBe(false);
+  });
+
+  const grants = (platform: NodeJS.Platform, ...rules: string[]) => new ClaudeCodeRunner({
+    id: 'claude',
+    processRunner: new FakeProcessRunner(),
+    platform,
+    extraArgs: ['--allowedTools', ...rules],
+  }).capabilities().nonInteractiveToolGrants?.commandExecution;
+
+  it('is granted when the runner args allow a Bash command', () => {
+    // Measured on the Deck, 23/09/2026: a project declared
+    // `--allowedTools Bash(docker run --rm --network none:*)`, `doctor` in the terminal said
+    // OK, and the Diagnostics page said "falta permissão" for every executor — the page read
+    // this static `false` and never the args the operator wrote.
+    expect(grants('linux', 'Bash(npm run:*)', 'Bash(git status:*)')).toBe(true);
+    expect(grants('darwin', 'Bash(npm run:*)')).toBe(true);
+  });
+
+  it('on Windows, is granted by the PowerShell rule and not by a Bash one', () => {
+    // Measured 23/09/2026 on claude 2.1.280 / Windows: with only
+    // `Bash(docker run --rm --network none:*)` the command was denied, and
+    // `permission_denials[0].tool_name` was "PowerShell". The same rule declared as
+    // `PowerShell(...)` ran it. Counting the Bash rule there reported a grant that is not one.
+    expect(grants('win32', 'PowerShell(docker run --rm --network none:*)')).toBe(true);
+    expect(grants('win32', 'Bash(docker run --rm --network none:*)')).toBe(false);
+    expect(grants('win32', 'Bash(npm test:*)', 'PowerShell(npm test:*)')).toBe(true);
+  });
+
+  it('elsewhere, is not granted by a PowerShell rule alone', () => {
+    expect(grants('linux', 'PowerShell(npm test:*)')).toBe(false);
+  });
+
+  it('reads the flag written with an equals sign too', () => {
+    const runner = (arg: string) => new ClaudeCodeRunner({
+      id: 'claude',
+      processRunner: new FakeProcessRunner(),
+      platform: 'win32',
+      extraArgs: [arg],
+    }).capabilities().nonInteractiveToolGrants?.commandExecution;
+    expect(runner('--allowedTools=PowerShell(npm test:*)')).toBe(true);
+    expect(runner('--allowed-tools=Read,PowerShell(git status:*)')).toBe(true);
+    expect(runner('--allowedTools=Bash(npm test:*)')).toBe(false);
+  });
+
+  it('is not granted by an allowlist that names no Bash command', () => {
+    const runner = new ClaudeCodeRunner({
+      id: 'claude',
+      processRunner: new FakeProcessRunner(),
+      extraArgs: ['--allowedTools', 'mcp__codegraph'],
+    });
+    expect(runner.capabilities().nonInteractiveToolGrants?.commandExecution).toBe(false);
+  });
+});
+
 describe('ClaudeCodeRunner model suggestions (AD-13)', () => {
-  it('offers the aliases the CLI accepts, not the dated ids behind them', async () => {
-    // No `models` subcommand exists to ask, so this list is declared — and declared as
-    // aliases, which keep meaning the current model as versions land. A dated id would be
-    // the exact name AD-13 says rots, printed by us in a control people trust.
+  const CATALOG_DIR = '/home/me/.claude/cache/model-catalog';
+
+  /** The shape `claude 2.1.280` writes, trimmed to the fields the adapter reads. */
+  function catalogFile(fetchedAt: number, models: readonly Record<string, unknown>[], surface = 'cc'): string {
+    return JSON.stringify({ version: 2, fetchedAt, staleAt: fetchedAt + 3_600_000, catalog: { surface, config: { id: 'x', models } } });
+  }
+
+  function withCatalog(files: Record<string, string>, version = '2.1.280 (Claude Code)') {
+    const fs = new InMemoryFileSystem();
+    for (const [name, content] of Object.entries(files)) fs.seed(`${CATALOG_DIR}/${name}`, content);
+    const proc = new FakeProcessRunner().always({ stdout: `${version}\n` });
+    return { runner: new ClaudeCodeRunner({ id: 'claude', processRunner: proc, fs, modelCatalogDir: CATALOG_DIR }), proc };
+  }
+
+  it('falls back to the aliases the CLI documents when there is no catalog to read', async () => {
+    // `claude --help` on 2.1.280: "an alias for the latest model (e.g. 'fable', 'opus', or
+    // 'sonnet')". Fable was missing from the old declared list, which is how a model the
+    // account could run never reached the editor.
     const runner = new ClaudeCodeRunner({ id: 'claude', processRunner: new FakeProcessRunner() });
-    expect(await runner.listModels?.()).toEqual(['opus', 'sonnet', 'haiku']);
+    expect(await runner.listModels?.()).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+  });
+
+  it('offers the ids of the catalog the CLI cached for this account, then the aliases', async () => {
+    const { runner } = withCatalog({
+      'org-a-cc.json': catalogFile(1_000, [
+        { id: 'claude-opus-5-5', section: 'main', min_claude_code_version: '2.1.280' },
+        { id: 'claude-fable-5-1', section: 'main', min_claude_code_version: '2.1.251' },
+        { id: 'claude-sonnet-5', section: 'main' },
+        { id: 'claude-opus-5', section: 'overflow' },
+      ]),
+    });
+
+    expect(await runner.listModels?.()).toEqual([
+      'claude-opus-5-5',
+      'claude-fable-5-1',
+      'claude-sonnet-5',
+      'claude-opus-5',
+      'fable',
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
+  });
+
+  it('leaves out a model the installed CLI is too old to run', async () => {
+    // Offering it would let a person pin a role to an id the spawned CLI rejects, and the
+    // failure would surface mid-run instead of in the editor.
+    const { runner } = withCatalog({
+      'org-a-cc.json': catalogFile(1_000, [
+        { id: 'claude-opus-5-5', section: 'main', min_claude_code_version: '2.1.280' },
+        { id: 'claude-sonnet-5', section: 'main' },
+      ]),
+    }, '2.1.270 (Claude Code)');
+
+    expect(await runner.listModels?.()).toEqual(['claude-sonnet-5', 'fable', 'opus', 'sonnet', 'haiku']);
+  });
+
+  it('keeps a floored model when the CLI version cannot be read, since the CLI is the judge', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(`${CATALOG_DIR}/a-cc.json`, catalogFile(1_000, [{ id: 'claude-opus-5-5', section: 'main', min_claude_code_version: '2.1.280' }]));
+    const proc = new FakeProcessRunner().always({ spawnFailed: true });
+    const runner = new ClaudeCodeRunner({ id: 'claude', processRunner: proc, fs, modelCatalogDir: CATALOG_DIR });
+
+    expect((await runner.listModels?.())?.[0]).toBe('claude-opus-5-5');
+  });
+
+  it('reads the most recently fetched catalog when several accounts left one', async () => {
+    const { runner } = withCatalog({
+      'org-old-cc.json': catalogFile(1_000, [{ id: 'claude-opus-4-6', section: 'main' }]),
+      'org-new-cc.json': catalogFile(2_000, [{ id: 'claude-opus-5-5', section: 'main' }]),
+    });
+
+    const models = await runner.listModels?.();
+    expect(models?.[0]).toBe('claude-opus-5-5');
+    expect(models).not.toContain('claude-opus-4-6');
+  });
+
+  it('ignores a catalog that is not Claude Code\'s or does not parse, rather than failing the page', async () => {
+    const { runner } = withCatalog({
+      'broken-cc.json': '{ not json',
+      'desktop.json': catalogFile(9_000, [{ id: 'claude-desktop-only', section: 'main' }], 'desktop'),
+      'shape.json': JSON.stringify({ version: 2, catalog: { surface: 'cc', config: { models: 'nope' } } }),
+    });
+
+    expect(await runner.listModels?.()).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+  });
+
+  it('asks the CLI its version only when some model sets a floor', async () => {
+    const { runner, proc } = withCatalog({ 'a-cc.json': catalogFile(1_000, [{ id: 'claude-sonnet-5', section: 'main' }]) });
+    await runner.listModels?.();
+    expect(proc.calls).toHaveLength(0);
   });
 });
 

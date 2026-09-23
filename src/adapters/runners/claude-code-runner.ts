@@ -1,7 +1,9 @@
 import type { AgentRunInput, AgentRunUsage, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
 import type { ReasoningLevel } from '../../contracts/common.schema.js';
-import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
+import type { FileSystem } from '../../ports/file-system.js';
+import { join } from 'node:path';
+import { BaseRunner, type BaseRunnerOptions, type ErrorRule, type RunnerInvocation } from './base-runner.js';
 
 /**
  * Logical reasoning level → the value Claude Code accepts.
@@ -76,6 +78,108 @@ function asEnvelope(value: unknown): ClaudeEnvelope | undefined {
 }
 
 /**
+ * The aliases `claude --help` documents, in its order: "an alias for the latest model
+ * (e.g. 'fable', 'opus', or 'sonnet')". `haiku` is accepted the same way.
+ */
+const ALIASES: readonly string[] = ['fable', 'opus', 'sonnet', 'haiku'];
+
+export interface ClaudeCodeRunnerOptions extends BaseRunnerOptions {
+  /** Reads the model catalog. Absent means the aliases are all there is to offer. */
+  readonly fs?: FileSystem;
+  /** `<claude config dir>/cache/model-catalog`. See `ClaudeCodeRunner.listModels`. */
+  readonly modelCatalogDir?: string;
+  /** Which command tool a grant must name. `process.platform` when absent. */
+  readonly platform?: NodeJS.Platform;
+}
+
+interface CatalogModel {
+  readonly id: string;
+  readonly minVersion: string | undefined;
+}
+
+interface ParsedCatalog {
+  readonly fetchedAt: number;
+  readonly models: readonly CatalogModel[];
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * One cached catalog, or nothing when it is not a Claude Code catalog of the shape measured.
+ *
+ * `surface: "cc"` is checked because the directory is keyed per surface and only this one
+ * describes what the `claude` binary accepts.
+ */
+function parseCatalog(value: unknown): ParsedCatalog | undefined {
+  const root = record(value);
+  const catalog = record(root?.catalog);
+  if (catalog === undefined || (catalog.surface !== undefined && catalog.surface !== 'cc')) return undefined;
+
+  const entries = record(catalog.config)?.models;
+  if (!Array.isArray(entries)) return undefined;
+
+  const models = entries.flatMap((entry): CatalogModel[] => {
+    const model = record(entry);
+    const id = model?.id;
+    if (typeof id !== 'string' || id.trim() === '') return [];
+    const floor = model?.min_claude_code_version;
+    return [{ id: id.trim(), minVersion: typeof floor === 'string' ? floor : undefined }];
+  });
+  if (models.length === 0) return undefined;
+
+  return { fetchedAt: typeof root?.fetchedAt === 'number' ? root.fetchedAt : 0, models };
+}
+
+/**
+ * Whether `args` carry `--allowedTools` (or `--allowed-tools`) with an entry for the tool this
+ * platform runs commands with: `PowerShell` on Windows, `Bash` elsewhere. A `Bash(...)` rule
+ * alone was measured denied on Windows (claude 2.1.280, 23/09/2026), so counting it there
+ * reported a grant the executor did not have.
+ *
+ * The flag is variadic, so every token after it up to the next option is one of its values.
+ */
+function grantsCommands(args: readonly string[], platform: NodeJS.Platform): boolean {
+  const tool = platform === 'win32' ? /^PowerShell(\(|$)/ : /^Bash(\(|$)/;
+  const names = (value: string): boolean => value.split(/[\s,]+/).some((entry) => tool.test(entry));
+  let inAllowlist = false;
+  for (const token of args) {
+    if (token === '--allowedTools' || token === '--allowed-tools') {
+      inAllowlist = true;
+      continue;
+    }
+    // `--allowedTools=PowerShell(npm:*)`: one token, the value after the sign.
+    const inline = /^--allowed-?[Tt]ools=(.*)$/.exec(token);
+    if (inline !== null) {
+      if (names(inline[1] ?? '')) return true;
+      inAllowlist = false;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      inAllowlist = false;
+      continue;
+    }
+    if (inAllowlist && names(token)) return true;
+  }
+  return false;
+}
+
+/** Numeric, segment by segment: `2.1.280` > `2.1.99`. */
+function compareVersions(left: string, right: string): number {
+  const a = left.split('.').map(Number);
+  const b = right.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const difference = (a[i] ?? 0) - (b[i] ?? 0);
+    if (Number.isNaN(difference)) return 0;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
  * Claude Code adapter.
  *
  * Everything provider-specific about this CLI lives here: flag names, the effort
@@ -83,6 +187,18 @@ function asEnvelope(value: unknown): ClaudeEnvelope | undefined {
  * this file knows any of it.
  */
 export class ClaudeCodeRunner extends BaseRunner {
+  private readonly fs: FileSystem | undefined;
+  /** Where `claude` caches the account's model picker. See {@link listModels}. */
+  private readonly modelCatalogDir: string | undefined;
+  private readonly platform: NodeJS.Platform;
+
+  constructor(options: ClaudeCodeRunnerOptions) {
+    super(options);
+    this.fs = options.fs;
+    this.modelCatalogDir = options.modelCatalogDir;
+    this.platform = options.platform ?? process.platform;
+  }
+
   protected defaultCommand(): string {
     return 'claude';
   }
@@ -106,7 +222,13 @@ export class ClaudeCodeRunner extends BaseRunner {
       // scope (it would remove the containment AD-14 assigns to the runner). False
       // does not block execution — it produces a `permission_not_ready` warning and
       // a preflight finding, so an unmeasured grant is visible instead of assumed.
-      nonInteractiveToolGrants: { fileEdit: true, commandExecution: false },
+      //
+      // **True when the operator granted it in `RunnerConfig.args`**: `--allowedTools` with a
+      // `Bash(…)` entry (`PowerShell(…)` on Windows) is how Claude Code allows a command in `-p`, and it is the remedy
+      // `doctor` itself prints. Reading only the default made the Diagnostics page say
+      // "missing permission" for a project whose args granted exactly that, while `doctor`
+      // in the terminal said OK — two answers from one configuration.
+      nonInteractiveToolGrants: { fileEdit: true, commandExecution: grantsCommands(this.extraArgs, this.platform) },
     };
   }
 
@@ -148,16 +270,80 @@ export class ClaudeCodeRunner extends BaseRunner {
   }
 
   /**
-   * The aliases this CLI accepts, not the model ids behind them (AD-13).
+   * The models this account can run, read from the catalog the CLI itself caches, then the
+   * aliases it documents (AD-13).
    *
-   * Claude Code has no `models` subcommand to ask, so this is the one list here that is
-   * declared rather than enumerated — and it is declared as *aliases* on purpose. An
-   * alias like `opus` keeps meaning the current Opus as versions land; the dated id it
-   * resolves to today is exactly the kind of name AD-13 says rots. A person who wants a
-   * pinned id still types it: this is a suggestion list, and the field stays open.
+   * Claude Code has no `models` subcommand, and the list used to be declared here as
+   * `opus, sonnet, haiku`. That is the defect this replaces, and it was measured rather than
+   * reasoned: on 23/09/2026 the account could run Opus 5.5 and Fable 5.1, and the editor
+   * offered neither — the aliases list had no `fable` at all, and a declared list of dated
+   * ids would have rotted the same way one release later.
+   *
+   * **The source is `<config dir>/cache/model-catalog/*.json`,** which `claude` 2.1.280
+   * writes after fetching the account's model picker. It is the same list `/model` shows,
+   * so it follows the account (a model an organisation disabled is absent) and it follows
+   * releases without this file changing. It carries no credential — ids, names, effort
+   * options — which is what makes reading it acceptable next to AD-14. It is also an
+   * undocumented cache, so every field is checked and anything unexpected contributes
+   * nothing: this feeds a suggestion list, and the field stays open for a typed id.
+   *
+   * A model with `min_claude_code_version` above the installed CLI is left out. Offering it
+   * would let a role be pinned to an id the spawned CLI rejects, and that failure would
+   * surface mid-run instead of in the editor. The version is asked only when some model
+   * sets a floor, and an unreadable version keeps the model: the CLI is the real judge.
+   *
+   * The aliases ride after the ids because they answer a different wish — "the current
+   * Opus, whatever that is" — and removing them would take that choice away.
    */
   async listModels(): Promise<readonly string[]> {
-    return ['opus', 'sonnet', 'haiku'];
+    const catalog = await this.readModelCatalog();
+    if (catalog.length === 0) return ALIASES;
+
+    const installed = catalog.some((model) => model.minVersion !== undefined)
+      ? await this.installedVersion()
+      : undefined;
+    const runnable = catalog.filter((model) =>
+      model.minVersion === undefined || installed === undefined || compareVersions(installed, model.minVersion) >= 0,
+    );
+
+    return [...new Set([...runnable.map((model) => model.id), ...ALIASES])];
+  }
+
+  /** The newest catalog in {@link modelCatalogDir}, or nothing. Never throws. */
+  private async readModelCatalog(): Promise<readonly CatalogModel[]> {
+    const dir = this.modelCatalogDir;
+    if (this.fs === undefined || dir === undefined) return [];
+
+    let names: string[];
+    try {
+      names = await this.fs.readDir(dir);
+    } catch {
+      return [];
+    }
+
+    let newest: ParsedCatalog | undefined;
+    for (const name of names.filter((entry) => entry.endsWith('.json'))) {
+      let parsed: ParsedCatalog | undefined;
+      try {
+        parsed = parseCatalog(JSON.parse(await this.fs.readFile(join(dir, name))));
+      } catch {
+        parsed = undefined;
+      }
+      if (parsed !== undefined && (newest === undefined || parsed.fetchedAt > newest.fetchedAt)) newest = parsed;
+    }
+    return newest?.models ?? [];
+  }
+
+  /** `2.1.280` out of `2.1.280 (Claude Code)`, or nothing. */
+  private async installedVersion(): Promise<string | undefined> {
+    const result = await this.processRunner.run({
+      command: this.command,
+      args: ['--version'],
+      cwd: process.cwd(),
+      timeoutSeconds: 15,
+    });
+    if (result.spawnFailed || result.exitCode !== 0) return undefined;
+    return /\d+(?:\.\d+)+/.exec(result.stdout)?.[0];
   }
 
   /**

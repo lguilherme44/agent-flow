@@ -281,7 +281,7 @@ describe('the corrected plan is judged on who really wrote it', () => {
     expect(result.review.independence).toBe('same-provider-fresh-context');
 
     const state = await w.store.loadRun(w.run.runId);
-    expect(state.degradations.map((d) => d.kind)).toContain('single_provider');
+    expect(state.degradations.map((d) => d.kind)).not.toContain('single_provider');
   });
 
   it('is independent when neither author shares the reviewer’s provider', async () => {

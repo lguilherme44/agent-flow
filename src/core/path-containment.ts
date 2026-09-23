@@ -61,3 +61,20 @@ export function isAtOrUnderRoot(root: string, path: string, flavour: PathFlavour
 
   return relative !== '..' && !relative.startsWith(`..${flavour.sep}`);
 }
+
+/**
+ * Whether two paths name the same file or directory, by the rules of `platform`.
+ *
+ * Windows paths are case-insensitive and take either separator; comparing them as strings
+ * registered `C:\wk\api` and `c:/wk/api` as two projects with two ids and one run history.
+ * Here rather than beside its first caller because the configuration loader needs the same
+ * answer — whether a project file *is* the global one — and two copies of a path rule are
+ * two chances to get Windows wrong.
+ */
+export function samePath(left: string, right: string, platform: string = process.platform): boolean {
+  const fold = (path: string): string => {
+    const trimmed = path.replace(/[\\/]+$/, '');
+    return platform === 'win32' ? trimmed.replace(/\\/g, '/').toLowerCase() : trimmed;
+  };
+  return fold(left) === fold(right);
+}

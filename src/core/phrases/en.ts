@@ -107,7 +107,7 @@ export const en: Phrases = {
       'This project declares commands, and install, lint, test and build would all be ' +
       'refused, unapproved, in a non-interactive session. Grant the binaries those ' +
       `commands already name, e.g. runners.${runner}.args: ` +
-      "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)']",
+      "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)'] — on Windows declare each rule for PowerShell too, e.g. 'PowerShell(npm:*)': Claude Code runs commands with that tool there",
     nodeMissing: 'Node.js is missing from PATH',
     installNode: 'Install Node.js 20+ (https://nodejs.org or via fnm/nvm)',
     gitMissingOrOld: 'Git is missing or older than 2.38',
@@ -204,7 +204,8 @@ export const en: Phrases = {
     // The floor is the DASHBOARD's, not the product's: `engines.node` is `>=20` and CI
     // proves the installed CLI runs there. Saying "agent-flow needs 20.19" would be false
     // and would send someone upgrading a runtime that works.
-    belowNodeFloor: (floor) => `the dashboard needs ${floor} or newer; \`ui\` will refuse`,
+    belowNodeFloor: (floor) => `the dashboard needs ${floor} or newer, and no installed Node qualifies`,
+    dashboardRunsOn: (version) => `the dashboard runs on Node ${version}`,
     nodeNeedsVersion: (floor) => `\`ui\` needs ${floor} or newer`,
 
     authConfigured: 'configured',
@@ -213,19 +214,10 @@ export const en: Phrases = {
     authNotVerifiedShort: 'not verified (use --deep)',
     verdictOkWithNote: 'OK — nothing here blocks a run, but see the note above',
 
-    // Recorded onto a run, then read back verbatim by the Deck. A Portuguese dashboard
-    // showing `esta run está degradada:` followed by an English clause was the visible
-    // symptom of these two being literals rather than entries.
-    planReviewSameProvider:
-      'the plan review is same-provider: a wrong assumption made while planning may be ' +
-      'repeated rather than caught',
-    finalReviewSameProvider:
-      'the final review is same-provider: the model that wrote the code is also judging it',
-
     stageRoutingHeading: 'Stage routing (which runner serves what)',
     readsRepository: 'reads the repository',
-    textInTextOut: 'text in, text out',
-    stageOpensNoFile: 'this stage opens no file — an `openai-compatible` runner could serve it',
+    textInTextOut: 'works from the earlier documents',
+    stageOpensNoFile: 'does not require the repository — an `openai-compatible` runner could serve it, without checking anything in the code',
     configuredAndUnrouted: 'Configured and unrouted',
     noRolePointsAtIt: 'no role points at it',
     pointARoleAtOne: 'Point a role at one to use it; `doctor` reports only what a role resolves to.',
@@ -382,6 +374,8 @@ export const en: Phrases = {
     alreadyBeing: (runId, operation, owner, where, since) =>
       `${runId} is already being ${operation} by the ${owner} (${where}), since ${since}.`,
     waitForExecution: 'Wait for the active execution to finish.',
+    useSeparateWorktree:
+      'Wait for it to finish, or start the new feature in a separate worktree (`git worktree add`) so the two runs do not share a current run.',
     lockOnAnotherHost:
       'Agent Flow does not judge a lock from another machine. Stop the execution on that ' +
       'host, or — if that host is gone — remove the highest-numbered execution.lock.* file ' +
@@ -579,6 +573,8 @@ export const en: Phrases = {
     reviewOwnership: 'Review the ownership areas',
 
     planWaiting: 'the plan is waiting for a decision',
+    finalReviewWaiting: 'every task is done; the final review has not run',
+    runTheFinalReview: 'Run the final review',
     nothingRunsUntilGate: 'nothing runs until the gate opens',
     reviewThePlan: 'Review the plan',
     exhaustedRecovery: (task) => `${task} exhausted automatic recovery`,
@@ -625,13 +621,10 @@ export const en: Phrases = {
     readyAndNobodyTakes: (task) => `${task} is ready and nothing can take it`,
     everyMemberAtCapacity: 'every member whose skills match is at maxConcurrentTasks',
     openTheTeam: 'Open the team',
-    runIsDegraded: (kind) => `this run is degraded: ${kind}`,
-    reasonAndImpact: (reason, impact) => `${reason} — ${impact}`,
     finishedNothingPublished: 'this run has finished and nothing has been published',
     runForgePublish: 'Run `agent-flow forge publish`',
     checksPending: (pending) => `${String(pending)} remote checks have not reported`,
     checksAreObservation: 'remote checks are an observation and never a local verdict',
-    openTheRunSummary: 'Open the run summary',
   },
   pairing: {
     title: 'Pair Device',

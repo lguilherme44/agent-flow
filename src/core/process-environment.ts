@@ -163,6 +163,13 @@ export const PARENT_SESSION_NAMES: readonly string[] = [
   'CLAUDE_CODE_ENTRYPOINT',
   'CLAUDE_CODE_EXECPATH',
   'CLAUDE_PID',
+  // Measured inside a Claude Code 2.1.280 session, 23/09/2026: these describe the calling
+  // session — whether a person attends it, which SDK drives it, which of its features are
+  // on — not the credentials a spawned agent needs.
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_ENABLE_TASKS',
+  'CLAUDE_AGENT_SDK_VERSION',
+  'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
   'CODEX_SESSION_ID',
   'OPENCODE_SESSION_ID',
   'AGY_SESSION_ID',

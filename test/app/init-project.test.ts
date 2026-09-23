@@ -209,14 +209,31 @@ describe('AGENTS.md is appended to, never replaced (§37)', () => {
  * until its timeout killed it.
  */
 describe('instruction files agent-flow does not read', () => {
-  it('names a CLAUDE.md that says something AGENTS.md does not', async () => {
-    const fs = seeded({ ...nodeRepo, 'CLAUDE.md': '# Rules\n\nUse the codegraph index first.\n' });
+  it('names a CLAUDE.md that says something a person-written AGENTS.md does not', async () => {
+    // The case the warning still exists for: the repository chose an AGENTS.md, so that is
+    // what stages receive, and a diverging CLAUDE.md beside it really is unread.
+    const fs = seeded({
+      ...nodeRepo,
+      'AGENTS.md': '# Rules\n\n- services never import routes.\n',
+      'CLAUDE.md': '# Rules\n\nUse the codegraph index first.\n',
+    });
     const result = await initProject({ fs, projectDir: PROJECT });
 
     expect(result.warnings).toContainEqual({
       kind: 'instructions_unread',
       paths: ['CLAUDE.md'],
     });
+  });
+
+  it('says CLAUDE.md is what stages read when AGENTS.md is only the scaffold it just wrote', async () => {
+    // Measured on a Python service: this used to warn "CLAUDE.md is never read" — true then,
+    // and the repository's 227 lines of rules were invisible. Now it is read in the
+    // scaffold's place, and the operator is told so instead of being told the opposite.
+    const fs = seeded({ ...nodeRepo, 'CLAUDE.md': '# Rules\n\nUse the codegraph index first.\n' });
+    const result = await initProject({ fs, projectDir: PROJECT });
+
+    expect(result.warnings.map((warning) => warning.kind)).not.toContain('instructions_unread');
+    expect(result.warnings).toContainEqual({ kind: 'instructions_fallback', path: 'CLAUDE.md' });
   });
 
   it('says nothing about a mirror that agrees', async () => {
@@ -247,6 +264,7 @@ describe('instruction files agent-flow does not read', () => {
   it('names every unread file, in one warning', async () => {
     const fs = seeded({
       ...nodeRepo,
+      'AGENTS.md': '# Rules of our own\n',
       'CLAUDE.md': '# One\n',
       'GEMINI.md': '# Two\n',
     });

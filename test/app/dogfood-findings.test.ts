@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FakeHost } from '../fakes/fake-host.js';
-import { sharedReviewProvider } from '../../src/core/independence.js';
 import { getCeremonyBudget } from '../../src/core/adaptive-workflow.js';
 import { isThrowawayWorkspace } from '../../src/core/worktree-policy.js';
 import { reclaimStrayWorkspaces } from '../../src/app/namespace-reclaim.js';
-import { GlobalConfigSchema } from '../../src/contracts/index.js';
 
 /**
  * The five findings of the 10/09/2026 dogfood, each with the thing that would fail again.
@@ -21,63 +19,8 @@ import { GlobalConfigSchema } from '../../src/contracts/index.js';
  * the folds and the sweep.
  */
 
-const ROLES = (planner: string, reviewer: string) =>
-  GlobalConfigSchema.parse({
-    runners: {
-      agy: { type: 'agy-cli' },
-      claude: { type: 'claude-code-cli' },
-    },
-    roles: {
-      architect: { runner: 'agy', effort: 'high' },
-      sdd: { runner: 'agy', effort: 'high' },
-      planner: { runner: planner, effort: 'high' },
-      planReviewer: { runner: reviewer, effort: 'high' },
-      executors: {
-        trivial: { runner: 'agy', effort: 'low' },
-        normal: { runner: 'agy', effort: 'medium' },
-        complex: { runner: 'agy', effort: 'high' },
-      },
-      verification: { runner: 'agy', effort: 'medium' },
-      finalReviewer: { runner: reviewer, effort: 'very_high' },
-    },
-  }).roles;
-
-const PROVIDERS: Record<string, string> = { agy: 'agy-cli', claude: 'claude-code-cli' };
-const providerOf = (id: string): string | undefined => PROVIDERS[id];
-
-describe('D2 — the high-risk review pair is judged from configuration alone', () => {
-  it('names the shared provider when planner and reviewer collide', () => {
-    // The measured case: `AF-2026-001` was created, refused 2.2 s later, and left in the
-    // history with no plan. Both facts were knowable before anything existed.
-    expect(
-      sharedReviewProvider({ plannerRunner: 'agy', reviewerRunner: 'agy', providerOf }),
-    ).toBe('agy-cli');
-  });
-
-  it('is satisfied by two providers', () => {
-    expect(
-      sharedReviewProvider({ plannerRunner: 'agy', reviewerRunner: 'claude', providerOf }),
-    ).toBeUndefined();
-  });
-
-  it('does not refuse what it cannot judge', () => {
-    // A runner whose provider does not resolve is a misconfiguration the registry reports
-    // with a better sentence. Turning undecidable into a refusal would make this function
-    // the thing that explains an unrelated problem, badly.
-    expect(
-      sharedReviewProvider({ plannerRunner: 'agy', reviewerRunner: 'ghost', providerOf }),
-    ).toBeUndefined();
-  });
-
-  it('reads the configured roles, so a fixed pair is not what makes it pass', () => {
-    // The positive control: the same function over the same providers answers differently
-    // when the *configuration* differs, which is what proves it reads it at all.
-    const same = ROLES('agy', 'agy');
-    const split = ROLES('agy', 'claude');
-    expect(same.planner.runner).toBe(same.planReviewer.runner);
-    expect(split.planner.runner).not.toBe(split.planReviewer.runner);
-  });
-});
+// D2 (the high-risk review pair refused on one provider) was withdrawn on 23/09/2026:
+// one provider is a choice, and HIGH-RISK no longer refuses it. See planning-pipeline.test.ts.
 
 describe('D3 — every workflow class enforces the task bound it declares', () => {
   it('declares a bound for all four classes', () => {

@@ -76,6 +76,12 @@ export interface ToolCheck {
   readonly floor?: string;
   /** Information, never a gate — M2-03 owns turning this into a refusal. */
   readonly belowFloor?: boolean;
+  /**
+   * Node only, and only below the floor: the version `agent-flow ui` runs on instead,
+   * because it re-runs itself under a newer Node it finds. Absent when none qualifies —
+   * which is the one case `belowFloor` is a real problem.
+   */
+  readonly dashboardNode?: string;
 }
 
 /**
@@ -295,6 +301,11 @@ export interface DiagnoseOptions {
   /** Runs a real prompt against each runner. Opt-in: it consumes quota. */
   readonly deep?: boolean;
   /**
+   * The Node the dashboard would run on, asked only when the PATH one is below the floor.
+   * The CLI answers with what `agent-flow ui` would pick; the server with its own runtime.
+   */
+  readonly dashboardNode?: () => string | undefined;
+  /**
    * Runs the §8.4 install probe. Opt-out, because a terminal should keep doing it.
    *
    * The two opt-ins here cost different things and are therefore separate. `deep` spends
@@ -341,7 +352,9 @@ export interface DiagnoseOptions {
 export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
   const { fs, processRunner, host, config, projectDir, promptsDir } = options;
 
-  const node = await checkTool(processRunner, projectDir, 'node', ['--version']);
+  const pathNode = await checkTool(processRunner, projectDir, 'node', ['--version']);
+  const dashboardNode = pathNode.belowFloor === true ? options.dashboardNode?.() : undefined;
+  const node: ToolCheck = dashboardNode === undefined ? pathNode : { ...pathNode, dashboardNode };
   // Through the wrapper, not through `checkTool`. `git --version` runs no hooks and could
   // not have hurt anything, but "only one module spawns git" (§26.1 rule 1) is worth
   // exactly as much as its least-defended exception, and a probe is the easiest place for
@@ -451,7 +464,11 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
 
       const runnerConfig = config.global.runners[roleConfig.runner];
       if (runnerConfig?.type !== 'claude-code-cli') continue;
-      if (runnerConfig.args.includes('--allowedTools')) continue;
+      // The adapter's answer, the one the executor's preflight reads. Checking the args here
+      // for `--allowedTools` gave a second answer: a Windows grant naming only `Bash(...)`
+      // silenced this note while the preflight warned, and `--allowed-tools` the reverse.
+      const grants = capabilitiesOf(registry.capabilities(), roleConfig.runner, roleConfig.model)?.nonInteractiveToolGrants;
+      if (grants?.commandExecution === true) continue;
       if (runnerConfig.dangerouslySkipPermissions) continue;
 
       grantless.add(roleConfig.runner);
@@ -579,11 +596,13 @@ export function rolesThatCannotRun(
 /**
  * One row per stage: what serves it, and whether that is more than it needs.
  *
- * Concretely: `architect` serves `discovery`, which reads the repository, and
- * `architecture-impact`, which reads nothing. Because runner is chosen per role, the first
- * forces the second onto a coding CLI. Measured on one run, that put 22 kB of context
- * through a frontier CLI that an inference endpoint would have absorbed at no quota cost —
- * and nothing in `doctor` said so.
+ * The finding is a cost with a price, not a free saving. A stage whose prompt does not
+ * require the repository still gets a read-only checkout on a coding CLI, and uses it:
+ * measured 23/09/2026 on a Node monorepo, `architecture-impact` — then declared as
+ * reading nothing — was the stage that found the facts that changed the plan, by reading
+ * code. It and `sdd` now declare `workingDirectory: true`, because both confirm the
+ * request against the repository. What is left flagged works from the earlier documents,
+ * and the sentence says what moving it to an endpoint gives up.
  */
 export async function describeStageRouting(options: {
   readonly config: GlobalConfig;

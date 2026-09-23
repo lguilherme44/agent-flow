@@ -127,6 +127,15 @@ describe('A7 — status distinguishes running from not started', () => {
     expect(sdd).toContain('…');
   });
 
+  it('says a skipped discovery was skipped, not pending', () => {
+    // A grounded run (23/09/2026) printed `Discovery ·`, the mark of a stage not begun,
+    // for a stage that was deliberately never going to run.
+    const lines = renderPlanningProgress(['architecture-impact'], 'sdd', 'running', ['architecture-impact', 'sdd'], [], new Map(), ['discovery']);
+    const discovery = lines.find((line) => line.includes('Discovery'));
+    expect(discovery).toContain('skipped');
+    expect(discovery).not.toContain('·');
+  });
+
   it('leaves a stage that has not begun as pending', () => {
     const lines = renderPlanningProgress(['discovery'], 'sdd', 'running', ['discovery', 'sdd']);
     const planReview = lines.find((line) => line.includes('Plan Review'));

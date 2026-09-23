@@ -167,9 +167,11 @@ function renderCorrectiveRound(round: CorrectiveRound): string {
     'was approved. The corrected plan was reviewed in its own right:',
     '',
     `  Plan review: ${round.review.verdict}`,
-    round.review.independence === 'cross-provider'
-      ? '  reviewed by a different provider from the planner and the reviewer'
-      : '  ⚠ same-provider review — no protection against a repeated assumption',
+    // One provider is the operator's choice (23/09/2026): said when it is not the case,
+    // never warned about when it is.
+    ...(round.review.independence === 'cross-provider'
+      ? ['  reviewed by a different provider from the planner and the reviewer']
+      : []),
   ];
 
   for (const finding of round.review.findings) {
@@ -230,11 +232,9 @@ function renderReview(
   }
 
   lines.push('', `Final review (model, advisory): ${finalReview.verdict}`);
-  lines.push(
-    finalReview.independence === 'cross-provider'
-      ? '  reviewed by a different provider from the implementer'
-      : '  ⚠ same-provider review — the model that wrote the code is judging it',
-  );
+  if (finalReview.independence === 'cross-provider') {
+    lines.push('  reviewed by a different provider from the implementer');
+  }
   for (const finding of finalReview.findings) {
     lines.push(`  [${finding.severity}] ${finding.description}`);
     lines.push(`      → ${finding.suggestedAction}`);

@@ -33,6 +33,16 @@ export interface ProcessSpawnOptions {
    */
   readonly unsetEnv?: readonly string[];
   /**
+   * Windows only: hand `args` to the child exactly as written, with no MSVCRT quoting.
+   *
+   * For `cmd.exe /d /s /c "<command line>"` and nothing else. A command line is already
+   * shell syntax; escaping it again as argv turns every inner `"` into `\"`, which `cmd`
+   * does not undo — measured, `docker run -v "%CD%\server:/src:ro"` from a project's `test`
+   * command died with "too many colons". This is what Node's own `shell: true` does.
+   * Ignored on POSIX.
+   */
+  readonly verbatimArguments?: boolean;
+  /**
    * How much of the parent environment the child inherits (PRI-17).
    *
    * **Defaults to `allowlist`**, which is the change: a coding CLI used to receive

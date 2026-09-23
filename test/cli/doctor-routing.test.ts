@@ -61,15 +61,28 @@ describe('stage routing is reported by stage, not only by role', () => {
     const find = (stage: string) => lines.find((l) => l.trimStart().startsWith(stage));
     expect(find('discovery')).toContain('reads the repository');
     expect(find('implementation')).toContain('reads the repository');
-    expect(find('sdd')).toContain('text in, text out');
+    expect(find('planning')).toContain('works from the earlier documents');
   });
 
-  it('flags a text-only stage served by a process-spawning runner', async () => {
-    // `architecture-impact` opens no file and rides on `architect`, which
-    // `discovery` forces onto a CLI. That is the whole finding.
+  it('counts architecture-impact and sdd as reading the repository, because they confirm the request in it', async () => {
+    // Measured 23/09/2026 on a Node monorepo: the facts that changed the plan —
+    // a pricing helper named as the reference has no caller, the search index consumes the same pricing —
+    // came from `architecture-impact` reading code, not from the discovery map. Reported
+    // as "text in, text out", with a lighter runner suggested, the one stage that caught
+    // them was the one `doctor` invited the operator to blind.
     const lines = await routingLines();
-    const at = lines.findIndex((l) => l.trimStart().startsWith('architecture-impact'));
+    for (const stage of ['architecture-impact', 'sdd']) {
+      const at = lines.findIndex((l) => l.trimStart().startsWith(stage));
+      expect(lines[at], stage).toContain('reads the repository');
+      expect(lines[at + 1] ?? '', stage).not.toContain('could serve it');
+    }
+  });
+
+  it('flags a stage that needs no file served by a process-spawning runner, and says what it would lose', async () => {
+    const lines = await routingLines();
+    const at = lines.findIndex((l) => l.trimStart().startsWith('planning'));
     expect(lines[at + 1]).toContain('openai-compatible');
+    expect(lines[at + 1]).toContain('without checking anything in the code');
   });
 
   it('does not flag a stage that genuinely reads files', async () => {
@@ -83,11 +96,11 @@ describe('stage routing is reported by stage, not only by role', () => {
       config({
         roles: {
           ...config().roles,
-          sdd: { runner: 'local', effort: 'high', timeoutSeconds: 900 },
+          planner: { runner: 'local', effort: 'high', timeoutSeconds: 900 },
         },
       }),
     );
-    const at = onLocal.findIndex((l) => l.trimStart().startsWith('sdd'));
+    const at = onLocal.findIndex((l) => l.trimStart().startsWith('planning'));
     expect(onLocal[at + 1] ?? '').not.toContain('could serve it');
   });
 });
@@ -97,11 +110,12 @@ describe('the finding is decided once, where both surfaces can read it', () => {
     // The reason the split exists: `GET /api/v1/doctor` renders nothing, so a finding
     // that lived only in a rendered line would be invisible to the Deck.
     const rows = await describeStageRouting({ config: config(), promptsDir, fs });
-    const impact = rows.find((row) => row.stage === 'architecture-impact');
+    const planning = rows.find((row) => row.stage === 'planning');
 
-    expect(impact?.overpowered).toBe(true);
-    expect(impact?.readsRepository).toBe(false);
-    expect(impact?.runner).toBe('claude');
+    expect(planning?.overpowered).toBe(true);
+    expect(planning?.readsRepository).toBe(false);
+    expect(planning?.runner).toBe('claude');
+    expect(rows.find((row) => row.stage === 'architecture-impact')).toMatchObject({ readsRepository: true, overpowered: false });
     expect(rows.find((row) => row.stage === 'discovery')?.overpowered).toBe(false);
   });
 

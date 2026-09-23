@@ -27,9 +27,9 @@ const CAPS = {
   nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
 } as const;
 
-function config(reviewerRunner: string, plannerRunner = 'claude') {
+function config(reviewerRunner: string, plannerRunner = 'claude', codexEnabled = true) {
   return GlobalConfigSchema.parse({
-    runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+    runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli', enabled: codexEnabled } },
     roles: {
       architect: { runner: 'claude', effort: 'high' },
       sdd: { runner: 'claude', effort: 'high' },
@@ -65,7 +65,7 @@ const goodPlan = {
   ],
 };
 
-async function harness(reviewerRunner: string) {
+async function harness(reviewerRunner: string, options: { codexEnabled?: boolean } = {}) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const processRunner = new FakeProcessRunner().always({ exitCode: 1 });
@@ -76,7 +76,7 @@ async function harness(reviewerRunner: string) {
     }
   }
 
-  const global = config(reviewerRunner);
+  const global = config(reviewerRunner, 'claude', options.codexEnabled ?? true);
   const store = new StateStore({ fs, clock, projectDir: PROJECT });
   const run = await store.createRun('f');
 
@@ -162,7 +162,7 @@ describe('independence follows execution, not configuration', () => {
     expect(review.reviewer.runner).toBe('claude');
   });
 
-  it('records the loss of independence on the run, naming both sides', async () => {
+  it('adds no same-provider warning on top of a fallback', async () => {
     const { pipeline, run, runners, store } = await harness('codex');
     runners.claude.pushJson(goodPlan);
     runners.codex.push({
@@ -180,10 +180,10 @@ describe('independence follows execution, not configuration', () => {
 
     await pipeline.run(run.runId, 'f', { from: 'planning' });
 
+    // A substituted runner is a lost capability, and the runner registry records it as
+    // `runner_unavailable_with_fallback` on its own. The review adds nothing on top.
     const state = await store.loadRun(run.runId);
-    const degradation = state.degradations.find((d) => d.kind === 'single_provider');
-    expect(degradation?.reason).toContain('claude');
-    expect(degradation?.reason).toContain('claude-code-cli');
+    expect(state.degradations.map((d) => d.kind)).not.toContain('single_provider');
   });
 });
 
@@ -241,19 +241,33 @@ describe('cross-provider review', () => {
 });
 
 describe('degraded review', () => {
-  it('records a degradation when the reviewer shares the planner runner', async () => {
-    // The whole risk of tolerating one provider: reviews stop being independent
-    // and nothing says so unless it is written down (RK-12).
+  it('records no degradation when there was no second provider to review with', async () => {
+    // Measured on AF-2026-001 (a Python service, 23/09/2026), every role on claude and nothing
+    // else enabled: every run carried `single_provider`, and the Deck raised it as a P3 that
+    // "needs you" on every project — for a choice the owner cannot make. `core/health.ts`
+    // already draws this line (a lost capability is a second provider that was ENABLED); the
+    // review now draws the same one. The artifact still says what happened.
+    const { pipeline, run, runners, store, fs } = await harness('claude', { codexEnabled: false });
+    runners.claude.pushJson(goodPlan).pushJson({ verdict: 'PASS', findings: [] });
+
+    await pipeline.run(run.runId, 'f', { from: 'planning' });
+
+    const state = await store.loadRun(run.runId);
+    expect(state.degradations.map((d) => d.kind)).not.toContain('single_provider');
+    const review = ReviewResultSchema.parse(JSON.parse(await fs.readFile(runPaths(PROJECT, run.runId).planReview)));
+    expect(review.independence).toBe('same-provider-fresh-context');
+  });
+
+  it('records no warning when the reviewer is routed to the planner provider, second provider or not', async () => {
+    // Routing the reviewer to the planner provider is the operator choosing it; the
+    // artifact says `same-provider-fresh-context` and that is the whole of the record.
     const { pipeline, run, runners, store } = await harness('claude');
     runners.claude.pushJson(goodPlan).pushJson({ verdict: 'PASS', findings: [] });
 
     await pipeline.run(run.runId, 'f', { from: 'planning' });
 
     const state = await store.loadRun(run.runId);
-    const degradation = state.degradations.find((d) => d.kind === 'single_provider');
-
-    expect(degradation).toBeDefined();
-    expect(degradation?.impact).toMatch(/repeated rather than caught/i);
+    expect(state.degradations).toEqual([]);
   });
 
   it('marks the artifact as same-provider', async () => {

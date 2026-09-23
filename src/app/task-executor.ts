@@ -1176,7 +1176,10 @@ export interface ParsedReport {
 export function parseResultBlock(text: string): ParsedReport {
   const block = RESULT_BLOCK.exec(text)?.[1] ?? text;
 
-  const status = /STATUS:\s*BLOCKED/i.test(block) ? 'BLOCKED' : 'COMPLETED';
+  // The Portuguese word too: under `language: pt-BR` a model may translate the label, and
+  // reading `STATUS: BLOQUEADO` as COMPLETED recorded a stopped task as done — the one
+  // outcome this parser exists to be strict about. Erring toward BLOCKED costs a look.
+  const status = /STATUS:\s*(BLOCKED|BLOQUEAD[OA])/i.test(block) ? 'BLOCKED' : 'COMPLETED';
 
   const section = (name: string): string[] => {
     const pattern = new RegExp(`${name}:\\s*\\n([\\s\\S]*?)(?=\\n[A-Z][A-Z ]+:|$)`, 'i');

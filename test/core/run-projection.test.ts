@@ -437,6 +437,28 @@ describe('runtime status overrides a persisted status that has moved on', () => 
 
     expect(projection.status).toBe('blocked_on_human');
     expect(projection.gate?.gate).toBe('final_acceptance');
+    expect(projection.reviewInProgress).toBeUndefined();
+  });
+
+  it('says the review is running from its first moment until a stage of it fails', () => {
+    // `stage_started {verification}` comes after workspace preparation and every
+    // mechanical command; `run_review_started` is written before them. A failed stage
+    // ends the review and hands the run back to a person; new work needs a new review.
+    const at = (type: string, minute: number, detail: Record<string, unknown> = {}): RunEvent =>
+      RunEventSchema.parse({ at: `2026-09-23T10:${String(minute).padStart(2, '0')}:00.000Z`, type, detail });
+    const reviewing = (events: RunEvent[]) => projectRun({
+      state: state({ stage: 'implementation', tasks: [task('TASK-001', 'completed')] }),
+      nodes: [{ id: 'TASK-001', dependencies: [] }],
+      events,
+    }).reviewInProgress;
+
+    const finished = at('task_finished', 0, { task: 'TASK-001' });
+    const started = at('run_review_started', 1);
+    expect(reviewing([finished])).toBeUndefined();
+    expect(reviewing([finished, started])).toBe(true);
+    expect(reviewing([finished, started, at('stage_started', 5, { stage: 'final-review' })])).toBe(true);
+    expect(reviewing([finished, started, at('stage_failed', 6, { stage: 'verification' })])).toBeUndefined();
+    expect(reviewing([finished, started, at('task_finished', 9, { task: 'FIX-001' })])).toBeUndefined();
   });
 
   it('reports the agent-blocked gate distinctly from a review gate', () => {

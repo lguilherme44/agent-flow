@@ -166,7 +166,6 @@ export function assessHealth(
     });
   }
 
-
   const status: HealthStatus =
     orphanRoles.length > 0 || usable.size === 0
       ? 'FAIL'
@@ -283,3 +282,4 @@ export function referencedRunners(config: GlobalConfig): string[] {
   for (const roleConfig of Object.values(config.fallback.roles)) seen.add(roleConfig.runner);
   return [...seen];
 }
+

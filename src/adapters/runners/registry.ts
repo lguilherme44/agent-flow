@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   ALL_WORKFLOW_ROLES,
   roleConfigOf,
@@ -93,6 +95,10 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       // `RunnerConfig.args` (§7): the seam for what this schema does not model,
       // most concretely pointing a coding CLI at another inference endpoint.
       extraArgs: config.args,
+      // The account's model picker, cached by the CLI itself — see `listModels`. The CLI
+      // honours `CLAUDE_CONFIG_DIR` for where that cache lives, so this does too.
+      fs: deps.fs,
+      modelCatalogDir: join(deps.env?.('CLAUDE_CONFIG_DIR') ?? join(homedir(), '.claude'), 'cache', 'model-catalog'),
     }),
 
   'codex-cli': (id, config, deps, policy) =>
@@ -127,9 +133,10 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
    * any OpenAI-compatible host.
    *
    * It cannot write and has no working directory, and it declares both. That is what lets
-   * it serve the nine shipped prompts which carry their whole input — `sdd`, `planning`,
-   * the reviews, `verification` — while the resolver refuses it for `discovery` and
-   * `implementation`, which read and write the repository.
+   * it serve the five shipped prompts which carry their whole input — `planning` and the plan
+   * reviews — while the resolver refuses it for the eight that read or write the repository
+   * (`discovery`, `architecture-impact`, `sdd`, `implementation`, `verification`,
+   * `final-review`, `code-review`, `e2e`).
    *
    * The key comes from the environment, never from the config file (§7.1).
    */

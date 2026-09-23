@@ -26,10 +26,24 @@ function promptsNeedingWorkingDirectory(): string[] {
 }
 
 describe('the prompts that need a filesystem', () => {
-  it('are exactly the three the openai-runner refuses to serve', () => {
+  it('are exactly the ones the openai-runner refuses to serve', () => {
     // Change this list only together with the comment in
     // `src/adapters/runners/openai-runner.ts` and the README's count.
-    expect(promptsNeedingWorkingDirectory()).toEqual(['code-review', 'discovery', 'e2e', 'implementation']);
+    // `architecture-impact` and `sdd` joined on 23/09/2026: both confirm the request against
+    // the code, and on a real run the impact stage found, by reading code, the facts that
+    // changed the plan. On an endpoint they would silently plan from the documents alone.
+    // `verification` and `final-review` followed the same day: both tell the model to read the
+    // changed files, and `changedFiles` carries only their paths.
+    expect(promptsNeedingWorkingDirectory()).toEqual([
+      'architecture-impact',
+      'code-review',
+      'discovery',
+      'e2e',
+      'final-review',
+      'implementation',
+      'sdd',
+      'verification',
+    ]);
   });
 
   it('are named in the adapter that turns them away', () => {
@@ -42,8 +56,8 @@ describe('the prompts that need a filesystem', () => {
     }
   });
 
-  it('leaves the rest servable by an endpoint, and there are nine of them', () => {
+  it('leaves the rest servable by an endpoint, and there are five of them', () => {
     const all = readdirSync(promptsDir).filter((f) => f.endsWith('.md'));
-    expect(all.length - promptsNeedingWorkingDirectory().length).toBe(9);
+    expect(all.length - promptsNeedingWorkingDirectory().length).toBe(5);
   });
 });

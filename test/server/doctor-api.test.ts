@@ -122,10 +122,10 @@ describe('GET /api/v1/doctor', () => {
     const { server } = await serve();
 
     const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
-    const impact = view.stageRouting.find((row) => row.stage === 'architecture-impact');
+    const planning = view.stageRouting.find((row) => row.stage === 'planning');
     const discovery = view.stageRouting.find((row) => row.stage === 'discovery');
 
-    expect(impact).toMatchObject({ runner: 'claude', readsRepository: false, overpowered: true });
+    expect(planning).toMatchObject({ runner: 'claude', readsRepository: false, overpowered: true });
     expect(discovery).toMatchObject({ readsRepository: true, overpowered: false });
   });
 

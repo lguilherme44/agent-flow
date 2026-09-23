@@ -223,3 +223,18 @@ describe('shipped default config', () => {
     expect(enabled.map(([id]) => id)).toEqual(['claude']);
   });
 });
+
+describe('loadConfig run from the home directory', () => {
+  it('does not read the global configuration a second time as a project file', async () => {
+    // `~/.agent-flow/config.yaml` is both the global file and, from the home directory, the
+    // project path. Measured: `agent-flow config list --global` typed in home failed with
+    // "project: expected object" — the global file validated against the project schema.
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'runners:\n  claude:\n    enabled: true\n');
+
+    const config = await loadConfig({ fs, globalConfigPath: GLOBAL_PATH, projectDir: '/home/u' });
+
+    expect(config.project).toBeUndefined();
+    expect(config.global.runners.claude?.enabled).toBe(true);
+  });
+});

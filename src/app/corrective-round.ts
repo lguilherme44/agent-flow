@@ -1,4 +1,3 @@
-import type { Phrases } from '../core/phrases/index.js';
 import { recordCorrectiveRound } from './autonomy-budget.js';
 import { repairCorrectivePlan } from '../core/corrective-plan-repair.js';
 import { decideCorrectivePlanRepair } from '../core/recovery-policy.js';
@@ -23,8 +22,6 @@ export interface CorrectiveRoundOptions {
   readonly store: StateStore;
   readonly stageRunner: StageRunner;
   readonly providerOf: ProviderOf;
-  /** The reader's book, for any degradation this round records. English when absent. */
-  readonly say?: Phrases;
   readonly runId: string;
   readonly plan: Plan;
   /** The review whose findings become work. */
@@ -227,7 +224,6 @@ export async function runCorrectiveRound(
     store,
     stageRunner: options.stageRunner,
     providerOf: options.providerOf,
-    ...(options.say === undefined ? {} : { say: options.say }),
   });
 
   const review = await service.review({

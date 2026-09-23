@@ -133,6 +133,13 @@ export interface RunProjection {
    * `plan_rejected` stayed on screen while revision 2 was already running.
    */
   readonly reviewFreshness: 'current' | 'superseded' | 'absent';
+  /**
+   * `review` is running for the work as it stands: started after the last task finished,
+   * and neither of its stages has failed since. The `final_acceptance` gate stays up for
+   * the whole review, so without this the run read as waiting for a person to start the
+   * review it was already doing. Absent when false.
+   */
+  readonly reviewInProgress?: true;
   /** Present exactly when the status is `auto_recovery_exhausted` (C-22). */
   readonly escalation?: RuntimeEscalation;
 }

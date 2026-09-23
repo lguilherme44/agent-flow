@@ -193,6 +193,16 @@ describe('parseResultBlock', () => {
     expect(parseResultBlock('STATUS: BLOCKED — need a decision').status).toBe('BLOCKED');
   });
 
+  it('finds BLOCKED when the agent translated the word, because the run speaks pt-BR', () => {
+    // `language: pt-BR` asks every stage to write in Portuguese, and the prescribed label is a
+    // word a model will happily translate. `STATUS: BLOQUEADO` used to parse as COMPLETED —
+    // a task that stopped for a missing decision recorded as done, the one outcome this
+    // parser is strict about. Found by reading the parser against the language instruction.
+    expect(parseResultBlock('## RESULT\n\nSTATUS: BLOQUEADO\n\nNOTES:\n- Falta decisão.\n').status).toBe('BLOCKED');
+    expect(parseResultBlock('STATUS: bloqueada — falta uma decisão').status).toBe('BLOCKED');
+    expect(parseResultBlock('STATUS: CONCLUÍDO').status).toBe('COMPLETED');
+  });
+
   it('drops "none" placeholders', () => {
     const report = parseResultBlock('## RESULT\nSTATUS: COMPLETED\nDEVIATIONS:\n- none\n');
     expect(report.deviations).toEqual([]);
@@ -266,7 +276,8 @@ describe('validation is run by agent-flow, not reported by the agent (§42)', ()
     // where it lands — and `[1]` is `/s` on Windows. The same correction
     // `verification-commands.test.ts` already carries; this was the copy that did not.
     expect(proc.calls).toHaveLength(1);
-    expect(proc.lastCall?.args.at(-1)).toBe('npm test -- recurrence');
+    // Unwrapped: on Windows the line travels inside one pair of quotes `cmd /s` strips.
+    expect(proc.lastCall?.args.at(-1)?.replace(/^"(.*)"$/, '$1')).toBe('npm test -- recurrence');
   });
 
   it('sends a task to review when its validation fails', async () => {

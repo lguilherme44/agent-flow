@@ -1,3 +1,4 @@
+import { featureTitle } from '../contracts/feature-title.js';
 import { PlanSchema, ReviewResultSchema, type RunState } from '../contracts/index.js';
 import { planningResume } from '../core/resume.js';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
@@ -185,6 +186,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         reusedStages,
         contextBytes,
         replan === undefined ? undefined : describeReplanReport(replan),
+        stagesOf('stage_skipped'),
       )}\n`,
     );
 
@@ -265,10 +267,13 @@ export function renderPlanningProgress(
    * inert — it needs a `contextWindow` no runner declares.
    */
   contextBytes: ReadonlyMap<string, number> = new Map(),
+  /** Stages deliberately not run: today only `discovery`, for a grounded request. */
+  skippedStages: readonly string[] = [],
 ): string[] {
   const done = new Set(completedStages);
   const begun = new Set(startedStages);
   const reused = new Set(reusedStages);
+  const skipped = new Set(skippedStages);
   const sized = (stage: string): string => {
     const bytes = contextBytes.get(stage);
     return bytes === undefined ? '' : `  ${(bytes / 1024).toFixed(1)} KB in`;
@@ -287,6 +292,7 @@ export function renderPlanningProgress(
     // answers "is this done", the suffix answers "did this run do it" — the same
     // split the dashboard makes with a solid marker in a different tone.
     if (reused.has(stage)) return `  ${label.padEnd(16)}✓ (cached)`;
+    if (skipped.has(stage)) return `  ${label.padEnd(16)}– skipped (grounded request)`;
 
     // `state.stage` lags behind the log, and the `…` was the casualty. Observed
     // on a real run: the field read `architecture-impact` while `stage_started`
@@ -401,16 +407,35 @@ export function render(
    * text, it never decides it.
    */
   replanNote?: string,
+  /**
+   * Stages with a `stage_skipped` event. Read from the log rather than from
+   * `state.grounded`: the flag is written when planning starts, before discovery has
+   * decided anything, so it printed "skipped" for a stage that had not been reached yet.
+   * (A cache hit was never affected: `✓ (cached)` is checked first.)
+   */
+  skippedStages: readonly string[] = [],
 ): string {
   const lines: string[] = [
-    `Feature: ${state.feature}`,
+    // The title: the whole request is in `request.md`, and printing 5 KB here pushed the
+    // part of `status` somebody reads — where the run is — off the screen.
+    `Feature: ${featureTitle(state.feature)}`,
     `Run: ${state.runId}`,
     '',
     'PLANNING',
     '',
   ];
 
-  lines.push(...renderPlanningProgress(completedStages, state.stage, state.status, startedStages, reusedStages, contextBytes));
+  lines.push(
+    ...renderPlanningProgress(
+      completedStages,
+      state.stage,
+      state.status,
+      startedStages,
+      reusedStages,
+      contextBytes,
+      skippedStages,
+    ),
+  );
 
   lines.push(`  ${'Approval'.padEnd(16)}${state.approved ? '✓' : '·'}`);
 
@@ -441,13 +466,11 @@ export function render(
 
   if (review !== null) {
     lines.push(`Plan review: ${review.verdict}`);
-    // Stated plainly rather than buried: a same-provider review is a weaker
-    // guarantee, and this is where someone decides whether to trust it.
-    lines.push(
-      review.independence === 'cross-provider'
-        ? '  reviewed by a different provider from the planner'
-        : '  ⚠ same-provider review — no protection against a repeated assumption',
-    );
+    // Said when a second provider reviewed it; one provider is the operator's choice
+    // and is not warned about (23/09/2026).
+    if (review.independence === 'cross-provider') {
+      lines.push('  reviewed by a different provider from the planner');
+    }
     if (review.findings.length > 0) {
       lines.push(`  ${String(review.findings.length)} finding(s)`);
       for (const finding of review.findings.slice(0, 5)) {

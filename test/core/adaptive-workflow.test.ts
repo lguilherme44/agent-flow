@@ -141,9 +141,8 @@ describe('Adaptive Workflow Classifier', () => {
    * producing a refusal on work that touches no data, no money and no identity.
    *
    * This matters more than a mis-labelled workflow: an explicit `--workflow standard` is
-   * REFUSED once a signal is detected, and HIGH-RISK requires a cross-provider review that
-   * a single-provider setup cannot supply. A false positive here is a repository that
-   * cannot be planned at all.
+   * overridden once a signal is detected, and HIGH-RISK refreshes discovery and demands the
+   * full ceremony. A false positive here is every run in that repository paying for both.
    */
   it('does not escalate on words that merely contain a signal, or on paths that merely contain one', () => {
     // `unselectable` contains `table`. Measured on a real request: a Flutter app whose
