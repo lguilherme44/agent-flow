@@ -41,7 +41,7 @@ export function CrewPage({ projectId }: { projectId?: string }) {
   return (
     <main className="page">
       <div className="page-head crew-head">
-        <div><span className="eyebrow">{t.nav.crew}</span><h1 className="page-head__title">{t.crew.title}</h1><p className="page-head__sub">{t.crew.resolvedAgainst(roles.data?.length ?? 9, health.data?.length, project.name)}{unresolved > 0 ? ` ${t.crew.unresolvedCount(unresolved)}` : ''}</p></div>
+        <div><span className="eyebrow">{t.nav.crew}</span><h1 className="page-head__title">{t.crew.title}</h1><p className="page-head__sub">{t.crew.resolvedAgainst(roles.data?.length ?? 9, health.data?.length)}{unresolved > 0 ? ` ${t.crew.unresolvedCount(unresolved)}` : ''}</p></div>
         <label className="crew-control">{t.common.project}<select className="input" value={project.id} onChange={(event) => setSelectedProject(event.target.value)}>{projects.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       </div>
       <div className="crew-scope" role="group" aria-label={t.crew.scopeAria}>
@@ -59,7 +59,7 @@ export function CrewPage({ projectId }: { projectId?: string }) {
           onPick={setConfigScope}
           title={t.crew.thisProject(project.name)}
           path={sources.data?.sources.projectPath}
-          note={t.crew.committedWithRepo}
+          note={t.crew.appliesToProject}
         />
       </div>
       <ConfigPanel key={`${configScope}/${project.id}`} scope={configScope} project={project} roles={roles} health={health} types={types} models={models} />
@@ -182,21 +182,24 @@ function ConfigPanel({ scope, project, roles, health, types, models }: {
   if (resource.loading || view === undefined) return <section className="section"><Skeleton rows={6} /></section>;
   return (
     <section className="section crew-editor" aria-labelledby="configuration-editor">
-      <div className="section__head"><div><h2 id="configuration-editor" className="eyebrow" style={{ margin: 0 }}>{t.crew.scopeSource(scope === 'global' ? t.crew.scopeGlobal : t.crew.scopeProject)}</h2><span className="section__count">{view.exists ? t.crew.sourcePresent : t.crew.sourceWillBeCreated} · {t.crew.revision(view.revision.slice(0, 18))}</span></div></div>
+      {/* The file's revision hash and "fonte existe" were bookkeeping for the save, printed
+          as a heading. Only the fact a person acts on stays: the file does not exist yet. */}
+      <h2 id="configuration-editor" className="visually-hidden">{t.crew.scopeSource(scope === 'global' ? t.crew.scopeGlobal : t.crew.scopeProject)}</h2>
+      {view.exists ? null : <div className="notice" data-tone="idle" role="status">{t.crew.sourceWillBeCreated}</div>}
       {scope === 'project' ? <div className="notice" data-tone="warn" role="status">{t.crew.savingTouchesTree}</div> : null}
-      {view.unknownKeys.length > 0 ? <div className="notice" data-tone="idle" role="status">{t.crew.unknownKeys(view.unknownKeys.length)}</div> : null}
       {message === undefined ? null : <div className="empty empty--error" role="alert">{message}</div>}
       {validation?.diagnostics.map((diagnostic) => <div key={`${diagnostic.code}/${pathLabel(diagnostic.path)}`} className="empty empty--error" role="alert"><strong>{pathLabel(diagnostic.path) || t.crew.configurationWord}:</strong> {diagnostic.message}</div>)}
       <div className="crew-tabs" role="tablist" aria-label={t.crew.areaAria}>
         <button type="button" role="tab" aria-selected={tab === 'crew'} onClick={() => setTab('crew')}>{t.nav.crew}</button>
         <button type="button" role="tab" aria-selected={tab === 'advanced'} onClick={() => setTab('advanced')}>
-          {t.crew.advanced} <span className="crew-tabs__count">{advancedFields.length}</span>
+          {t.crew.advanced}
         </button>
       </div>
       {tab === 'crew' ? <>
         <RunnerGrid view={view} roles={roles.data} health={health} types={types} models={models.data} operations={operations} onChange={updateField} onOperations={validate} />
         <RoutingEditor view={view} roles={roles} types={types.data} models={models.data} operations={operations} onChange={updateField} onOperations={validate} />
       </> : <>
+      {view.unknownKeys.length > 0 ? <div className="notice" data-tone="idle" role="status">{t.crew.unknownKeys(view.unknownKeys.length)}</div> : null}
       <div className="crew-filter">
         <span>{t.crew.fieldsSetHere(advancedFields.filter(({ explicitValue }) => explicitValue !== undefined).length, advancedFields.length)}</span>
         <label className="crew-filter__toggle"><input type="checkbox" checked={showInherited} onChange={(event) => setShowInherited(event.target.checked)} />{t.crew.showInherited}</label>

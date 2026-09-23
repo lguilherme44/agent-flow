@@ -30,7 +30,7 @@ export interface FieldControlProps {
   readonly options?: readonly string[];
   /**
    * Values worth offering that are not the only values allowed — model ids a runner
-   * reported, most concretely. Renders as a datalist beside a text box, so a model
+   * reported, most concretely. Renders as a list with a way out to type any other value, so a model
    * released this morning is still typeable this morning (AD-13).
    */
   readonly suggestions?: readonly string[];
@@ -116,45 +116,79 @@ function NumberControl({ id, field, raw, inherited, onChange }: FieldControlProp
   );
 }
 
-function TextControl({ id, field, raw, inherited, suggestions, onChange }: FieldControlProps) {
+function TextControl(props: FieldControlProps) {
+  const t = useT();
+  if ((props.suggestions ?? []).length > 0) return <SuggestedControl {...props} />;
+  const { id, field, raw, inherited, onChange } = props;
+  return (
+    <input
+      id={id}
+      type="text"
+      className="input mono"
+      value={raw}
+      disabled={!field.editable}
+      placeholder={inherited ? displayValue(t, field.effectiveValue) : undefined}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+const TYPE_ANOTHER = '__type_another__';
+
+/**
+ * A list of what the runner reported, and one way out of it to type anything else.
+ *
+ * It was a text box with a datalist *and* a select beside it, offering the same models
+ * twice (measured 23/09/2026). Neither alone did the job: a datalist only suggests what
+ * matches the text already there, so with `claude-opus-5-5` filled in, Fable was not on
+ * offer at all. A value the list does not know is still carried and still typeable, so a
+ * model released this morning works this morning (AD-13).
+ */
+function SuggestedControl({ id, field, raw, inherited, suggestions, onChange }: FieldControlProps) {
   const t = useT();
   const offered = suggestions ?? [];
+  const current = inherited ? '' : raw;
+  const [typing, setTyping] = useState(false);
+
+  if (typing) {
+    return (
+      <span className="field-text-with-suggestions">
+        <input
+          id={id}
+          type="text"
+          className="input mono"
+          value={raw}
+          autoFocus
+          disabled={!field.editable}
+          placeholder={inherited ? displayValue(t, field.effectiveValue) : undefined}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <button type="button" className="btn btn--ghost btn--sm" onClick={() => setTyping(false)}>
+          {t.crew.selectFromList}
+        </button>
+      </span>
+    );
+  }
+
+  const unknown = current !== '' && !offered.includes(current);
   return (
-    <div className="field-text-with-suggestions">
-      <input
-        id={id}
-        type="text"
-        className="input mono"
-        value={raw}
-        disabled={!field.editable}
-        placeholder={inherited ? displayValue(t, field.effectiveValue) : undefined}
-        {...(offered.length === 0 ? {} : { list: `${id}-suggestions` })}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      {offered.length === 0 ? null : (
-        <>
-          <datalist id={`${id}-suggestions`}>
-            {offered.map((value) => <option key={value} value={value} />)}
-          </datalist>
-          <select
-            className="input mono field-suggestions-select"
-            aria-label={`${t.crew.chooseModel} (${field.path.join('.')})`}
-            value=""
-            disabled={!field.editable}
-            onChange={(event) => {
-              if (event.target.value) {
-                onChange(event.target.value);
-              }
-            }}
-          >
-            <option value="">{t.crew.chooseModel}</option>
-            {offered.map((value) => (
-              <option key={value} value={value}>{value}</option>
-            ))}
-          </select>
-        </>
-      )}
-    </div>
+    <select
+      id={id}
+      className="input mono"
+      value={current}
+      disabled={!field.editable}
+      onChange={(event) => {
+        const value = event.target.value;
+        if (value === TYPE_ANOTHER) setTyping(true);
+        else if (value === '') onChange('', true);
+        else onChange(value);
+      }}
+    >
+      <option value="">{inherited ? t.crew.inheritValue(displayValue(t, field.effectiveValue)) : t.crew.inherit}</option>
+      {unknown ? <option value={current}>{current}</option> : null}
+      {offered.map((value) => <option key={value} value={value}>{value}</option>)}
+      <option value={TYPE_ANOTHER}>{t.crew.typeCustomModel}</option>
+    </select>
   );
 }
 

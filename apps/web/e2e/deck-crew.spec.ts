@@ -134,20 +134,20 @@ test.describe('Deck active crew configuration', () => {
     const world = await makeWorld({ dashboard: 'deck', plan: false });
     await openCrew(page, world.url);
 
-    // `architect` routes to `claude`, so the ids offered are the ones that runner reports.
+    // `architect` routes to `claude`, so the ids offered are the ones that runner reports —
+    // once, in one list: it used to be a text box and a select offering the same models.
     const model = page.getByLabel('roles.architect.model');
-    const listId = await model.getAttribute('list');
-    expect(listId, 'the model field offers no suggestions').not.toBeNull();
-    // Attribute selector, not `#id`: the id is `route-roles.architect.model-suggestions`
-    // and CSS would read every dot in it as a class.
-    expect(await page.locator(`datalist[id="${String(listId)}"] option`).evaluateAll((options) =>
-      options.map((option) => option.getAttribute('value')))).toEqual(['opus', 'sonnet', 'haiku']);
+    const offered = await model.locator('option').evaluateAll((options) =>
+      options.map((option) => option.getAttribute('value')));
+    // First the way back to inheriting, last the way out to type any other id.
+    expect(offered.slice(1, -1)).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku']));
 
     const png = await page.screenshot({ path: join(REPO_ROOT, 'apps/web/e2e/.results', 'deck-crew-models.png') });
     await testInfo.attach('models', { body: png, contentType: 'image/png' });
 
     // A suggestion, never a constraint (AD-13): a model released this morning still saves.
-    await model.fill('a-model-released-this-morning');
+    await model.selectOption(String(offered.at(-1)));
+    await page.getByLabel('roles.architect.model').fill('a-model-released-this-morning');
     await waitForPreview(page);
     await page.getByRole('button', { name: 'Save configuration' }).click();
     await expect(page.getByText('Saved.', { exact: true })).toBeVisible();

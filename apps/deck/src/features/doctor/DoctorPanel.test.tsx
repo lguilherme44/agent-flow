@@ -111,11 +111,15 @@ describe('the doctor panel', () => {
     expect(screen.getByText(t.inspector.clamped)).toBeTruthy();
   });
 
-  it('marks a stage served by more than it needs', () => {
+  it('says once that a lighter runner would serve the text-only stages, without a warning per row', () => {
+    // It was an amber "servido demais" on six rows of a healthy machine: a cost hint worded
+    // as a fault (measured 23/09/2026).
     render(<DoctorPanel report={REPORT} />);
 
-    expect(screen.getByText(new RegExp(t.doctor.overpoweredNote))).toBeTruthy();
-    expect(screen.getByText(t.doctor.overServed)).toBeTruthy();
+    const overpowered = REPORT.stageRouting.filter((row) => row.overpowered).length;
+    expect(overpowered).toBeGreaterThan(0);
+    expect(screen.getByText(t.doctor.lighterRunnerWouldDo(overpowered))).toBeTruthy();
+    expect(document.querySelectorAll('[data-stage] .chip[data-tone="warn"]')).toHaveLength(0);
   });
 
   it('names a runner that is configured and routed nowhere', () => {

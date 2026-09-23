@@ -51,7 +51,7 @@ export function runnerIdsOf(fields: readonly ConfigEditorFieldView[]): readonly 
  * Two independent signals, and reading either alone gets it backwards. `architect` runs
  * `discovery`, which is `permissions: read-only` *and* `workingDirectory: true` — it
  * reads the repository without writing a line, so labelling it by the working directory
- * alone calls it a writer. `sdd` is read-only with no working directory at all: it
+ * alone calls it a writer. `planning` is read-only with no working directory at all: it
  * carries its whole input, which is exactly why it can run on an inference endpoint.
  */
 export function roleNeeds(role: { readonly requiresReadOnly: boolean; readonly requiresWorkingDirectory: boolean }): 'writes files' | 'reads files' | 'text only' {

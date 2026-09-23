@@ -75,7 +75,7 @@ export function formatClock(at: number, withSeconds = true): string {
 
 export function formatDay(at: number, words: TimeWords): string {
   const d = new Date(at);
-  return `${words.months[d.getMonth()] ?? ''} ${String(d.getDate())}`;
+  return words.day(words.months[d.getMonth()] ?? '', d.getDate());
 }
 
 export function formatStamp(at: number, words: TimeWords): string {

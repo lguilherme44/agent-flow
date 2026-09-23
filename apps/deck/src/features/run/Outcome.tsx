@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ArtifactContentView, ArtifactName, ArtifactView, AttentionFocus, DeliveryView, ReviewView } from '@contracts/index.js';
 import { api, keys, type RunAddress } from '../../lib/api';
 import { useResource } from '../../lib/store';
@@ -124,13 +124,12 @@ function ReviewTab({ address, reviewFreshness }: { readonly address: RunAddress;
   // **`reviewed`, not an empty list.** A run with no reviewer configured produced no
   // statement at all, which is a different thing from a reviewer that found nothing —
   // and showing the second for the first is how "no findings" comes to mean "not looked at".
-  if (!data.reviewed) {
-    return (
-      <Empty hint={t.outcome.reviewedNothingHint}>
-        {t.outcome.reviewedNothing}
-      </Empty>
-    );
-  }
+  //
+  // And the per-task threads are not the only review a run has. The plan review, the
+  // verification and the final review are files of their own; a run that used none of the
+  // threads still went through them (measured 23/09/2026: all three PASS, and this tab said
+  // the run "reviewed nothing").
+  if (!data.reviewed) return <RunReviews address={address} />;
 
   const totals = data.totals;
 
@@ -190,6 +189,89 @@ function ReviewTab({ address, reviewFreshness }: { readonly address: RunAddress;
         )}
       </Block>
     </div>
+  );
+}
+
+const RUN_REVIEWS = [
+  { name: 'planReview', title: 'runReviewPlan' },
+  { name: 'verification', title: 'runReviewVerification' },
+  { name: 'finalReview', title: 'runReviewFinal' },
+] as const satisfies readonly { name: ArtifactName; title: string }[];
+
+function RunReviews({ address }: { readonly address: RunAddress }) {
+  const t = useT();
+  const list = useResource<ArtifactView[]>(keys.artifacts(address), () => api.artifacts(address));
+  const nothing = <Empty hint={t.outcome.reviewedNothingHint}>{t.outcome.reviewedNothing}</Empty>;
+
+  if (list.data === undefined) return list.error === undefined ? <Skeleton rows={3} /> : nothing;
+  const present = RUN_REVIEWS.filter((entry) => list.data?.some((artifact) => artifact.name === entry.name && artifact.available));
+  if (present.length === 0) return nothing;
+
+  return (
+    <div className="outcome">
+      {present.map((entry) => (
+        <RunReview key={entry.name} address={address} name={entry.name} title={t.outcome[entry.title]} />
+      ))}
+    </div>
+  );
+}
+
+interface RunReviewFile {
+  readonly verdict?: string;
+  readonly summary?: string;
+  readonly reviewer?: { readonly runner?: string; readonly model?: string };
+  readonly findings?: readonly { readonly severity?: string; readonly description?: string; readonly suggestedAction?: string }[];
+}
+
+function RunReview({ address, name, title }: { readonly address: RunAddress; readonly name: ArtifactName; readonly title: string }) {
+  const t = useT();
+  const file = useResource<ArtifactContentView>(keys.artifact(address, name), () => api.artifact(address, name));
+  const parsed = useMemo<RunReviewFile | null | undefined>(() => {
+    if (file.data === undefined) return undefined;
+    try {
+      return JSON.parse(file.data.content) as RunReviewFile;
+    } catch {
+      return null;
+    }
+  }, [file.data]);
+
+  const findings = parsed?.findings ?? [];
+  return (
+    <Block title={title} {...(parsed === undefined || parsed === null ? {} : { count: findings.length === 0 ? t.outcome.reviewNoFindings : t.outcome.reviewFindings(findings.length) })}>
+      {file.error !== undefined || parsed === null ? (
+        <p className="faint outcome__none">{t.outcome.reviewUnreadable}</p>
+      ) : parsed === undefined ? (
+        <Skeleton rows={2} />
+      ) : (
+        <div className="run-review">
+          <div className="run-review__head">
+            {parsed.verdict === undefined ? null : (
+              <Chip tone={parsed.verdict === 'PASS' ? 'ok' : 'bad'}>{parsed.verdict === 'PASS' ? t.outcome.verdictPass : t.outcome.verdictFail}</Chip>
+            )}
+            {parsed.reviewer?.runner === undefined ? null : (
+              <span className="run-review__who">
+                {parsed.reviewer.runner}
+                {parsed.reviewer.model === undefined ? '' : ` · ${parsed.reviewer.model}`}
+              </span>
+            )}
+          </div>
+          {parsed.summary === undefined ? null : <p className="run-review__summary">{parsed.summary}</p>}
+          {findings.length === 0 ? null : (
+            <ul className="run-review__findings">
+              {findings.map((finding, index) => (
+                <li key={index} className="run-review__finding">
+                  <Chip tone={severityTone(finding.severity)}>{word(t, finding.severity ?? 'low')}</Chip>
+                  <div>
+                    <p>{finding.description}</p>
+                    {finding.suggestedAction === undefined ? null : <p className="faint">{finding.suggestedAction}</p>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Block>
   );
 }
 
@@ -366,7 +448,7 @@ function ArtifactsTab({ address }: { readonly address: RunAddress }) {
             aria-selected={shown === artifact.name}
             onClick={() => setShown(shown === artifact.name ? undefined : (artifact.name as ArtifactName))}
           >
-            {artifact.label}
+            {(t.outcome.artifactLabel as Readonly<Record<string, string | undefined>>)[artifact.name] ?? artifact.label}
             {artifact.sizeBytes === undefined ? null : <span className="pill__meta">{kb(artifact.sizeBytes)}</span>}
           </button>
         ))}

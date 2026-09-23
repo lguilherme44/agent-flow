@@ -77,7 +77,7 @@ export function DoctorPage({ projectId }: { projectId?: string }) {
           <span className="eyebrow">{t.nav.doctor}</span>
           <h1 className="page-head__title">{t.doctor.title}</h1>
           <p className="page-head__sub">
-            {t.doctor.subtitleBefore}<code>agent-flow doctor --deep</code>{t.doctor.subtitleAfter}
+            {t.doctor.subtitle}
           </p>
         </div>
         <label className="crew-control">

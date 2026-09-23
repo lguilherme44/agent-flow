@@ -84,7 +84,7 @@ const FAILING_GATE: ApprovalGateView = {
   ...PASSING_GATE,
   canApprove: false,
   refusal: { kind: 'review_failed', forcible: true },
-  warnings: ['the plan review was same-provider: it does not protect against a repeated assumption'],
+  warnings: ['runner "codex" failed with quota_exceeded — role "planReviewer" ran on "claude" at high'],
   review: {
     verdict: 'FAIL',
     independence: 'same-provider-fresh-context',
@@ -259,8 +259,9 @@ describe('the approval gate', () => {
     // The findings are on screen. Approving without reading them is still possible;
     // approving without them being shown is not.
     expect(within(dialog).getByText('TASK-004 has no validation command.')).toBeInTheDocument();
-    // And the degradation warning, before the decision rather than after it (R-16).
-    expect(within(dialog).getByText(/same-provider/)).toBeInTheDocument();
+    // And a degradation, before the decision rather than after it (R-16). A same-provider
+    // review is not one: one provider is a choice (23/09/2026). A fallback is.
+    expect(within(dialog).getByText(/quota_exceeded/)).toBeInTheDocument();
 
     const approve = within(dialog).getByRole('button', { name: /Approve/ });
     expect(approve).toBeDisabled();

@@ -86,22 +86,11 @@
   container-type: inline-size;
   width: 100%;
 }
-/* A cell narrower than a word hides the word and keeps the colour. Two classes, so this
-   outranks the label's own rule regardless of where either lands in the sheet. */
-@container (max-width: 560px) {
-  .tape-box .tape__label {
-    display: none;
-  }
-}
 .tape {
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 2px;
-  height: 8px;
-}
-.tape--tall {
-  height: 22px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3px;
+  height: 8px;
 }
 .tape__cell {
   position: relative;
@@ -125,27 +114,6 @@
 }
 .tape__cell[data-tone='live']::after {
   animation: pulse 1.6s ease-in-out infinite;
-}
-.tape__label {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  padding: 0 6px;
-  z-index: 1;
-  font-family: var(--font-mono);
-  font-size: var(--fs-0);
-  letter-spacing: 0.04em;
-  color: var(--bg);
-  mix-blend-mode: normal;
-  font-weight: 700;
-  overflow: hidden;
-  white-space: nowrap;
-}
-.tape__cell[data-tone='idle'] .tape__label,
-.tape__cell[data-tone='ghost'] .tape__label {
-  color: var(--ink-3);
-  font-weight: 500;
 }
 
 /* ── Deck: workspace summary ─────────────────────────────────────────────── */
@@ -264,6 +232,17 @@
   gap: var(--s-4);
   padding: 0 var(--s-4);
   min-width: 0;
+}
+/* Without a team or a forge anywhere, the seats column was "— / sem forge" on every row. */
+@media (min-width: 1281px) {
+  .lanes--no-seats .lanes__head,
+  .lanes--no-seats .lane {
+    grid-template-columns: minmax(150px, 1.1fr) minmax(0, 2fr) 170px 150px 100px 90px 90px;
+  }
+  .lanes--no-seats .lanes__head > :nth-child(7),
+  .lanes--no-seats .lane > :nth-child(7) {
+    display: none;
+  }
 }
 .lanes__head {
   height: 30px;
@@ -1123,6 +1102,13 @@ select[data-unknown='true'] {
 .crew-actions > span {
   color: var(--ink-3);
 }
+/* The bar is sticky to the bottom of the page, so anything scrolled "into view" — by focus,
+   by a find, by an automation click — used to stop exactly under it. Measured: the runner
+   switch at the top of the grid could not be clicked, the bar took the hit. Reserving the
+   bar's height at the scroll edge keeps what is scrolled to above it. */
+html:has(.crew-actions) {
+  scroll-padding-bottom: 6rem;
+}
 
 @media (max-width: 640px) {
   .crew-control { width: 100%; }
@@ -1467,4 +1453,14 @@ select[data-unknown='true'] {
   .telemetry-row {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* The runs table's task cell: the bar and its count side by side. */
+.runs-tasks {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.runs-tasks .meter {
+  width: 72px;
 }

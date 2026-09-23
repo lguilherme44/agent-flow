@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { RunSummaryView } from '@contracts/index.js';
+import { featureTitle } from '@contracts/feature-title.js';
 import { api, keys } from '../../lib/api';
 import { useResource } from '../../lib/store';
 import { formatDuration, formatRelative } from '../../lib/time';
@@ -48,7 +49,6 @@ export function RunsPage({ projectId }: { projectId?: string }) {
             {t.runs.runCount(runs.data?.length ?? 0)}
             {projectId === undefined ? '' : ` · ${names.get(projectId) ?? projectId}`}
           </h1>
-          <p className="page-head__sub">{t.runs.newestFirst}</p>
         </div>
         <div className="filters">
           <button type="button" className="btn btn--primary" onClick={() => setCreating(true)} disabled={(projects.data?.length ?? 0) === 0}>
@@ -94,9 +94,7 @@ export function RunsPage({ projectId }: { projectId?: string }) {
                 <th>{t.deck.colFeature}</th>
                 <th>{t.runs.colStatus}</th>
                 <th>{t.newFeature.workflow.toLowerCase()}</th>
-                <th>{t.runs.colProgress}</th>
                 <th>{t.deck.colTasks}</th>
-                <th>{t.runs.colDegraded}</th>
                 <th>{t.inspector.duration}</th>
                 <th>{t.run.updated}</th>
               </tr>
@@ -111,28 +109,28 @@ export function RunsPage({ projectId }: { projectId?: string }) {
                       <a href={to} onClick={onLinkClick} style={{ fontWeight: 600 }}>
                         {run.runId}
                       </a>
-                      {run.revisionCount !== undefined && run.revisionCount > 0 ? <span className="faint">{` r${String(run.revisionCount)}`}</span> : null}
                     </td>
                     <td className="cell-max">
                       <span className="truncate" style={{ display: 'block', maxWidth: 460 }} title={run.feature}>
-                        {run.feature}
+                        {featureTitle(run.feature)}
                       </span>
                     </td>
                     <td>
                       <Chip tone={runStatusTone(run.status)}>{word(t, run.status)}</Chip>
                     </td>
                     <td className="mono">{run.workflow === undefined ? t.common.none : word(t, run.workflow)}</td>
-                    <td style={{ minWidth: 120 }}>
-                      <Meter done={run.progress} total={100} tone={run.status === 'failed' ? 'bad' : run.status === 'completed' ? 'ok' : 'live'} />
+                    {/* One column for the tasks: a progress bar beside a count that says the same
+                        thing was two columns, and pushed the duration off the table. */}
+                    <td className="nowrap">
+                      <span className="runs-tasks">
+                        <Meter done={run.completedTasks} total={Math.max(run.taskCount, 1)} tone={run.status === 'failed' ? 'bad' : run.status === 'completed' ? 'ok' : 'live'} />
+                        <span className="mono">
+                          {run.completedTasks}/{run.taskCount}
+                        </span>
+                      </span>
                     </td>
-                    <td className="mono">
-                      {run.completedTasks}/{run.taskCount}
-                    </td>
-                    <td className="mono" style={{ color: run.degradations > 0 ? 'var(--warn)' : undefined }}>
-                      {run.degradations === 0 ? t.common.none : run.degradations}
-                    </td>
-                    <td className="mono">{formatDuration(run.durationMs)}</td>
-                    <td className="mono">{formatRelative(run.updatedAt, now, t.time)}</td>
+                    <td className="mono nowrap">{formatDuration(run.durationMs)}</td>
+                    <td className="mono nowrap">{formatRelative(run.updatedAt, now, t.time)}</td>
                   </tr>
                 );
               })}

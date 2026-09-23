@@ -52,9 +52,8 @@ export interface WorldOptions {
   /**
    * Route every role at one runner, so the plan review is not independent.
    *
-   * Produces a genuine `single_provider` degradation rather than one written into
-   * `state.json` — the run records it because the resolver noticed, which is the
-   * only way the warning at the gate can be trusted.
+   * One provider is the operator's choice (23/09/2026): the run records no degradation
+   * for it and the gate carries no warning. This world is what proves that.
    */
   readonly singleProvider?: boolean;
   /** Command run for the `test` validation id. Must be fast and offline. */

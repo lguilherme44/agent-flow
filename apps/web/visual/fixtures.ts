@@ -890,7 +890,7 @@ export const APPROVAL_GATE: ApprovalGateView = {
   canApprove: false,
   refusal: { kind: 'review_failed', forcible: true },
   warnings: [
-    'the plan review was same-provider: it does not protect against an assumption repeated from planning',
+    'runner "codex" failed with quota_exceeded — role "planReviewer" ran on "claude" at high',
   ],
   planHash: 'a1b2c3d4e5f60718',
   taskCount: 9,
@@ -1582,7 +1582,6 @@ const ATTENTION = projectAttention({
   tasks: TASKS,
   run: {
     updatedAt: RUN.updatedAt,
-    degradations: RUN.degradationDetail,
     integrationConflicts: RUN.integrationConflicts,
   },
   events: [],
@@ -1635,7 +1634,7 @@ const GATED_ATTENTION = projectAttention({
   runId: GATED_RUN_ID,
   runtime: GATED_RUN.runtime,
   tasks: [],
-  run: { updatedAt: GATED_RUN.updatedAt, degradations: [], integrationConflicts: [] },
+  run: { updatedAt: GATED_RUN.updatedAt, integrationConflicts: [] },
   events: [],
 });
 
@@ -1677,7 +1676,7 @@ const LARGE_ATTENTION = projectAttention({
   runId: RUN_ID,
   runtime: RUN.runtime,
   tasks: LARGE_TASKS,
-  run: { updatedAt: RUN.updatedAt, degradations: [], integrationConflicts: [] },
+  run: { updatedAt: RUN.updatedAt, integrationConflicts: [] },
   events: [],
 });
 

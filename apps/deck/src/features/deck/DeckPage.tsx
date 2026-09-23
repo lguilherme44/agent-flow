@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { AttentionItem, ControlSnapshotView, ProjectView, StageViewResponse, WorkspaceProjectView } from '@contracts/index.js';
+import { featureTitle } from '@contracts/feature-title.js';
 import { api, keys } from '../../lib/api';
 import { useResource, useResources } from '../../lib/store';
 import { formatRelative } from '../../lib/time';
@@ -13,6 +14,15 @@ import { RegisterProjectDialog } from './RegisterProjectDialog';
 
 /** Runtime statuses after which a project is not moving. */
 const STILL = new Set(['complete', 'failed', 'cancelled']);
+
+/**
+ * The runtime statuses in which an agent is actually working.
+ *
+ * "Moving" used to be "not finished", which counted a rejected plan and a run held for a
+ * person as in motion: the home said "2 em movimento" with nothing running anywhere
+ * (measured 23/09/2026). A run held for a person is in the queue beside it, not here.
+ */
+const MOVING = new Set(['planning', 'implementing', 'recovering', 'verifying', 'reviewing', 'correcting']);
 
 /** How many tickets the queue shows before it asks to be unfolded. */
 const QUEUE_FOLD = 6;
@@ -38,7 +48,9 @@ export function DeckPage() {
   const rows = workspace.data?.projects ?? [];
   const byId = useMemo(() => new Map((projects.data ?? []).map((project) => [project.id, project])), [projects.data]);
 
-  const moving = rows.filter((row) => row.runtime !== undefined && !STILL.has(row.runtime));
+  const moving = rows.filter((row) => row.runtime !== undefined && MOVING.has(row.runtime));
+  // Seats and forge only mean something once a team or a forge is configured somewhere.
+  const showSeats = rows.some((row) => row.teamLoad !== undefined || (row.delivery !== undefined && row.delivery !== 'disabled'));
   const idle = rows.filter((row) => row.runId === undefined);
   const wanting = rows.filter((row) => row.attentionCount > 0 && row.runId !== undefined);
 
@@ -76,7 +88,8 @@ export function DeckPage() {
   const ordered = useMemo(() => {
     const rank = (row: WorkspaceProjectView): number => {
       if (row.topPriority !== undefined) return Number.parseInt(row.topPriority.slice(1), 10);
-      if (row.runtime !== undefined && !STILL.has(row.runtime)) return 5;
+      if (row.runtime !== undefined && MOVING.has(row.runtime)) return 5;
+      if (row.runtime !== undefined && !STILL.has(row.runtime)) return 5.5;
       if (row.runId !== undefined) return 6;
       return 7;
     };
@@ -160,9 +173,9 @@ export function DeckPage() {
           <>
             <div className="queue" role="list" aria-label={t.deck.queueAria}>
               {shown.map(({ item, projectId, projectName }) => (
-                // `item.id` is stable but not unique: three degradations on one run share
-                // `degradation_recorded`. A duplicate React key renders extra rows out of
-                // order, which is exactly what happened here. `since` tells them apart.
+                // `item.id` is stable but not unique: two items of one kind on one run share
+                // it (measured with three degradations, when those were still queued). A
+                // duplicate React key renders extra rows out of order. `since` tells them apart.
                 <a
                   key={`${projectId}|${item.id}|${item.since}`}
                   className="ticket"
@@ -217,7 +230,7 @@ export function DeckPage() {
         ) : workspace.loading ? (
           <Skeleton rows={4} />
         ) : (
-          <div className="lanes">
+          <div className={showSeats ? 'lanes' : 'lanes lanes--no-seats'}>
             <div className="lanes__head" aria-hidden="true">
               <span>{t.deck.colProject}</span>
               <span>{t.deck.colFeature}</span>
@@ -258,9 +271,11 @@ function ProjectLane({ row, project, now, t }: { row: WorkspaceProjectView; proj
       </div>
       <div className="lane__feature">
         {idle ? (
-          <span className="lane__feature-text faint">{project?.lastRun === undefined ? t.deck.nothingRanHere : t.deck.last(project.lastRun.feature)}</span>
+          <span className="lane__feature-text faint">{project?.lastRun === undefined ? t.deck.nothingRanHere : t.deck.last(featureTitle(project.lastRun.feature))}</span>
         ) : (
-          <span className="lane__feature-text">{row.feature ?? t.common.none}</span>
+          // The title, with the whole request one hover away: the lane used to print a
+          // 5 KB request and every card on the home read as a wall of text.
+          <span className="lane__feature-text" title={row.feature}>{row.feature === undefined ? t.common.none : featureTitle(row.feature)}</span>
         )}
       </div>
       <div className="lane__cell">
@@ -279,7 +294,7 @@ function ProjectLane({ row, project, now, t }: { row: WorkspaceProjectView; proj
         )}
       </div>
       <div className="lane__cell">
-        <Tape stages={idle ? undefined : stages.data} />
+        <Tape stages={idle ? undefined : stages.data} finished={row.runtime !== undefined && STILL.has(row.runtime)} />
       </div>
       <div className="lane__cell">
         {idle ? (
@@ -301,7 +316,7 @@ function ProjectLane({ row, project, now, t }: { row: WorkspaceProjectView; proj
             <span style={{ color: `var(--${priorityTone(row.topPriority)})` }}>{row.attentionCount}</span>
           </span>
         ) : (
-          <span className="lane__v faint">{idle ? t.common.none : word(t, 'none')}</span>
+          <span className="lane__v faint">{t.common.none}</span>
         )}
       </div>
       <div className="lane__cell">

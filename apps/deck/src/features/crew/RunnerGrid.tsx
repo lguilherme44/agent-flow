@@ -129,9 +129,15 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
         {switchField === undefined
           ? null
           : <RunnerField field={switchField} operations={operations} onChange={onChange} compact />}
-        {health === undefined
+        {/* `unavailable`: configuration said no, so nothing was checked. The switch beside
+            this already says "off"; a chip reading "missing" would send someone to install
+            a CLI they have (measured: an installed claude read "ausente"). */}
+        {/* And `auth: unknown` is the shallow check's normal answer — it never probes
+            credentials — so a chip reading "DESCONHECIDO" sat on every healthy runner
+            (measured 23/09/2026). Only a finding is shown: missing, or not configured. */}
+        {health === undefined || health.unavailable !== undefined || (health.installed && health.executable && health.auth !== 'not_configured')
           ? null
-          : <Chip tone={!health.installed || !health.executable ? 'bad' : health.auth === 'unknown' ? 'idle' : 'ok'}>
+          : <Chip tone="bad">
             {!health.installed ? t.crew.missing : word(t, health.auth)}
           </Chip>}
       </div>
@@ -140,7 +146,6 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
         : <p className="runner-card__caps">
           <span className="tag">{declared.capabilities.supportsWorkingDirectory ? t.crew.worksInRepo : t.crew.textOnly}</span>
           <span className="tag">{declared.capabilities.supportsReadOnly ? t.crew.canReadOnly : t.crew.noReadOnly}</span>
-          <span className="tag">{declared.capabilities.structuredOutputStrategy}</span>
         </p>}
       <details className="runner-card__more">
         <summary>{t.crew.settingCount(fields.length)}</summary>
@@ -173,9 +178,9 @@ function RunnerCard({ id, view, roles, health, types, models, operations, onChan
       {blocked.length === 0
         ? null
         : enabled
-          ? <small className="runner-card__blocked" title={blocked.join(', ')}>
-            {t.crew.referencedByRoutes(blocked.length)}
-          </small>
+          // The role count in the foot already says who uses it; "referenciado por 10
+          // rotas" beside it was the same number in configuration vocabulary.
+          ? null
           /**
            * Turned off with routes still pointing here (PRI-27).
            *

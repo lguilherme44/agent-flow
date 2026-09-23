@@ -108,13 +108,23 @@ function response(body: unknown, status = 200): Promise<Response> {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
 }
 
-function stub(overrides: { review?: unknown; reviewStatus?: number } = {}): void {
+function stub(
+  overrides: {
+    review?: unknown;
+    reviewStatus?: number;
+    artifacts?: ArtifactView[];
+    contents?: Partial<Record<string, ArtifactContentView>>;
+  } = {},
+): void {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const target = String(input);
     if (target.includes('/review')) return response(overrides.review ?? review, overrides.reviewStatus ?? 200);
     if (target.includes('/delivery')) return response(delivery);
     if (target.includes('/artifacts/sdd')) return response(sdd);
-    if (target.includes('/artifacts')) return response(artifacts);
+    const named = /\/artifacts\/(\w+)/.exec(target)?.[1];
+    const content = named === undefined ? undefined : overrides.contents?.[named];
+    if (content !== undefined) return response(content);
+    if (target.includes('/artifacts')) return response(overrides.artifacts ?? artifacts);
     return response({}, 404);
   }));
 }
@@ -182,6 +192,34 @@ describe('the review a person reads after the run', () => {
 
     expect(await screen.findByText(t.outcome.reviewedNothing)).toBeInTheDocument();
     expect(screen.queryByText(t.gate.noFindings)).not.toBeInTheDocument();
+  });
+
+  it('shows the plan, verification and final reviews when no task was reviewed one by one', async () => {
+    // Measured 23/09/2026 on AF-2026-001: plan review, verification and final review all
+    // PASS on disk, and this tab said the run "reviewed nothing" — it read only the
+    // per-task threads, which that run did not use.
+    const finalReview: ArtifactContentView = {
+      name: 'finalReview',
+      label: 'Final Review',
+      available: true,
+      truncated: false,
+      content: JSON.stringify({
+        verdict: 'PASS',
+        reviewer: { runner: 'claude', model: 'claude-opus-5-5', reasoning: 'very_high' },
+        findings: [{ severity: 'low', description: 'Two test classes cover the same case.', suggestedAction: 'Keep one of them.' }],
+      }),
+    };
+    stub({
+      review: { ...review, reviewed: false, threads: [], gates: [], totals: { ...review.totals, reviews: 0 } },
+      artifacts: [{ name: 'finalReview', label: 'Final Review', available: true, sizeBytes: 900 }],
+      contents: { finalReview },
+    });
+    panel('review');
+
+    expect(await screen.findByText('Two test classes cover the same case.')).toBeInTheDocument();
+    expect(screen.getByText(t.outcome.runReviewFinal)).toBeInTheDocument();
+    expect(screen.getByText(/claude-opus-5-5/)).toBeInTheDocument();
+    expect(screen.queryByText(t.outcome.reviewedNothing)).not.toBeInTheDocument();
   });
 
   it('says the review could not be read rather than showing an empty one', async () => {

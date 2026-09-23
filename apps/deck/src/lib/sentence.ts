@@ -249,6 +249,9 @@ export function describe(event: RunEvent, t: Dictionary): Sentence {
       return { title: e.planningRepair(num(d['repair']), num(d['maxRepairs'])), detail: clip(problems[0]), tone: 'warn' };
     }
     case 'degradation_detected':
+      // Runs from before 23/09/2026 recorded one provider as a degradation. It is a choice,
+      // and an old log must not keep calling it a loss.
+      if (d['kind'] === 'single_provider') return { title: e.oneProviderChosen, tone: 'ghost' };
       return { title: e.degraded(word(t, text(d['kind']))), detail: clip(text(d['reason'])), tone: 'warn' };
     case 'execution_lock_acquired':
       return { title: e.lockTaken(text(d['operation'])), detail: text(d['owner']), tone: 'ghost' };

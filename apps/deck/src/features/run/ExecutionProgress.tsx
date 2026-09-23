@@ -1,12 +1,15 @@
-import { useMemo } from 'react';
-import type { PipelineStage, StageViewResponse } from '@contracts/index.js';
-import { formatClock, MINUTE } from '../../lib/time';
+import { useMemo, useState } from 'react';
+import type { StageViewResponse } from '@contracts/index.js';
+import { formatClock, formatDuration, MINUTE } from '../../lib/time';
 import { useT, word } from '../../lib/i18n';
 import { stageTone } from '../../lib/tone';
+import { phasesOf, type PhaseId } from '../../lib/phases';
 
 export interface ExecutionProgressProps {
   readonly stages: StageViewResponse[] | undefined;
   readonly activeStage: string | undefined;
+  /** The gate the run is held at for a person, when it is. */
+  readonly awaiting?: string | undefined;
   readonly onOpenStageLog: (stage: string) => void;
   readonly domain: readonly [number, number];
   readonly t: number;
@@ -24,20 +27,10 @@ export interface ExecutionProgressProps {
   readonly onToggleTimeline: () => void;
 }
 
-const ORDERED_STAGES: readonly PipelineStage[] = [
-  'discovery',
-  'architecture-impact',
-  'sdd',
-  'planning',
-  'plan-review',
-  'verification',
-  'e2e',
-  'final-review',
-];
-
 export function ExecutionProgress({
   stages,
   activeStage,
+  awaiting,
   onOpenStageLog,
   domain,
   t,
@@ -49,21 +42,29 @@ export function ExecutionProgress({
   onToggleTimeline,
 }: ExecutionProgressProps) {
   const dict = useT();
-  const short: Readonly<Record<string, string | undefined>> = dict.stageShort;
+  const long: Readonly<Record<string, string | undefined>> = dict.stageLong;
+  const [picked, setPicked] = useState<PhaseId | undefined>(undefined);
 
-  const stageMap = useMemo(() => {
-    const map = new Map<string, StageViewResponse>();
-    for (const s of stages ?? []) {
-      map.set(s.stage, s);
-    }
-    return map;
-  }, [stages]);
+  const phases = useMemo(() => phasesOf(stages, activeStage, finished, awaiting), [stages, activeStage, finished, awaiting]);
+
+  // The phase that is moving or holding the run, else the last one that happened.
+  const current =
+    phases.find((phase) => ['running', 'waiting_approval', 'blocked', 'failed'].includes(phase.status)) ??
+    [...phases].reverse().find((phase) => phase.status !== 'pending') ??
+    phases[0];
+  const selected = phases.find((phase) => phase.id === picked) ?? current;
 
   const { total, completed, running, attention, queued } = tasksCount;
-  const completedPct = total > 0 ? (completed / total) * 100 : 0;
-  const runningPct = total > 0 ? (running / total) * 100 : 0;
-  const attentionPct = total > 0 ? (attention / total) * 100 : 0;
-  const queuedPct = total > 0 ? (queued / total) * 100 : 0;
+
+  const subline = (phase: (typeof phases)[number]): string => {
+    if (phase.status === 'failed') return dict.run.phaseFailed;
+    if (phase.status === 'waiting_approval') return dict.run.phaseWaiting;
+    if (phase.id === 'approve' && phase.status === 'completed') return dict.run.phaseApproved;
+    if (phase.id === 'build' && total > 0) return dict.run.phaseTasks(completed, total);
+    if (phase.status === 'running' && phase.current !== undefined) return long[phase.current] ?? phase.current;
+    if (phase.status === 'completed') return phase.durationMs > 0 ? formatDuration(phase.durationMs) : word(dict, 'completed');
+    return dict.run.phaseNotStarted;
+  };
 
   const stepBack = () => onScrub(Math.max(domain[0], t - MINUTE));
   const stepForward = () => {
@@ -71,106 +72,103 @@ export function ExecutionProgress({
     if (next >= domain[1]) onScrub(null);
     else onScrub(next);
   };
-  const jumpStart = () => onScrub(domain[0]);
-  const jumpLive = () => onScrub(null);
 
   return (
-    <div className="exec-progress">
-      {/* 1. Pipeline Stage Stepper */}
-      <div className="exec-progress__stepper-wrap">
-        <div className="exec-progress__stepper" role="list" aria-label={dict.run.stepperStages}>
-          {ORDERED_STAGES.map((stageName, index) => {
-            const stg = stageMap.get(stageName);
-            const status = stg?.status ?? (activeStage === stageName ? 'running' : 'pending');
-            const tone = stageTone(status);
-            const isCurrent = activeStage === stageName;
-            return (
-              <div key={stageName} className="exec-progress__step" role="listitem" data-status={status} data-current={isCurrent}>
-                {index > 0 ? <div className="exec-progress__step-line" data-tone={stg?.status ? tone : 'idle'} /> : null}
+    <section className="phases" aria-label={dict.run.stepperStages}>
+      <ol className="phases__track" style={{ ['--phases' as string]: String(phases.length) }}>
+        {phases.map((phase, index) => {
+          const tone = stageTone(phase.status);
+          const isSelected = selected?.id === phase.id;
+          return (
+            <li key={phase.id} className="phase" data-tone={tone} data-status={phase.status}>
+              <button type="button" className="phase__btn" aria-pressed={isSelected} onClick={() => setPicked(phase.id)}>
+                <span className="phase__mark" aria-hidden="true">
+                  {phase.status === 'completed' ? '✓' : phase.status === 'failed' ? '✕' : phase.status === 'waiting_approval' || phase.status === 'blocked' ? '!' : index + 1}
+                </span>
+                <span className="phase__text">
+                  <span className="phase__name">{dict.run.phase[phase.id]}</span>
+                  <span className="phase__sub">{subline(phase)}</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
+      {selected === undefined ? null : (
+        <div className="phases__detail">
+          <span className="eyebrow">{dict.run.phaseStagesOf(dict.run.phase[selected.id])}</span>
+          <ul className="phases__stages">
+            {selected.stages.map(({ stage, status, view }) => (
+              <li key={stage}>
                 <button
                   type="button"
-                  className="exec-progress__step-btn"
-                  data-tone={tone}
-                  onClick={() => onOpenStageLog(stageName)}
-                  title={`${short[stageName] ?? stageName} · ${word(dict, status)} (clique para ver logs)`}
+                  className="phase-stage"
+                  data-tone={stageTone(status)}
+                  onClick={() => onOpenStageLog(stage)}
+                  title={dict.run.stageOpenLog}
                 >
-                  <span className="exec-progress__step-dot">
-                    {status === 'completed' ? '✓' : status === 'failed' ? '✕' : status === 'running' ? '⟳' : index + 1}
+                  <span className="phase-stage__dot" aria-hidden="true" />
+                  <span className="phase-stage__name">{long[stage] ?? stage}</span>
+                  <span className="phase-stage__meta">
+                    {word(dict, status)}
+                    {view?.durationMs === undefined ? '' : ` · ${formatDuration(view.durationMs)}`}
+                    {view?.model === undefined ? '' : ` · ${view.model}`}
                   </span>
-                  <span className="exec-progress__step-label">{short[stageName] ?? stageName}</span>
                 </button>
+              </li>
+            ))}
+          </ul>
+
+          {selected.id === 'build' && total > 0 ? (
+            <div className="phases__tasks">
+              <div className="phases__bar" role="progressbar" aria-valuenow={completed} aria-valuemin={0} aria-valuemax={total}>
+                {[
+                  ['ok', completed],
+                  ['live', running],
+                  ['warn', attention],
+                  ['idle', queued],
+                ].map(([tone, count]) =>
+                  Number(count) > 0 ? <span key={String(tone)} data-tone={tone} style={{ flexGrow: Number(count) }} /> : null,
+                )}
               </div>
-            );
-          })}
+              <span className="phases__task-stats">
+                {dict.run.phaseTasks(completed, total)}
+                {running > 0 ? ` · ${dict.run.tasksRunning(running)}` : ''}
+                {attention > 0 ? ` · ${dict.run.tasksAttention(attention)}` : ''}
+                {queued > 0 ? ` · ${dict.run.tasksQueued(queued)}` : ''}
+              </span>
+            </div>
+          ) : null}
         </div>
-      </div>
+      )}
 
-      {/* 2. Tasks Progress Bar & Summary */}
-      <div className="exec-progress__summary">
-        <div className="exec-progress__bar-wrap">
-          <div className="exec-progress__bar" role="progressbar" aria-valuenow={completed} aria-valuemin={0} aria-valuemax={total}>
-            {completedPct > 0 ? <div className="exec-progress__bar-segment" data-tone="ok" style={{ width: `${completedPct}%` }} title={`Concluídas: ${completed}`} /> : null}
-            {runningPct > 0 ? <div className="exec-progress__bar-segment" data-tone="live" style={{ width: `${runningPct}%` }} title={`Executando: ${running}`} /> : null}
-            {attentionPct > 0 ? <div className="exec-progress__bar-segment" data-tone="warn" style={{ width: `${attentionPct}%` }} title={`Atenção/Falha: ${attention}`} /> : null}
-            {queuedPct > 0 ? <div className="exec-progress__bar-segment" data-tone="idle" style={{ width: `${queuedPct}%` }} title={`Na fila: ${queued}`} /> : null}
-          </div>
-          <div className="exec-progress__stats">
-            <span className="exec-progress__stat" data-tone="ok">
-              <b>{completed}</b> de <b>{total}</b> tarefas concluídas ({Math.round(completedPct)}%)
-            </span>
-            {running > 0 ? (
-              <span className="exec-progress__stat" data-tone="live">
-                <b>{running}</b> executando
-              </span>
-            ) : null}
-            {attention > 0 ? (
-              <span className="exec-progress__stat" data-tone="warn">
-                <b>{attention}</b> atenção / bloqueado
-              </span>
-            ) : null}
-            {queued > 0 ? (
-              <span className="exec-progress__stat" data-tone="idle">
-                <b>{queued}</b> na fila
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* 3. Controls & Scrubber */}
-        <div className="exec-progress__controls">
-          <div className="exec-progress__playback">
-            <button type="button" className="btn btn--sm btn--ghost" onClick={jumpStart} title="Ir para o início">
-              ⏮ Início
+      <div className="phases__foot">
+        {showTimeline ? (
+          <div className="phases__replay">
+            <button type="button" className="btn btn--sm btn--ghost" onClick={() => onScrub(domain[0])}>
+              {dict.run.replayStart}
             </button>
-            <button type="button" className="btn btn--sm btn--ghost" onClick={stepBack} title="-1 minuto">
-              ⏪ -1m
+            <button type="button" className="btn btn--sm btn--ghost" onClick={stepBack}>
+              {dict.run.replayBack}
             </button>
-            <button type="button" className="btn btn--sm btn--ghost" onClick={stepForward} title="+1 minuto" disabled={live}>
-              +1m ⏩
+            <button type="button" className="btn btn--sm btn--ghost" onClick={stepForward} disabled={live}>
+              {dict.run.replayForward}
             </button>
-            <button
-              type="button"
-              className={live ? 'btn btn--sm btn--primary' : 'btn btn--sm btn--ghost'}
-              onClick={jumpLive}
-              title="Voltar para o feed ao vivo"
-            >
-              {live ? (finished ? dict.recorder.endCap : '● AO VIVO') : 'Ir ao vivo ⏭'}
+            <button type="button" className={live ? 'btn btn--sm btn--primary' : 'btn btn--sm btn--ghost'} onClick={() => onScrub(null)}>
+              {live && finished ? dict.recorder.endCap : dict.run.replayLive}
             </button>
-            <span className="exec-progress__time-badge" data-live={live}>
-              {live ? formatClock(t) : `${formatClock(t)} (passado)`}
+            <span className="phases__clock" data-live={live}>
+              {live ? formatClock(t) : `${formatClock(t)} · ${dict.run.replayPast}`}
             </span>
           </div>
-
-          <button
-            type="button"
-            className="btn btn--sm btn--ghost exec-progress__timeline-toggle"
-            onClick={onToggleTimeline}
-            aria-expanded={showTimeline}
-          >
-            {showTimeline ? '▲ Ocultar Linha do Tempo' : '▼ Expandir Linha do Tempo'}
-          </button>
-        </div>
+        ) : (
+          <span />
+        )}
+        <button type="button" className="btn btn--sm btn--ghost" onClick={onToggleTimeline} aria-expanded={showTimeline}>
+          {dict.run.timelineToggle} {showTimeline ? '▴' : '▾'}
+        </button>
       </div>
-    </div>
+    </section>
   );
 }

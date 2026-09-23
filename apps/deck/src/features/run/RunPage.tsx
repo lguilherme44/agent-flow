@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { featureTitle } from '@contracts/index.js';
 import type { ActionJobView, ApprovalGateView, AttentionItem, ControlSnapshotView, PipelineStage, RunDagView, RunDetailView, RunEventLogView, RunStage, StageViewResponse, TaskSummaryView } from '@contracts/index.js';
 import { ApiError, api, keys } from '../../lib/api';
 import { buildTimeline, stateAt } from '../../lib/replay';
@@ -7,7 +8,7 @@ import { formatDuration, formatRelative, formatStamp, ms } from '../../lib/time'
 import { runtimeTone } from '../../lib/tone';
 import { useT, word } from '../../lib/i18n';
 import { useNow } from '../../lib/use-now';
-import { Chip, Empty, Notice, Pri, Skeleton, Tape } from '../../components/ui';
+import { Chip, Empty, Notice, Pri, Skeleton } from '../../components/ui';
 import { href, navigate, onLinkClick } from '../../app/router';
 import { Recorder } from './Recorder';
 import { Graph } from './Graph';
@@ -209,6 +210,9 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
       case 'resume':
         void start();
         break;
+      case 'review':
+        void finalReview();
+        break;
       case 'retry':
       case 'inspect':
       default: {
@@ -300,14 +304,15 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
             <Skeleton rows={2} />
           ) : (
             <>
-              <p className="run-head__feature" data-open={featureOpen} title={featureOpen ? undefined : detail.feature}>
-                {detail.feature}
-              </p>
-              {detail.feature.length > 180 ? (
-                <button type="button" className="run-head__more" onClick={() => setFeatureOpen((value) => !value)}>
+              {/* The title, not the request: a 7 KB markdown brief in a two-line clamp showed
+                  "## O que o usuário viu" as if it were prose (measured 23/09/2026). */}
+              <p className="run-head__feature">{featureTitle(detail.feature)}</p>
+              {featureTitle(detail.feature) !== detail.feature.trim() ? (
+                <button type="button" className="run-head__more" aria-expanded={featureOpen} onClick={() => setFeatureOpen((value) => !value)}>
                   {featureOpen ? dict.feed.less : dict.run.readWholeRequest}
                 </button>
               ) : null}
+              {featureOpen ? <div className="run-head__request">{detail.feature}</div> : null}
               <div className="facts" style={{ marginTop: 12 }}>
                 <span>
                   {dict.run.created} <b>{formatStamp(Date.parse(detail.createdAt), dict.time)}</b>
@@ -382,16 +387,8 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               {dict.run.allRuns}
             </a>
           </div>
-          {rt === undefined ? null : (
-            <div className="axes" aria-label={dict.run.progress}>
-              <Axis label={dict.run.axisWorkflow} done={rt.progress.workflow.done} total={rt.progress.workflow.total} tone={runtimeTone(rt.status) === 'bad' ? 'bad' : 'live'} />
-              <Axis label={dict.run.axisTasks} done={rt.progress.implementation.done} total={rt.progress.implementation.total} tone="ok" />
-              {rt.progress.corrective === undefined ? null : <Axis label={dict.run.axisCorrective} done={rt.progress.corrective.done} total={rt.progress.corrective.total} tone="warn" />}
-            </div>
-          )}
-          <div style={{ width: 'min(100%, 420px)', alignSelf: 'stretch' }}>
-            <Tape stages={stages.data} tall />
-          </div>
+          {/* Progress lives in the phases below, once. Two bars and a stage tape here said
+              the same thing three ways (measured 23/09/2026). */}
         </div>
       </header>
 
@@ -407,7 +404,9 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         </Notice>
       )}
 
-      {rt?.gate !== undefined ? (
+      {/* The queue below carries the gate's own sentence as its reason; the notice is only
+          for a gate nothing in the queue speaks for — it said the same thing twice. */}
+      {rt?.gate !== undefined && attention.length === 0 ? (
         <Notice tone="warn" k={word(dict, rt.gate.gate)}>
           {rt.gate.action}
           {rt.gate.tasks.length > 0 ? ` — ${rt.gate.tasks.join(', ')}` : ''}
@@ -448,6 +447,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
       <ExecutionProgress
         stages={stages.data}
         activeStage={detail?.stage}
+        awaiting={rt?.reviewInProgress === true ? undefined : rt?.gate?.gate}
         onOpenStageLog={onOpenStageLog}
         domain={domain}
         t={t}
@@ -496,7 +496,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               aria-selected={viewMode === 'kanban'}
               onClick={() => setViewMode('kanban')}
             >
-              📋 {dict.run.viewKanban}
+              {dict.run.viewKanban}
             </button>
             <button
               type="button"
@@ -505,7 +505,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               aria-selected={viewMode === 'graph'}
               onClick={() => setViewMode('graph')}
             >
-              🕸 {dict.run.viewGraph}
+              {dict.run.viewGraph}
             </button>
             <button
               type="button"
@@ -514,7 +514,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
               aria-selected={viewMode === 'feed'}
               onClick={() => setViewMode('feed')}
             >
-              📄 {dict.run.viewFeed}
+              {dict.run.viewFeed}
             </button>
           </div>
           <div className="tasks-workspace__meta">
@@ -609,23 +609,5 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
       <GateDialog address={address} gate={gate.data} open={gateOpen} onClose={() => setGateOpen(false)} initialTab={gateTab} />
       <ConfirmCancel runId={runId} open={confirmCancel} onDismiss={() => setConfirmCancel(false)} onConfirm={() => void cancelRun()} />
     </main>
-  );
-}
-
-function Axis({ label, done, total, tone }: { label: string; done: number; total: number; tone: 'ok' | 'live' | 'warn' | 'bad' }) {
-  const dict = useT();
-  const pct = total <= 0 ? 0 : Math.round((done / total) * 100);
-  return (
-    <div className="axis" role="img" aria-label={dict.common.progressOf(label, done, total)}>
-      <span className="axis__k">
-        <span>{label}</span>
-        <b>
-          {done}/{total}
-        </b>
-      </span>
-      <span className="axis__track" data-tone={tone}>
-        <span className="axis__fill" style={{ width: `${String(pct)}%` }} />
-      </span>
-    </div>
   );
 }

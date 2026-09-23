@@ -126,6 +126,11 @@ export function RegisterProjectDialog({ open, onClose }: { open: boolean; onClos
                   {t.register.instructionsUnreadAfter}
                 </>
               ) : null}
+              {warning.kind === 'instructions_fallback' ? (
+                <>
+                  {t.register.instructionsFallbackBefore}<code>{warning.path}</code>{t.register.instructionsFallbackAfter}
+                </>
+              ) : null}
               {warning.kind === 'active_run' ? (
                 <>
                   {t.register.activeRunBefore}<b>{warning.runId}</b>

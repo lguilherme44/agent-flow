@@ -39,6 +39,7 @@ export function DevicesPage() {
           <span className="eyebrow">{t.nav.devices}</span>
           <h1 className="page-head__title">{t.devices.title}</h1>
           <p className="page-head__sub">{t.devices.description}</p>
+          <p className="page-head__sub faint">{t.devices.howToPair}</p>
         </div>
       </div>
 

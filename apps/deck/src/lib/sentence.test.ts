@@ -15,6 +15,15 @@ describe('describe', () => {
     ).toEqual({ title: 'architecture impact completed', detail: '3m 41s · r1 · 1 repair', tone: 'ok' });
   });
 
+  it('does not call one provider, recorded by an older run, a degradation', () => {
+    // Runs from before 23/09/2026 logged `single_provider`; one provider is a choice.
+    const legacy = { at, type: 'degradation_detected', detail: { kind: 'single_provider', reason: 'plan review on the same provider' } };
+    expect(say(legacy, ptBR)).toEqual({ title: 'Um provedor para todos os papéis', tone: 'ghost' });
+    // A real loss still reads as one.
+    const fallback = { at, type: 'degradation_detected', detail: { kind: 'reasoning_clamped', reason: 'high → medium' } };
+    expect(say(fallback, en).tone).toBe('warn');
+  });
+
   it('reads a failure’s first problem rather than its code', () => {
     expect(say({ at, type: 'stage_failed', detail: { stage: 'planning', problems: ['two tasks declare one file'] } }, en)).toMatchObject({
       title: 'planning failed',

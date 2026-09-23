@@ -68,7 +68,7 @@ export function DoctorPanel({
         )}
       </Section>
 
-      <Section title={t.doctor.capabilities} note={t.doctor.declaredByAdapters}>
+      <Section title={t.doctor.capabilities}>
         <ul className="doctor-list">
           {report.capabilities.map((entry) => (
             <CapabilityRow key={entry.role} entry={entry} />
@@ -76,7 +76,14 @@ export function DoctorPanel({
         </ul>
       </Section>
 
-      <Section title={t.doctor.stageRouting} note={t.doctor.stageRoutingNote}>
+      {/* "Servido demais" was six amber rows on a healthy machine: a cost hint dressed as a
+          warning. One sentence says it, and every row reads as what it is — served. */}
+      <Section
+        title={t.doctor.stageRouting}
+        {...(report.stageRouting.some((row) => row.overpowered)
+          ? { note: t.doctor.lighterRunnerWouldDo(report.stageRouting.filter((row) => row.overpowered).length) }
+          : {})}
+      >
         <ul className="doctor-list">
           {report.stageRouting.map((row) => (
             <StageRow key={row.stage} row={row} />
@@ -129,11 +136,16 @@ function Verdict({ report }: { report: DoctorView }) {
 
 function ToolRow({ tool }: { tool: DoctorToolView }) {
   const t = useT();
-  const belowFloor = tool.belowFloor === true;
+  // Below the floor on PATH is only a problem when no newer Node is there to run the
+  // dashboard — and this page is being served by one, so it usually is (measured 23/09/2026).
+  const belowFloor = tool.belowFloor === true && tool.dashboardNode === undefined;
   return (
     <li className="doctor-row" data-tool={tool.name}>
       <span className="doctor-row__name">{tool.name === 'node' ? 'Node' : 'Git'}</span>
-      <span className="doctor-row__value">{tool.version ?? t.doctor.notFound}</span>
+      <span className="doctor-row__value">
+        {tool.version ?? t.doctor.notFound}
+        {tool.dashboardNode === undefined ? null : <span className="faint">{` · ${t.doctor.dashboardRunsOn(tool.dashboardNode)}`}</span>}
+      </span>
       <Chip tone={tool.present ? (belowFloor ? 'warn' : 'ok') : 'bad'}>
         {tool.present ? (belowFloor ? t.doctor.below(tool.floor ?? '') : t.doctor.installed) : t.crew.missing}
       </Chip>
@@ -154,7 +166,8 @@ function RunnerRow({ runner }: { runner: DoctorRunnerView }) {
             ? (runner.detail ?? t.doctor.willNotRun)
             : t.doctor.auth(authState(t, runner.auth))}
       </span>
-      <Chip tone={tone}>{runner.installed && runner.executable ? authState(t, runner.auth) : t.doctor.unusable}</Chip>
+      {/* The value beside it already says the auth state; the chip only speaks for a finding. */}
+      {tone === 'ghost' || tone === 'ok' ? null : <Chip tone={tone}>{runner.installed && runner.executable ? authState(t, runner.auth) : t.doctor.unusable}</Chip>}
     </li>
   );
 }
@@ -212,11 +225,8 @@ function StageRow({ row }: { row: DoctorStageRoutingView }) {
       <span className="doctor-row__name">{word(t, row.stage)}</span>
       <span className="doctor-row__value">
         {row.runner} · {row.readsRepository ? t.doctor.readsRepository : t.doctor.textInTextOut}
-        {row.overpowered ? (
-          <em className="doctor-row__warn"> · {t.doctor.overpoweredNote}</em>
-        ) : null}
       </span>
-      <Chip tone={row.overpowered ? 'warn' : 'ok'}>{row.overpowered ? t.doctor.overServed : t.doctor.fits}</Chip>
+      <Chip tone="ok">{t.doctor.fits}</Chip>
     </li>
   );
 }

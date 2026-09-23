@@ -79,30 +79,27 @@ test.describe('failure states', () => {
     await assertNoTrace((await page.locator('body').textContent()) ?? '');
   });
 
-  test('a degraded run says what it lost, before the gate is signed', async ({
+  test('a single-provider run is not a degraded one', async ({
     page,
     makeWorld,
   }) => {
-    // One provider means the review is not independent of the planner. Permitted,
-    // weaker, and recorded on the run — the reader has to be told while they still
-    // have the choice, not in a post-mortem.
+    // One provider is the operator's choice, not a lost capability (23/09/2026). It used
+    // to be recorded as `single_provider` on every run and warned about at the gate, for
+    // a setup its owner chose on purpose.
     const world = await makeWorld({ singleProvider: true });
 
     const state = (await world.stateOf('booking-api')) as {
       degradations: Array<{ kind: string }>;
     };
-    expect(state.degradations.map((entry) => entry.kind)).toContain('single_provider');
+    expect(state.degradations.map((entry) => entry.kind)).not.toContain('single_provider');
 
     await openDashboard(page, world);
-    // The degradation detail is on Overview as of M8.5, beside the escalation and the
-    // pipeline. The attention strip carries the headline; this is what it points at.
     await page.getByRole('tab', { name: 'Overview' }).click();
-    await expect(page.getByText(/same.provider/i).first()).toBeVisible();
+    await expect(page.getByText(/same.provider/i)).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Review & approve' }).first().click();
     const dialog = page.getByRole('dialog');
-    await expect(dialog.getByText('same provider')).toBeVisible();
-    // Approvable, and honest about it.
+    await expect(dialog.getByText(/same.provider/i)).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: 'Approve Plan' })).toBeEnabled();
 
     await assertNoTrace((await dialog.textContent()) ?? '');

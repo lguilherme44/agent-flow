@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { StageViewResponse } from '@contracts/index.js';
 import { priorityTone, stageTone, type Tone } from '../lib/tone';
 import { useT, word } from '../lib/i18n';
+import { phasesOf } from '../lib/phases';
 
 /** A status word, toned once. */
 export function Chip({ tone, children, plain = false, title }: { tone: Tone; children: ReactNode; plain?: boolean; title?: string | undefined }) {
@@ -35,28 +36,22 @@ export function Meter({ label, done, total, tone }: { label?: string; done: numb
 }
 
 /**
- * The pipeline as ten cells, one encoding at every size.
+ * A run's five phases as five cells, the run page's phases at lane size.
  *
- * Reads the server's stage view and nothing else: the cell for `approval` is whatever
- * `/stages` said, and a tape with a label is the same tape without one, taller.
- *
- * The short labels are the dictionary's (`stageShort`) and not the stage names: a cell is
- * 34 pixels wide, and `implementação` does not fit in one any more than `implementation`
- * did. Abbreviating is a choice each language makes for itself.
+ * It was eleven cells, one per pipeline stage, and a finished run showed gaps where a
+ * stage had been skipped (a switched-off `e2e`, a `code-review` nobody was routed to) —
+ * which read as work still to come.
  */
-export function Tape({ stages, tall = false }: { stages: readonly StageViewResponse[] | undefined; tall?: boolean }) {
+export function Tape({ stages, finished }: { stages: readonly StageViewResponse[] | undefined; finished: boolean }) {
   const t = useT();
-  const short: Readonly<Record<string, string | undefined>> = t.stageShort;
-  const cells = stages ?? [];
+  const phases = stages === undefined ? [] : phasesOf(stages, undefined, finished);
   return (
     <div className="tape-box">
-      <div className={tall ? 'tape tape--tall' : 'tape'} role="img" aria-label={cells.map((cell) => `${word(t, cell.stage)} ${word(t, cell.status)}`).join(', ')}>
-        {cells.length === 0
-          ? Array.from({ length: 10 }, (_, index) => <span key={index} className="tape__cell" data-tone="ghost" />)
-          : cells.map((stage) => (
-              <span key={stage.stage} className="tape__cell" data-tone={stageTone(stage.status)} title={`${word(t, stage.stage)} · ${word(t, stage.status)}`}>
-                {tall ? <span className="tape__label">{short[stage.stage] ?? stage.stage}</span> : null}
-              </span>
+      <div className="tape" role="img" aria-label={phases.map((phase) => `${t.run.phase[phase.id]} ${word(t, phase.status)}`).join(', ')}>
+        {phases.length === 0
+          ? Array.from({ length: 5 }, (_, index) => <span key={index} className="tape__cell" data-tone="ghost" />)
+          : phases.map((phase) => (
+              <span key={phase.id} className="tape__cell" data-tone={stageTone(phase.status)} title={`${t.run.phase[phase.id]} · ${word(t, phase.status)}`} />
             ))}
       </div>
     </div>

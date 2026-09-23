@@ -59,8 +59,10 @@ export function Shell({ route, connection, version, children }: { route: Route; 
           {link('analytics', t.nav.analytics)}
           {link('doctor', t.nav.doctor)}
           {link('clean', t.nav.clean)}
+          {/* One entry: pairing is the screen a *remote* device lands on by itself when it gets
+              a 401. On the machine running the Deck it had nothing to do, and sat in the menu
+              beside Dispositivos as a second item for the same thing. */}
           {link('devices', t.nav.devices)}
-          {link('pairing', t.nav.pairing)}
         </nav>
         <div className="status-cluster">
           {/*
@@ -82,8 +84,10 @@ export function Shell({ route, connection, version, children }: { route: Route; 
         </div>
       </header>
       {children}
+      {/* The version only. "loopback · sem autenticação · toda escrita passa pelo mesmo caso de uso
+          que o CLI chama" was an architecture note on every screen, and static: it said
+          loopback on a server bound to the network for pairing. */}
       <footer className="footer">
-        <span>{t.nav.footer}</span>
         <span>{version === undefined ? '' : `agent-flow ${version}`}</span>
       </footer>
     </div>

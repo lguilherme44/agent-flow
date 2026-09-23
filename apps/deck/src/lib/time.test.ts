@@ -41,8 +41,10 @@ describe('formatRelative', () => {
     expect(formatRelative('2026-09-04T11:57:00.000Z', now, ptBR.time)).toBe('h\u00e1 3min');
     expect(formatRelative('2026-09-04T09:00:00.000Z', now, ptBR.time)).toBe('h\u00e1 3h');
     expect(formatRelative('2026-09-03T06:00:00.000Z', now, ptBR.time)).toBe('ontem');
-    // A month name is language too, and this is the branch that reaches for one.
-    expect(formatRelative('2026-09-01T06:00:00.000Z', now, ptBR.time)).toMatch(/^set /);
+    // A month name is language too, and so is where it goes: "set 1" was English order
+    // with a Portuguese word in it (measured on the Deck, 23/09/2026).
+    expect(formatRelative('2026-09-01T06:00:00.000Z', now, ptBR.time)).toBe('1 set');
+    expect(formatRelative('2026-09-01T06:00:00.000Z', now, en.time)).toBe('Sep 1');
     expect(formatRelative('2026-09-01T06:00:00.000Z', now, en.time)).toMatch(/^Sep /);
   });
 });

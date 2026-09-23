@@ -101,6 +101,28 @@ describe('CrewPage configuration workflow', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  /** The same server, answering `/runners/health` with `entry` for the one runner. */
+  function withHealth(entry: Record<string, unknown>): void {
+    const base = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes('/runners/health') ? response([entry]) : base(input, init)));
+  }
+
+  it('does not call a runner the configuration turned off "missing"', async () => {
+    // Measured on the real page: an installed claude 2.1.280 read "ausente" because the
+    // global file had `enabled: false`, and nothing had spawned it to find out.
+    withHealth({ id: 'moe', installed: false, executable: false, auth: 'not_configured', unavailable: 'disabled' });
+    render(<CrewPage projectId="flowcanvas" />);
+    expect(await screen.findByRole('button', { name: t.crew.removeRunner('moe') })).toBeInTheDocument();
+    expect(screen.queryByText(t.crew.missing)).toBeNull();
+  });
+
+  it('positive control: a runner that was checked and is not installed still says so', async () => {
+    withHealth({ id: 'moe', installed: false, executable: false, auth: 'unknown' });
+    render(<CrewPage projectId="flowcanvas" />);
+    expect(await screen.findByText(t.crew.missing)).toBeInTheDocument();
+  });
+
   it('names the file each scope writes, and folds inherited values away until asked', async () => {
     render(<CrewPage projectId="flowcanvas" />);
     expect(await screen.findByLabelText(t.common.project)).toHaveValue('flowcanvas');
@@ -109,10 +131,11 @@ describe('CrewPage configuration workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: new RegExp(t.crew.thisProject('')) }));
     expect(await screen.findByText('/wk/flowcanvas/.agent-flow/config.yaml')).toBeInTheDocument();
 
-    // The runner a role points at cannot be removed while that reference stands.
-    expect(await screen.findByRole('button', { name: t.crew.removeRunner('moe') })).toBeDisabled();
-    // The count is what the card shows; the paths themselves are its title.
-    expect(screen.getByText(t.crew.referencedByRoutes(1))).toHaveAttribute('title', 'roles.architect.runner');
+    // The runner a role points at cannot be removed while that reference stands, and the
+    // disabled button says which paths hold it.
+    const remove = await screen.findByRole('button', { name: t.crew.removeRunner('moe') });
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAttribute('title', t.crew.referencedBy('roles.architect.runner'));
 
     fireEvent.click(await screen.findByRole('tab', { name: new RegExp(t.crew.advanced) }));
     // Runners and the three routed leaves belong to the Crew tab, so they are not counted
@@ -185,15 +208,17 @@ describe('CrewPage configuration workflow', () => {
     render(<CrewPage />);
     const model = await screen.findByLabelText('roles.architect.model');
 
-    // `architect` is routed to `moe`, so the ids offered are the ones `moe` reported.
-    expect(model).toHaveAttribute('list');
-    const list = document.getElementById(model.getAttribute('list') ?? '');
-    expect([...(list?.querySelectorAll('option') ?? [])].map((option) => option.getAttribute('value')))
-      .toEqual(['gpt-5-codex', 'gpt-5-codex-mini']);
+    // `architect` is routed to `moe`, so the ids offered are the ones `moe` reported —
+    // once, in one control: it used to be a text box and a select offering the same list.
+    expect(model.tagName).toBe('SELECT');
+    const offered = [...model.querySelectorAll('option')].map((option) => option.getAttribute('value'));
+    expect(offered.slice(1, -1)).toEqual(['gpt-5-codex', 'gpt-5-codex-mini']);
 
     // A suggestion, not a constraint: a model released this morning is still typeable.
-    expect(model.tagName).toBe('INPUT');
-    fireEvent.change(model, { target: { value: 'a-model-released-this-morning' } });
+    fireEvent.change(model, { target: { value: offered.at(-1) } });
+    const typed = await screen.findByLabelText('roles.architect.model');
+    expect(typed.tagName).toBe('INPUT');
+    fireEvent.change(typed, { target: { value: 'a-model-released-this-morning' } });
     await waitFor(() => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/config/editor/validate'));
       const body = JSON.parse(String(call?.[1]?.body)) as { operations: unknown[] };
@@ -240,8 +265,8 @@ describe('CrewPage configuration workflow', () => {
     render(<CrewPage />);
     await screen.findByLabelText(t.crew.assignEveryRole);
 
-    // `moe` is enabled and `architect` points at it: a plain reference, stated quietly.
-    expect(screen.getByText(t.crew.referencedByRoutes(1))).toBeInTheDocument();
+    // `moe` is enabled and `architect` points at it: a plain reference, nothing to say.
+    expect(screen.queryByText(t.crew.brokenBySwitch(1))).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('switch', { name: /runners\.moe\.enabled/ }));
 
@@ -316,9 +341,10 @@ describe('CrewPage configuration workflow', () => {
     render(<CrewPage projectId="flowcanvas" />);
     const card = (await screen.findByText('moe', { selector: '.runner-card__id' })).closest('.runner-card');
     expect(card).not.toBeNull();
-    // Health used to live in a separate card at the foot of the page, unconnected to the
-    // configuration it describes.
-    expect(card).toHaveTextContent(/configured/i);
+    // Health lives on the card, and a healthy runner carries no chip: the shallow check's
+    // "configured"/"unknown" sat on every card and said nothing. The positive control
+    // above keeps the finding (a runner not installed) visible.
+    expect(card?.querySelector('.chip')).toBeNull();
     // `codex-cli` is a type the server declares; the card can therefore say what it does.
     expect(card).toHaveTextContent(t.crew.worksInRepo);
     expect(screen.getByRole('button', { name: t.crew.removeRunner('moe') })).toBeDisabled();

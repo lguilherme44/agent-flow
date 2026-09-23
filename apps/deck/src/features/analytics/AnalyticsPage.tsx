@@ -5,7 +5,7 @@ import { useResource } from '../../lib/store';
 import { formatDuration } from '../../lib/time';
 import { runtimeTone } from '../../lib/tone';
 import { useT, word } from '../../lib/i18n';
-import { Chip, Empty, Meter, NoProjectsYet, Notice, Skeleton, Stat } from '../../components/ui';
+import { Chip, Empty, Meter, NoProjectsYet, Skeleton, Stat } from '../../components/ui';
 
 /**
  * Aggregates over recent runs (7.4).
@@ -129,12 +129,10 @@ export function AnalyticsPage({ projectId }: { projectId?: string }) {
             rows={data.byModel}
             total={data.totals.durationMs}
             empty={t.analytics.noModelReported}
+            verbatim
           />
           <Buckets title={t.analytics.byRole} rows={data.byRole} total={data.totals.durationMs} />
 
-          <Notice tone="ghost" k={t.analytics.noFiguresKey}>
-            {t.analytics.noFigures}
-          </Notice>
         </>
       )}
     </main>
@@ -174,6 +172,7 @@ function Outcomes({ data }: { data: AnalyticsView }) {
 
       {tasks.length === 0 ? null : (
         <p className="doctor-finding analytics-statuses" data-tone="idle">
+          <span className="doctor-row__name">{t.analytics.tasks}</span>
           {tasks.map(([state, count]) => (
             <Chip key={state} tone={runtimeTone(state)}>
               {String(count)} {word(t, state)}
@@ -190,11 +189,14 @@ function Buckets({
   rows,
   total,
   empty,
+  verbatim = false,
 }: {
   title: string;
   rows: readonly MetricBucketView[];
   total: number;
   empty?: string;
+  /** Keys are identifiers (model ids), shown as written — never humanised into "claude opus 5 5". */
+  verbatim?: boolean;
 }) {
   const t = useT();
   const sorted = [...rows].sort((a, b) => b.durationMs - a.durationMs);
@@ -210,17 +212,19 @@ function Buckets({
         <ul className="doctor-list">
           {sorted.map((bucket) => (
             <li key={bucket.key} className="telemetry-row">
-              <span className="doctor-row__name">{word(t, bucket.key)}</span>
+              <span className={verbatim ? 'doctor-row__name mono' : 'doctor-row__name'}>{verbatim ? bucket.key : word(t, bucket.key)}</span>
               <Meter
                 label={formatDuration(bucket.durationMs)}
                 done={bucket.durationMs}
                 total={total === 0 ? 1 : total}
-                tone={bucket.failures > 0 ? 'bad' : 'live'}
+                // The bar is time. Painting it red for one failed call in twenty-one turned
+                // every row red and hid which one actually failed (measured 23/09/2026).
+                tone="live"
               />
               <span className="doctor-row__value">
                 {t.telemetry.calls(bucket.count)}
                 {bucket.retries > 0 ? ` · ${t.telemetry.retried(bucket.retries)}` : ''}
-                {bucket.failures > 0 ? ` · ${t.telemetry.failed(bucket.failures)}` : ''}
+                {bucket.failures > 0 ? <span style={{ color: 'var(--bad)' }}>{` · ${t.telemetry.failed(bucket.failures)}`}</span> : null}
               </span>
             </li>
           ))}

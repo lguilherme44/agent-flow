@@ -3,7 +3,7 @@ import type { ConfigEditorFieldView, ConfigEditorView, RoleRouteView, RunnerMode
 import type { ConfigEditorOperation } from '../../lib/api';
 import { Empty, Skeleton } from '../../components/ui';
 import { level, useT, type Dictionary } from '../../lib/i18n';
-import { displayValue, pathLabel, roleNeeds, runnerIdsOf } from './crew-config';
+import { pathLabel, roleNeeds, runnerIdsOf } from './crew-config';
 import { FieldControl } from './FieldControl';
 
 /**
@@ -278,7 +278,7 @@ function RoutingRow({ role, view, runners, models, operations, onChange }: {
           ) : null}
           <span className="crew-roles__name mono">{role.role}</span>
         </div>
-        <small>{role.prompts.join(', ')}</small>
+        <small>{role.prompts.map((stage) => (t.stageLong as Readonly<Record<string, string | undefined>>)[stage] ?? stage).join(', ')}</small>
       </td>
       <td>
         <span className="tag-list">
@@ -343,9 +343,11 @@ function RoutingSwitch({ field, operations, onChange }: {
  * already configured with, which is the shipped default and deliberate (AD-13). Saying
  * "inherits not set" under it described the schema instead of the behaviour.
  */
-function originNote(t: Dictionary, field: ConfigEditorFieldView, inherited: boolean): string {
+function originNote(t: Dictionary, field: ConfigEditorFieldView, inherited: boolean): string | undefined {
   if (!inherited) return t.crew.setIn(field.origin ?? t.crew.thisSource);
-  return field.effectiveValue === undefined ? t.crew.runnerDecides : t.crew.inherits(displayValue(t, field.effectiveValue));
+  // An inherited value is already in the control ("herdar · high"); a caption saying
+  // "herda high" under it said it twice on every row (measured 23/09/2026).
+  return field.effectiveValue === undefined ? t.crew.runnerDecides : undefined;
 }
 
 /** One editable leaf of a role's route, addressed by the path the server published. */
@@ -371,6 +373,7 @@ function RoutingCell({ role, view, leaf, options, suggestions, operations, onCha
       : field.explicitValue === undefined ? '' : String(field.explicitValue);
   const inherited = (field.explicitValue === undefined && operation === undefined) || operation?.kind === 'unset';
   const id = `route-${label}`;
+  const note = originNote(t, field, inherited);
   return (
     <td>
       <label className="visually-hidden" htmlFor={id}>{label}</label>
@@ -384,19 +387,9 @@ function RoutingCell({ role, view, leaf, options, suggestions, operations, onCha
           {...(suggestions === undefined ? {} : { suggestions })}
           onChange={(value, inherit) => onChange(field, value, inherit)}
         />
-        {leaf === 'model' && !inherited ? (
-          <button
-            type="button"
-            className="btn btn--sm btn--ghost crew-roles__clear-btn"
-            title={t.crew.inherit}
-            aria-label={`${t.crew.inherit} (${label})`}
-            onClick={() => onChange(field, '', true)}
-          >
-            ×
-          </button>
-        ) : null}
       </div>
-      <small className="crew-roles__origin">{originNote(t, field, inherited)}</small>
+      {/* No separate clear button: the list's first option is the way back to inheriting. */}
+      {note === undefined ? null : <small className="crew-roles__origin">{note}</small>}
     </td>
   );
 }

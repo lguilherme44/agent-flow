@@ -63,7 +63,21 @@ describe('the analytics page', () => {
     render(<AnalyticsPage />);
 
     expect(await screen.findByText(t.analytics.scope(50, 200, true))).toBeInTheDocument();
-    expect(screen.getByText(/50 de 200 runs/)).toBeInTheDocument();
+    expect(screen.getByText(/50 de 200 execuções/)).toBeInTheDocument();
+  });
+
+  it('names a model by its id, verbatim', async () => {
+    // Measured on the real page, 23/09/2026: the model list read "claude opus 5 5" — the
+    // humaniser meant for stage tokens turned the id's hyphens into spaces, and the one
+    // string a person copies into the Crew page stopped being copyable.
+    serve({
+      ...ANALYTICS,
+      byModel: [{ key: 'claude-opus-5-5', count: 2, durationMs: 1_000_000, failures: 0, fallbacks: 0, retries: 0 }],
+    });
+    render(<AnalyticsPage />);
+
+    const models = await screen.findByLabelText(t.telemetry.byModel);
+    expect([...models.querySelectorAll('.doctor-row__name')].map((node) => node.textContent)).toEqual(['claude-opus-5-5']);
   });
 
   it('ranks the stages by time, longest first', async () => {
@@ -84,13 +98,14 @@ describe('the analytics page', () => {
     expect(outcomes.textContent).toContain(`6 ${t.words.failed}`);
   });
 
-  it('shows no monetary figure, and says that is deliberate', async () => {
+  it('shows no monetary figure', async () => {
     // The declared decision, asserted rather than assumed: a page that grew a currency
-    // later would have to come and delete this.
+    // later would have to come and delete this. The paragraph explaining it on the page
+    // went on 23/09/2026 — it explained a feature that does not exist.
     serve();
     render(<AnalyticsPage />);
 
-    expect(await screen.findByText(t.analytics.noFigures)).toBeInTheDocument();
+    await screen.findByLabelText(t.telemetry.byStage);
     expect(document.body.textContent).not.toMatch(/[$€£]\s?\d/);
   });
 

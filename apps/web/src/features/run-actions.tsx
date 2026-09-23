@@ -428,11 +428,6 @@ function GateBody(props: {
             judged a different plan
           </Badge>
         ) : null}
-        {review?.independence === 'same-provider-fresh-context' ? (
-          <Badge tone="warning" caps>
-            same provider
-          </Badge>
-        ) : null}
         {freshness === undefined ? null : (
           <Tooltip content={<span>{freshness.explanation}</span>}>
             <Badge tone={freshness.tone} caps>
