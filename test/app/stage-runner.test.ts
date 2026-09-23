@@ -48,7 +48,14 @@ const SDD_STAGE: StageDefinition = {
   artifact: 'sdd',
 };
 
-async function harness(options: { runner?: FakeAgentRunner; prompt?: string; recordPrompts?: boolean } = {}) {
+async function harness(
+  options: {
+    runner?: FakeAgentRunner;
+    prompt?: string;
+    recordPrompts?: boolean;
+    language?: 'en' | 'pt-BR';
+  } = {},
+) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const runner = options.runner ?? new FakeAgentRunner('claude');
@@ -66,9 +73,13 @@ async function harness(options: { runner?: FakeAgentRunner; prompt?: string; rec
     fs,
     clock,
     store,
-    config: options.recordPrompts === true
-      ? { ...config, execution: { ...config.execution, recordPrompts: true } }
-      : config,
+    config: {
+      ...config,
+      ...(options.recordPrompts === true
+        ? { execution: { ...config.execution, recordPrompts: true } }
+        : {}),
+      ...(options.language === undefined ? {} : { language: options.language }),
+    },
     capabilities: CAPABILITIES,
     promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
     getRunner: () => runner,
@@ -1085,5 +1096,76 @@ describe('the prompt is measured, by source (AR-09)', () => {
     );
 
     expect(measured?.detail?.['overCeiling']).toBe(false);
+  });
+});
+
+/**
+ * What language a run's artefacts come back in.
+ *
+ * Three sound decisions combined into one nobody chose: the CLI is English by
+ * construction, a renderer must never rewrite a model's words, and `--setting-sources ''`
+ * strips the operator's own `language` for reproducibility. The result was a Portuguese
+ * dashboard whose every SDD, plan and task title was English — and the phrase book could
+ * not fix it, because none of that prose is the product's to write.
+ */
+describe('the language a stage writes in', () => {
+  it('sends no system prompt at all for English, so nothing changes by default', async () => {
+    const { stageRunner, run, runner } = await harness();
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'recurring bookings' });
+
+    expect(runner.lastCall?.systemPrompt).toBeUndefined();
+  });
+
+  it('instructs the model to write its prose in the configured language', async () => {
+    const { stageRunner, run, runner } = await harness({ language: 'pt-BR' });
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'recurring bookings' });
+
+    const systemPrompt = runner.lastCall?.systemPrompt ?? '';
+    expect(systemPrompt).toContain('Brazilian Portuguese');
+    // The artefacts a person actually reads, named explicitly — a model told only
+    // "write in Portuguese" translates the summary and leaves the task titles.
+    expect(systemPrompt).toContain('task titles');
+    expect(systemPrompt).toContain('acceptance criteria');
+  });
+
+  /**
+   * The half that makes the instruction safe to give at all.
+   *
+   * Later stages match on `FR-001` and `TASK-004`, and the repository's own paths and
+   * commands are quoted back verbatim. A model that helpfully localised those would break
+   * the matching that makes a plan machine-readable — so the instruction has to forbid it,
+   * and this is the assertion that keeps the forbidding there.
+   */
+  it('forbids translating the identifiers later stages match on', async () => {
+    const { stageRunner, run, runner } = await harness({ language: 'pt-BR' });
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'recurring bookings' });
+
+    const systemPrompt = runner.lastCall?.systemPrompt ?? '';
+    expect(systemPrompt).toContain('Do NOT translate');
+    expect(systemPrompt).toContain('FR-001');
+    expect(systemPrompt).toContain('TASK-004');
+    expect(systemPrompt).toContain('file paths');
+  });
+
+  it('carries the instruction on every stage, not only the first', async () => {
+    // The repair loop re-invokes the runner, and a language that applied only to the
+    // first attempt would produce an artefact whose halves disagree.
+    const { stageRunner, run, runner } = await harness({ language: 'pt-BR' });
+    runner.pushText('# SDD');
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'one' });
+
+    runner.pushText('# SDD again');
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'two' });
+
+    expect(runner.calls).toHaveLength(2);
+    for (const call of runner.calls) {
+      expect(call.systemPrompt ?? '').toContain('Brazilian Portuguese');
+    }
   });
 });

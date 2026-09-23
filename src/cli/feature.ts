@@ -295,11 +295,40 @@ export function writeStageProgress(stage: string, status: string, verbose: boole
  * plan (§17), so a plan produced after approval has not been through it — and
  * leaving the flag set would let unreviewed work execute.
  */
+
+/**
+ * Which stages a revision may re-enter, and why the list is two long rather than four.
+ *
+ * `planning` is the default and the common case: the finding is about the plan. `sdd` is
+ * for a finding about the specification — the case that had no answer at all, where the
+ * planner corrects the plan, the plan then contradicts a specification nothing can change,
+ * and the next review rejects it for the contradiction. Measured: the cycle could not
+ * converge, and the way out was a fresh run costing a full planning pass to change one row
+ * of one table.
+ *
+ * `discovery` and `architecture-impact` are deliberately absent. Discovery is
+ * feature-agnostic and cached across runs, so re-entering there is `--no-cache` on a fresh
+ * run rather than a revision of this one — and offering the most expensive stage in the
+ * product as a response to a review finding is not a kindness.
+ */
+const REVISABLE_STAGES = ['sdd', 'planning'] as const;
 export async function runReviseCommand(
-  flags: InstructionFlags,
+  flags: InstructionFlags & { readonly from?: string },
   globals: GlobalOptions,
 ): Promise<ExitCodeValue> {
   try {
+    // Validated before anything is read: a bad stage name should not open an editor.
+    const from = flags.from ?? 'planning';
+    if (!(REVISABLE_STAGES as readonly string[]).includes(from)) {
+      process.stderr.write(
+        `--from "${from}" is not a stage a revision can re-enter.\n` +
+          `  Use one of: ${REVISABLE_STAGES.join(', ')}.\n` +
+          `  A finding about the plan is "planning" (the default); one about the\n` +
+          `  specification is "sdd", which re-runs planning after it.\n`,
+      );
+      return ExitCode.CONFIG_ERROR;
+    }
+
     // AR-08: the instruction may arrive as an argument, a file, stdin or an editor buffer.
     // Which one is decided first because it is pure and free, and a bad invocation should
     // not reach the filesystem at all.
@@ -326,7 +355,7 @@ export async function runReviseCommand(
     }
     const instruction = read.instruction;
 
-    const outcome = await revise(deps, runId, instruction);
+    const outcome = await revise(deps, runId, instruction, from as RunStage);
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);

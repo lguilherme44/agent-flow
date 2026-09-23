@@ -11,6 +11,7 @@ import { CollaborationConfigSchema } from './collaboration-config.schema.js';
 import { TeamsConfigSchema } from './team.schema.js';
 import { QualityConfigSchema } from './review.schema.js';
 import { ForgeConfigSchema } from './forge.schema.js';
+import { LocaleSchema, DEFAULT_LOCALE } from './locale.js';
 
 /**
  * Default per-role timeout. A hung CLI must not stall a run forever (R-11).
@@ -490,6 +491,29 @@ export const GlobalConfigSchema = z.object({
    * repository add a member would let a repository decide who runs code on this machine.
    */
   teams: TeamsConfigSchema.prefault({}),
+  /**
+   * The language this installation writes in — its own sentences AND the prose its agents
+   * produce (SDDs, plans, task titles, review findings).
+   *
+   * **This exists because three separate, individually sound decisions combined into one
+   * nobody chose.** `core/phrases/index.ts` says the CLI is English "by construction"
+   * because terminal output gets grepped and pasted into issues. It also says, correctly,
+   * that a renderer must never rewrite a model's words. And `claude-code-runner.ts` strips
+   * the operator's `~/.claude/settings.json` with `--setting-sources ''` — a measured fix
+   * for reproducibility, whose side effect is that the `language` setting which WOULD have
+   * made the model answer in Portuguese is removed before it can. So the phrase book
+   * reached the browser and nothing else, and every artefact a person actually reads came
+   * back in English no matter what they configured.
+   *
+   * **Here rather than in the operator's personal settings, which is the whole point.** A
+   * run must not change because of whose machine started it; that invariant is why
+   * `--setting-sources ''` is there and it stays. A language declared in the project's own
+   * configuration is reproducible by construction: every operator of this repository gets
+   * the same one, and it travels with the repository rather than with a laptop.
+   *
+   * English when absent, so nothing changes for an installation that never sets it.
+   */
+  language: LocaleSchema.default(DEFAULT_LOCALE),
   /**
    * What a quality gate means, and how a review blocks (M6).
    *

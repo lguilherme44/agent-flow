@@ -66,6 +66,25 @@ export interface ResolvedWebDir {
  * Binds to loopback by default. Binding outside loopback requires remote access
  * authentication (`--pair` or `ui.pairing.enabled: true`, FR-019).
  */
+/**
+ * The running version when it is below `major.minor`, or nothing when it is fine.
+ *
+ * Returns the version rather than a boolean so the refusal can name what it found: "this
+ * is 20.10.0" is actionable in a way that "your Node is too old" is not, especially on a
+ * machine with several installed.
+ */
+export function nodeBelow(version: string, major: number, minor: number): string | undefined {
+  const match = /^(\d+)\.(\d+)\./.exec(version);
+  // Unparseable: say nothing. Refusing to start over a version string nothing understood
+  // would turn a cosmetic surprise into an outage.
+  if (match === null) return undefined;
+
+  const runningMajor = Number(match[1]);
+  const runningMinor = Number(match[2]);
+  const below = runningMajor < major || (runningMajor === major && runningMinor < minor);
+  return below ? version : undefined;
+}
+
 export async function runUiCommand(
   root: string | undefined,
   options: UiOptions,
@@ -80,6 +99,29 @@ export async function runUiCommand(
   const processRunner = new NodeProcessRunner();
 
   try {
+    // Refused here rather than crashed at import time, and only for `ui`.
+    //
+    // The dashboard's server stack reaches an ESM-only `content-disposition` through
+    // `@fastify/static`'s `require()`, and `require()` of an ES module landed in Node
+    // 20.19. Below that the process dies with `ERR_REQUIRE_ESM` naming two node_modules
+    // paths — a message that sends the reader to a dependency graph rather than to their
+    // runtime. Measured on 20.10.
+    //
+    // The floor belongs to this command, not to the product: `engines.node` is `>=20` and
+    // CI proves the installed CLI runs there, so raising it would exclude a Node the rest
+    // of agent-flow genuinely supports.
+    const nodeFloor = nodeBelow(process.versions.node, 20, 19);
+    if (nodeFloor !== undefined) {
+      process.stderr.write(
+        `The dashboard needs Node 20.19 or newer; this is ${nodeFloor}.\n\n` +
+          'Its server stack `require()`s an ESM-only module, which Node learned to do in\n' +
+          '20.19. On an older Node the process exits with ERR_REQUIRE_ESM naming a\n' +
+          'dependency rather than the runtime.\n\n' +
+          'Everything else in agent-flow runs on Node 20. Only `ui` needs the newer one.\n',
+      );
+      return ExitCode.CONFIG_ERROR;
+    }
+
     const port = parsePort(options.port);
     const host = options.host ?? DEFAULT_UI_HOST;
     // Relative to where the command was typed, as every shell path is. The

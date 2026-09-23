@@ -128,6 +128,78 @@ export interface Phrases {
     readonly rolesWillRunOn: (from: string, to: string) => string;
     readonly onlyOneUsable: (provider: string) => string;
     readonly noCrossProviderReview: string;
+    readonly runnerGrantsNoTools: (runner: string) => string;
+    readonly implementationCannotRunCommands: (runner: string) => string;
+
+    /**
+     * The report's own headings and labels.
+     *
+     * Multi-line entries are arrays rather than strings with `\n` in them: the renderer
+     * indents each line itself, and a translation that changed the line count would
+     * otherwise break the indentation silently. An array makes the count part of the
+     * contract that this interface enforces across both books.
+     */
+    readonly labelInstalled: string;
+    readonly labelExecutable: string;
+    readonly labelAuth: string;
+    readonly labelVersion: string;
+    readonly labelDetail: string;
+    readonly livePro: string;
+    readonly quotaDoesNotChangeVerdict: readonly string[];
+    readonly probeCouldNotUseTool: readonly string[];
+    readonly rolesWithNowhereToRun: string;
+    readonly unusableAndNoFallback: (primary: string) => string;
+    readonly rolesWhoseConfigCannotRun: string;
+    readonly seeCapabilitiesAbove: string;
+    readonly configErrorsNotDegradations: readonly string[];
+    readonly degradedHeading: string;
+    readonly noteLabel: string;
+    readonly remediationHeading: string;
+    readonly fixLabel: string;
+    readonly remoteAccessHeading: string;
+    readonly remoteEnabled: (sessions: number) => string;
+    readonly remoteOff: string;
+    readonly admittedAddresses: string;
+    readonly workStillPossible: string;
+    readonly capabilitiesHeading: string;
+    readonly runnerDefaultModel: string;
+    readonly cannotRun: (errorKind: string) => string;
+    readonly effortNotOffered: (requested: string, supported: string) => string;
+    readonly willBeClamped: (effective: string) => string;
+    readonly effortSupported: (effective: string, supported: string) => string;
+    readonly doesNotDeclareToolClass: (runner: string, toolClass: string) => string;
+    readonly declaredCapabilitiesCaveat: readonly string[];
+    readonly installProbeHeading: string;
+    readonly checkoutDirtyBeforeInstall: string;
+    readonly worktreeRefusesDirtyCheckout: string;
+    readonly installFailedInFreshCheckout: (command: string) => string;
+    readonly worktreeRunsInstallEveryTask: string;
+    readonly installLeavesCheckoutClean: (command: string) => string;
+    readonly installModifiesTrackedFiles: (command: string) => string;
+    readonly worktreeWillRefuseEveryTask: string;
+    readonly useLockfileRespectingInstall: string;
+    readonly belowWorktreeFloor: (floor: string) => string;
+    readonly worktreeNeedsVersion: (floor: string) => string;
+    readonly belowNodeFloor: (floor: string) => string;
+    readonly nodeNeedsVersion: (floor: string) => string;
+
+    readonly authConfigured: string;
+    readonly authAvailable: string;
+    readonly authNotConfigured: string;
+    readonly authNotVerifiedShort: string;
+    readonly verdictOkWithNote: string;
+
+    readonly planReviewSameProvider: string;
+    readonly finalReviewSameProvider: string;
+
+    readonly stageRoutingHeading: string;
+    readonly readsRepository: string;
+    readonly textInTextOut: string;
+    readonly stageOpensNoFile: string;
+    readonly configuredAndUnrouted: string;
+    readonly noRolePointsAtIt: string;
+    readonly pointARoleAtOne: string;
+
     readonly nodeMissing: string;
     readonly installNode: string;
     readonly gitMissingOrOld: string;

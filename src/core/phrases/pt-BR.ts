@@ -104,6 +104,14 @@ export const ptBR: Phrases = {
     noCrossProviderReview:
       'a revisão de plano e a revisão final não podem ser entre provedores; elas vão rodar no ' +
       'mesmo provedor com contexto novo, o que não protege contra uma suposição errada repetida',
+    runnerGrantsNoTools: (runner) =>
+      `o runner "${runner}" não recebe nenhuma ferramenta além de editar arquivos`,
+    implementationCannotRunCommands: (runner) =>
+      'um estágio de implementação vai conseguir editar arquivos mas não rodar um único ' +
+      'comando. Este projeto declara commands, e install, lint, test e build seriam todos ' +
+      'recusados, sem aprovação, numa sessão não-interativa. Conceda os binários que esses ' +
+      `commands já nomeiam, ex.: runners.${runner}.args: ` +
+      "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)']",
     nodeMissing: 'O Node.js não está no PATH',
     installNode: 'Instale o Node.js 20+ (https://nodejs.org ou via fnm/nvm)',
     gitMissingOrOld: 'O Git não existe ou é mais antigo que 2.38',
@@ -131,6 +139,100 @@ export const ptBR: Phrases = {
     installProbeReason: 'sonda de instalação do agent-flow doctor',
     remoteAccessUndetermined:
       'o status de acesso remoto não pode ser determinado a partir de um terminal; consulte o servidor em execução',
+
+    // ── O chrome do próprio relatório ────────────────────────────────────────────────
+    // `runner`, `worktree`, `effort`, `forge` e `fallback` ficam como estão: são termos
+    // do produto, aparecem nas chaves de configuração que a pessoa vai digitar, e
+    // traduzi-los criaria dois nomes para a mesma coisa — um na tela, outro no YAML.
+    labelInstalled: 'instalado',
+    labelExecutable: 'executável',
+    labelAuth: 'autenticação',
+    labelVersion: 'versão',
+    labelDetail: 'detalhe',
+    livePro: 'Sonda ao vivo:',
+    quotaDoesNotChangeVerdict: [
+      'Cota e chamadas falhas são reportadas mas não mudam o veredito:',
+      'um orçamento gasto é uma janela de cobrança, e uma resposta ruim não é um',
+      'ambiente quebrado. Credenciais ausentes mudam sim — foi para isso que',
+      'o --deep existe.',
+    ],
+    probeCouldNotUseTool: [
+      'A sonda rodou em modo leitura e não conseguiu usar nenhuma ferramenta. Conceda',
+      'acesso não-interativo a ferramentas na configuração do próprio CLI do runner.',
+    ],
+    rolesWithNowhereToRun: 'Papéis sem onde rodar:',
+    unusableAndNoFallback: (primary) => `"${primary}" não é utilizável e não tem fallback`,
+    rolesWhoseConfigCannotRun: 'Papéis cuja configuração não consegue rodar:',
+    seeCapabilitiesAbove: 'veja Capacidades acima',
+    configErrorsNotDegradations: [
+      'Estes são erros de configuração, não degradações: o estágio falha no contato,',
+      'toda vez. Aponte o papel para um runner que faça o que os prompts dele exigem.',
+    ],
+    degradedHeading: 'Degradado:',
+    noteLabel: 'Nota',
+    remediationHeading: 'Correção:',
+    fixLabel: 'Como corrigir',
+    remoteAccessHeading: 'Acesso remoto:',
+    remoteEnabled: (sessions) =>
+      `ligado (${String(sessions)} sessão${sessions === 1 ? '' : 'ões'} ao vivo)`,
+    remoteOff: 'desligado',
+    admittedAddresses: 'endereços admitidos',
+    workStillPossible:
+      'Ainda dá para trabalhar. Use --strict para tratar isto como falha no CI.',
+    capabilitiesHeading: 'Capacidades (declaradas — nenhum runner foi invocado)',
+    runnerDefaultModel: '(padrão do runner)',
+    cannotRun: (errorKind) => `não consegue rodar: ${errorKind}`,
+    effortNotOffered: (requested, supported) =>
+      `o effort ${requested} não é oferecido por esta dupla (suportados: ${supported})`,
+    willBeClamped: (effective) => `será limitado a ${effective}, e isso fica registrado na run`,
+    effortSupported: (effective, supported) => `effort ${effective} (suportados: ${supported})`,
+    doesNotDeclareToolClass: (runner, toolClass) =>
+      `"${runner}" não declara ${toolClass}, que os prompts deste papel precisam`,
+    declaredCapabilitiesCaveat: [
+      'Capacidades declaradas são lidas dos adapters, nunca inferidas de uma run que por',
+      'acaso deu certo. Uma concessão ausente é um aviso: ela não impede a execução.',
+    ],
+    installProbeHeading: 'Sonda de instalação',
+    checkoutDirtyBeforeInstall:
+      'um checkout novo deste repositório não está limpo antes de instalar',
+    worktreeRefusesDirtyCheckout:
+      'O modo worktree recusa uma tarefa cujo checkout está sujo (fase: checkout).',
+    installFailedInFreshCheckout: (command) => `\`${command}\` falhou num checkout novo`,
+    worktreeRunsInstallEveryTask:
+      'O modo worktree roda isso antes de cada tarefa, então toda tarefa falharia aqui.',
+    installLeavesCheckoutClean: (command) => `\`${command}\` deixa um checkout novo limpo`,
+    installModifiesTrackedFiles: (command) =>
+      `\`${command}\` modifica arquivos versionados ou não ignorados:`,
+    worktreeWillRefuseEveryTask:
+      'O modo worktree vai recusar toda tarefa neste projeto (fase: setup).',
+    useLockfileRespectingInstall:
+      'Use uma instalação que respeite o lockfile — no npm, `commands.install: npm ci`.',
+    belowWorktreeFloor: (floor) => `abaixo do mínimo ${floor} exigido pelo modo worktree`,
+    worktreeNeedsVersion: (floor) => `o modo worktree precisa de ${floor} ou mais novo`,
+    belowNodeFloor: (floor) => `o dashboard precisa de ${floor} ou mais novo; o \`ui\` vai recusar`,
+    nodeNeedsVersion: (floor) => `o \`ui\` precisa de ${floor} ou mais novo`,
+
+    authConfigured: 'configurada',
+    authAvailable: 'disponível',
+    authNotConfigured: 'não configurada',
+    authNotVerifiedShort: 'não verificada (use --deep)',
+    verdictOkWithNote: 'OK — nada aqui impede uma run, mas veja a nota acima',
+
+    planReviewSameProvider:
+      'a revisão do plano é do mesmo provedor: uma suposição errada feita no planejamento ' +
+      'pode ser repetida em vez de pega',
+    finalReviewSameProvider:
+      'a revisão final é do mesmo provedor: o modelo que escreveu o código é também quem o julga',
+
+    stageRoutingHeading: 'Roteamento de estágios (qual runner serve o quê)',
+    readsRepository: 'lê o repositório',
+    textInTextOut: 'texto entra, texto sai',
+    stageOpensNoFile:
+      'este estágio não abre arquivo — um runner `openai-compatible` daria conta',
+    configuredAndUnrouted: 'Configurados e sem rota',
+    noRolePointsAtIt: 'nenhum papel aponta para ele',
+    pointARoleAtOne:
+      'Aponte um papel para ele para usá-lo; o `doctor` só reporta o que um papel resolve.',
   },
   delivery: {
     noForgeConfigured: 'nenhuma forge está configurada, então esta run não entrega em lugar nenhum',

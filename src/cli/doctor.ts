@@ -14,7 +14,7 @@ import {
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { renderStageRouting, renderUnusedRunners } from './render/routing.js';
-import { en, type Phrases } from '../core/phrases/index.js';
+import { en, phrasesFor, type Phrases } from '../core/phrases/index.js';
 import type { GlobalOptions } from './index.js';
 
 export interface DoctorOptions {
@@ -26,6 +26,16 @@ const TICK = '✓';
 const CROSS = '✗';
 const DASH = '·';
 const WARN = '⚠';
+
+/**
+ * Column width for the runner labels, wide enough for the longest in any book.
+ *
+ * The labels used to be literals padded by hand to 19 characters. Translating them made
+ * the width a property of the language — `auth` is four characters and `autenticação` is
+ * twelve — so the constant is the only way the values stay in one column whichever book
+ * is loaded.
+ */
+const LABEL_WIDTH = 19;
 
 /**
  * `agent-flow doctor` — is this environment able to work?
@@ -55,11 +65,18 @@ export async function runDoctorCommand(
       projectDir: globals.cwd,
     });
 
+    // The reader's language, resolved once and passed to both halves. `diagnose` composes
+    // the sentences and `renderDiagnosis` lays them out; letting either fall back to its
+    // `Phrases = en` default is how a screen ends up half translated, which is worse than
+    // one in the wrong language because the reader cannot tell which half is stale.
+    const say = phrasesFor(config.global.language);
+
     const diagnosis = await diagnose({
       fs,
       processRunner,
       host: new NodeHost(),
       config,
+      say,
       projectDir: globals.cwd,
       promptsDir: resolvePromptsDir(),
       // The CLI may read the environment; the server may not (§93). Passing it here is
@@ -77,7 +94,7 @@ export async function runDoctorCommand(
       },
     });
 
-    process.stdout.write(`${renderDiagnosis(diagnosis, globals.strict).join('\n')}\n`);
+    process.stdout.write(`${renderDiagnosis(diagnosis, globals.strict, say).join('\n')}\n`);
 
     if (globals.json) {
       process.stdout.write(
@@ -111,14 +128,14 @@ export async function runDoctorCommand(
 export function renderDiagnosis(diagnosis: Diagnosis, strict = false, say: Phrases = en): string[] {
   const lines: string[] = ['Agent Flow Doctor', ''];
 
-  for (const tool of diagnosis.tools) lines.push(renderTool(tool));
+  for (const tool of diagnosis.tools) lines.push(renderTool(tool, say));
   lines.push('');
 
-  for (const line of renderInstallProbe(diagnosis.install)) lines.push(line);
-  for (const line of renderCapabilityReport(diagnosis.capabilities)) lines.push(line);
+  for (const line of renderInstallProbe(diagnosis.install, say)) lines.push(line);
+  for (const line of renderCapabilityReport(diagnosis.capabilities, say)) lines.push(line);
 
-  lines.push('', ...renderStageRouting(diagnosis.stageRouting));
-  const unused = renderUnusedRunners(diagnosis.unusedRunners);
+  lines.push('', ...renderStageRouting(diagnosis.stageRouting, say));
+  const unused = renderUnusedRunners(diagnosis.unusedRunners, say);
   if (unused.length > 0) lines.push('', ...unused);
 
   for (const runner of diagnosis.runners) {
@@ -142,20 +159,27 @@ export function renderDiagnosis(diagnosis: Diagnosis, strict = false, say: Phras
       continue;
     }
 
-    lines.push(`  installed          ${runner.installed ? TICK : CROSS}`);
-    lines.push(`  executable         ${runner.executable ? TICK : CROSS}`);
-    lines.push(`  auth               ${renderAuth(runner.auth)}`);
-    if (runner.version !== undefined) lines.push(`  version            ${runner.version}`);
+    // Padded to a common width so the values line up whatever the label's language:
+    // `executable` is 10 characters and `executável` is 10, but `auth` is 4 and
+    // `autenticação` is 12, and a hardcoded column would have split the block in two.
+    const label = (text: string): string => `  ${text.padEnd(LABEL_WIDTH)}`;
+
+    lines.push(`${label(say.doctor.labelInstalled)}${runner.installed ? TICK : CROSS}`);
+    lines.push(`${label(say.doctor.labelExecutable)}${runner.executable ? TICK : CROSS}`);
+    lines.push(`${label(say.doctor.labelAuth)}${renderAuth(runner.auth, say)}`);
+    if (runner.version !== undefined) {
+      lines.push(`${label(say.doctor.labelVersion)}${runner.version}`);
+    }
     // Distinguishing "not on PATH" from "present but will not run" is the
     // difference between installing something and repairing it.
     if (runner.detail !== undefined && !runner.executable) {
-      lines.push(`  detail             ${runner.detail}`);
+      lines.push(`${label(say.doctor.labelDetail)}${runner.detail}`);
     }
     lines.push('');
   }
 
   if (diagnosis.probes.length > 0) {
-    lines.push('Live probe:');
+    lines.push(say.doctor.livePro);
     for (const probe of diagnosis.probes) {
       const detail = probe.detail === undefined ? '' : ` — ${probe.detail}`;
       lines.push(
@@ -182,45 +206,36 @@ export function renderDiagnosis(diagnosis: Diagnosis, strict = false, say: Phras
         if (probe.toolUse.outcome !== 'healthy') {
           // Actionable, and it stops there. Granting the tool is the user's; AR-01
           // neither edits configuration nor escalates permissions to work around it.
-          lines.push(
-            `        The probe ran read-only and could not use a tool. Grant the runner`,
-            `        non-interactive tool access in its own CLI configuration.`,
-          );
+          lines.push(...say.doctor.probeCouldNotUseTool.map((line) => `        ${line}`));
         }
       }
     }
     // Stated rather than left to be worked out from the verdict below.
-    lines.push(
-      '',
-      '  Quota and failed calls are reported but do not change the verdict:',
-      '  a spent budget is a billing window, and a bad answer is not a broken',
-      '  environment. Missing credentials do change it — that is what --deep',
-      '  was for.',
-      '',
-    );
+    lines.push('', ...say.doctor.quotaDoesNotChangeVerdict.map((line) => `  ${line}`), '');
   }
 
   if (diagnosis.orphanRoles.length > 0) {
-    lines.push('Roles with nowhere to run:');
+    lines.push(say.doctor.rolesWithNowhereToRun);
     for (const orphan of diagnosis.orphanRoles) {
-      lines.push(`  ${CROSS} ${orphan.role} → "${orphan.primary}" is unusable and has no fallback`);
+      lines.push(`  ${CROSS} ${orphan.role} → ${say.doctor.unusableAndNoFallback(orphan.primary)}`);
     }
     lines.push('');
   }
 
   if (diagnosis.unresolvableRoles.length > 0) {
     lines.push(
-      'Roles whose configuration cannot run:',
-      ...diagnosis.unresolvableRoles.map((role) => `  ${CROSS} ${role} — see Capabilities above`),
+      say.doctor.rolesWhoseConfigCannotRun,
+      ...diagnosis.unresolvableRoles.map(
+        (role) => `  ${CROSS} ${role} — ${say.doctor.seeCapabilitiesAbove}`,
+      ),
       '',
-      '  These are configuration errors, not degradations: the stage fails on contact,',
-      '  every time. Point the role at a runner that can do what its prompts require.',
+      ...say.doctor.configErrorsNotDegradations.map((line) => `  ${line}`),
       '',
     );
   }
 
   if (diagnosis.degradations.length > 0) {
-    lines.push('Degraded:');
+    lines.push(say.doctor.degradedHeading);
     for (const degradation of diagnosis.degradations) {
       // Never a bare "degraded": the point is what was lost (R-16).
       lines.push(`  ${DASH} ${degradation.reason}`);
@@ -230,26 +245,26 @@ export function renderDiagnosis(diagnosis: Diagnosis, strict = false, say: Phras
   }
 
   if (diagnosis.notes.length > 0) {
-    for (const note of diagnosis.notes) lines.push(`Note: ${note}`);
+    for (const note of diagnosis.notes) lines.push(`${say.doctor.noteLabel}: ${note}`);
     lines.push('');
   }
 
   if (diagnosis.remediations.length > 0) {
-    lines.push('Remediation:');
+    lines.push(say.doctor.remediationHeading);
     for (const rem of diagnosis.remediations) {
       lines.push(`  → ${rem.problem}`);
-      lines.push(`    Fix: ${rem.fix}`);
+      lines.push(`    ${say.doctor.fixLabel}: ${rem.fix}`);
     }
     lines.push('');
   }
 
   for (const line of renderRemoteAccess(diagnosis.remoteAccess, say)) lines.push(line);
 
-  lines.push(renderVerdict({ status: diagnosis.status, notes: diagnosis.notes }));
+  lines.push(renderVerdict({ status: diagnosis.status, notes: diagnosis.notes }, say));
 
   if (diagnosis.status === 'DEGRADED' && !strict) {
     lines.push('');
-    lines.push('Work is still possible. Use --strict to treat this as a failure in CI.');
+    lines.push(say.doctor.workStillPossible);
   }
 
   return lines;
@@ -270,22 +285,22 @@ export function renderRemoteAccess(
 ): string[] {
   if (!remoteAccess.known) {
     return [
-      'Remote access:',
+      say.doctor.remoteAccessHeading,
       `  ${DASH} ${say.doctor.remoteAccessUndetermined}`,
       '',
     ];
   }
 
-  const lines: string[] = ['Remote access:'];
+  const lines: string[] = [say.doctor.remoteAccessHeading];
   if (remoteAccess.enabled) {
-    lines.push(
-      `  ${TICK} enabled (${String(remoteAccess.liveSessions)} live session${remoteAccess.liveSessions === 1 ? '' : 's'})`,
-    );
+    lines.push(`  ${TICK} ${say.doctor.remoteEnabled(remoteAccess.liveSessions)}`);
     if (remoteAccess.admittedAddresses.length > 0) {
-      lines.push(`    admitted addresses: ${remoteAccess.admittedAddresses.join(', ')}`);
+      lines.push(
+        `    ${say.doctor.admittedAddresses}: ${remoteAccess.admittedAddresses.join(', ')}`,
+      );
     }
   } else {
-    lines.push(`  ${DASH} off`);
+    lines.push(`  ${DASH} ${say.doctor.remoteOff}`);
   }
   lines.push('');
   return lines;
@@ -305,20 +320,21 @@ export function renderRemoteAccess(
  */
 export function renderCapabilityReport(
   observations: readonly CapabilityObservation[],
+  say: Phrases = en,
 ): string[] {
   if (observations.length === 0) return [];
 
-  const lines: string[] = ['Capabilities (declared — no runner was invoked)'];
+  const lines: string[] = [say.doctor.capabilitiesHeading];
 
   for (const observation of observations) {
-    const model = observation.model ?? '(runner default)';
+    const model = observation.model ?? say.doctor.runnerDefaultModel;
     lines.push(`  ${observation.role.padEnd(20)} ${observation.runner.padEnd(10)} ${model}`);
 
     if (observation.kind === 'unresolvable') {
       // A cross, not a dash: this role has nowhere to run, and every stage it serves will
       // fail on contact. Rendering it as a degradation would say work is still possible.
       lines.push(
-        `    ${CROSS} cannot run: ${observation.errorKind}`,
+        `    ${CROSS} ${say.doctor.cannotRun(observation.errorKind)}`,
         ...observation.reason.split('\n').map((line) => `      ${line.trim()}`),
       );
       continue;
@@ -327,30 +343,26 @@ export function renderCapabilityReport(
     const supported = observation.supportedReasoningLevels.join(', ');
     if (observation.reasoningClamped) {
       lines.push(
-        `    ${DASH} effort ${observation.requestedReasoning} is not offered by this pair ` +
-          `(supported: ${supported})`,
-        `      it will be clamped to ${observation.effectiveReasoning}, recorded on the run`,
+        `    ${DASH} ${say.doctor.effortNotOffered(observation.requestedReasoning, supported)}`,
+        `      ${say.doctor.willBeClamped(observation.effectiveReasoning)}`,
       );
     } else {
-      lines.push(`    ${TICK} effort ${observation.effectiveReasoning} (supported: ${supported})`);
+      lines.push(
+        `    ${TICK} ${say.doctor.effortSupported(observation.effectiveReasoning, supported)}`,
+      );
     }
 
     const finding = observation.permissionFinding;
     if (finding !== undefined) {
       lines.push(
-        `    ${WARN} ${finding.failureClass}: "${finding.runner}" does not declare ` +
-          `${finding.toolClass}, which this role's prompts need`,
+        `    ${WARN} ${finding.failureClass}: ` +
+          say.doctor.doesNotDeclareToolClass(finding.runner, finding.toolClass),
         `      ${finding.action}`,
       );
     }
   }
 
-  lines.push(
-    '',
-    '  Declared capabilities are read from the adapters, never inferred from a run that',
-    '  happened to succeed. A missing grant is a warning: it does not stop execution.',
-    '',
-  );
+  lines.push('', ...say.doctor.declaredCapabilitiesCaveat.map((line) => `  ${line}`), '');
 
   return lines;
 }
@@ -362,52 +374,61 @@ export function renderCapabilityReport(
  * install command, for one that is not a repository, and for a Git that cannot answer, and
  * a second voice saying the same thing is noise.
  */
-export function renderInstallProbe(probe: InstallProbe): string[] {
+export function renderInstallProbe(probe: InstallProbe, say: Phrases = en): string[] {
+  const heading = say.doctor.installProbeHeading;
   switch (probe.outcome) {
     case 'skipped':
       return [];
     case 'dirty_before':
       return [
-        'Install probe',
-        `  ${CROSS} a fresh checkout of this repository is not clean before installing`,
+        heading,
+        `  ${CROSS} ${say.doctor.checkoutDirtyBeforeInstall}`,
         ...probe.entries.map((path) => `      ${path}`),
-        '  Worktree mode refuses a task whose checkout is dirty (phase: checkout).',
+        `  ${say.doctor.worktreeRefusesDirtyCheckout}`,
         '',
       ];
     case 'install_failed':
       return [
-        'Install probe',
-        `  ${CROSS} \`${probe.command}\` failed in a fresh checkout`,
-        '  Worktree mode runs it before every task, so every task would fail here.',
+        heading,
+        `  ${CROSS} ${say.doctor.installFailedInFreshCheckout(probe.command)}`,
+        `  ${say.doctor.worktreeRunsInstallEveryTask}`,
         '',
       ];
     case 'clean':
-      return ['Install probe', `  ${TICK} \`${probe.command}\` leaves a fresh checkout clean`, ''];
+      return [heading, `  ${TICK} ${say.doctor.installLeavesCheckoutClean(probe.command)}`, ''];
     case 'dirties_checkout':
       return [
-        'Install probe',
-        `  ${CROSS} \`${probe.command}\` modifies files that are tracked or not ignored:`,
+        heading,
+        `  ${CROSS} ${say.doctor.installModifiesTrackedFiles(probe.command)}`,
         ...probe.entries.map((path) => `      ${path}`),
-        '  Worktree mode will refuse every task in this project (phase: setup).',
-        '  Use a lockfile-respecting install — for npm, `commands.install: npm ci`.',
+        `  ${say.doctor.worktreeWillRefuseEveryTask}`,
+        `  ${say.doctor.useLockfileRespectingInstall}`,
         '',
       ];
   }
 }
 
-function renderTool(tool: ToolCheck): string {
+function renderTool(tool: ToolCheck, say: Phrases = en): string {
+  // Product names, never translated: `Node` and `Git` are what the person types.
   const name = tool.name === 'node' ? 'Node' : 'Git';
+  // Both tools carry a floor now, and they mean different things: Git's gates worktree
+  // mode, Node's gates the product itself. One sentence for both would have to be vague
+  // about which, and a vague version warning is one nobody acts on.
+  const isNode = tool.name === 'node';
+  const belowSentence = isNode ? say.doctor.belowNodeFloor : say.doctor.belowWorktreeFloor;
+  const needsSentence = isNode ? say.doctor.nodeNeedsVersion : say.doctor.worktreeNeedsVersion;
   const version =
     tool.version === undefined
       ? undefined
       : tool.floor === undefined
         ? tool.version
         : tool.belowFloor === true
-          ? `${tool.version}  ⚠ below the ${tool.floor} worktree-mode floor`
-          : `${tool.version}  (worktree mode needs ${tool.floor} or newer)`;
+          ? `${tool.version}  ⚠ ${belowSentence(tool.floor)}`
+          : `${tool.version}  (${needsSentence(tool.floor)})`;
 
-  return `${name}\n  installed          ${tool.present ? TICK : CROSS}${
-    version ? `\n  version            ${version}` : ''
+  const label = (text: string): string => `  ${text.padEnd(LABEL_WIDTH)}`;
+  return `${name}\n${label(say.doctor.labelInstalled)}${tool.present ? TICK : CROSS}${
+    version ? `\n${label(say.doctor.labelVersion)}${version}` : ''
   }`;
 }
 
@@ -415,16 +436,16 @@ function renderTool(tool: ToolCheck): string {
  * Reports whether credentials exist, never what they are. Nothing here reads
  * or echoes the contents of an auth file (§7.1).
  */
-function renderAuth(auth: ObservedRunnerReport['auth']): string {
+function renderAuth(auth: ObservedRunnerReport['auth'], say: Phrases = en): string {
   switch (auth) {
     case 'configured':
-      return 'configured';
+      return say.doctor.authConfigured;
     case 'available':
-      return 'available';
+      return say.doctor.authAvailable;
     case 'not_configured':
-      return `${CROSS} not configured`;
+      return `${CROSS} ${say.doctor.authNotConfigured}`;
     default:
-      return 'not verified (use --deep)';
+      return say.doctor.authNotVerifiedShort;
   }
 }
 
@@ -440,8 +461,11 @@ function renderAuth(auth: ObservedRunnerReport['auth']): string {
  * the status is unchanged and the sentence stops overstating it. Anything other than a
  * clean `OK` is left exactly as it was — a FAIL needs no softening.
  */
-export function renderVerdict(verdict: { readonly status: string; readonly notes: readonly string[] }): string {
+export function renderVerdict(
+  verdict: { readonly status: string; readonly notes: readonly string[] },
+  say: Phrases = en,
+): string {
   return verdict.status === 'OK' && verdict.notes.length > 0
-    ? 'OK — nothing here blocks a run, but see the note above'
+    ? say.doctor.verdictOkWithNote
     : verdict.status;
 }

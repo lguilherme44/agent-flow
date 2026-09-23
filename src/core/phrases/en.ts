@@ -100,6 +100,14 @@ export const en: Phrases = {
     noCrossProviderReview:
       'plan review and final review cannot be cross-provider; they will run same-provider ' +
       'with a fresh context, which does not protect against a repeated wrong assumption',
+    runnerGrantsNoTools: (runner) =>
+      `runner "${runner}" is granted no tool beyond editing files`,
+    implementationCannotRunCommands: (runner) =>
+      'an implementation stage will be able to edit files but not run a single command. ' +
+      'This project declares commands, and install, lint, test and build would all be ' +
+      'refused, unapproved, in a non-interactive session. Grant the binaries those ' +
+      `commands already name, e.g. runners.${runner}.args: ` +
+      "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)']",
     nodeMissing: 'Node.js is missing from PATH',
     installNode: 'Install Node.js 20+ (https://nodejs.org or via fnm/nvm)',
     gitMissingOrOld: 'Git is missing or older than 2.38',
@@ -124,6 +132,103 @@ export const en: Phrases = {
     installProbeReason: 'agent-flow doctor install probe',
     remoteAccessUndetermined:
       'remote access status cannot be determined from a terminal; ask the running server',
+
+    // ── The report's own chrome ──────────────────────────────────────────────────────
+    // These were string literals in `cli/doctor.ts` until the CLI learned to read a
+    // locale. They are the headings and labels a reader scans before reading anything
+    // else, so leaving them behind produced a half-translated page — the exact failure
+    // this book exists to prevent.
+    labelInstalled: 'installed',
+    labelExecutable: 'executable',
+    labelAuth: 'auth',
+    labelVersion: 'version',
+    labelDetail: 'detail',
+    livePro: 'Live probe:',
+    quotaDoesNotChangeVerdict: [
+      'Quota and failed calls are reported but do not change the verdict:',
+      'a spent budget is a billing window, and a bad answer is not a broken',
+      'environment. Missing credentials do change it — that is what --deep',
+      'was for.',
+    ],
+    probeCouldNotUseTool: [
+      'The probe ran read-only and could not use a tool. Grant the runner',
+      'non-interactive tool access in its own CLI configuration.',
+    ],
+    rolesWithNowhereToRun: 'Roles with nowhere to run:',
+    unusableAndNoFallback: (primary) => `"${primary}" is unusable and has no fallback`,
+    rolesWhoseConfigCannotRun: 'Roles whose configuration cannot run:',
+    seeCapabilitiesAbove: 'see Capabilities above',
+    configErrorsNotDegradations: [
+      'These are configuration errors, not degradations: the stage fails on contact,',
+      'every time. Point the role at a runner that can do what its prompts require.',
+    ],
+    degradedHeading: 'Degraded:',
+    noteLabel: 'Note',
+    remediationHeading: 'Remediation:',
+    fixLabel: 'Fix',
+    remoteAccessHeading: 'Remote access:',
+    remoteEnabled: (sessions) =>
+      `enabled (${String(sessions)} live session${sessions === 1 ? '' : 's'})`,
+    remoteOff: 'off',
+    admittedAddresses: 'admitted addresses',
+    workStillPossible: 'Work is still possible. Use --strict to treat this as a failure in CI.',
+    capabilitiesHeading: 'Capabilities (declared — no runner was invoked)',
+    runnerDefaultModel: '(runner default)',
+    cannotRun: (errorKind) => `cannot run: ${errorKind}`,
+    effortNotOffered: (requested, supported) =>
+      `effort ${requested} is not offered by this pair (supported: ${supported})`,
+    willBeClamped: (effective) => `it will be clamped to ${effective}, recorded on the run`,
+    effortSupported: (effective, supported) => `effort ${effective} (supported: ${supported})`,
+    doesNotDeclareToolClass: (runner, toolClass) =>
+      `"${runner}" does not declare ${toolClass}, which this role's prompts need`,
+    declaredCapabilitiesCaveat: [
+      'Declared capabilities are read from the adapters, never inferred from a run that',
+      'happened to succeed. A missing grant is a warning: it does not stop execution.',
+    ],
+    installProbeHeading: 'Install probe',
+    checkoutDirtyBeforeInstall: 'a fresh checkout of this repository is not clean before installing',
+    worktreeRefusesDirtyCheckout:
+      'Worktree mode refuses a task whose checkout is dirty (phase: checkout).',
+    installFailedInFreshCheckout: (command) => `\`${command}\` failed in a fresh checkout`,
+    worktreeRunsInstallEveryTask:
+      'Worktree mode runs it before every task, so every task would fail here.',
+    installLeavesCheckoutClean: (command) => `\`${command}\` leaves a fresh checkout clean`,
+    installModifiesTrackedFiles: (command) =>
+      `\`${command}\` modifies files that are tracked or not ignored:`,
+    worktreeWillRefuseEveryTask:
+      'Worktree mode will refuse every task in this project (phase: setup).',
+    useLockfileRespectingInstall:
+      'Use a lockfile-respecting install — for npm, `commands.install: npm ci`.',
+    belowWorktreeFloor: (floor) => `below the ${floor} worktree-mode floor`,
+    worktreeNeedsVersion: (floor) => `worktree mode needs ${floor} or newer`,
+    // The floor is the DASHBOARD's, not the product's: `engines.node` is `>=20` and CI
+    // proves the installed CLI runs there. Saying "agent-flow needs 20.19" would be false
+    // and would send someone upgrading a runtime that works.
+    belowNodeFloor: (floor) => `the dashboard needs ${floor} or newer; \`ui\` will refuse`,
+    nodeNeedsVersion: (floor) => `\`ui\` needs ${floor} or newer`,
+
+    authConfigured: 'configured',
+    authAvailable: 'available',
+    authNotConfigured: 'not configured',
+    authNotVerifiedShort: 'not verified (use --deep)',
+    verdictOkWithNote: 'OK — nothing here blocks a run, but see the note above',
+
+    // Recorded onto a run, then read back verbatim by the Deck. A Portuguese dashboard
+    // showing `esta run está degradada:` followed by an English clause was the visible
+    // symptom of these two being literals rather than entries.
+    planReviewSameProvider:
+      'the plan review is same-provider: a wrong assumption made while planning may be ' +
+      'repeated rather than caught',
+    finalReviewSameProvider:
+      'the final review is same-provider: the model that wrote the code is also judging it',
+
+    stageRoutingHeading: 'Stage routing (which runner serves what)',
+    readsRepository: 'reads the repository',
+    textInTextOut: 'text in, text out',
+    stageOpensNoFile: 'this stage opens no file — an `openai-compatible` runner could serve it',
+    configuredAndUnrouted: 'Configured and unrouted',
+    noRolePointsAtIt: 'no role points at it',
+    pointARoleAtOne: 'Point a role at one to use it; `doctor` reports only what a role resolves to.',
   },
   delivery: {
     noForgeConfigured: 'no forge is configured, so this run delivers nowhere',

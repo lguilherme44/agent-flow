@@ -66,9 +66,15 @@ export interface ToolCheck {
   readonly name: 'node' | 'git';
   readonly present: boolean;
   readonly version?: string;
-  /** Git only: the worktree-mode floor, so the answer sits beside the question (§23). */
+  /**
+   * The version this tool has to reach, so the answer sits beside the question (§23).
+   *
+   * Git's is the worktree-mode floor. Node's is the runtime the product itself needs —
+   * below it the dashboard cannot start, and it fails naming a dependency rather than the
+   * runtime.
+   */
   readonly floor?: string;
-  /** Git only. Information, never a gate — M2-03 owns turning this into a refusal. */
+  /** Information, never a gate — M2-03 owns turning this into a refusal. */
   readonly belowFloor?: boolean;
 }
 
@@ -418,7 +424,52 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     };
   });
 
-  const verdict = assessHealth(config.global, runners, options.say ?? en);
+  const say = options.say ?? en;
+  const baseVerdict = assessHealth(config.global, runners, say);
+
+  // The failure a run otherwise meets at its first task, after the expensive half is paid
+  // for: a coding CLI spawned with `--permission-mode acceptEdits` auto-approves edits and
+  // ONLY edits, and `--setting-sources ''` shuts out the operator's own
+  // `permissions.allow`. In a non-interactive session nobody can approve, so every shell
+  // command is refused — measured on a task whose whole job was to run `flutter analyze`
+  // and `flutter test` to capture a baseline, which reported *"Blocking reason is a
+  // permission grant, not a missing decision"* and stopped the run.
+  //
+  // Said here rather than in `assessHealth` for two reasons. It needs the PROJECT config —
+  // firing only when the repository actually declares commands an executor would have to
+  // run, so a project with none is never nagged. And it is a note rather than a
+  // degradation: with no grant configured anywhere it would otherwise be true of every
+  // default installation, and a DEGRADED that is always on is worth nothing (C-4).
+  const declaresCommands = Object.values(config.project?.commands ?? {}).some(
+    (command) => typeof command === 'string' && command.trim().length > 0,
+  );
+  const grantless = new Set<string>();
+  if (declaresCommands) {
+    for (const role of ['executor.trivial', 'executor.normal', 'executor.complex'] as const) {
+      const roleConfig = roleConfigOf(config.global.roles, role);
+      if (!roleConfig.enabled) continue;
+
+      const runnerConfig = config.global.runners[roleConfig.runner];
+      if (runnerConfig?.type !== 'claude-code-cli') continue;
+      if (runnerConfig.args.includes('--allowedTools')) continue;
+      if (runnerConfig.dangerouslySkipPermissions) continue;
+
+      grantless.add(roleConfig.runner);
+    }
+  }
+
+  const verdict = {
+    ...baseVerdict,
+    notes: [
+      ...baseVerdict.notes,
+      ...[...grantless]
+        .sort()
+        .map(
+          (runner) =>
+            `${say.doctor.runnerGrantsNoTools(runner)} — ${say.doctor.implementationCannotRunCommands(runner)}`,
+        ),
+    ],
+  };
   const unresolvableRoles = rolesThatCannotRun(capabilities);
 
   return {
@@ -840,6 +891,30 @@ async function checkGit(
   };
 }
 
+/**
+ * The Node the product itself needs, which is not the one `engines` used to claim.
+ *
+ * `engines.node` said `>=20`, and on 20.10 two things do not work: `agent-flow ui` dies at
+ * startup with `ERR_REQUIRE_ESM` — `@fastify/static` requires `content-disposition`, which
+ * is ESM-only, and `require()` of an ES module landed in **20.19** — and the repository's
+ * own `vitest` fails to boot on `styleText`, added in 20.12. Neither failure names Node:
+ * the first points at a dependency and the second at a missing export, so the operator
+ * reads a broken install rather than an old runtime.
+ *
+ * `doctor` says "OK — nothing here blocks a run" while the dashboard cannot start, which is
+ * the check earning its place: the floor is knowable before anything is spent.
+ */
+const MINIMUM_SUPPORTED_NODE = { major: 20, minor: 19 } as const;
+
+/** `v20.10.0` → `{ major: 20, minor: 10 }`, or nothing when the shape is not recognised. */
+function parseNodeVersion(raw: string): { major: number; minor: number } | undefined {
+  const match = /v?(\d+)\.(\d+)\./.exec(raw.trim());
+  if (match === null) return undefined;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return Number.isFinite(major) && Number.isFinite(minor) ? { major, minor } : undefined;
+}
+
 async function checkTool(
   processRunner: ProcessRunner,
   cwd: string,
@@ -847,9 +922,21 @@ async function checkTool(
   args: string[],
 ): Promise<ToolCheck> {
   const result = await processRunner.run({ command, args, cwd, timeoutSeconds: 10 });
-  return result.spawnFailed || result.exitCode !== 0
-    ? { name: command, present: false }
-    : { name: command, present: true, version: result.stdout.trim().split('\n')[0] ?? '' };
+  if (result.spawnFailed || result.exitCode !== 0) return { name: command, present: false };
+
+  const version = result.stdout.trim().split('\n')[0] ?? '';
+  const floor = `${String(MINIMUM_SUPPORTED_NODE.major)}.${String(MINIMUM_SUPPORTED_NODE.minor)}`;
+  const parsed = parseNodeVersion(version);
+
+  // An unparseable version is reported without a verdict. Asserting "below the floor"
+  // about a string nothing understood would be the check inventing a failure.
+  if (parsed === undefined) return { name: command, present: true, version, floor };
+
+  const below =
+    parsed.major < MINIMUM_SUPPORTED_NODE.major ||
+    (parsed.major === MINIMUM_SUPPORTED_NODE.major && parsed.minor < MINIMUM_SUPPORTED_NODE.minor);
+
+  return { name: command, present: true, version, floor, belowFloor: below };
 }
 
 export function generateRemediations(

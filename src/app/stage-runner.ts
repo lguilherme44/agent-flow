@@ -11,6 +11,7 @@ import {
   type Task,
   type WorkflowRole,
 } from '../contracts/index.js';
+import type { Locale } from '../contracts/locale.js';
 import type { AgentRunner, Clock, FileSystem, Host, RunProvenance } from '../ports/index.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveRole, type ResolvedAgentConfig } from '../core/role.js';
@@ -361,6 +362,48 @@ export interface StageAdvisor {
   advise(request: StageAdvisoryRequest): Promise<string | undefined>;
 }
 
+/**
+ * The one sentence that decides what language a run's artefacts come back in.
+ *
+ * **Why an explicit instruction rather than the operator's own setting.** Claude Code
+ * reads a `language` from `~/.claude/settings.json`, and the adapter deliberately shuts
+ * that out with `--setting-sources ''` so a run does not change because of whose machine
+ * started it. That is the right invariant and it stays; the consequence nobody chose was
+ * that every SDD, plan, task title and review finding came back in English however the
+ * team had configured things. Declaring the language in agent-flow's own configuration
+ * keeps the invariant — it travels with the repository, not with a laptop — and still
+ * lets a team read its own artefacts.
+ *
+ * **Prose only, and the exclusions are the point.** Identifiers, paths, commands, code
+ * and the requirement ids the later stages match on (`FR-001`, `TASK-004`) are load
+ * bearing: a translated `pubspec.yaml` or a localised `TASK-004` would break the very
+ * matching that makes the plan machine-readable. So the instruction names what to
+ * translate and, more importantly, what not to.
+ *
+ * Returns nothing for English, so an installation that never sets this sends no extra
+ * bytes and behaves exactly as before.
+ */
+export function languageInstructionFor(locale: Locale): string | undefined {
+  if (locale === 'en') return undefined;
+
+  const name = LANGUAGE_NAMES[locale];
+  return (
+    `Write all prose in ${name}: summaries, explanations, rationales, task titles and ` +
+    `descriptions, acceptance criteria, review findings and risk statements.\n\n` +
+    `Do NOT translate: identifiers, file paths, directory names, commands, flags, code, ` +
+    `log lines, quoted output, or the structured ids other stages match on (requirement ` +
+    `ids such as FR-001 and NFR-002, task ids such as TASK-004, and any enum value a ` +
+    `schema fixes). Keep every one of those byte-for-byte as they appear in the ` +
+    `repository or the schema. A field whose value is constrained by a schema keeps its ` +
+    `schema value; only the prose around it is written in ${name}.`
+  );
+}
+
+/** The language named in the instruction, in that language. */
+const LANGUAGE_NAMES: Readonly<Record<Exclude<Locale, 'en'>, string>> = {
+  'pt-BR': 'Brazilian Portuguese (português do Brasil)',
+};
+
 export class StageRunner {
   constructor(private readonly options: StageRunnerOptions) {}
 
@@ -687,6 +730,9 @@ export class StageRunner {
     // the only record of who actually wrote the output that failed.
     let lastExecution = executionOf(undefined, resolved);
 
+    // Computed once: it is the same for every repair attempt, and for every stage.
+    const languageInstruction = languageInstructionFor(this.options.config.language);
+
     while (repair < MAX_REPAIR_ATTEMPTS + 1) {
       repair += 1;
 
@@ -696,6 +742,7 @@ export class StageRunner {
         workingDirectory: cwd,
         permissions: prompt.meta.permissions,
         timeoutSeconds: resolved.timeoutSeconds,
+        ...(languageInstruction === undefined ? {} : { systemPrompt: languageInstruction }),
         ...(resolved.model === undefined ? {} : { model: resolved.model }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(stage.outputSchema === undefined

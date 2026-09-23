@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { phrasesFor } from '../core/phrases/index.js';
 import { stringify as toYaml } from 'yaml';
 import type { EffectiveConfig, Plan, ReviewResult, RunStage } from '../contracts/index.js';
 import { PlanSchema } from '../contracts/index.js';
@@ -586,6 +587,7 @@ export class PlanningPipeline {
       store: this.options.store,
       stageRunner: this.options.stageRunner,
       providerOf: this.options.providerOf,
+      say: phrasesFor(this.options.config.global.language),
     });
   }
 

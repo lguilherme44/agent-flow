@@ -222,14 +222,19 @@ export async function main(argv: string[]): Promise<number> {
     .argument('[instruction]', 'what to change about the plan, or - to read stdin')
     .option('--file <path>', 'read the instruction from a file')
     .option('--edit', 'write the instruction in $EDITOR')
+    // Default `planning`, which is what revise always did. `sdd` is for a finding against
+    // the specification itself: without it the planner corrects the plan, the plan then
+    // contradicts a specification nothing can change, and the next review rejects it for
+    // the contradiction — a cycle that cannot converge.
+    .option('--from <stage>', 're-enter at a stage (sdd, planning — default: planning)')
     .action(
       async (
         instruction: string | undefined,
-        options: { file?: string; edit?: boolean },
+        options: { file?: string; edit?: boolean; from?: string },
         command: Command,
       ) => {
         exitCode = await runReviseCommand(
-          { argument: instruction, file: options.file, edit: options.edit },
+          { argument: instruction, file: options.file, edit: options.edit, from: options.from },
           globalOptions(command),
         );
       },

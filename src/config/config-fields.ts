@@ -2,6 +2,7 @@ import { REASONING_ORDER } from '../contracts/common.schema.js';
 import { FORGE_PROVIDERS } from '../contracts/forge.schema.js';
 import { QUALITY_CATEGORIES } from '../contracts/review.schema.js';
 import { UTILITY_MODEL_ADAPTERS } from '../contracts/utility-model-config.schema.js';
+import { LOCALES } from '../contracts/locale.js';
 import { PROJECT_OVERRIDABLE_KEYS, PROJECT_OWN_KEYS } from './resolver.js';
 
 export type ConfigScope = 'global' | 'project';
@@ -55,6 +56,9 @@ const roleFields = (prefix: string, scopes = GLOBAL): ConfigFieldDefinition[] =>
 /** This metadata is also the write allowlist: unknown paths are never editable. */
 export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   field('version', 'integer'),
+  // Editable at project scope too: the language a repository's artefacts are written in
+  // belongs to the repository, not to whoever happens to be running the CLI.
+  enumField('language', [...LOCALES], ['global', 'project']),
   ...['type', 'command', 'baseUrl', 'apiKeyEnv', 'model'].map((key) => field(`runners.*.${key}`, 'string')),
   field('runners.*.enabled', 'boolean'), field('runners.*.args', 'string_list'), field('runners.*.contextWindow', 'integer'),
   // The declared MCP set. Editable for the same reason `args` is — it is how an operator

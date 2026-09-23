@@ -1,4 +1,5 @@
 import type { Plan, ReviewResult, RunEvent } from '../contracts/index.js';
+import { en, type Phrases } from '../core/phrases/index.js';
 import { assessIndependence, explainIndependence, type ProviderOf } from '../core/independence.js';
 import { planHash } from './approval.js';
 import type { StageRunner } from './stage-runner.js';
@@ -15,6 +16,17 @@ export interface PlanReviewServiceOptions {
   readonly stageRunner: StageRunner;
   /** Maps a runner id to its provider, for judging review independence. */
   readonly providerOf: ProviderOf;
+  /**
+   * The language a degradation recorded here is written in.
+   *
+   * `phrases/index.ts` once argued that a run's evidence stays English "like a commit
+   * message", because translating it would make the record depend on who pressed the
+   * button. That premise held while language was a personal setting. It is not one: it is
+   * `config.language`, declared in the repository, identical for everyone who opens it —
+   * so the record is as reproducible in Portuguese as it was in English, and the reader
+   * of the Deck no longer gets a Portuguese sentence with an English clause inside it.
+   */
+  readonly say?: Phrases;
 }
 
 export interface PlanReviewRequest {
@@ -74,9 +86,7 @@ export class PlanReviewService {
       await store.recordDegradation(request.runId, {
         kind: 'single_provider',
         reason: explainIndependence(request.authors, result.execution.runner, providerOf),
-        impact:
-          'the plan review is same-provider: a wrong assumption made while planning may be ' +
-          'repeated rather than caught',
+        impact: (this.options.say ?? en).doctor.planReviewSameProvider,
       });
     }
 
@@ -116,9 +126,7 @@ export class PlanReviewService {
       await store.recordDegradation(request.runId, {
         kind: 'single_provider',
         reason: explainIndependence(request.authors, result.execution.runner, providerOf),
-        impact:
-          'the plan review is same-provider: a wrong assumption made while planning may be ' +
-          'repeated rather than caught',
+        impact: (this.options.say ?? en).doctor.planReviewSameProvider,
       });
     }
 

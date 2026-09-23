@@ -1,4 +1,5 @@
 import type { StageRoutingRow, UnusedRunnerRow } from '../../app/diagnostics.js';
+import { en, type Phrases } from '../../core/phrases/index.js';
 
 /**
  * Two questions `doctor` did not answer, and an operator has to.
@@ -13,18 +14,18 @@ import type { StageRoutingRow, UnusedRunnerRow } from '../../app/diagnostics.js'
  * that agree until one of them is edited. What is left here is the shape of the
  * line, and the sentences that make a finding actionable in a terminal.
  */
-export function renderStageRouting(rows: readonly StageRoutingRow[]): string[] {
-  const lines: string[] = ['Stage routing (which runner serves what)'];
+export function renderStageRouting(
+  rows: readonly StageRoutingRow[],
+  say: Phrases = en,
+): string[] {
+  const lines: string[] = [say.doctor.stageRoutingHeading];
 
   for (const row of rows) {
-    lines.push(
-      `  ${row.stage.padEnd(20)} ${row.runner.padEnd(12)} ${row.readsRepository ? 'reads the repository' : 'text in, text out'}`,
-    );
+    const nature = row.readsRepository ? say.doctor.readsRepository : say.doctor.textInTextOut;
+    lines.push(`  ${row.stage.padEnd(20)} ${row.runner.padEnd(12)} ${nature}`);
 
     if (row.overpowered) {
-      lines.push(
-        `    · this stage opens no file — an \`openai-compatible\` runner could serve it`,
-      );
+      lines.push(`    · ${say.doctor.stageOpensNoFile}`);
     }
   }
 
@@ -37,12 +38,15 @@ export function renderStageRouting(rows: readonly StageRoutingRow[]): string[] {
  * Information, never a failure: an operator may keep a runner configured for a
  * profile they switch to. What it is not is invisible, which is what it was.
  */
-export function renderUnusedRunners(rows: readonly UnusedRunnerRow[]): string[] {
+export function renderUnusedRunners(
+  rows: readonly UnusedRunnerRow[],
+  say: Phrases = en,
+): string[] {
   if (rows.length === 0) return [];
 
   return [
-    'Configured and unrouted',
-    ...rows.map((row) => `  ${row.id.padEnd(20)} ${row.type} — no role points at it`),
-    '  Point a role at one to use it; `doctor` reports only what a role resolves to.',
+    say.doctor.configuredAndUnrouted,
+    ...rows.map((row) => `  ${row.id.padEnd(20)} ${row.type} — ${say.doctor.noRolePointsAtIt}`),
+    `  ${say.doctor.pointARoleAtOne}`,
   ];
 }

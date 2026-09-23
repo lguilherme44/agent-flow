@@ -1710,6 +1710,24 @@ export async function revise(
   deps: RunActionDeps,
   runId: string,
   instruction: string,
+  /**
+   * Which stage the revision re-enters. `planning` by default, which is what this always
+   * did — and what made a whole class of finding impossible to act on.
+   *
+   * **Measured.** A review rejected a plan because the SDD's own contract table mapped
+   * `image/*` to three extensions, which broke the use case the incident was about. The
+   * revision told the planner to fix it; the planner did; the next review then rejected
+   * the plan for *contradicting the SDD* — which `revise` had never been able to touch.
+   * The cycle could not converge, and the operator's only way out was a fresh run with
+   * the decision written into the description: a full planning cycle to change one row of
+   * one table.
+   *
+   * A finding against the specification needs `--from sdd`. One against the plan stays at
+   * `planning` and costs nothing extra. Re-entering earlier re-runs the stages after it,
+   * so the price is visible in what it re-runs rather than hidden in a contradiction two
+   * reviews later.
+   */
+  from: RunStage = 'planning',
 ): Promise<ActionOutcome<ReviseResult>> {
   const say = deps.say ?? en;
   const trimmed = instruction.trim();
@@ -1721,13 +1739,14 @@ export async function revise(
   }
 
   const store = storeFor(deps);
-  return withExecutionLock(deps, store, runId, 'revise', () => replan(deps, runId, trimmed));
+  return withExecutionLock(deps, store, runId, 'revise', () => replan(deps, runId, trimmed, from));
 }
 
 async function replan(
   deps: RunActionDeps,
   runId: string,
   trimmed: string,
+  from: RunStage = 'planning',
 ): Promise<ActionOutcome<ReviseResult>> {
   const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
@@ -1782,6 +1801,9 @@ async function replan(
 
   await context.store.appendEvent(runId, 'revision_requested', {
     instruction: trimmed,
+    // On the record, because it decides which artefacts this revision can change. A
+    // reader asking "why does the plan still contradict the SDD" gets the answer here.
+    from,
     attemptedRevision: currentRevisions + 1,
     maxAllowed: budget.maxRevisionCycles,
     // D14. What the planner was actually given, on the record — so `status` and the
@@ -1794,7 +1816,7 @@ async function replan(
 
   const pipeline = buildPlanningPipeline(context);
 
-  const result = await pipeline.run(runId, replan.text, { from: 'planning', workflow });
+  const result = await pipeline.run(runId, replan.text, { from, workflow });
 
   const nextRevisionCount = currentRevisions + 1;
   await context.store.updateRun(runId, (entry) => ({
@@ -1833,7 +1855,10 @@ async function replan(
 export async function createRunWithIdentity(
   context: ExecutionContext,
   description: string,
-  say: Phrases = en,
+  // Defaults to the context's book, never to English. The parameter stays because the
+  // server legitimately overrides it: the dashboard carries the reader's locale on the
+  // request, and that reader need not be whoever's configuration built the context.
+  say: Phrases = context.say,
 ): Promise<RunState> {
   const deps = {
     workspaces: context.workspaces,
@@ -2389,8 +2414,7 @@ async function judgeRun(
     await context.store.recordDegradation(runId, {
       kind: 'single_provider',
       reason: explainIndependence(authors, finalResult.execution.runner, context.providerOf),
-      impact:
-        'the final review is same-provider: the model that wrote the code is also judging it',
+      impact: context.say.doctor.finalReviewSameProvider,
     });
   }
 

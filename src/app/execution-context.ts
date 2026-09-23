@@ -45,6 +45,7 @@ import {
 } from './run-git-identity.js';
 import { createGitCommand, type GitCommand } from '../adapters/git/git-command.js';
 import { createGitWorkspaces, type GitWorkspaces } from '../adapters/git/git-workspaces.js';
+import { phrasesFor, type Phrases } from '../core/phrases/index.js';
 import type { Clock, FileSystem, Host, ProcessRunner, UtilityModel } from '../ports/index.js';
 
 /**
@@ -68,6 +69,18 @@ export interface ExecutionContext {
   readonly registry: RunnerRegistry;
   readonly capabilities: RunnerCapabilitiesMap;
   readonly config: EffectiveConfig;
+  /**
+   * The reader's phrase book, resolved once from `config.global.language`.
+   *
+   * **Here rather than as a defaulted parameter on each function that needs it**, which is
+   * what it was: half a dozen signatures ended `say: Phrases = en`, and a caller that
+   * forgot the argument produced an English sentence in an otherwise Portuguese screen
+   * with nothing to flag it. `execution-context.ts` itself had one such call. A default
+   * that is silently correct in tests and silently wrong in production is not a default,
+   * it is a bug with a friendly face — so the book travels with the context that already
+   * carries the configuration it comes from.
+   */
+  readonly say: Phrases;
   readonly stageRunner: StageRunner;
   readonly executor: TaskExecutor;
   readonly scheduler: Scheduler;
@@ -450,6 +463,7 @@ export async function buildExecutionContext(
     registry,
     capabilities: registry.capabilities(),
     config,
+    say: phrasesFor(config.global.language),
     stageRunner,
     executor,
     scheduler,
@@ -551,7 +565,10 @@ export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeli
       return {
         code: preconditions.code,
         detail: preconditions.detail,
-        action: worktreeRefusalAction(preconditions.code),
+        // `context.say`, not the function's English default: this refusal is rendered
+        // beside sentences that did pass a phrase book, and a half-translated refusal is
+        // the worst place to be inconsistent — it is what the reader must act on.
+        action: worktreeRefusalAction(preconditions.code, context.say),
       };
     },
     config: context.config,

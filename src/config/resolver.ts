@@ -6,6 +6,10 @@ export type ConfigValueOrigin = 'default' | 'global' | 'project';
 /** Top-level global settings a repository is allowed to narrow or override. */
 export const PROJECT_OVERRIDABLE_KEYS = [
   'roles', 'runners', 'fallback', 'parallelism', 'retry', 'git', 'approval', 'recovery',
+  // The language a repository's SDDs, plans and task titles are written in belongs to the
+  // repository and its team, not to whoever happened to start the CLI. Overridable so one
+  // repo reads the same for every operator of it.
+  'language',
 ] as const;
 
 /** Settings that exist only in a project source. */

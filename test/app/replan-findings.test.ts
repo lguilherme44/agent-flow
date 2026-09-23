@@ -288,6 +288,55 @@ describe('revise forwards the findings of a rejected plan review (D14)', () => {
     expect(requested?.detail['findingsOmitted']).toBe(0);
   });
 
+  /**
+   * A finding against the SPECIFICATION had nowhere to go, and the cycle could not converge.
+   *
+   * Measured on a live run: a review rejected a plan because the SDD's contract table
+   * mapped `image/*` to three extensions, which broke the use case the incident was about.
+   * The revision told the planner to fix it, the planner did, and the next review rejected
+   * the plan for *contradicting the SDD* — an artefact `revise` re-entered past. The only
+   * way out was a fresh run with the decision written into its description: a full planning
+   * pass to change one row of one table.
+   */
+  it('re-enters at planning by default, and actually re-runs the sdd when asked', async () => {
+    // Asserted on the stages the pipeline STARTED, not on the event that records the
+    // parameter. An earlier version of this test checked `revision_requested.detail.from`
+    // and stayed green with `from: 'planning'` hardcoded back into the pipeline call —
+    // it proved the intent was written down, not that anything acted on it.
+    const stagesStartedAfter = async (
+      store: StateStore,
+      runId: string,
+      marker: string,
+    ): Promise<string[]> => {
+      const events = await eventsOf(store, runId);
+      const from = events.findIndex((e) => e.type === marker);
+      return events
+        .slice(from + 1)
+        .filter((e) => e.type === 'stage_started')
+        .map((e) => String(e.detail['stage']));
+    };
+
+    const byDefault = await rejectedRun();
+    await revise(byDefault.deps, byDefault.runId, 'split TASK-002');
+    const defaultStages = await stagesStartedAfter(
+      byDefault.store,
+      byDefault.runId,
+      'revision_requested',
+    );
+    expect(defaultStages).toContain('planning');
+    expect(defaultStages).not.toContain('sdd');
+
+    // POSITIVE CONTROL: hardcode `from: 'planning'` back into `replan` and this fails —
+    // the sdd never starts, however the caller asks.
+    const fromSdd = await rejectedRun();
+    await revise(fromSdd.deps, fromSdd.runId, 'the contract table is wrong', 'sdd');
+    const sddStages = await stagesStartedAfter(fromSdd.store, fromSdd.runId, 'revision_requested');
+    expect(sddStages).toContain('sdd');
+    // And planning still runs after it: re-specifying without re-planning would leave the
+    // plan bound to a specification it no longer matches, which is the defect inverted.
+    expect(sddStages).toContain('planning');
+  });
+
   it('adds nothing when the last review passed', async () => {
     // The guard is not a blanket paste. A PASS review's summary is an observation, and a
     // planner told to fix it would be fixing something nobody refused.
