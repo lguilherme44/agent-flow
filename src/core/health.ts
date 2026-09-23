@@ -141,14 +141,31 @@ export function assessHealth(
   // review exists to stop one model confirming its own mistaken hypothesis;
   // with a single provider that protection is simply gone, and a report that
   // does not say so is omitting the main thing.
+  // `observed` was the wrong denominator, and C-4 is why.
+  //
+  // It comes from `referencedRunners`, which also collects whatever `fallback.roles`
+  // names — so a runner the operator explicitly disabled still counted as evidence that
+  // cross-provider review had been available. Measured: a configuration with
+  // `codex: { enabled: false }` and every role on Claude was reported DEGRADED on every
+  // run, for a second provider its owner had deliberately turned off.
+  //
+  // That is the failure C-4 already names for a fresh install, arriving by another door.
+  // A developer whose organisation gives them one coding CLI has not LOST cross-provider
+  // review; they never had it, and a permanent DEGRADED for an unmakeable choice is the
+  // "always on, therefore worth nothing" problem this model exists to avoid.
+  //
+  // What is genuinely a lost capability is a second provider that was ENABLED and turned
+  // out not to be usable. That still degrades, and should.
   const usableProviders = [...usable];
-  if (usableProviders.length === 1 && observed.length > 1) {
+  const enabledProviders = observed.filter((runner) => config.runners[runner.id]?.enabled === true);
+  if (usableProviders.length === 1 && enabledProviders.length > 1) {
     degradations.push({
       kind: 'single_provider',
       reason: say.doctor.onlyOneUsable(String(usableProviders[0])),
       impact: say.doctor.noCrossProviderReview,
     });
   }
+
 
   const status: HealthStatus =
     orphanRoles.length > 0 || usable.size === 0
