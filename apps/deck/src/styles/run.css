@@ -1606,7 +1606,14 @@ input[type='checkbox'] {
 }
 
 .tasks-workspace__layout--with-inspector {
-  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.85fr);
+  /*
+   * The inspector used to take 0.85fr against the board's 1.4fr — 38% of the width for
+   * one task's detail, leaving the five columns about 180px each. Selecting a card made
+   * the board that much harder to read, which is backwards: you select a card to compare
+   * it with the others, not instead of seeing them. The detail panel keeps a 300px floor
+   * so it never becomes a column of single words.
+   */
+  grid-template-columns: minmax(0, 1.9fr) minmax(300px, 0.75fr);
 }
 
 .tasks-workspace__inspector .panel {
@@ -1658,7 +1665,14 @@ input[type='checkbox'] {
 
 .kanban__board {
   display: grid;
-  grid-template-columns: repeat(5, minmax(180px, 1fr));
+  /*
+   * 260px, not 180px. A card carries an id, a couple of chips and a title, and at 180px
+   * the title wrapped to three lines while the chips stacked under the id — five columns
+   * of that is a wall of fragments rather than a board you can read across. The board
+   * already scrolls horizontally, so a narrow viewport now scrolls instead of cramping:
+   * a legible column you scroll to beats five illegible ones that all fit.
+   */
+  grid-template-columns: repeat(5, minmax(260px, 1fr));
   gap: var(--s-3);
   overflow-x: auto;
   padding-bottom: var(--s-2);
@@ -1673,6 +1687,16 @@ input[type='checkbox'] {
   border-radius: var(--radius-md);
   min-height: 320px;
   max-height: 75vh;
+}
+
+/*
+ * An empty column still has to be visible — a board that hides "Blocked" is a board that
+ * cannot tell you nothing is blocked — but it does not need the height of a full one.
+ * `align-items: start` on the board already lets columns differ, so this simply stops the
+ * empty ones from setting the floor.
+ */
+.kanban__col[data-empty='true'] {
+  min-height: 0;
 }
 
 .kanban__col-head {

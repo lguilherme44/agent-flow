@@ -125,7 +125,16 @@ export function Kanban({ tasks, rows, stateOf, selected, onSelect, cards }: Kanb
         {COLUMNS.map((col) => {
           const colItems = grouped.get(col.key) ?? [];
           return (
-            <div key={col.key} className="kanban__col" data-col={col.key}>
+            // `data-empty` so the stylesheet can stop reserving a column's full height for
+            // a column that holds nothing. Early in a run four of the five are empty, and
+            // 320px of "no tasks in this column" four times over pushed the first real card
+            // below the fold — the board looked busy while saying almost nothing.
+            <div
+              key={col.key}
+              className="kanban__col"
+              data-col={col.key}
+              data-empty={colItems.length === 0}
+            >
               <div className="kanban__col-head">
                 <span className="kanban__col-dot" data-tone={col.tone} />
                 <span className="kanban__col-title">{dict.run[col.titleKey]}</span>

@@ -13,11 +13,34 @@ import { Empty } from '../../components/ui';
  * a chain with a hole in it, and a hole describes a dependency that does not exist.
  */
 
-const NODE_W = 150;
-const NODE_H = 46;
-const COL_GAP = 24;
-const ROW_GAP = 10;
+const NODE_W = 240;
+const NODE_H = 52;
+const COL_GAP = 44;
+const ROW_GAP = 14;
 const PAD = 12;
+
+/**
+ * How much title fits, derived from the box rather than guessed at.
+ *
+ * The node used to be 150px wide and the title cut at 12 characters, which turned
+ * "Promote webview_flutter_android to a direct dependency" into "Promote web…" — a label
+ * that distinguishes nothing from its neighbours, in a view whose whole job is telling
+ * nodes apart. Widening the box without widening the cut would have kept the ellipsis and
+ * added whitespace, so the cut is computed from the width: change `NODE_W` and the title
+ * follows.
+ *
+ * The per-character widths are the measured ones from the original note — the title is
+ * 10.5px monospace and the state 9px — kept as constants so the arithmetic is visible
+ * instead of folded into a magic number.
+ */
+const TITLE_CHAR_PX = 6.3;
+const STATE_CHAR_PX = 5.4;
+const STATE_CHARS = 10;
+const LEFT_PAD = 12;
+const RIGHT_PAD = 8;
+const TITLE_CHARS = Math.floor(
+  (NODE_W - LEFT_PAD - RIGHT_PAD - STATE_CHARS * STATE_CHAR_PX) / TITLE_CHAR_PX,
+);
 
 export interface GraphProps {
   readonly dag: RunDagView | undefined;
@@ -39,14 +62,57 @@ export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphPr
       list.push(node.taskId);
       columns.set(node.depth, list);
     }
+    // Where each node's dependencies sit, so a column can be ordered against the one
+    // before it rather than against the plan alone.
+    const parentsOf = new Map<string, string[]>();
+    for (const edge of dag.edges) {
+      parentsOf.set(edge.to, [...(parentsOf.get(edge.to) ?? []), edge.from]);
+    }
+
     const positions = new Map<string, { x: number; y: number }>();
+    const rowOf = new Map<string, number>();
     let maxRows = 0;
     const depths = [...columns.keys()].sort((a, b) => a - b);
+
     depths.forEach((depth, columnIndex) => {
-      const ids = (columns.get(depth) ?? []).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
-      maxRows = Math.max(maxRows, ids.length);
-      ids.forEach((id, rowIndex) => {
-        positions.set(id, { x: PAD + columnIndex * (NODE_W + COL_GAP), y: PAD + rowIndex * (NODE_H + ROW_GAP) });
+      const ids = columns.get(depth) ?? [];
+
+      /**
+       * Rows ordered by where a node's dependencies already sit — the barycentre
+       * heuristic, and the reason this is not plain plan order.
+       *
+       * Plan order put TASK-004 in row 1 of its column while both of its dependencies sat
+       * in row 0 of theirs, so its edges crossed every edge above them. The reader then
+       * has to trace a line to answer "what does this wait on", which is the one question
+       * the view exists to answer at a glance.
+       *
+       * The mean row of a node's parents is where its edges would like it to be. Sorting
+       * by that puts each node opposite what feeds it; plan order breaks ties and carries
+       * any node whose parents are not placed yet, so the result is still deterministic.
+       * One pass, left to right: a column is ordered against columns already positioned,
+       * never against one that is not.
+       */
+      const barycentre = (id: string): number => {
+        const rows = (parentsOf.get(id) ?? [])
+          .map((parent) => rowOf.get(parent))
+          .filter((row): row is number => row !== undefined);
+        if (rows.length === 0) return Number.POSITIVE_INFINITY;
+        return rows.reduce((sum, row) => sum + row, 0) / rows.length;
+      };
+
+      const ordered = [...ids].sort((a, b) => {
+        const difference = barycentre(a) - barycentre(b);
+        if (difference !== 0 && Number.isFinite(difference)) return difference;
+        return (order.get(a) ?? 0) - (order.get(b) ?? 0);
+      });
+
+      maxRows = Math.max(maxRows, ordered.length);
+      ordered.forEach((id, rowIndex) => {
+        rowOf.set(id, rowIndex);
+        positions.set(id, {
+          x: PAD + columnIndex * (NODE_W + COL_GAP),
+          y: PAD + rowIndex * (NODE_H + ROW_GAP),
+        });
       });
     });
     return {
@@ -112,10 +178,9 @@ export function Graph({ dag, rows, stateOf, selected, onSelect, error }: GraphPr
             if (position === undefined) return null;
             const state = stateOf(node.taskId);
             const title = titles.get(node.taskId) ?? '';
-            // Measured, not guessed: 12 characters of the title at 10.5px and 10 of the state
-            // at 9px share the 150px second line with 8px to spare.
-            const short = title.length > 12 ? `${title.slice(0, 11)}…` : title;
-            const stateWord = state === undefined ? '' : word(t, state).slice(0, 10);
+            const short =
+              title.length > TITLE_CHARS ? `${title.slice(0, TITLE_CHARS - 1)}…` : title;
+            const stateWord = state === undefined ? '' : word(t, state).slice(0, STATE_CHARS);
             const isSelected = selected === node.taskId;
             const dim = selected !== undefined && !isSelected && !hot.has(node.taskId);
             return (
