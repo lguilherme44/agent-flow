@@ -1,5 +1,6 @@
 ---
 permissions: read-only
+workingDirectory: true
 outputFormat: markdown
 requiredVars: [featureRequest, architecture, architectureImpact, projectConfig, agentsMd]
 ---
@@ -51,6 +52,14 @@ rather than absorbing it into the scope.
 
 Where you must assume something, state the assumption in the relevant section.
 An unstated assumption becomes a defect nobody can trace.
+
+**The request is a claim, not a fact.** An incident arrives with the reporter's hypothesis,
+and a feature request with the requester's picture of the code. Every fact it cites — a
+file, a function, a value, a behaviour — is confirmed before it goes into *Current
+Behavior*: against the repository when you can read it, against the architecture and
+impact documents above when you cannot. Where the code contradicts the request, say so
+plainly. For a defect, *Problem* names the root cause with `file:line` and how it was
+confirmed, or says UNCONFIRMED and what would confirm it.
 
 - **External integrations and contracts:** When third-party services, OAuth, or APIs are involved,
   the design must explicitly enumerate every external endpoint called and the exact permissions,

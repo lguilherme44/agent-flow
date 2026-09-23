@@ -1,5 +1,6 @@
 ---
 permissions: read-only
+workingDirectory: true
 outputFormat: markdown
 requiredVars: [featureRequest, architecture, projectConfig, agentsMd]
 ---

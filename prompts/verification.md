@@ -2,6 +2,8 @@
 permissions: read-only
 outputFormat: json
 requiredVars: [sdd, changedFiles, commandResults, agentsMd]
+# It reads the changed files; `changedFiles` is only their paths.
+workingDirectory: true
 ---
 ROLE: VERIFICATION_AGENT
 

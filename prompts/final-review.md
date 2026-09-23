@@ -2,6 +2,8 @@
 permissions: read-only
 outputFormat: json
 requiredVars: [sdd, plan, diffStat, changedFiles, commandResults]
+# It reads the changed files; `changedFiles` is only their paths.
+workingDirectory: true
 ---
 ROLE: FINAL_REVIEW_AGENT
 

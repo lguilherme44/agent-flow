@@ -34,7 +34,9 @@ line. The orchestrator resolves an id to the command the project configured and
 runs it itself. An id that is not listed above will be rejected, and a command
 written where an id belongs will be rejected too.
 
-If nothing above fits a task, use an empty list.
+A task that changes source code declares **at least one** id — an empty list means no
+command will ever observe what it did. Use an empty list only for a task no listed command
+can check (documentation, for instance), and say so in its description.
 
 ### What the validation is expected to do
 
@@ -117,7 +119,9 @@ point. That is what `expectsNoChange` is for.
 
 Set `"expectsNoChange": true` on a task whose correct outcome is an unchanged repository:
 a verification task, a check that something already holds, a task that only runs the
-existing tests. Leave it out, or `false`, for every task that adds, edits or removes a
+existing tests. The executor of such a task changes nothing and runs nothing — the
+orchestrator runs its validation. Never plan a task whose *work* is to run commands and
+report their output: that is the orchestrator's job, and the executor is told not to. Leave it out, or `false`, for every task that adds, edits or removes a
 file. The difference between "correctly changed nothing" and "did nothing" is intent,
 and only the plan can carry intent.
 
