@@ -68,6 +68,41 @@ export async function detectStack(fs: FileSystem, projectDir: string): Promise<D
   };
 }
 
+/**
+ * Flutter, and whether this repository pins its SDK with fvm.
+ *
+ * **A bare `flutter` is a guess, and on an fvm machine it is the wrong one.** fvm installs
+ * SDKs per project and does not put `flutter` on PATH at all; the repository declares the
+ * pinned version in `.fvmrc` and every command goes through `fvm flutter`. Writing the bare
+ * form there produces a configuration whose every validation command exits 127 — and a
+ * stage reading 127 cannot tell "this repository is broken" from "this command does not
+ * exist", so the run concludes the base is red and says nothing about why.
+ *
+ * Measured: a Flutter repository where `init` wrote `flutter analyze`, there was no
+ * `flutter` on PATH, and the mistake was only found by reading the generated file.
+ *
+ * `.fvmrc` is the signal because it is what fvm itself reads — its presence means the
+ * repository has already decided, and honouring that decision is not a preference.
+ */
+async function detectFlutter(
+  fs: FileSystem,
+  projectDir: string,
+  directoryName: string,
+): Promise<Omit<DetectedStack, 'paths'>> {
+  const pinnedByFvm = await fs.exists(`${projectDir}/.fvmrc`);
+  const flutter = pinnedByFvm ? 'fvm flutter' : 'flutter';
+
+  return {
+    type: 'flutter',
+    name: (await readYamlName(fs, `${projectDir}/pubspec.yaml`)) ?? directoryName,
+    commands: {
+      install: `${flutter} pub get`,
+      lint: `${flutter} analyze`,
+      test: `${flutter} test`,
+    },
+  };
+}
+
 async function detectFor(
   type: string,
   fs: FileSystem,
@@ -84,15 +119,7 @@ async function detectFor(
     case 'node':
       return detectNode(fs, projectDir, directoryName);
     case 'flutter':
-      return {
-        type,
-        name: (await readYamlName(fs, `${projectDir}/pubspec.yaml`)) ?? directoryName,
-        commands: {
-          install: 'flutter pub get',
-          lint: 'flutter analyze',
-          test: 'flutter test',
-        },
-      };
+      return detectFlutter(fs, projectDir, directoryName);
     case 'python':
       return detectPython(fs, projectDir, directoryName);
     case 'go':

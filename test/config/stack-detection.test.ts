@@ -265,4 +265,34 @@ describe('the install command a new project is given (§8.4)', () => {
 
     expect((await detectStack(fs, '/repo')).commands.install).toBe('flutter pub get');
   });
+
+  /**
+   * An fvm repository has no `flutter` on PATH at all, so the bare form exits 127 on every
+   * command. A stage reading 127 cannot distinguish "this repository is broken" from "this
+   * command does not exist", so a run concludes the base is red and never says why.
+   * Measured on a real repository, where the mistake was only found by reading the
+   * generated configuration.
+   */
+  it('routes Flutter through fvm when the repository pins its SDK', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/pubspec.yaml', 'name: demo\n');
+    fs.seed('/repo/.fvmrc', '{ "flutter": "3.38.6" }\n');
+
+    const stack = await detectStack(fs, '/repo');
+
+    // POSITIVE CONTROL: drop the `.fvmrc` check and all three fall back to the bare
+    // `flutter`, which is the configuration that produced the 127s.
+    expect(stack.commands.install).toBe('fvm flutter pub get');
+    expect(stack.commands.lint).toBe('fvm flutter analyze');
+    expect(stack.commands.test).toBe('fvm flutter test');
+  });
+
+  it('leaves a Flutter repository without .fvmrc on the bare command', async () => {
+    // The pin is the signal, not the stack. A repository that does not use fvm must not
+    // be handed a wrapper it has never installed.
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/pubspec.yaml', 'name: demo\n');
+
+    expect((await detectStack(fs, '/repo')).commands.lint).toBe('flutter analyze');
+  });
 });
