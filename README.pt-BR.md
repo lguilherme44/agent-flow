@@ -453,10 +453,36 @@ Percorrido com uma feature real de quatro tasks, um DAG e os artefatos que ela p
 | `revalidate TASK-004` | Você consertou a worktree da tentativa na mão: reexecuta só os comandos de validação da tarefa sobre a árvore como ela está. Nenhum modelo é chamado e nenhum retry é gasto. Um passe vira uma tentativa cujo ator é `human`, com o mesmo recibo e o mesmo marker de qualquer tentativa, e o `run` integra normalmente. |
 | `review` | Roda a validação, inspeciona o código e o julga contra o SDD. No modo worktree os três leem a integration tree, sob o lock do run. `--fix` transforma os findings em tasks e revisa o plano corrigido. |
 | `ui [root]` | Serve o Deck em `127.0.0.1:4782`. Com um diretório, serve todo repositório inicializado abaixo dele como workspace. `--classic` serve o dashboard anterior. Veja [`docs/web-ui.md`](docs/web-ui.md). |
+| `projects [list|add|remove] [dirs...]` | O hub de projetos (`~/.agent-flow/projects.json`): todo diretório que o dashboard mostra de qualquer lugar. Qualquer comando rodado num projeto o adiciona; `add` aceita também uma pasta de repositórios. |
+| `autostart [status|install|uninstall]` | Sobe o dashboard no login (pasta Inicializar no Windows, LaunchAgent no macOS), num Node ≥ 20.19 achado no nvm quando o padrão é mais antigo. |
 | `clean` | Remove estado de runs antigos, e o namespace Git que vem junto: os worktrees e as refs de attempt deste run, nunca nada de terceiros. Mantém os cinco runs mais recentes, e nunca o ativo sem `--force`. Uma integration branch que não foi mergeada em lugar nenhum é **mantida e reportada** — `--branches` é a única flag que apaga trabalho. |
 
 `--dry-run` mostra o roteamento sem invocar nada, e imprime a concorrência pedida e a
 efetiva. `--verbose`, `--json` e `--strict` se comportam como você espera.
+
+### Uso diário
+
+- **O dashboard fica sempre no ar.** `agent-flow autostart install` uma vez; depois é o
+  favorito `http://127.0.0.1:4782`. `agent-flow ui` de qualquer pasta só abre o navegador, e num
+  Node anterior a 20.19 se re-executa no mais novo que o nvm tiver.
+- **Todos os projetos num lugar só.** Qualquer comando rodado num repositório o põe no hub;
+  `agent-flow projects add ~/wk` entrega uma pasta de repositórios, e o dashboard oferece o
+  `init` dos que nunca passaram por ele.
+- **Fixe o modelo.** Deck → *Equipe* → *Modelo para todos os papéis*. A lista é o catálogo da
+  própria conta, lido do cache da CLI do Claude (`~/.claude/cache/model-catalog`): modelo novo
+  aparece no dia em que a conta recebe. Sem fixar, quem decide é a CLI.
+- **Deixe o executor rodar comandos.** O Claude Code em `-p` só roda o que for liberado:
+  `runners.claude.args: ['--allowedTools', 'Bash(npm run:*)', 'Bash(git status:*)']` na config do
+  projeto — e **no Windows as mesmas regras como `PowerShell(...)`**, porque é por essa ferramenta que o
+  Claude Code roda comandos lá (só `Bash(...)` é negado). O `doctor` avisa quando falta. Sem isso o executor edita arquivos e toda validação que
+  ele tentaria rodar é recusada.
+- **De outro chat.** Uma sessão do Claude Code ou do agy dirige uma run com a skill `agent-flow`
+  (`~/.claude/skills/agent-flow`, `~/.agents/skills/agent-flow`): pedido num arquivo,
+  `feature --file`, acompanhar o `events.jsonl`, parar no gate para uma pessoa. Uma run por
+  checkout — um segundo `feature` enquanto a run atual executa é recusado com código 5; trabalho
+  em paralelo vai numa `git worktree` separada.
+- **As regras vêm do `AGENTS.md`**, ou do `CLAUDE.md` enquanto o `AGENTS.md` não existe ou ainda
+  é o esqueleto que o `init` escreveu.
 
 ---
 
@@ -573,9 +599,10 @@ endpoint de inferência e não um agente de código — e ele diz isso.
 
 O último não tem working directory e não escreve, e **declara as duas coisas** — então o
 resolvedor de papéis o recusa para `discovery` e para os executores, e o aceita para os
-nove prompts que carregam toda a entrada dentro deles. Isso é a maior parte do workflow,
-e é o que permite um llama.cpp ou vLLM local atender `sdd`, `planning`, as duas reviews,
-`verification`, `final-review` e `architecture-impact`.
+cinco prompts que carregam toda a entrada dentro deles: `planning` e as duas revisões de
+plano, que um llama.cpp ou vLLM local pode atender. `architecture-impact` e `sdd` ficam fora
+porque conferem o pedido no código, e `verification` e `final-review` porque leem os
+arquivos alterados; num endpoint cada um trabalharia só com documentos e nomes de arquivo.
 
 ```yaml
 runners:
@@ -588,9 +615,11 @@ runners:
 ```
 
 Só um runner vem ligado de fábrica, porque a ferramenta precisa funcionar em uma máquina
-que nunca instalou uma segunda CLI. Ligar a segunda é o que torna plan review e final
-review genuinamente cross-provider — e o `doctor` reporta o estado de provider único
-como `DEGRADED`, então a perda nunca é silenciosa.
+que nunca instalou uma segunda CLI. Um provedor só é uma escolha suportada, não um estado
+degradado: todo workflow roda nele, HIGH-RISK inclusive. Ligar um segundo é o que torna plan
+review e final review genuinamente cross-provider; sem ele, cada revisão registra
+`same-provider-fresh-context` e diz isso onde o veredito aparece — a perda nunca é
+silenciosa, e nunca é um bloqueio.
 
 Nenhum quinto adapter é declarado. Uma interface abstrata não é compatibilidade; o
 [`docs/runner-capabilities.md`](docs/runner-capabilities.md) registra o que cada CLI de

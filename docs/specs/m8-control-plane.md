@@ -149,9 +149,13 @@ order unreproducible, which is the one property an operator's queue must have.
 | | Meaning | Kinds |
 |---|---|---|
 | P0 | safety or integrity: acting on this wrongly loses work | `remote_diverged`, `integration_conflict`, `ownership_conflict` |
-| P1 | a human decision is the only thing blocking progress | `approval_required`, `task_review_required`, `agent_blocked`, `recovery_exhausted` |
+| P1 | a human decision is the only thing blocking progress | `approval_required`, `task_review_required`, `agent_blocked`, `recovery_exhausted`, `final_review_required` |
 | P2 | something authoritative failed | `required_gate_failed`, `required_gate_not_run`, `delivery_failed`, `blocking_finding_open` |
-| P3 | degraded, still moving | `review_stale`, `capacity_starvation`, `run_paused`, `degradation_recorded` |
+| P3 | degraded, still moving | `review_stale`, `capacity_starvation`, `run_paused` |
+
+`degradation_recorded` was a P3 kind until 23/09/2026. A degradation is information about
+a run, not work for a person, and it moved to the run's own summary: queued, one provider
+by choice filled the queue with items nobody could act on.
 | P4 | informational, actionable, not urgent | `delivery_not_published`, `checks_pending` |
 
 Ties break by `since`, oldest first. Two items of the same kind and priority sort by

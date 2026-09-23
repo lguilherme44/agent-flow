@@ -341,11 +341,12 @@ Details, including what having no authentication does and does not mean:
   an OpenAI-compatible endpoint and serves the stages that touch no file. See
   [Coding agents](#coding-agents).
 - *(Optional)* A local or remote OpenAI-compatible model endpoint (e.g. Ollama, llama.cpp, vLLM).
-  It can serve nine of the twelve prompts as a first-class runner — `sdd`, `planning`,
-  `plan-review`, `verification`, `final-review` and `architecture-impact` receive text and
-  produce text — as well as advisory context intelligence and mechanical triage. The three it
-  cannot serve (`discovery`, `implementation`, `code-review`) declare `workingDirectory: true`,
-  and an inference endpoint has no filesystem on the other side.
+  It can serve five of the thirteen prompts as a first-class runner — the three `planning`
+  prompts and both `plan-review` prompts receive text and produce text — as well as advisory
+  context intelligence and mechanical triage. The eight it cannot serve (`discovery`,
+  `architecture-impact`, `sdd`, `implementation`, `verification`, `final-review`,
+  `code-review`, `e2e`) declare `workingDirectory: true`, and an inference endpoint has no
+  filesystem on the other side.
 
 **Credentials & Privacy:**
 - **Local CLI Runners:** Agent Flow invokes the CLIs you have already authenticated in your environment. It never reads, stores, or transmits runner credentials.
@@ -452,10 +453,37 @@ Walked through with a real four-task feature, a DAG and the artifacts it produce
 | `revalidate TASK-004` | You fixed the attempt's worktree by hand: re-run only that task's validation commands over it, as it stands. No model is invoked and no retry is spent. A pass is recorded as an attempt whose actor is `human`, with the same receipt and marker any attempt gets, and `run` integrates it normally. |
 | `review` | Run validation, inspect the code, judge it against the SDD. In worktree mode all three read the integration tree, under the run lock. `--fix` turns findings into tasks and reviews the corrected plan. |
 | `ui [root]` | Serve Deck on `127.0.0.1:4782`. With a directory, serves every initialised repository under it as a workspace. `--classic` serves the previous dashboard instead. See [`docs/web-ui.md`](docs/web-ui.md). |
+| `projects [list|add|remove] [dirs...]` | The project hub (`~/.agent-flow/projects.json`): every directory the dashboard shows from anywhere. Any command run in a project adds it; `add` also takes a folder of repositories. |
+| `autostart [status|install|uninstall]` | Start the dashboard at logon (Windows Startup folder, macOS LaunchAgent), on a Node ≥ 20.19 found in nvm when the default one is older. |
 | `clean` | Remove old run state, and the Git namespace that goes with it: this run's worktrees and attempt refs, never anything foreign. Keeps the five most recent runs, and never the active one without `--force`. An integration branch that is merged nowhere is **kept and reported** — `--branches` is the only flag that deletes work. |
 
 `--dry-run` shows the routing without invoking anything, and prints requested versus
 effective concurrency. `--verbose`, `--json`, `--strict` behave as you would expect.
+
+### Daily use
+
+- **The dashboard is always up.** `agent-flow autostart install` once; then bookmark
+  `http://127.0.0.1:4782`. `agent-flow ui` from any folder only opens it, and on a Node older
+  than 20.19 re-runs itself on the newest one nvm has.
+- **Every project in one place.** Running any command in a repository adds it to the hub;
+  `agent-flow projects add ~/wk` hands over a folder of repositories, and the dashboard
+  offers `init` for the ones that have never had it.
+- **Pin the model.** Deck → *Equipe* → *Modelo para todos os papéis*. The list is the
+  account's own catalog, read from what the Claude CLI caches (`~/.claude/cache/model-catalog`),
+  so a new model appears the day the account gets it. Without a pin, the CLI decides.
+- **Let the executor run commands.** Claude Code in `-p` runs only what is allowed:
+  `runners.claude.args: ['--allowedTools', 'Bash(npm run:*)', 'Bash(git status:*)']` in the
+  project config — and **on Windows the same rules as `PowerShell(...)`**, because that is the tool
+  Claude Code runs commands with there (a `Bash(...)` rule alone is denied). `doctor` says when
+  this is missing. Without it the executor edits files and
+  every validation it would run is refused.
+- **From another chat.** A Claude Code or agy session can drive a run with the `agent-flow`
+  skill (`~/.claude/skills/agent-flow`, `~/.agents/skills/agent-flow`): request in a file,
+  `feature --file`, watch `events.jsonl`, stop at the gate for a person. One run per checkout —
+  a second `feature` while the current run is executing is refused with exit 5; parallel work
+  goes in a separate `git worktree`.
+- **Rules come from `AGENTS.md`**, or from `CLAUDE.md` while `AGENTS.md` is missing or still
+  the scaffold `init` wrote.
 
 ---
 
@@ -571,9 +599,11 @@ an inference endpoint rather than a coding agent, and says so.
 
 The last one has no working directory and cannot write, and it **declares both** — so
 the role resolver refuses it for `discovery` and the executors, and accepts it for the
-nine shipped prompts that carry their whole input. That is most of the workflow, and it
-is what lets a local llama.cpp or vLLM server serve `sdd`, `planning`, both reviews,
-`verification`, `final-review` and `architecture-impact`.
+five shipped prompts that carry their whole input: `planning` and both plan reviews, which
+a local llama.cpp or vLLM server can serve. `architecture-impact` and `sdd` stay out because
+both confirm the request against the code, and `verification` and `final-review` because
+they read the changed files; on an endpoint each would work from documents and file names
+alone.
 
 ```yaml
 runners:
@@ -586,9 +616,11 @@ runners:
 ```
 
 Only one runner is enabled out of the box, because the tool has to work on a machine
-that never installed a second CLI. Enabling the second is what makes plan review and
-final review genuinely cross-provider — and `doctor` reports the single-provider state
-as `DEGRADED`, so the loss is never silent.
+that never installed a second CLI. One provider is a supported choice, not a degraded
+state: every workflow runs on it, HIGH-RISK included. Enabling a second is what makes plan
+review and final review genuinely cross-provider; without it each review records
+`same-provider-fresh-context` and says so where its verdict is shown, so the loss is never
+silent — and never a gate.
 
 No fifth adapter is claimed. An abstract interface is not compatibility;
 [`docs/runner-capabilities.md`](docs/runner-capabilities.md) records what each CLI

@@ -311,6 +311,9 @@ de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
       tratamento.
       **Pronto quando:** a combinação impossível é recusada sem criar run, e um teste
       afirma que o histórico não ganhou entrada.
+      **Retirado em 23/09/2026:** a recusa inteira saiu. Provedor único é escolha do usuário;
+      HIGH-RISK roda nele e a revisão registra `same-provider-fresh-context`. Quem quer
+      revisão entre provedores liga o segundo runner — não é o agent-flow que decide.
 
 - [x] **D3 · O orçamento de cerimônia anuncia um limite de tarefas e não aplica** — `src/app/planning-pipeline.ts:346`
       O maior dos cinco, porque a run declara o limite e então o ignora. O log de

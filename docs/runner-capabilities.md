@@ -753,17 +753,24 @@ filesystem on the other side of the HTTP call.
 ### What it can and cannot serve
 
 `supportsWorkingDirectory: false` is not a limitation to work around — it is the fact that
-routes the roles. Of the eleven shipped prompts, **nine carry their whole input**:
+routes the roles. Of the thirteen shipped prompts, **five carry their whole input**:
 
 ```
-sdd · planning · planning-simple · planning-trivial · plan-review · plan-review-simple
-verification · final-review · architecture-impact
+planning · planning-simple · planning-trivial · plan-review · plan-review-simple
 ```
 
-They receive text and produce text or JSON, and open no file. **Two do not**: `discovery`,
-whose own text says *"prefer reading a file over inferring from its name"*, and
-`implementation`, which writes the code. Those two declare `workingDirectory: true` in
-their front matter, and the resolver refuses to route them here.
+They receive text and produce text or JSON, and open no file. **Eight do not**: `discovery`
+maps the repository, `architecture-impact` and `sdd` check the request's claims against the
+code (every read-only stage runs in a disposable checkout it can read), `implementation`
+writes the code, and `verification`, `final-review`, `code-review` and `e2e` inspect the
+change — the two reviews read the changed files, of which `changedFiles` carries only the
+paths. Those eight declare `workingDirectory: true` in their front matter, and the resolver
+refuses to route them here.
+
+`architecture-impact`, `sdd`, `verification` and `final-review` were once listed as
+carrying their whole input. That was wrong: measured on
+23/09/2026, the impact stage corrected two premises of a request by reading code, which an
+endpoint would have lost without saying so.
 
 This was previously unexpressible: `core/role.ts` required a working directory of every
 runner, on the grounds that *"every role requires"* one. The prompts disprove it, and the
