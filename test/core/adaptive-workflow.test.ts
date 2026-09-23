@@ -135,6 +135,62 @@ describe('Adaptive Workflow Classifier', () => {
     expect(nonCorrelated.workflow).toBe('standard');
     expect(nonCorrelated.highRiskSignalsDetected).toHaveLength(0);
   });
+
+  /**
+   * Both halves of the file-fact rule used to be substring tests, and both were measured
+   * producing a refusal on work that touches no data, no money and no identity.
+   *
+   * This matters more than a mis-labelled workflow: an explicit `--workflow standard` is
+   * REFUSED once a signal is detected, and HIGH-RISK requires a cross-provider review that
+   * a single-provider setup cannot supply. A false positive here is a repository that
+   * cannot be planned at all.
+   */
+  it('does not escalate on words that merely contain a signal, or on paths that merely contain one', () => {
+    // `unselectable` contains `table`. Measured on a real request: a Flutter app whose
+    // product directory is `migration_partner/` (a user migrated between storefronts,
+    // not a schema migration) was refused planning over this sentence.
+    const prose = classifyWorkflow(
+      'Expanding image/* to jpg and png makes a HEIC photo unselectable on devices that shoot HEIC by default',
+      { files: ['lib/src/features/migration_partner/pages/migrated_to_partner_page.dart'] },
+    );
+    expect(prose.workflow).toBe('standard');
+    expect(prose.highRiskSignalsDetected).toHaveLength(0);
+
+    // The path alone must not arm the rule, even when the prose does mention data words.
+    const productDirectory = classifyWorkflow('Alter the lookup table used by the mapper', {
+      files: ['lib/src/features/migration_partner/utils/file_selector.dart'],
+    });
+    expect(productDirectory.workflow).toBe('standard');
+    expect(productDirectory.highRiskSignalsDetected).toHaveLength(0);
+
+    // The word half, ISOLATED: a path that genuinely names the concern, with prose whose
+    // only "match" is a substring inside an unrelated word. Without the word check this
+    // escalates; the previous two cases cannot catch that, because the path fix alone
+    // already stops them before the prose is consulted.
+    const substringOnly = classifyWorkflow('Make the HEIC photo unselectable in the picker', {
+      files: ['db/migrations/001_users.sql'],
+    });
+    expect(substringOnly.workflow).toBe('standard');
+    expect(substringOnly.highRiskSignalsDetected).toHaveLength(0);
+
+    // Same shape for the other two concerns.
+    const authorRes = classifyWorkflow('Show the post author and let the user edit it', {
+      files: ['src/features/author/profile.ts'],
+    });
+    expect(authorRes.workflow).toBe('standard');
+
+    const paymentishRes = classifyWorkflow('Rename the invoice column header', {
+      files: ['src/ui/repayment_banner.ts'],
+    });
+    expect(paymentishRes.workflow).toBe('standard');
+
+    // Positive control: the real thing still escalates, so the narrowing did not blind it.
+    const genuine = classifyWorkflow('Alter database table schema', {
+      files: ['lib/src/features/migration_partner/x.dart', 'db/migrations/003_orders.sql'],
+    });
+    expect(genuine.workflow).toBe('high-risk');
+    expect(genuine.highRiskSignalsDetected.some((s) => s.includes('migration'))).toBe(true);
+  });
 });
 
 describe('Ceremony Budget Stop Conditions', () => {

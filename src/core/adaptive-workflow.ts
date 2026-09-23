@@ -138,6 +138,45 @@ export function getCeremonyBudget(workflow: WorkflowClass): CeremonyBudget {
 }
 
 /**
+ * Whether the text mentions any of these as a **word**.
+ *
+ * `includes` was the original test and it was wrong in a way that only shows up in prose:
+ * `table` is a substring of `unselectable`, `acceptable`, `suitable` and `portable`, so a
+ * sentence about a file picker tripped the schema-migration detector. Measured on a real
+ * request — "makes a HEIC photo unselectable on devices that shoot HEIC by default" — which
+ * elevated the run to HIGH-RISK and, on a single-provider setup, refused it outright.
+ *
+ * The word check is the same one the text-signal pass above already uses. Two matchers for
+ * one question was the defect; there is one now.
+ */
+function mentionsWord(normalized: string, words: readonly string[]): boolean {
+  return words.some((word) => new RegExp(`\\b${word.replace(/\s+/g, '\\s+')}\\b`, 'i').test(normalized));
+}
+
+/**
+ * Whether a repository path **names** one of these concerns, rather than merely containing
+ * its letters somewhere.
+ *
+ * A path counts when a directory segment is the term, when the file's own name (without
+ * extension) is the term, or when a segment begins `term.` — which is how `auth.config.ts`
+ * declares itself. Raw `includes` counted far more than that: `migration_partner/`, a
+ * *product* directory in a Flutter app (the user migrated from one storefront to another),
+ * satisfied the schema-migration path test permanently, so every feature in that repository
+ * carried half of a high-risk signal that nothing could clear.
+ */
+function pathNamesConcern(file: string, terms: readonly string[]): boolean {
+  const segments = file.toLowerCase().split(/[\\/]+/).filter(Boolean);
+  const last = segments[segments.length - 1] ?? '';
+  const basename = last.replace(/\.[^.]+$/, '');
+  return terms.some(
+    (term) =>
+      segments.includes(term) ||
+      basename === term ||
+      segments.some((segment) => segment.startsWith(`${term}.`)),
+  );
+}
+
+/**
  * Classifies a feature request into a workflow class using deterministic facts first.
  * High-risk signals monotonically elevate the workflow and prevent unsafe downgrades.
  */
@@ -154,31 +193,37 @@ export function classifyWorkflow(
     return regex.test(normalized);
   });
 
-  // Detect high risk signals from deterministic repository file facts
+  // Detect high risk signals from deterministic repository file facts.
+  //
+  // Both halves are narrow on purpose: the path must NAME the concern and the request must
+  // MENTION it as a word. Either half left loose produces a signal the operator cannot
+  // clear by rewriting the request — and since an explicit override cannot downgrade a
+  // detected signal (below), a false positive here is not a warning, it is a refusal.
   if (context.files && context.files.length > 0) {
     for (const file of context.files) {
-      const lowerFile = file.toLowerCase();
       if (
-        (lowerFile.includes('auth/') || lowerFile.includes('auth.') || lowerFile.includes('authentication')) &&
+        pathNamesConcern(file, ['auth', 'authentication', 'authorization']) &&
         !detectedHighRisk.some((s) => s.startsWith('auth'))
       ) {
-        if (normalized.includes('login') || normalized.includes('session') || normalized.includes('user') || normalized.includes('auth')) {
+        if (mentionsWord(normalized, ['login', 'session', 'user', 'auth'])) {
           detectedHighRisk.push('auth (file: ' + file + ')');
         }
       }
       if (
-        (lowerFile.includes('migration') || lowerFile.includes('db/migrations') || lowerFile.includes('schema.')) &&
+        // `migrations/` (the directory) and `*.sql` are what a schema migration looks like.
+        // A directory merely *containing* the letters "migration" is not one.
+        (pathNamesConcern(file, ['migrations', 'schema']) || file.toLowerCase().endsWith('.sql')) &&
         !detectedHighRisk.some((s) => s.startsWith('migration'))
       ) {
-        if (normalized.includes('db') || normalized.includes('table') || normalized.includes('database') || normalized.includes('schema')) {
+        if (mentionsWord(normalized, ['db', 'table', 'database', 'schema'])) {
           detectedHighRisk.push('migration (file: ' + file + ')');
         }
       }
       if (
-        (lowerFile.includes('payment') || lowerFile.includes('stripe') || lowerFile.includes('billing')) &&
+        pathNamesConcern(file, ['payment', 'payments', 'stripe', 'billing']) &&
         !detectedHighRisk.some((s) => s.startsWith('payment'))
       ) {
-        if (normalized.includes('pay') || normalized.includes('card') || normalized.includes('invoice') || normalized.includes('billing')) {
+        if (mentionsWord(normalized, ['pay', 'card', 'invoice', 'billing'])) {
           detectedHighRisk.push('payment (file: ' + file + ')');
         }
       }
