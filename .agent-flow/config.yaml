@@ -34,35 +34,45 @@ roles:
       runner: agy
       timeoutSeconds: 900
       effort: high
+      model: gemini-3.8-flash-high
     normal:
       runner: agy
       timeoutSeconds: 1800
       effort: high
+      model: gemini-3.8-flash-high
     complex:
       runner: agy
       timeoutSeconds: 2400
+      model: gemini-3.8-flash-high
   architect:
     runner: agy
     timeoutSeconds: 2400
+    model: gemini-3.8-flash-high
   sdd:
     runner: agy
     timeoutSeconds: 2400
+    model: gemini-3.8-flash-high
   planner:
     runner: agy
     timeoutSeconds: 2400
+    model: gemini-3.8-flash-high
   planReviewer:
     runner: agy
     timeoutSeconds: 2400
+    model: gemini-3.8-flash-high
   verification:
     runner: agy
     timeoutSeconds: 2400
     effort: high
+    model: gemini-3.8-flash-high
   e2e:
     enabled: true
     runner: agy
     effort: high
     timeoutSeconds: 2400
+    model: gemini-3.8-flash-high
   finalReviewer:
     runner: agy
     timeoutSeconds: 2400
     effort: high
+    model: gemini-3.8-flash-high
