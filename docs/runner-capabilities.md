@@ -91,6 +91,15 @@ identical again with `CODEX_HOME` pointed at an empty directory, which is what p
 were defaults rather than leaks. The observable that does discriminate is the hook count on
 stderr: **30 with, 0 without**. The skills warning appears in both, so skills survive.
 
+**agy loads global MCP servers in every invocation (measured 24/09/2026, agy `1.2.10`).**
+With a marker server registered through `agy mcp add`, the exact read-only invocation the
+adapter builds (`--output-format json --effort low --mode plan --disable-slash-commands
+--sandbox`) saw the tool and tried to call it; the call was refused only because headless
+mode cannot prompt for the `mcp` permission. With `dangerouslySkipPermissions: true` it would
+have run. `--disable-slash-commands` does not isolate MCP, and this version also warns that
+`--mode plan has no effect while slash command expansion is disabled`. A role that must not
+reach the operator's MCP servers cannot be served by this runner today.
+
 ### The candidates that were rejected
 
 `--system-prompt` instead of `--append-system-prompt` was the live-dogfood report's other
@@ -405,6 +414,24 @@ stderr is appended to raw text unchanged. The design treats "Claude never writes
 to stderr in JSON mode" as its weakest assumption. If that assumption is wrong, the cut above
 has a gap, and the end-to-end test would not catch it, because the stub decides what goes to
 stderr. Capture stderr the next time a real denial is reproduced.
+
+### Live stream and reasoning (measured on 2.1.281)
+
+**Measured:** Claude Code `2.1.281`, Windows 11, `--output-format stream-json --verbose --setting-sources ''`,
+Sonnet 5 and Opus 5.5 at `--effort high`.
+
+- **Actions arrive live.** The stream carries `system:init`, one `assistant` message per step
+  with `tool_use` blocks (tool name and input), a `user` message per `tool_result`, the
+  intermediate text, and the final `result` — the same envelope `--output-format json` prints.
+  With `--include-partial-messages` the text also arrives as `text_delta` chunks.
+- **Reasoning does not.** Every `thinking` block came back as `"thinking":""` with only a
+  `signature`, on both models; with `--include-partial-messages` the single `thinking_delta`
+  was empty too. `--settings '{"showThinkingSummaries":true}'` changed nothing. The only
+  related flag in `--help` is `--forward-subagent-text`, which concerns subagents.
+
+So a live view can show what the model **does** (read, edit, run) and what it **says**, not
+what it **thinks**. The `tool_use` input includes file content for writes, so a view reachable
+from a paired device shows the verb and the target, never the input.
 
 ### Fixtures
 
