@@ -3,6 +3,11 @@
 Fila executável do [`plan.md`](plan.md), em ordem. O porquê de cada item está lá; aqui é o
 que fazer e como saber que fechou.
 
+A frente de plataforma — evals, sandbox nativo dos CLIs, teto de gasto, menor privilégio,
+entrada por work item — tem
+fila própria em [`platform-todo.md`](platform-todo.md), com o porquê em
+[`platform-roadmap.md`](platform-roadmap.md).
+
 **Definição de pronto, para todos:** teste cobrindo o comportamento · controle positivo
 (reverter o fix e ver o teste ficar vermelho) · verificação rodando o comando de verdade e
 lendo a saída · suíte inteira verde.

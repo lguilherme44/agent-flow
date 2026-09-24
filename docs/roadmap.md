@@ -550,3 +550,8 @@ acknowledgement.
 ## Beyond this milestone
 
 See [`docs/post-mvp3-backlog.md`](post-mvp3-backlog.md) for non-normative enhancement ideas and future backlog items.
+
+The platform front — trajectory and evals, the CLIs' native sandboxes, a spend ceiling,
+per-tool least privilege and work-item intake with named approval — is planned in [`platform-roadmap.md`](platform-roadmap.md)
+and queued in [`platform-todo.md`](platform-todo.md) (both in Portuguese, like `plan.md` and
+`todo.md`).
