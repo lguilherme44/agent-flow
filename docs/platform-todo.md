@@ -144,7 +144,10 @@ emenda se comportam exatamente como hoje.
       real gravado); um segredo plantado numa entrada de ferramenta não aparece no Deck nem em
       disco.
 
-- [ ] **P0.5 · Medir se o raciocínio pode ser exposto**
+- [x] **P0.5 · Medir se o raciocínio pode ser exposto** — 992608e, 24/09
+      **Resultado:** não pode, no Claude 2.1.281 headless — `thinking` vazio com Sonnet 5 e Opus 5.5,
+      inclusive em `--include-partial-messages`; nenhuma configuração mudou isso. O P0.4 mostra
+      ações e o texto que o modelo escreve (ao vivo com `text_delta`), não o raciocínio.
       No stream do Claude o bloco `thinking` veio vazio (só assinatura), medido uma vez com o
       Sonnet 5. Repetir com o Opus e procurar uma configuração que exponha resumos de raciocínio
       no modo headless; o codex entrega resumos no `exec --json`.
@@ -364,7 +367,11 @@ emenda se comportam exatamente como hoje.
 
 ## F3b — MCP por ferramenta e por estágio
 
-- [ ] **P3.3 · Medir o MCP global do agy** — `src/adapters/runners/agy-runner.ts`
+- [x] **P3.3 · Medir o MCP global do agy** — 992608e, 24/09
+      **Resultado:** carrega. Um MCP-marcador registrado com `agy mcp add` apareceu no modo
+      só-leitura exato do adapter e o modelo tentou chamá-lo; só não rodou porque o headless não
+      pede permissão — com `dangerouslySkipPermissions` rodaria. O P3.6 passa a recusar MCP
+      declarado em papel servido pelo agy **e** a avisar que o agy herda os MCPs globais. — `src/adapters/runners/agy-runner.ts`
       O codex já está resolvido: roda com `--ignore-user-config` (`codex-runner.ts:174-198`).
       Falta o agy: com um MCP-marcador na configuração global, rodar no modo exato em que o
       Agent Flow invoca e ver se o modelo enxerga a ferramenta. Não há documentação pública —
