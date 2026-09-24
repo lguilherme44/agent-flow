@@ -13,9 +13,12 @@ import {
   FailedAttemptSchema,
   GlobalConfigSchema,
   ProjectConfigSchema,
+  RunUsageSchema,
   TaskAttemptResultSchema,
+  TaskResultSchema,
   TaskSchema,
   type GlobalConfig,
+  type RunUsage,
 } from '../../src/contracts/index.js';
 import { CollaborationService } from '../../src/app/collaboration-service.js';
 import { CollaborationStore } from '../../src/app/collaboration-store.js';
@@ -761,6 +764,62 @@ describe('a failed task records where the work was actually routed', () => {
   });
 });
 
+/**
+ * Turns and permission denials on the sequential record (P1.2, FR-006).
+ *
+ * Every assertion reads `result.json` back from the file system and parses it, because the
+ * defect this guards is a strip on the way to disk: `RunUsageSchema` used to drop any key
+ * it did not name, and an in-memory `TaskResult` would have carried the fields regardless.
+ */
+describe('a sequential result.json carries turns and permission denials (FR-006)', () => {
+  const USAGE = {
+    inputTokens: 10,
+    turns: 3,
+    permissionDenials: { count: 2, tools: ['Write', 'Bash'] },
+  } as const;
+
+  const resultOnDisk = async (fs: InMemoryFileSystem, runId: string) =>
+    TaskResultSchema.parse(
+      JSON.parse(await fs.readFile(runPaths(PROJECT, runId).taskResult('TASK-001'))),
+    );
+
+  it('on a completed task, and on its stage_completed event (AC-006a)', async () => {
+    const { executor, runner, run, fs, store } = await harness();
+    runner.push({ ok: true, text: COMPLETED, durationMs: 1, usage: USAGE });
+
+    await executor.execute(task(), run.runId, 'SDD');
+
+    const persisted = await resultOnDisk(fs, run.runId);
+    expect(persisted.status).toBe('completed');
+    expect(persisted.usage).toEqual(USAGE);
+
+    const completed = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_completed',
+    );
+    expect(RunUsageSchema.parse(completed?.detail['usage'])).toEqual(USAGE);
+  });
+
+  it('on a failed task, and on its stage_failed event (AC-006b)', async () => {
+    const { executor, runner, run, fs, store } = await harness();
+    runner.push({
+      ok: false,
+      errorCode: 'execution_failed',
+      raw: 'the process exited unexpectedly',
+      durationMs: 1,
+      usage: USAGE,
+    });
+
+    await executor.execute(task(), run.runId, 'SDD');
+
+    const persisted = await resultOnDisk(fs, run.runId);
+    expect(persisted.status).toBe('failed');
+    expect(persisted.usage).toEqual(USAGE);
+
+    const failed = (await store.readEvents(run.runId)).find((event) => event.type === 'stage_failed');
+    expect(RunUsageSchema.parse(failed?.detail['usage'])).toEqual(USAGE);
+  });
+});
+
 describe('where a task runs (M2-04 §4.2)', () => {
   // Three places touch a directory, and in worktree mode all three must be the
   // task's own checkout. The third is the one that is easy to miss: `AGENTS.md`
@@ -986,6 +1045,22 @@ describe('worktree mode records an attempt, not a result (M2-05 §10.1)', () => 
     // The *ids* the plan named, which `TaskResult` does not keep — it holds the
     // resolved commands, and an id is what a person recognises.
     expect(persisted.validation.ids).toEqual(['test']);
+  });
+
+  it('records the turns and permission denials the runner reported (AC-006d, FR-006)', async () => {
+    const world = await isolated();
+    const usage = {
+      inputTokens: 10,
+      turns: 3,
+      permissionDenials: { count: 2, tools: ['Write', 'Bash'] },
+    } as const;
+    world.runner.push({ ok: true, text: COMPLETED, durationMs: 1, usage });
+
+    await world.executor.execute(task(), world.run.runId, 'SDD', workspace());
+
+    // Read from disk and parsed: the strip this guards happens on the way to the file.
+    const persisted = await attemptOf(world.fs, world.run.runId);
+    expect(persisted.usage).toEqual(usage);
   });
 
   it('announces the attempt and its marker (Appendix B)', async () => {
@@ -1347,7 +1422,7 @@ describe('a failed attempt is recorded, under its own name (AD-34)', () => {
     'permission check failed',
   ].join('\n');
 
-  async function failedInWorktree(raw: string) {
+  async function failedInWorktree(raw: string, usage?: RunUsage) {
     const fs = new InMemoryFileSystem();
     const clock = new FixedClock();
     const runner = new FakeAgentRunner('claude', CAPS);
@@ -1380,7 +1455,13 @@ describe('a failed attempt is recorded, under its own name (AD-34)', () => {
       projectDir: PROJECT,
     });
 
-    runner.push({ ok: false, errorCode: 'execution_failed', raw, durationMs: 3 });
+    runner.push({
+      ok: false,
+      errorCode: 'execution_failed',
+      raw,
+      durationMs: 3,
+      ...(usage === undefined ? {} : { usage }),
+    });
 
     const workspace = {
       path: '/wt/AF-2026-001/TASK-001/attempt-2',
@@ -1464,6 +1545,25 @@ describe('a failed attempt is recorded, under its own name (AD-34)', () => {
   it('names the failure class on the result, so a reader never sees only a code', async () => {
     const { result } = await failedInWorktree(DENIAL);
     expect(result.failureClass).toBe('runner_permission_required');
+  });
+
+  it('carries the usage the failed call reported, turns and denials included (AC-006c, FR-006)', async () => {
+    // The object `writeFailedAttempt` built had no `usage` key although the schema declared
+    // one (a PRI-19 gap). This reads the file, so it fails the moment that spread goes away.
+    const usage = {
+      inputTokens: 10,
+      turns: 3,
+      permissionDenials: { count: 2, tools: ['Write', 'Bash'] },
+    } as const;
+    const { written } = await failedInWorktree(DENIAL, usage);
+
+    expect(FailedAttemptSchema.parse(JSON.parse(written ?? '{}')).usage).toEqual(usage);
+  });
+
+  it('writes no usage key at all when the failed call reported none', async () => {
+    // Absent means unmeasured. An empty object here would read as "reported nothing".
+    const { written } = await failedInWorktree(DENIAL);
+    expect(JSON.parse(written ?? '{}')).not.toHaveProperty('usage');
   });
 });
 

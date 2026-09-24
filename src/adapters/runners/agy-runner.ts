@@ -71,6 +71,8 @@ interface AgyEnvelope {
   status_code?: number | null;
   structured_output?: unknown;
   denied_actions?: ReadonlyArray<{ action?: string; display_name?: string }>;
+  /** Top level, beside `usage` rather than inside it, as measured from `agy 1.1.27`. */
+  num_turns?: unknown;
   /** Token accounting, as measured from `agy 1.1.27`. No cost and no model in it. */
   usage?: {
     input_tokens?: number;
@@ -325,17 +327,25 @@ export class AgyRunner extends BaseRunner {
    * and a reader of `AgentRunUsage` is told to treat an absent field as unmeasured. The
    * model for an agy stage therefore still comes from the configuration when one was
    * pinned, which is the honest limit of what this provider says.
+   *
+   * **`num_turns` sits outside `usage`, so a missing `usage` block no longer ends the read**
+   * (P1.2). It is taken only as a non-negative integer, which is what `RunUsageSchema`
+   * accepts: a malformed count left through would fail `result.json`'s parse or drop a
+   * telemetry row, where leaving it absent loses one number.
    */
   protected override parseUsage(_result: ProcessResult, parsed: unknown): AgentRunUsage | undefined {
-    const usage = asEnvelope(parsed)?.usage;
-    if (usage === undefined) return undefined;
+    const envelope = asEnvelope(parsed);
+    if (envelope === undefined) return undefined;
 
+    const usage = envelope.usage;
+    const turns = envelope.num_turns;
     const measured: AgentRunUsage = {
-      ...(count(usage.input_tokens) === undefined ? {} : { inputTokens: count(usage.input_tokens) }),
-      ...(count(usage.output_tokens) === undefined ? {} : { outputTokens: count(usage.output_tokens) }),
-      ...(count(usage.cache_read_tokens) === undefined
+      ...(count(usage?.input_tokens) === undefined ? {} : { inputTokens: count(usage?.input_tokens) }),
+      ...(count(usage?.output_tokens) === undefined ? {} : { outputTokens: count(usage?.output_tokens) }),
+      ...(count(usage?.cache_read_tokens) === undefined
         ? {}
-        : { cacheReadTokens: count(usage.cache_read_tokens) }),
+        : { cacheReadTokens: count(usage?.cache_read_tokens) }),
+      ...(typeof turns === 'number' && Number.isInteger(turns) && turns >= 0 ? { turns } : {}),
     };
 
     return Object.keys(measured).length === 0 ? undefined : measured;

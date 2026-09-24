@@ -6,7 +6,7 @@ import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
 import { StageRunner, StageFailure, type StageAdvisor } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
-import { GlobalConfigSchema } from '../../src/contracts/index.js';
+import { GlobalConfigSchema, RunUsageSchema } from '../../src/contracts/index.js';
 import { runPaths } from '../../src/app/paths.js';
 import type { StageDefinition } from '../../src/app/stage-runner.js';
 
@@ -1167,5 +1167,56 @@ describe('the language a stage writes in', () => {
     for (const call of runner.calls) {
       expect(call.systemPrompt ?? '').toContain('Brazilian Portuguese');
     }
+  });
+});
+
+/**
+ * Turns and permission denials reach both stage events (P1.2, FR-006).
+ *
+ * `executionDetail` already copies `usage` whole, so nothing in `StageRunner` changed for
+ * this. What these pin is that it stays that way on the failure path too: a call that was
+ * denied a tool is the call whose denials matter most, and it is the one that fails.
+ *
+ * Read back from `events.jsonl` through the store, and the usage parsed with its schema —
+ * the in-memory execution is never consulted.
+ */
+describe('stage events carry turns and permission denials (FR-006)', () => {
+  const USAGE = {
+    inputTokens: 10,
+    turns: 3,
+    permissionDenials: { count: 2, tools: ['Write', 'Bash'] },
+  } as const;
+
+  const usageOf = (detail: Record<string, unknown> | undefined) =>
+    RunUsageSchema.parse(detail?.['usage']);
+
+  it('records them on stage_completed (AC-006a)', async () => {
+    const { stageRunner, run, runner, store } = await harness();
+    runner.push({ ok: true, text: '# SDD body', durationMs: 1, usage: USAGE });
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    const completed = (await store.readEvents(run.runId)).find(
+      (event) => event.type === 'stage_completed',
+    );
+    expect(usageOf(completed?.detail)).toEqual(USAGE);
+  });
+
+  it('records them on stage_failed (AC-006b)', async () => {
+    const { stageRunner, run, runner, store } = await harness();
+    runner.push({
+      ok: false,
+      errorCode: 'execution_failed',
+      raw: 'boom',
+      durationMs: 1,
+      usage: USAGE,
+    });
+
+    await expect(stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' })).rejects.toThrow(
+      StageFailure,
+    );
+
+    const failed = (await store.readEvents(run.runId)).find((event) => event.type === 'stage_failed');
+    expect(usageOf(failed?.detail)).toEqual(USAGE);
   });
 });

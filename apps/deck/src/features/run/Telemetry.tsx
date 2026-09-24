@@ -1,8 +1,8 @@
-import type { ContextTelemetryObservation, RunTelemetryView } from '@contracts/index.js';
+import type { ContextTelemetryObservation, RunTelemetryView, TelemetrySummaryView } from '@contracts/index.js';
 import { api, keys, type RunAddress } from '../../lib/api';
 import { useResource } from '../../lib/store';
 import { formatDuration } from '../../lib/time';
-import { useT, word } from '../../lib/i18n';
+import { useT, word, type Dictionary } from '../../lib/i18n';
 import { Chip, Empty, Meter, Notice, Skeleton, Stat } from '../../components/ui';
 
 /**
@@ -59,7 +59,9 @@ export function TelemetryTab({ address }: { readonly address: RunAddress }) {
           value={String(summary.reasoningClamped)}
           tone={summary.reasoningClamped > 0 ? 'warn' : undefined}
         />
+        <ConductStats conduct={summary.conduct} />
       </div>
+      <DeniedTools conduct={summary.conduct} />
 
       <Buckets title={t.telemetry.byStage} buckets={summary.byStage} total={summary.durationMs} />
       <Buckets title={t.telemetry.byRunner} buckets={summary.byRunner} total={summary.durationMs} />
@@ -73,6 +75,52 @@ export function TelemetryTab({ address }: { readonly address: RunAddress }) {
       <ContextSection context={context} />
     </div>
   );
+}
+
+/**
+ * Turns and permission denials (P1.2), as `summary.conduct` states them.
+ *
+ * Absent and `reporting: 0` read the same, as "not reported": a server older than the
+ * field, a run older than it, and a run served only by runners that report neither have
+ * all told us nothing, and a `0` would say they took no turns and were denied nothing.
+ * Coverage is taken from the response, never counted here from `entries`.
+ */
+function ConductStats({ conduct }: { conduct: TelemetrySummaryView['conduct'] }) {
+  const t = useT();
+  const turns = conduct?.turns;
+  const denials = conduct?.permissionDenials;
+
+  return (
+    <>
+      <Stat
+        label={withCoverage(t, t.telemetry.turns, turns)}
+        value={turns === undefined || turns.reporting === 0 ? t.telemetry.notReported : String(turns.total)}
+      />
+      <Stat
+        label={withCoverage(t, t.telemetry.permissionDenials, denials)}
+        value={denials === undefined || denials.reporting === 0 ? t.telemetry.notReported : String(denials.count)}
+        tone={denials !== undefined && denials.count > 0 ? 'warn' : undefined}
+      />
+    </>
+  );
+}
+
+function withCoverage(
+  t: Dictionary,
+  label: string,
+  field: { reporting: number; of: number } | undefined,
+): string {
+  if (field === undefined || field.reporting === 0 || field.reporting >= field.of) return label;
+  return `${label} · ${t.telemetry.measuredOn(field.reporting, field.of)}`;
+}
+
+/** Only the tool name tells a person which grant is missing, so it is said, not implied. */
+function DeniedTools({ conduct }: { conduct: TelemetrySummaryView['conduct'] }) {
+  const t = useT();
+  const denials = conduct?.permissionDenials;
+  if (denials === undefined || denials.count === 0 || denials.tools.length === 0) return null;
+
+  return <p className="doctor-note">{t.telemetry.deniedTools(denials.tools.join(', '))}</p>;
 }
 
 function Buckets({

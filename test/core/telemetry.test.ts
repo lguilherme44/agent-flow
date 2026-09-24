@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TelemetryEntrySchema, type TelemetryEntry } from '../../src/contracts/index.js';
-import { durationBetween, groupBy, summariseTelemetry } from '../../src/core/telemetry.js';
+import { durationBetween, groupBy, summariseConduct, summariseTelemetry } from '../../src/core/telemetry.js';
 
 const entry = (overrides: Record<string, unknown> = {}): TelemetryEntry =>
   TelemetryEntrySchema.parse({
@@ -81,6 +81,79 @@ describe('summariseTelemetry', () => {
     expect(summary.entries).toBe(0);
     expect(summary.durationMs).toBe(0);
     expect(summary.byRunner).toEqual({});
+    expect(summary.conduct).toEqual({
+      turns: { total: 0, reporting: 0, of: 0 },
+      permissionDenials: { count: 0, tools: [], reporting: 0, of: 0 },
+    });
+  });
+
+  it('carries the conduct summary, computed by the one function that computes it', () => {
+    const entries = [
+      entry({ usage: { turns: 2, permissionDenials: { count: 1, tools: ['Write'] } } }),
+      entry({ usage: { inputTokens: 5 } }),
+    ];
+
+    expect(summariseTelemetry(entries).conduct).toEqual(summariseConduct(entries));
+  });
+});
+
+describe('summariseConduct (P1.2)', () => {
+  it('reports nothing, and says so, when no entry reported either field', () => {
+    // Totals of 0 beside `reporting: 0` — the renderers read the second, not the first.
+    expect(summariseConduct([entry(), entry({ usage: { inputTokens: 10 } }), entry()])).toEqual({
+      turns: { total: 0, reporting: 0, of: 3 },
+      permissionDenials: { count: 0, tools: [], reporting: 0, of: 3 },
+    });
+  });
+
+  it('counts only the entries that reported, out of all of them', () => {
+    expect(
+      summariseConduct([
+        entry({ usage: { turns: 2, permissionDenials: { count: 1, tools: ['Write'] } } }),
+        entry({ usage: { turns: 3 } }),
+        entry(),
+      ]),
+    ).toEqual({
+      turns: { total: 5, reporting: 2, of: 3 },
+      permissionDenials: { count: 1, tools: ['Write'], reporting: 1, of: 3 },
+    });
+  });
+
+  it('totals every entry when every entry reported', () => {
+    expect(
+      summariseConduct([
+        entry({ usage: { turns: 1, permissionDenials: { count: 0, tools: [] } } }),
+        entry({ usage: { turns: 4, permissionDenials: { count: 2, tools: ['Bash'] } } }),
+      ]),
+    ).toEqual({
+      turns: { total: 5, reporting: 2, of: 2 },
+      permissionDenials: { count: 2, tools: ['Bash'], reporting: 2, of: 2 },
+    });
+  });
+
+  it('names each denied tool once, in the order it first appeared', () => {
+    const conduct = summariseConduct([
+      entry({ usage: { permissionDenials: { count: 1, tools: ['Write'] } } }),
+      entry({ usage: { permissionDenials: { count: 3, tools: ['Bash', 'Write'] } } }),
+    ]);
+
+    expect(conduct.permissionDenials.tools).toEqual(['Write', 'Bash']);
+    // The count keeps the multiplicity the names do not.
+    expect(conduct.permissionDenials.count).toBe(4);
+  });
+
+  it('counts an empty denial list as reported, with a count of zero', () => {
+    // "None were denied" is an answer; a runner that never reports denials gave none.
+    const conduct = summariseConduct([
+      entry({ usage: { permissionDenials: { count: 0, tools: [] } } }),
+      entry(),
+    ]);
+
+    expect(conduct.permissionDenials).toEqual({ count: 0, tools: [], reporting: 1, of: 2 });
+  });
+
+  it('counts a reported zero turns as reported', () => {
+    expect(summariseConduct([entry({ usage: { turns: 0 } })]).turns).toEqual({ total: 0, reporting: 1, of: 1 });
   });
 });
 

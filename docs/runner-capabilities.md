@@ -149,12 +149,18 @@ adapters parsed them and threw them away — the only mention of `usage` in the 
 a regex looking for the words "usage limit". An orchestrator whose job is spending model
 calls could not say what a run cost or which model wrote it.
 
-| Runner | Model | Tokens | Cache | Cost |
-|---|---|---|---|---|
-| `claude-code-cli` | `modelUsage[].canonicalModel` | `usage.input_tokens`, `output_tokens` | `cache_read_input_tokens`, `cache_creation_input_tokens` | `total_cost_usd` |
-| `agy-cli` | — | `usage.input_tokens`, `output_tokens` | `usage.cache_read_tokens` | — |
-| `codex-cli` | — | — | — | — |
-| `openai-compatible` | — | — | — | — |
+| Runner | Model | Tokens | Cache | Cost | Turns | Permission denials |
+|---|---|---|---|---|---|---|
+| `claude-code-cli` | `modelUsage[].canonicalModel` | `usage.input_tokens`, `output_tokens` | `cache_read_input_tokens`, `cache_creation_input_tokens` | `total_cost_usd` | `num_turns` | `permission_denials` (count and tool names only) |
+| `agy-cli` | — | `usage.input_tokens`, `output_tokens` | `usage.cache_read_tokens` | — | `num_turns` (top level, with or without `usage`) | — |
+| `codex-cli` | — | — | — | — | — | — |
+| `openai-compatible` | — | — | — | — | — | — |
+
+**Turns and denials are counted the way tokens are, undercount included (P1.2).** A stage's
+entry carries only its last invocation across repairs, a task's only its last attempt
+(`result.json` is overwritten on retry), and a fallback keeps only the secondary's figures.
+So a run's turns read smaller than what was spent. Per-attempt values survive in the attempt
+artifacts in worktree mode; the undercount itself is not fixed here.
 
 Measured, from `agy 1.1.27`:
 
@@ -349,6 +355,57 @@ belt-and-braces measure, and **never** passes `--dangerously-skip-permissions`.
 With `--output-format json`, failures keep the same envelope and set
 `is_error: true` plus an `api_error_status`.
 
+### Turns and permission denials (measured on 2.1.280)
+
+**Measured:** Claude Code `2.1.280`, Windows 11, `claude -p --output-format json --setting-sources ''`.
+
+The envelope carried these keys:
+
+```
+duration_api_ms, stop_reason, session_id, total_cost_usd, usage, modelUsage,
+permission_denials, terminal_reason, is_error, num_turns, subtype, result,
+errors, duration_ms
+```
+
+A real denial, with the path shortened:
+
+```json
+"num_turns": 2,
+"permission_denials": [
+  {
+    "tool_name": "Write",
+    "tool_use_id": "toolu_…",
+    "tool_input": { "file_path": "C:\\…\\probe.txt", "content": "hi" }
+  }
+]
+```
+
+The adapter reports `num_turns` as `usage.turns`, and `permission_denials` as
+`usage.permissionDenials = { count, tools }`: the array length, and each `tool_name` once in
+the order it first appears. `permission_denials: []` is reported as `{ count: 0, tools: [] }`,
+because the CLI said none were refused. A missing field is reported as nothing.
+
+**`tool_input` is the content the model tried to write,** the whole file of a denied `Write`,
+and that content can be a secret. So it is kept in neither place it could otherwise land:
+
+- **Not in usage.** The adapter reads only `tool_name` off an entry, and `RunUsageSchema` drops
+  any other key under `permissionDenials` if one arrives.
+- **Not in raw failure text.** For this CLI, stdout is the whole envelope, and the raw text of a
+  failure reaches the stage log, `stage_failed.rawExcerpt`, `attempt-<n>.failed.json`,
+  failure-context packets, `doctor --deep` and the CLI error renderer. `redactEvidence` removes
+  credential patterns, not file content. So `ClaudeCodeRunner.rawMessage` re-serialises the
+  envelope without `tool_input` and keeps every other key, `tool_name` and `tool_use_id`
+  included. A stdout that does not parse but contains `"tool_input"` is withheld whole
+  rather than guessed at. An envelope with nothing to remove is handed back byte for byte.
+  `test/app/claude-denial-disk.integration.test.ts` spawns a stub CLI printing a denial and
+  then reads every file under `.agent-flow/` for the canary.
+
+**What was not measured: stderr under a denial.** Only the stdout envelope was captured, and
+stderr is appended to raw text unchanged. The design treats "Claude never writes `tool_input`
+to stderr in JSON mode" as its weakest assumption. If that assumption is wrong, the cut above
+has a gap, and the end-to-end test would not catch it, because the stub decides what goes to
+stderr. Capture stderr the next time a real denial is reproduced.
+
 ### Fixtures
 
 | File | Origin |
@@ -359,8 +416,13 @@ With `--output-format json`, failures keep the same envelope and set
 | `error-invalid-model.txt` | **real** |
 | `SYNTHETIC-error-auth.json` | ⚠️ **synthetic** |
 | `SYNTHETIC-error-quota.json` | ⚠️ **synthetic** |
+| `SYNTHETIC-permission-denial.json` | ⚠️ **synthetic**, built from the 2.1.280 key set and denial shape |
+| `SYNTHETIC-error-permission-denial.json` | ⚠️ **synthetic**, the same, with `is_error: true` |
 
-The two `SYNTHETIC-` files are hand-written. Forcing a genuine 401 or 429 would
+The two denial fixtures carry `TOOL-INPUT-CANARY-7f3a` in every `tool_input.content`. The
+tests that prove the input never reaches usage or disk search for that string.
+
+The two `SYNTHETIC-error-` auth and quota files are hand-written. Forcing a genuine 401 or 429 would
 mean either breaking the developer's local login or burning through a real quota
 limit, and neither is a reasonable price for a fixture.
 

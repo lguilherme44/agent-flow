@@ -10,6 +10,11 @@ import {
 } from '../../src/contracts/index.js';
 import { renderCollaboration } from '../../src/cli/render/collaboration.js';
 import { describeReplanReport } from '../../src/core/replan-report.js';
+import { renderSpend, summariseSpend } from '../../src/cli/render/spend.js';
+import { collectTelemetry } from '../../src/app/telemetry.js';
+import { StateStore } from '../../src/app/state-store.js';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
+import { FixedClock } from '../fakes/fixed-clock.js';
 
 /**
  * Found by killing a run mid-discovery, not by reading the code.
@@ -462,5 +467,72 @@ describe('status says whether the last replan got the previous findings', () => 
     // The three tests above would all pass against a `status` that printed the line
     // unconditionally with a placeholder count.
     expect(statusWith(undefined)).not.toContain('Last replan');
+  });
+});
+
+/**
+ * P1.2 — the Spend block's turns and denials lines, over the path `status` reads.
+ *
+ * `runStatusCommand` builds a `NodeFileSystem` of its own, so the block is exercised here
+ * through the same three calls it makes — `collectTelemetry`, `summariseSpend`,
+ * `renderSpend` — over an in-memory store, with events shaped as each runner persists them.
+ */
+describe('status reports turns and permission denials in the Spend block', () => {
+  const stageEvent = (stage: string, runner: string, usage?: Record<string, unknown>) => ({
+    stage,
+    role: 'architect',
+    runner,
+    reasoning: 'high',
+    reasoningClamped: false,
+    repairs: 0,
+    startedAt: '2026-09-24T10:00:00.000Z',
+    finishedAt: '2026-09-24T10:00:05.000Z',
+    ...(usage === undefined ? {} : { usage }),
+  });
+
+  async function spendBlock(details: readonly Record<string, unknown>[]): Promise<string | undefined> {
+    const store = new StateStore({ fs: new InMemoryFileSystem(), clock: new FixedClock(), projectDir: '/repo' });
+    const run = await store.createRun('a feature');
+    for (const detail of details) await store.appendEvent(run.runId, 'stage_completed', detail);
+
+    const telemetry = await collectTelemetry(store, await store.loadRun(run.runId));
+    return renderSpend(summariseSpend(telemetry.entries));
+  }
+
+  it('prints both lines, with coverage, for a run mixing Claude, agy and codex', async () => {
+    const block = await spendBlock([
+      stageEvent('discovery', 'claude', {
+        inputTokens: 2,
+        outputTokens: 9,
+        costUsd: 0.1,
+        turns: 2,
+        permissionDenials: { count: 1, tools: ['Write'] },
+      }),
+      stageEvent('sdd', 'agy', { inputTokens: 10, outputTokens: 1, turns: 1 }),
+      stageEvent('planning', 'codex'),
+    ]);
+
+    expect(block).toBe(
+      [
+        'Spend',
+        '  tokens        12 in · 10 out',
+        '  cost          $0.1000 as the runner priced it — not necessarily your bill',
+        '  measured on   2 of 3 calls; the rest reported nothing',
+        '  turns         3; measured on 2 of 3 calls',
+        '  permission denials  1 (Write); measured on 1 of 3 calls',
+      ].join('\n'),
+    );
+  });
+
+  it('says not reported for a run whose runners reported tokens and nothing else', async () => {
+    const block = await spendBlock([stageEvent('discovery', 'agy', { inputTokens: 10, outputTokens: 1 })]);
+
+    expect(block).toContain('  turns         not reported by any runner on this run');
+    expect(block).toContain('  permission denials  not reported by any runner on this run');
+  });
+
+  it('prints no Spend block when no call reported spend, as before', async () => {
+    // Turns on their own are not spend, so they do not open the block (PRI-19's silence).
+    expect(await spendBlock([stageEvent('sdd', 'agy', { turns: 1 }), stageEvent('planning', 'codex')])).toBeUndefined();
   });
 });

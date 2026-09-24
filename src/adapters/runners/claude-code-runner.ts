@@ -42,11 +42,53 @@ interface ClaudeEnvelope {
     cache_read_input_tokens?: number;
   };
   total_cost_usd?: number;
+  /**
+   * Measured on Claude Code 2.1.280 (`-p --output-format json --setting-sources ''`), next
+   * to `duration_api_ms, stop_reason, session_id, terminal_reason, errors, duration_ms`.
+   * Typed `unknown` because nothing here trusts the CLI's word on the shape.
+   */
+  num_turns?: unknown;
+  /**
+   * One entry per refused tool call, measured on 2.1.280 as
+   * `{"tool_name":"Write","tool_use_id":"toolu_…","tool_input":{"file_path":…,"content":"hi"}}`.
+   * `tool_input` is the content the model tried to write, and is never read here.
+   */
+  permission_denials?: unknown;
 }
 
 /** A number the envelope actually carried, or nothing. Never a zero this file invented. */
 function count(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * A turn count the persisted mirror will accept, or nothing.
+ *
+ * Tighter than `count` on purpose: `RunUsageSchema` takes a non-negative integer, so a
+ * `-1` or `1.5` passed through here would fail `result.json`'s parse or drop a telemetry
+ * row (D10). Leaving it absent loses one malformed number and nothing else.
+ */
+function turnCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * How many calls were refused, and which tools — never what they tried to do.
+ *
+ * Only `tool_name` is read off an entry. `tool_input` carries the content the model meant
+ * to write (measured on 2.1.280), which can be a secret, and `tool_use_id` has no reader.
+ * An entry with no usable name still counts: it was a refusal, just an unnamed one.
+ */
+function denialsOf(value: unknown): AgentRunUsage['permissionDenials'] {
+  if (!Array.isArray(value)) return undefined;
+
+  const tools: string[] = [];
+  for (const entry of value as readonly unknown[]) {
+    const name =
+      typeof entry === 'object' && entry !== null ? (entry as { tool_name?: unknown }).tool_name : undefined;
+    if (typeof name === 'string' && name.length > 0 && !tools.includes(name)) tools.push(name);
+  }
+  return { count: value.length, tools };
 }
 
 /**
@@ -75,6 +117,47 @@ function principalModel(
 
 function asEnvelope(value: unknown): ClaudeEnvelope | undefined {
   return typeof value === 'object' && value !== null ? (value as ClaudeEnvelope) : undefined;
+}
+
+/** What stands in for a stdout that carried denied input this adapter could not cut out. */
+const WITHHELD_STDOUT = '[claude stdout withheld: unparseable envelope carrying permission_denials tool_input]';
+
+/**
+ * stdout with every `permission_denials[].tool_input` removed, or stdout itself.
+ *
+ * Returned untouched unless there is something to remove, so an envelope without denied
+ * input reads in the logs exactly as the CLI printed it. When there is, the envelope is
+ * re-serialised: its whitespace changes, which costs nothing because raw text is diagnosis
+ * and never drives control flow, and every other key — `tool_name`, `tool_use_id`,
+ * `errors`, `result` — stays, because those are what a person reads to find the missing
+ * grant.
+ *
+ * **Fails closed.** A stdout that is not JSON but still names `"tool_input"` cannot be cut
+ * safely — a truncated or interleaved envelope has no structure to cut along — so the whole
+ * stdout is withheld rather than guessed at (SEC-003).
+ */
+function withoutToolInput(stdout: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return stdout.includes('"tool_input"') ? WITHHELD_STDOUT : stdout;
+  }
+
+  const envelope = record(parsed);
+  const denials = envelope?.permission_denials;
+  if (envelope === undefined || !Array.isArray(denials)) return stdout;
+  if (!denials.some((entry: unknown) => Object.hasOwn(record(entry) ?? {}, 'tool_input'))) return stdout;
+
+  return JSON.stringify({
+    ...envelope,
+    permission_denials: denials.map((entry: unknown) => {
+      const denial = record(entry);
+      return denial === undefined
+        ? entry
+        : Object.fromEntries(Object.entries(denial).filter(([key]) => key !== 'tool_input'));
+    }),
+  });
 }
 
 /**
@@ -457,6 +540,25 @@ export class ClaudeCodeRunner extends BaseRunner {
   }
 
   /**
+   * The failure text, without the input of any tool call the CLI refused.
+   *
+   * For this CLI stdout is the whole envelope, and `permission_denials[].tool_input` carries
+   * what the model tried to pass — measured on 2.1.280 as the full `content` of a denied
+   * `Write`, which can be a secret. The base text reaches the stage log, `stage_failed`'s
+   * excerpt, `attempt-<n>.failed.json`, failure-context packets, `doctor --deep` and the CLI
+   * error renderer, and `redactEvidence` removes credential patterns, not file content. So
+   * it is cut here, once, where the vocabulary is allowed to be known (AD-13), rather than
+   * in each of those readers.
+   *
+   * Only stdout: stderr is joined unchanged by the base rules. Nothing was seen on stderr
+   * under a denial, but stderr under one was never captured either — see
+   * docs/runner-capabilities.md.
+   */
+  protected override rawMessage(result: ProcessResult): string {
+    return super.rawMessage({ ...result, stdout: withoutToolInput(result.stdout) });
+  }
+
+  /**
    * The accounting this CLI returns on every response, and this adapter used to discard
    * (PRI-19).
    *
@@ -469,10 +571,17 @@ export class ClaudeCodeRunner extends BaseRunner {
    *
    * Nothing is defaulted to zero. A field the envelope did not carry stays absent, so a
    * reader can tell "this CLI did not say" from "this cost nothing".
+   *
+   * `turns` and `permissionDenials` (P1.2) follow the same rule. `permission_denials: []`
+   * is a statement — none were refused — so it becomes `{ count: 0, tools: [] }`; only a
+   * missing or non-array field is silence.
    */
   protected override parseUsage(_result: ProcessResult, parsed: unknown): AgentRunUsage | undefined {
     const envelope = asEnvelope(parsed);
     if (envelope === undefined) return undefined;
+
+    const turns = turnCount(envelope.num_turns);
+    const permissionDenials = denialsOf(envelope.permission_denials);
 
     const usage: AgentRunUsage = {
       ...(principalModel(envelope.modelUsage) === undefined
@@ -493,6 +602,8 @@ export class ClaudeCodeRunner extends BaseRunner {
       ...(count(envelope.total_cost_usd) === undefined
         ? {}
         : { costUsd: count(envelope.total_cost_usd) }),
+      ...(turns === undefined ? {} : { turns }),
+      ...(permissionDenials === undefined ? {} : { permissionDenials }),
     };
 
     // An empty object would claim a measurement was taken. Nothing was.

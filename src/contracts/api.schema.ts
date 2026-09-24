@@ -1348,6 +1348,26 @@ export interface TelemetrySummaryView {
   readonly byModel: Record<string, TelemetryBucketView>;
   readonly byRole: Record<string, TelemetryBucketView>;
   readonly byStage: Record<string, TelemetryBucketView>;
+  /**
+   * Turns and permission denials (P1.2). Optional because a server older than the field
+   * does not send it, and a reader must say "not reported" then rather than throw.
+   */
+  readonly conduct?: ConductSummaryView;
+}
+
+/**
+ * `core/telemetry.ts`'s `RunConduct`, declared by shape because `contracts` may not import
+ * `core`. `reporting` is how many entries carried the field and `of` how many there were:
+ * `reporting: 0` means no runner said, never that the count was zero.
+ */
+export interface ConductSummaryView {
+  readonly turns: { readonly total: number; readonly reporting: number; readonly of: number };
+  readonly permissionDenials: {
+    readonly count: number;
+    readonly tools: readonly string[];
+    readonly reporting: number;
+    readonly of: number;
+  };
 }
 
 export interface RunTelemetryView {

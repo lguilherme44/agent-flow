@@ -109,6 +109,26 @@ export interface AgentRunUsage {
   readonly cacheWriteTokens?: number;
   /** What the provider says it charged, in USD. Absent where the CLI does not say. */
   readonly costUsd?: number;
+  /**
+   * How many model turns the call took, as the CLI counted them (P1.2).
+   *
+   * Absent means the runner did not report it, never zero: a CLI that says nothing about
+   * turns and one that answered in none are different facts, and only the adapter knows
+   * which one it is looking at.
+   */
+  readonly turns?: number;
+  /**
+   * Tool calls the agent attempted and its permission policy refused (P1.2).
+   *
+   * `count` carries the multiplicity and `tools` the unique names, in the order they first
+   * appeared — the name is what tells a person which grant is missing. **Never the input the
+   * model tried to pass**: Claude's envelope carries it, measured on 2.1.280 as the full
+   * content of a file it meant to write, and that can be a secret.
+   *
+   * Absent means the runner did not report denials, never that none happened; a runner that
+   * reported an empty list says so with `count: 0`.
+   */
+  readonly permissionDenials?: { readonly count: number; readonly tools: readonly string[] };
 }
 
 export interface AgentRunSuccess {

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunTelemetryView } from '@contracts/index.js';
 import { clearStore } from '../../lib/store';
 import { TelemetryTab } from './Telemetry';
-import { ptBR as t } from '../../lib/i18n';
+import { I18nProvider, en, ptBR as t } from '../../lib/i18n';
 
 /**
  * 7.4 — what a stage cost, and what its prompt was made of.
@@ -132,5 +132,134 @@ describe('the run telemetry tab', () => {
     render(<TelemetryTab address={address} />);
 
     expect(await screen.findByText(t.telemetry.nothingRunYet)).toBeInTheDocument();
+  });
+});
+
+/**
+ * P1.2 — turns and permission denials, as `summary.conduct` states them.
+ *
+ * The rule under test is the one the spend block already follows: silence is not zero. A
+ * server older than the field, and a run served only by runners that report neither, must
+ * read "not reported" — a `0` there would say the calls took no turns and nothing was denied.
+ */
+describe('turns and permission denials on the telemetry tab', () => {
+  beforeEach(() => clearStore());
+  afterEach(() => vi.unstubAllGlobals());
+
+  type Conduct = NonNullable<RunTelemetryView['summary']['conduct']>;
+
+  const withConduct = (conduct: Conduct): RunTelemetryView => ({
+    ...TELEMETRY,
+    summary: { ...TELEMETRY.summary, conduct },
+  });
+
+  /** The `Stat` whose label starts with `label`, since coverage may follow it. */
+  async function stat(label: string) {
+    const totals = await screen.findByLabelText(t.telemetry.totals);
+    const found = [...totals.querySelectorAll('.stat')].find((node) =>
+      node.querySelector('.stat__label')?.textContent?.startsWith(label),
+    );
+    expect(found).toBeDefined();
+    return {
+      value: found?.querySelector('.stat__value'),
+      label: found?.querySelector('.stat__label')?.textContent ?? '',
+    };
+  }
+
+  it('says "not reported" when the server sent no conduct at all', async () => {
+    // The fixture carries none, as an older server's response would.
+    expect(TELEMETRY.summary.conduct).toBeUndefined();
+    serve(TELEMETRY);
+    render(<TelemetryTab address={address} />);
+
+    expect((await stat(t.telemetry.turns)).value).toHaveTextContent('não reportado');
+    expect((await stat(t.telemetry.permissionDenials)).value).toHaveTextContent('não reportado');
+  });
+
+  it('says "not reported" in English too', async () => {
+    serve(TELEMETRY);
+    render(
+      <I18nProvider locale="en">
+        <TelemetryTab address={address} />
+      </I18nProvider>,
+    );
+
+    const totals = await screen.findByLabelText(en.telemetry.totals);
+    const values = [...totals.querySelectorAll('.stat')]
+      .filter((node) => {
+        const label = node.querySelector('.stat__label')?.textContent ?? '';
+        return label === en.telemetry.turns || label === en.telemetry.permissionDenials;
+      })
+      .map((node) => node.querySelector('.stat__value')?.textContent);
+    expect(values).toEqual(['not reported', 'not reported']);
+  });
+
+  it('says "not reported" when no entry reported either field, never 0', async () => {
+    serve(
+      withConduct({
+        turns: { total: 0, reporting: 0, of: 6 },
+        permissionDenials: { count: 0, tools: [], reporting: 0, of: 6 },
+      }),
+    );
+    render(<TelemetryTab address={address} />);
+
+    const turns = await stat(t.telemetry.turns);
+    const denials = await stat(t.telemetry.permissionDenials);
+    expect(turns.value).toHaveTextContent(t.telemetry.notReported);
+    expect(denials.value).toHaveTextContent(t.telemetry.notReported);
+    // Nobody reported, so there is no coverage to state either.
+    expect(turns.label).toBe(t.telemetry.turns);
+    expect(denials.value?.getAttribute('data-tone')).toBeNull();
+  });
+
+  it('shows denials in the warning tone and names the tools', async () => {
+    serve(
+      withConduct({
+        turns: { total: 7, reporting: 6, of: 6 },
+        permissionDenials: { count: 3, tools: ['Write', 'Bash'], reporting: 6, of: 6 },
+      }),
+    );
+    render(<TelemetryTab address={address} />);
+
+    const turns = await stat(t.telemetry.turns);
+    const denials = await stat(t.telemetry.permissionDenials);
+    expect(turns.value).toHaveTextContent('7');
+    expect(denials.value).toHaveTextContent('3');
+    expect(denials.value?.getAttribute('data-tone')).toBe('warn');
+    // Full coverage states none.
+    expect(denials.label).toBe(t.telemetry.permissionDenials);
+    expect(screen.getByText(t.telemetry.deniedTools('Write, Bash'))).toBeInTheDocument();
+  });
+
+  it('POSITIVE CONTROL: a reported zero is a number, with no warning and no tool line', async () => {
+    serve(
+      withConduct({
+        turns: { total: 4, reporting: 6, of: 6 },
+        permissionDenials: { count: 0, tools: [], reporting: 6, of: 6 },
+      }),
+    );
+    render(<TelemetryTab address={address} />);
+
+    const denials = await stat(t.telemetry.permissionDenials);
+    expect(denials.value).toHaveTextContent('0');
+    expect(denials.value?.getAttribute('data-tone')).toBeNull();
+    expect(screen.queryByText(/Ferramentas negadas/)).toBeNull();
+  });
+
+  it('states partial coverage as "measured on X of Y calls"', async () => {
+    serve(
+      withConduct({
+        turns: { total: 5, reporting: 2, of: 3 },
+        permissionDenials: { count: 1, tools: ['Write'], reporting: 1, of: 3 },
+      }),
+    );
+    render(<TelemetryTab address={address} />);
+
+    const turns = await stat(t.telemetry.turns);
+    const denials = await stat(t.telemetry.permissionDenials);
+    expect(turns.label).toContain('medido em 2 de 3 chamadas');
+    expect(turns.label).toContain(t.telemetry.measuredOn(2, 3));
+    expect(denials.label).toContain(t.telemetry.measuredOn(1, 3));
+    expect(en.telemetry.measuredOn(2, 3)).toBe('measured on 2 of 3 calls');
   });
 });

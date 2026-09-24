@@ -40,6 +40,64 @@ export interface TelemetrySummary {
   readonly byModel: Record<string, TelemetryBucket>;
   readonly byRole: Record<string, TelemetryBucket>;
   readonly byStage: Record<string, TelemetryBucket>;
+  /** Turns and permission denials, as the runners reported them (P1.2). */
+  readonly conduct: RunConduct;
+}
+
+/**
+ * How the calls behaved, as opposed to what they cost (P1.2): how many turns the runners
+ * said they took, and how many tool calls they said were denied.
+ *
+ * **`reporting` and `of` travel with every total**, for the same reason `RunSpend` keeps
+ * them apart: most runners report neither field, and a total of 3 turns over nine calls of
+ * which one reported is not a run that took 3 turns. `reporting: 0` is the honest shape of
+ * "nobody said", and it is what a run older than these fields reads as.
+ */
+export interface RunConduct {
+  readonly turns: { readonly total: number; readonly reporting: number; readonly of: number };
+  readonly permissionDenials: {
+    readonly count: number;
+    /** Every denied tool name, once, in the order the entries first named it. */
+    readonly tools: readonly string[];
+    readonly reporting: number;
+    readonly of: number;
+  };
+}
+
+/**
+ * Totals turns and denials over the entries that reported them, and only those.
+ *
+ * An entry without a field adds nothing and is not counted: inferring a `0` for a runner
+ * that never reports turns would make its calls look free of them. An entry that reported
+ * `{ count: 0, tools: [] }` is counted — "no denials" is an answer, and a different one
+ * from silence.
+ */
+export function summariseConduct(entries: readonly TelemetryEntry[]): RunConduct {
+  let turnsTotal = 0;
+  let turnsReporting = 0;
+  let deniedCount = 0;
+  let deniedReporting = 0;
+  const tools: string[] = [];
+
+  for (const entry of entries) {
+    const usage = entry.usage;
+    if (usage?.turns !== undefined) {
+      turnsTotal += usage.turns;
+      turnsReporting += 1;
+    }
+    if (usage?.permissionDenials !== undefined) {
+      deniedCount += usage.permissionDenials.count;
+      deniedReporting += 1;
+      for (const tool of usage.permissionDenials.tools) {
+        if (!tools.includes(tool)) tools.push(tool);
+      }
+    }
+  }
+
+  return {
+    turns: { total: turnsTotal, reporting: turnsReporting, of: entries.length },
+    permissionDenials: { count: deniedCount, tools, reporting: deniedReporting, of: entries.length },
+  };
 }
 
 const EMPTY: TelemetryBucket = {
@@ -62,6 +120,7 @@ export function summariseTelemetry(entries: readonly TelemetryEntry[]): Telemetr
     byModel: groupBy(entries, (entry) => entry.model),
     byRole: groupBy(entries, (entry) => entry.role),
     byStage: groupBy(entries, (entry) => entry.stage),
+    conduct: summariseConduct(entries),
   };
 }
 
@@ -143,6 +202,8 @@ export interface RunSpend {
   readonly total: number;
   /** Whether any entry reported a cost, as opposed to only tokens. */
   readonly pricedAny: boolean;
+  /** The same `summariseConduct` answer the telemetry summary carries, so the two agree. */
+  readonly conduct: RunConduct;
 }
 
 /**
@@ -162,7 +223,11 @@ export function summariseSpend(entries: readonly TelemetryEntry[]): RunSpend | u
 
   for (const entry of entries) {
     const usage = entry.usage;
-    if (usage === undefined) continue;
+    // A usage block is not necessarily a spend report (P1.2). agy with no token block
+    // yields `{ turns }`, and a Claude error envelope `{ permissionDenials }`; counting
+    // either here would print a fabricated `0 in · 0 out` and claim a call was measured
+    // when nothing about its cost was said.
+    if (usage === undefined || !reportsSpend(usage)) continue;
     reporting += 1;
     inputTokens += usage.inputTokens ?? 0;
     outputTokens += usage.outputTokens ?? 0;
@@ -174,5 +239,30 @@ export function summariseSpend(entries: readonly TelemetryEntry[]): RunSpend | u
   }
 
   if (reporting === 0) return undefined;
-  return { inputTokens, outputTokens, cacheReadTokens, costUsd, reporting, total: entries.length, pricedAny };
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    costUsd,
+    reporting,
+    total: entries.length,
+    pricedAny,
+    conduct: summariseConduct(entries),
+  };
+}
+
+type RunUsage = NonNullable<TelemetryEntry['usage']>;
+
+/** The usage fields that describe spend. `turns` and `permissionDenials` do not. */
+const SPEND_FIELDS = [
+  'model',
+  'inputTokens',
+  'outputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'costUsd',
+] as const satisfies readonly (keyof RunUsage)[];
+
+function reportsSpend(usage: RunUsage): boolean {
+  return SPEND_FIELDS.some((field) => usage[field] !== undefined);
 }

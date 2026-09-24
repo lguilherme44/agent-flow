@@ -322,6 +322,75 @@ describe('telemetry is derived from what the run already recorded', () => {
     expect(summariseTelemetry(entries).retries).toBe(2);
   });
 
+  it('carries turns and denials from a stage event, as the runner reported them (P1.2)', async () => {
+    const w = await world();
+    const run = await w.store.createRun('f');
+
+    w.runners.claude.push({
+      ok: true,
+      text: '# Architecture',
+      durationMs: 1,
+      usage: { inputTokens: 3, turns: 2, permissionDenials: { count: 1, tools: ['Write'] } },
+    });
+    await w.stageRunner.run({ name: 'discovery', role: 'architect', prompt: 'discovery' }, run.runId, {
+      projectDir: '/repo',
+      projectConfig: 'none',
+      agentsMd: 'none',
+    });
+
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+
+    expect(entries[0]?.usage).toEqual({
+      inputTokens: 3,
+      turns: 2,
+      permissionDenials: { count: 1, tools: ['Write'] },
+    });
+  });
+
+  it('carries turns and denials from a task result (P1.2)', async () => {
+    const w = await world();
+    const run = await w.store.createRun('f');
+
+    w.runners.codex.push({
+      ok: true,
+      text: IMPLEMENTED,
+      durationMs: 1,
+      usage: { turns: 5, permissionDenials: { count: 0, tools: [] } },
+    });
+    await w.executor.execute(TASK, run.runId, SDD);
+    await w.store.updateRun(run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-001', state: 'completed', attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    const { entries } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+    const task = entries.find((entry) => entry.kind === 'task');
+
+    expect(task?.usage).toEqual({ turns: 5, permissionDenials: { count: 0, tools: [] } });
+  });
+
+  it('still yields an entry for an event written before turns and denials existed', async () => {
+    const w = await world();
+    const run = await w.store.createRun('f');
+
+    await w.store.appendEvent(run.runId, 'stage_completed', {
+      stage: 'discovery',
+      role: 'architect',
+      runner: 'claude',
+      reasoning: 'high',
+      attempts: 1,
+      startedAt: '2026-09-10T00:00:00.000Z',
+      finishedAt: '2026-09-10T00:00:04.000Z',
+      usage: { inputTokens: 2, outputTokens: 9 },
+    });
+
+    const { entries, dropped } = await collectTelemetry(w.store, await w.store.loadRun(run.runId));
+
+    expect(dropped).toEqual([]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.usage).toEqual({ inputTokens: 2, outputTokens: 9 });
+  });
+
   it('is reproducible: reading twice gives the same answer', async () => {
     // The property that makes a projection safe. Nothing is stored, so nothing
     // can drift from the state and the events it is read out of.

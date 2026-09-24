@@ -27,6 +27,7 @@ import type {
   RunDetailView,
   RunEventLogView,
   RunSummaryView,
+  RunTelemetryView,
   RunnerHealthView,
   RunnerModelsView,
   StageLogView,
@@ -672,6 +673,52 @@ describe('UI-04 — the run read API', () => {
 
     expect(telemetry.summary.entries).toBe(1);
     expect(telemetry).not.toHaveProperty('context');
+  });
+
+  it('summarises turns and denials once, on the server (P1.2)', async () => {
+    const { server, store, run } = await serve();
+    const stage = (name: string, runner: string, usage?: Record<string, unknown>) =>
+      store.appendEvent(run.runId, 'stage_completed', {
+        stage: name,
+        role: 'architect',
+        runner,
+        reasoning: 'high',
+        reasoningClamped: false,
+        repairs: 0,
+        startedAt: '2026-08-09T20:01:00.000Z',
+        finishedAt: '2026-08-09T20:01:05.000Z',
+        ...(usage === undefined ? {} : { usage }),
+      });
+    // Claude reports both, agy turns only, codex nothing — each as its adapter persists it.
+    await stage('sdd', 'claude', { inputTokens: 4, turns: 2, permissionDenials: { count: 2, tools: ['Write', 'Bash'] } });
+    await stage('planning', 'agy', { turns: 1 });
+    await stage('plan-review', 'codex');
+
+    const telemetry = (await server.app.inject(`/api/v1/runs/${run.runId}/telemetry`)).json<RunTelemetryView>();
+
+    // Four entries: the fixture's legacy discovery event plus the three above.
+    expect(telemetry.summary.conduct).toEqual({
+      turns: { total: 3, reporting: 2, of: 4 },
+      permissionDenials: { count: 2, tools: ['Write', 'Bash'], reporting: 1, of: 4 },
+    });
+    expect(telemetry.entries.find((entry) => entry.stage === 'sdd')?.usage).toEqual({
+      inputTokens: 4,
+      turns: 2,
+      permissionDenials: { count: 2, tools: ['Write', 'Bash'] },
+    });
+    expect(telemetry.entries.find((entry) => entry.stage === 'planning')?.usage).toEqual({ turns: 1 });
+  });
+
+  it('reports no conduct coverage for a run whose events predate the fields', async () => {
+    // The fixture's one event carries no usage at all, as every run before P1.2 does.
+    const { server, run } = await serve();
+
+    const telemetry = (await server.app.inject(`/api/v1/runs/${run.runId}/telemetry`)).json<RunTelemetryView>();
+
+    expect(telemetry.summary.conduct).toEqual({
+      turns: { total: 0, reporting: 0, of: 1 },
+      permissionDenials: { count: 0, tools: [], reporting: 0, of: 1 },
+    });
   });
 
   it('adds separately labelled estimated context observations when they exist', async () => {

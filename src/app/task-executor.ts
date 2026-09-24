@@ -845,6 +845,10 @@ export class TaskExecutor {
       reasoning: input.execution.reasoning,
       reasoningClamped: input.execution.reasoningClamped,
       ...(input.execution.fallback === undefined ? {} : { fallback: input.execution.fallback }),
+      // `FailedAttemptSchema` has declared `usage` since PRI-19 and this object never set
+      // it, so the one artifact describing a failed attempt said nothing of what it spent —
+      // and a call that failed after the model answered was still paid for.
+      ...(input.execution.usage === undefined ? {} : { usage: input.execution.usage }),
       startedAt: input.startedAt,
       finishedAt: input.finishedAt,
       failureClass,

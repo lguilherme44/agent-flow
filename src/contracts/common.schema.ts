@@ -81,6 +81,30 @@ export const RunUsageSchema = z.object({
   cacheReadTokens: z.number().int().min(0).optional(),
   cacheWriteTokens: z.number().int().min(0).optional(),
   costUsd: z.number().min(0).optional(),
+  /** Absent when the runner did not report turns — never defaulted to zero (P1.2). */
+  turns: z.number().int().min(0).optional(),
+  /**
+   * Denied tool calls: a count and the unique tool names (P1.2).
+   *
+   * **Not `.strict()`, on purpose.** An unknown key here — above all a denied call's input,
+   * which on Claude carries the content the model tried to write — is dropped on parse
+   * rather than rejected. Rejecting would drop the whole telemetry row (D10) and lose the count with it;
+   * stripping keeps the fact and discards the payload.
+   *
+   * No refinement ties `count` to `tools.length` either. A denial without a tool name is
+   * counted and not named, so `count >= tools.length` is the usual shape, and a refine that
+   * failed would drop a row over an inconsistency that changes no decision.
+   *
+   * `tools` is `.readonly()` so the inferred type matches the port's `readonly string[]`:
+   * without it `StageRunner` could not hand a runner's usage to a `RunUsage` parameter
+   * unchanged. It validates exactly what the plain array does; Zod only freezes the output.
+   */
+  permissionDenials: z
+    .object({
+      count: z.number().int().min(0),
+      tools: z.array(z.string().min(1)).readonly(),
+    })
+    .optional(),
 });
 export type RunUsage = z.infer<typeof RunUsageSchema>;
 

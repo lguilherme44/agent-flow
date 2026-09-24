@@ -49,7 +49,37 @@ export function renderSpend(spend: RunSpend | undefined): string | undefined {
     );
   }
 
+  // P1.2. Each line carries its own coverage rather than sharing the one above: turns,
+  // denials and tokens are reported by different runners, so "measured on" for tokens
+  // says nothing about how many calls counted their turns.
+  const { turns, permissionDenials: denials } = spend.conduct;
+  lines.push(
+    turns.reporting === 0
+      ? `  turns         ${NOT_REPORTED}`
+      : `  turns         ${thousands(turns.total)}${coverage(turns.reporting, turns.of)}`,
+  );
+  lines.push(
+    denials.reporting === 0
+      ? `  permission denials  ${NOT_REPORTED}`
+      : `  permission denials  ${describeDenials(denials.count, denials.tools)}${coverage(denials.reporting, denials.of)}`,
+  );
+
   return lines.join('\n');
+}
+
+const NOT_REPORTED = 'not reported by any runner on this run';
+
+/**
+ * "None" is only said when a runner reported an empty list. It is a different answer from
+ * silence, and the one a person reading a run that answered nothing needs to tell apart.
+ */
+function describeDenials(count: number, tools: readonly string[]): string {
+  if (count === 0) return 'none';
+  return tools.length === 0 ? String(count) : `${String(count)} (${tools.join(', ')})`;
+}
+
+function coverage(reporting: number, of: number): string {
+  return reporting < of ? `; measured on ${String(reporting)} of ${String(of)} calls` : '';
 }
 
 function thousands(value: number): string {

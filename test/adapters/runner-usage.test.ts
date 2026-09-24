@@ -46,6 +46,9 @@ describe('Claude Code reports model, tokens and cost (PRI-19)', () => {
       cacheReadTokens: 31810,
       cacheWriteTokens: 23786,
       costUsd: 0.1524,
+      // P1.2: the same envelope carries `num_turns: 1` and `permission_denials: []`.
+      turns: 1,
+      permissionDenials: { count: 0, tools: [] },
     });
   });
 
@@ -84,9 +87,13 @@ describe('Claude Code reports model, tokens and cost (PRI-19)', () => {
     const result = await new ClaudeCodeRunner({ id: 'claude', processRunner: proc }).run(input);
 
     expect(result.ok).toBe(false);
-    // The synthetic quota fixture carries no usage block, so nothing is reported — which
-    // is the other half of the contract: absent means unmeasured, never zero.
-    expect(result.usage).toBeUndefined();
+    // The synthetic quota fixture carries no usage block, so no token, cost or model is
+    // reported — the other half of the contract: absent means unmeasured, never zero.
+    // The object is no longer `undefined` because the envelope does carry
+    // `permission_denials: []`, which is a statement (none were refused), not silence (P1.2).
+    expect(result.usage).toEqual({ permissionDenials: { count: 0, tools: [] } });
+    const measuredKeys = ['model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'costUsd'];
+    for (const key of measuredKeys) expect(result.usage).not.toHaveProperty(key);
   });
 
   it('says nothing rather than zero when the envelope carries no accounting', async () => {
@@ -111,7 +118,8 @@ describe('agy reports tokens and no cost (PRI-19)', () => {
     const result = await new AgyRunner({ id: 'agy', processRunner: proc }).run(input);
 
     expect(result.ok).toBe(true);
-    expect(result.usage).toEqual({ inputTokens: 20735, outputTokens: 1, cacheReadTokens: 0 });
+    // `turns` from the top-level `num_turns: 1` the same envelope carries (P1.2).
+    expect(result.usage).toEqual({ inputTokens: 20735, outputTokens: 1, cacheReadTokens: 0, turns: 1 });
     expect(result.usage?.costUsd).toBeUndefined();
     expect(result.usage?.model).toBeUndefined();
   });
