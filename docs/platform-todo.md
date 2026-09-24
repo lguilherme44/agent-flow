@@ -514,7 +514,10 @@ emenda se comportam exatamente como hoje.
 
 # Avulsos
 
-- [ ] **N1 · Medir se regras por diretório chegam ao executor** — `src/app/project-instructions.ts:33-72`, `claude-code-runner.ts:394-395`
+- [ ] **N1 · Medir se regras por diretório chegam ao executor**
+      **Medido em 24/09 (Claude 2.1.281): não chegam.** Com `sub/CLAUDE.md` mandando terminar a
+      resposta com uma palavra-marcador, a leitura de `sub/data.txt` obedeceu sem flags (controle) e
+      **ignorou** com `--setting-sources '' --safe-mode`, as flags do adapter. Falta a injeção. — `src/app/project-instructions.ts:33-72`, `claude-code-runner.ts:394-395`
       Num repo fixture com `sub/AGENTS.md` e `sub/CLAUDE.md` contendo uma instrução-marcador,
       rodar o estágio de implementação sobre um arquivo em `sub/` com os args exatos
       (`--setting-sources ''`). Se o marcador não chega: injetar as instruções aninhadas dos
