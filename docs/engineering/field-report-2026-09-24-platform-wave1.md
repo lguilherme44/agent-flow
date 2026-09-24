@@ -116,6 +116,24 @@ leu o código mas não pôde rodar os gates. O "FEATURE COMPLETE" saiu com uma p
 (Deck) verificada só por leitura. Quem conduz precisa rodar à mão — e precisa saber disso,
 porque a tela diz "completo".
 
+### A-14 · Falso negativo do classificador: mudança transversal virou `simple` — alto (P7.6)
+
+A run da F7a (resposta a BLOCKED, `revise` que preserva o concluído, emendas, orçamento) mexe em
+estado, run-actions, scheduler e prompts. Foi classificada `simple` com a justificativa
+*"scoped feature without cross-module architectural risks (styling/isolated UI request)"* — sem
+estágio de impacto, sem SDD, no máximo 3 tarefas para 4 itens. É o outro lado do defeito F: a
+classe sai de palavras soltas ("Deck", "tela" aparecem no pedido) nos dois sentidos. O
+`feature --workflow standard` existe e resolveu, re-entrando com `--from architecture-impact`,
+mas nada na saída do `feature` nem no Deck diz que a classe pode ser corrigida, e o motivo
+exibido não mostra qual trecho pesou.
+
+### A-15 · Um `timeout` do condutor matou o estágio no meio — baixo (condutor)
+
+Para testar se o `--workflow` era aceito, rodei o `feature` com `timeout 90`: aceitou, começou o
+impacto e foi morto aos 90s. Não deixou lixo visível, mas o estágio perdido custou uma rodada. É
+erro de quem conduz, registrado porque um produto que aceita a correção de classe como comando de
+primeira classe (P7.6) evitaria o experimento.
+
 ## Fechamento da execução (medido por quem conduziu, depois do FEATURE COMPLETE)
 
 | Gate | Base (`7306ca8`) | Depois |
