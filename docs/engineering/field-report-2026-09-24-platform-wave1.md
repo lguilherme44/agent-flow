@@ -134,6 +134,70 @@ impacto e foi morto aos 90s. Não deixou lixo visível, mas o estágio perdido c
 erro de quem conduz, registrado porque um produto que aceita a correção de classe como comando de
 primeira classe (P7.6) evitaria o experimento.
 
+### A-16 · O limite da assinatura derrubou duas runs em paralelo — informação, e dois ajustes
+
+Com duas runs planejando ao mesmo tempo, as duas bateram no limite de sessão de 5 horas da
+assinatura (`429`, *"You've hit your session limit · resets 7:10pm"*) no estágio de impacto. O
+tratamento foi bom: classe `quota_exceeded`, nenhuma tentativa gasta, e a saída diz como retomar.
+Dois ajustes:
+- **A retomada pede a descrição de novo** (`feature "<same description>" --from …`), embora o
+  `request.md` já esteja na run. Retomar deveria bastar com `--from`.
+- **O horário de reset está no envelope** (`result`) e não aparece na mensagem; o Deck poderia
+  mostrar "retoma às 19:10" e oferecer retomar sozinho nesse horário.
+- De passagem: o estágio de impacto **usou subagentes** (`subagent_stats.spawned: 3`, tipo
+  `Explore`), todos falharam junto com o limite. Então o executor já usa subagentes do próprio
+  CLI — só não há como ver isso hoje (P0.4).
+
+### A-17 · Instruções de `revise` do condutor introduzindo defeito, duas vezes — médio (P7.5)
+
+Na AF-2026-001 foi "dividir o saldo pela onda"; na run dos avulsos, uma regra de glob para o aviso
+de `.env` que fazia `*.yaml.example` avisar. Nos dois casos a revisão do plano pegou, com o
+contraexemplo certo. O efeito colateral é de orçamento: a correção do erro do condutor gastou o
+mesmo ciclo de revisão que um plano ruim gastaria, e as duas runs da F7a e dos avulsos chegaram à
+última revisão permitida. Uma instrução de `revise` deveria passar por uma checagem própria
+(contraexemplos do revisor contra a regra nova) antes de replanejar, ou não contar como ciclo de
+qualidade quando é correção do operador (P7.5).
+
+### A-18 · O defeito E ao vivo: revisões esgotadas, só restava `--force` — alto (P7.5)
+
+A primeira run da F7a (quatro itens) passou por três revisões de plano, cada uma com achados
+reais; a terceira reprovou por um alto que a **minha** instrução introduziu (acusar "tarefa
+diferente sob id preservado" comparando arquivos e requisitos que o planejador nem vê). Com as
+duas revisões do `standard` gastas, o produto oferecia `approve --force` — que não leva os achados
+aos executores — ou recomeçar. Recomecei com escopo menor (P7.1, P7.4, P7.5), porque quase todos
+os achados das três rodadas caíram no P7.3, que ganhou run própria. Custo: ~2h de planejamento
+descartadas. É o mesmo cenário relatado por outro condutor, reproduzido enquanto implementávamos a
+correção dele.
+
+### A-19 · `scope_violation` justificado sem caminho para aceitar — médio (P7.1, P7.3)
+
+Na run dos avulsos, a TASK-002 estreitou o tipo de uma dependência num arquivo da TASK-001 (fora
+dos seus `files.likely`) e explicou por quê no relatório; a aceitação recusou por
+`scope_violation` e a recuperação automática parou com *"Review the out-of-scope paths and decide
+whether the plan changed"* — sem comando para registrar a decisão. Com o `revise` esgotado, as
+saídas eram `retry` (o modelo tenta de novo, guiado só pelo contexto da falha) ou consertar o
+worktree à mão e `revalidate`. Usei `retry`. O mesmo canal de resposta do P7.1 deveria servir
+aqui: "aceito o arquivo fora do escopo" ou "não mexa nele, faça assim", registrado como emenda.
+
+### A-20 · Paralelismo ligado pela primeira vez: funcionou — informação (N3)
+
+A run dos avulsos rodou em modo worktree com `maxTasks: 3`: TASK-001 e TASK-003 em paralelo desde
+o início, depois TASK-002 e TASK-003 (em correção) ao mesmo tempo, integração serial no fim de
+cada uma. Sem conflito de arquivo. O custo de install por worktree não apareceu como gargalo neste
+repositório.
+
+### A-21 · Timeout de validação reportado com a evidência errada — alto
+
+Com duas runs em paralelo (cada uma em modo worktree), a validação `npm run test` de uma tarefa
+passou a camada rápida inteira (216 arquivos, 4321 testes) e foi **cortada** na de subprocesso pelo
+limite fixo de 900s (`src/app/verification-commands.ts:8`, sem configuração), sem imprimir resumo.
+Duas tentativas gastas assim. A "evidência" mostrada no `status` foi o `stderr` de um teste que
+**passa** e imprime `config_invalid` de propósito — nada dizia "timeout". Um condutor sem acesso ao
+`attempt-<n>.json` iria caçar um erro de configuração inexistente.
+**Oportunidades:** (1) timeout de validação distinguido de falha, com a classe e a mensagem
+dizendo "o comando X passou do limite de N s"; (2) limite configurável por comando; (3) o scheduler
+considerar a carga — várias suítes inteiras em paralelo na mesma máquina se sabotam.
+
 ## Fechamento da execução (medido por quem conduziu, depois do FEATURE COMPLETE)
 
 | Gate | Base (`7306ca8`) | Depois |
