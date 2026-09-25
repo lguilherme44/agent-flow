@@ -2,6 +2,8 @@ import { parse as parseYaml } from 'yaml';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../config/defaults.js';
 import { projectConfigPath } from '../config/loader.js';
 import { resolveConfigSources } from '../config/resolver.js';
+import { decideProjectTrust } from '../config/trust.js';
+import { samePath } from '../core/path-containment.js';
 import type { FileSystem } from '../ports/index.js';
 
 /**
@@ -39,6 +41,8 @@ export interface ReadOriginsOptions {
   readonly fs: FileSystem;
   readonly globalConfigPath: string;
   readonly projectDir: string;
+  /** Decides how trust entries are compared (FR-022). `process.platform` when absent. */
+  readonly platform?: string;
 }
 
 export async function readSettingOrigins(
@@ -47,9 +51,25 @@ export async function readSettingOrigins(
   const defaults = asRecord(parseYaml(DEFAULT_GLOBAL_CONFIG_YAML));
   const global = await readYamlRecord(options.fs, options.globalConfigPath);
   const projectPath = projectConfigPath(options.projectDir);
-  const project = await readYamlRecord(options.fs, projectPath);
+  // The loader's guard, for the loader's reason: from the home directory the project path
+  // *is* the global file, and reading it a second time as a project attributed every global
+  // value to a project that has no file of its own (FR-027).
+  const project = samePath(projectPath, options.globalConfigPath)
+    ? null
+    : await readYamlRecord(options.fs, projectPath);
 
-  const resolved = resolveConfigSources({ defaults, global, project });
+  // The same trust answer `loadConfig` reaches, from the same raw global record, so a value
+  // the runtime ignored is never shown as supplied by the project (AC-22).
+  const projectTrusted = project === null
+    ? false
+    : await decideProjectTrust({
+        fs: options.fs,
+        globalRaw: global,
+        projectDir: options.projectDir,
+        platform: options.platform ?? process.platform,
+      });
+
+  const resolved = resolveConfigSources({ defaults, global, project, projectTrusted });
 
   return {
     globalPath: options.globalConfigPath,

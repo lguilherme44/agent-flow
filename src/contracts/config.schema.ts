@@ -232,6 +232,87 @@ export const ReviewPolicySchema = z.object({
 });
 export type ReviewPolicy = z.infer<typeof ReviewPolicySchema>;
 
+/**
+ * Why a `worktree.copy` pattern is refused, or `undefined` when it is acceptable (FR-013).
+ *
+ * The patterns become Git `:(glob)` pathspecs run in the operator's checkout, and what they
+ * match is copied into a tree an agent writes. So each rule closes one way out of the
+ * repository or into Git's own machinery: `\` and a drive letter are Windows spellings
+ * `:(glob)` does not treat as separators, a leading `/` or `..` would reach outside the
+ * root, `.git` names the repository's internals, and a leading `:` or `-` would be read by
+ * Git as pathspec magic or as an option rather than as a pattern.
+ *
+ * `.git` is compared without case because the checkouts this runs on include Windows,
+ * where `.GIT` is the same directory.
+ */
+export function worktreeCopyPatternProblem(pattern: string): string | undefined {
+  if (pattern.length === 0) return 'expected a non-empty pattern';
+  if (pattern.includes('\\')) return 'expected "/" as the separator, not "\\"';
+  if (pattern.startsWith('/') || /^[A-Za-z]:/.test(pattern)) {
+    return 'expected a pattern relative to the repository root, not an absolute path';
+  }
+  if (pattern.startsWith(':') || pattern.startsWith('-')) return 'expected a pattern that does not start with ":" or "-"';
+  const segments = pattern.split('/');
+  if (segments.includes('..')) return 'expected a pattern with no ".." segment';
+  if (segments.some((segment) => segment.toLowerCase() === '.git')) return 'expected a pattern with no ".git" segment';
+  return undefined;
+}
+
+export const WorktreeCopyPatternSchema = z.string().superRefine((pattern, context) => {
+  const problem = worktreeCopyPatternProblem(pattern);
+  if (problem !== undefined) context.addIssue({ code: 'custom', message: problem });
+});
+
+/**
+ * Git-ignored files carried from the operator's checkout into a task worktree (N2).
+ *
+ * `git worktree add` checks out tracked content only, so a test that reads an ignored
+ * `.env.test` fails in every attempt for a reason that has nothing to do with the change.
+ * Empty by default, and the emptiness is the defence: whatever is listed here becomes
+ * readable by the agent working in that tree, `.env` files included.
+ *
+ * Project-overridable, unlike `execution.passEnv`: which ignored files a repository's
+ * tests need is a fact about the repository. A project list replaces the global one whole.
+ *
+ * `copyToReadOnly` extends the copy to the read-only twin, which otherwise holds no
+ * ignored file by design.
+ */
+export const WorktreeConfigSchema = z.object({
+  copy: z.array(WorktreeCopyPatternSchema).default([]),
+  copyToReadOnly: z.boolean().default(false),
+});
+export type WorktreeConfig = z.infer<typeof WorktreeConfigSchema>;
+
+/**
+ * The `worktree` section as one source file states it, so the loader can check a file's
+ * patterns before the merge — after it, every error names the global file (FR-013).
+ */
+export const WorktreeSourceSchema = z.object({ worktree: WorktreeConfigSchema.optional() });
+
+/**
+ * The section's key, taken from the schema that declares it rather than spelled as a
+ * string. The same word is the value of a run's isolation mode, and
+ * `test/architecture.test.ts` pins the modules allowed to spell that value (M2-03). This
+ * key names a configuration section and decides no mode, so it names the schema instead.
+ */
+export const WORKTREE_CONFIG_KEY = WorktreeSourceSchema.keyof().enum.worktree;
+
+/**
+ * Which checkouts may loosen the operator's safety posture from their own config (N4).
+ *
+ * Global only, and absent from `OVERRIDABLE_KEYS` and the project-owned keys for the
+ * reason `ui` and `utilityModel` are, sharpened: this is the list that decides whether a
+ * repository's config may widen what its own agent is allowed to do. A repository that
+ * could write itself into it would be trusting itself (SEC-001).
+ *
+ * Each entry is an absolute directory, and trusts that directory and everything beneath
+ * it. Empty by default: no project is trusted until the operator says so.
+ */
+export const TrustConfigSchema = z.object({
+  projectConfig: z.array(z.string().min(1)).default([]),
+});
+export type TrustConfig = z.infer<typeof TrustConfigSchema>;
+
 export const GlobalConfigSchema = z.object({
   version: z.literal(1).default(1),
   runners: z.record(z.string(), RunnerConfigSchema),
@@ -402,6 +483,7 @@ export const GlobalConfigSchema = z.object({
    */
   git: z.object({ useWorktrees: z.boolean().default(false) }).prefault({}),
   approval: z.object({ requiredBeforeImplementation: z.boolean().default(true) }).prefault({}),
+  worktree: WorktreeConfigSchema.prefault({}),
   /**
    * The local dashboard (§65).
    *
@@ -547,6 +629,7 @@ export const GlobalConfigSchema = z.object({
    * file spend the operator credentials.
    */
   forge: ForgeConfigSchema.prefault({}),
+  trust: TrustConfigSchema.prefault({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

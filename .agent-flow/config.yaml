@@ -20,10 +20,11 @@ paths:
 rules:
   architecture: []
 runners:
+  # No dangerouslySkipPermissions here: a project config only tightens (N4), and a repository
+  # should never ask for an agent that approves its own tool calls.
   agy:
     type: agy-cli
     enabled: true
-    dangerouslySkipPermissions: true
   claude:
     type: claude-code-cli
     enabled: false

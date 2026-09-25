@@ -112,6 +112,17 @@ export const ptBR: Phrases = {
       'recusados, sem aprovação, numa sessão não-interativa. Conceda os binários que esses ' +
       `commands já nomeiam, ex.: runners.${runner}.args: ` +
       "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)'] — no Windows declare cada regra também para o PowerShell, ex. 'PowerShell(npm:*)': é por ele que o Claude Code roda comandos lá",
+    projectLooseningIgnored: (path) =>
+      `a configuração do projeto define \`${path}\`, e isso é ignorado: este projeto não é ` +
+      'confiável, então a configuração dele só pode restringir as suas. Para que valha, ' +
+      'adicione o diretório do projeto a `trust.projectConfig` na sua configuração global',
+    worktreeCopyExposesEnv: (pattern) =>
+      `o padrão \`${pattern}\` de \`worktree.copy\` nomeia ou casa um arquivo .env, e o que ele ` +
+      'casa é copiado para cada worktree de tarefa, onde o modelo consegue lê-lo. Restrinja o ' +
+      'padrão, a menos que esses valores sejam para o agente',
+    worktreeCopyEnvUnchecked: (pattern) =>
+      `não foi possível listar os arquivos ignorados que o padrão \`${pattern}\` de \`worktree.copy\` ` +
+      'casa, então não foi verificado se ele copia um arquivo .env para os worktrees de tarefa',
     nodeMissing: 'O Node.js não está no PATH',
     installNode: 'Instale o Node.js 20+ (https://nodejs.org ou via fnm/nvm)',
     gitMissingOrOld: 'O Git não existe ou é mais antigo que 2.38',

@@ -178,6 +178,22 @@ git:
 approval:
   requiredBeforeImplementation: true
 
+worktree:
+  # Git-ignored files to copy from your checkout into each task worktree, as Git
+  # \`:(glob)\` patterns relative to the repository root — for a test that needs an
+  # ignored \`.env.test\`, say. Empty, because whatever is listed here becomes
+  # readable by the agent working in that tree. A project may replace this list.
+  copy: []
+  # Whether the read-only twin receives the same files. It holds no ignored file
+  # otherwise, by design.
+  copyToReadOnly: false
+
+# Checkouts whose own \`.agent-flow/config.yaml\` may loosen what their agents are
+# allowed to do. Absolute directories; each trusts itself and everything under
+# it. Read from this file only: a project cannot trust itself.
+trust:
+  projectConfig: []
+
 ui:
   # How far under a workspace root \`agent-flow ui ~/wk\` looks for projects.
   # Bounded on purpose: an unbounded scan of a home directory reads places

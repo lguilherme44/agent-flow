@@ -5,6 +5,7 @@ import {
   THROWAWAY_WORKSPACE_PREFIXES,
   type WorkspaceLocation,
 } from '../core/worktree-policy.js';
+import { copyIgnoredFiles, describeIgnoredCopyFailure } from './ignored-copy.js';
 
 /** `read-only-`, so `clean` and this module cannot disagree about the spelling. */
 const THROWAWAY_PREFIX = THROWAWAY_WORKSPACE_PREFIXES[1];
@@ -32,6 +33,10 @@ const THROWAWAY_PREFIX = THROWAWAY_WORKSPACE_PREFIXES[1];
  * proportional to the change rather than to the repository. No read-only stage runs a
  * command; the two stages that do run commands run them elsewhere, before the read-only
  * agent is asked what the output means.
+ *
+ * The one exception is opt-in and narrow: with `worktree.copyToReadOnly`, the files
+ * `worktree.copy` declares are copied in after the mirror, under the same checks a task
+ * worktree's copy passes (FR-017). Nothing else ignored crosses.
  *
  * **Cut per invocation and destroyed in a `finally`.** Measured through this function on
  * this repository, 1107 tracked files, on Windows: 3.4 s to open and 0.6 s to release, so
@@ -82,6 +87,11 @@ export const READ_ONLY_REFUSALS = [
   'no_worktree',
   /** The source's own dirt could not be read, so the twin cannot be shown to be faithful. */
   'no_status',
+  /**
+   * The operator opted the twin into its declared ignored files and they could not be
+   * copied (FR-017). The detail is `describeIgnoredCopyFailure`'s, so it names no path.
+   */
+  'no_copy',
 ] as const;
 
 export type ReadOnlyRefusal = (typeof READ_ONLY_REFUSALS)[number];
@@ -103,6 +113,14 @@ export interface ReadOnlyWorkspaceDeps {
   readonly fs: FileSystem;
   readonly workspaces: GitWorkspaces;
   readonly host: Host;
+  /**
+   * `worktree.copy`, set only when the operator also set `worktree.copyToReadOnly` (N2).
+   *
+   * Absent or empty keeps the twin exactly as described above, ignored files absent and no
+   * Git command added (FR-020). The composition root decides, so this module never reads
+   * config and the opt-in cannot be half-applied.
+   */
+  readonly copy?: readonly string[];
 }
 
 /**
@@ -239,6 +257,25 @@ export async function openReadOnlyTree(
       reason: 'no_status',
       detail: error instanceof Error ? error.message : 'the working tree could not be mirrored',
     };
+  }
+
+  // After the mirror rather than before it: the mirror is what makes the twin the source's
+  // tree, and the copy's "never overwrite a destination" check (FR-015) is only meaningful
+  // against the tree the stage will actually read.
+  const declared = deps.copy ?? [];
+  if (declared.length > 0) {
+    const copied = await copyIgnoredFiles(
+      { fs, workspaces },
+      { from: options.source, to: added.value, patterns: declared },
+    );
+    if (!copied.ok) {
+      // Refused rather than run without the files, for the reason the mirror's failure is:
+      // the operator asked for a twin that holds them, and one that does not is a tree
+      // nobody has. The detail comes from the code and the count alone (SEC-008), because
+      // the caller persists it and the listed names are the operator's ignored files.
+      await tree.release();
+      return { ok: false, reason: 'no_copy', detail: describeIgnoredCopyFailure(copied) };
+    }
   }
 
   return { ok: true, tree };

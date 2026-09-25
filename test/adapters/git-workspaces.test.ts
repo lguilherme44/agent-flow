@@ -327,6 +327,108 @@ describe('truncated output is an incomplete result, never a partial truth (§37)
   });
 });
 
+describe('check-ignore builds the argv its caller asked for (N1, FR-005)', () => {
+  const recorded = (): { workspaces: GitWorkspaces; runner: FakeProcessRunner } => {
+    const runner = new FakeProcessRunner().always({ exitCode: 1 });
+    const workspaces = new GitWorkspaces({
+      git: testGitCommand(runner),
+      fs: new InMemoryFileSystem(),
+      worktreeRoot: '/home/dev/.agent-flow/worktrees',
+    });
+    return { workspaces, runner };
+  };
+
+  /** The arguments from the subcommand on, past the hook-isolation config the wrapper adds. */
+  const fromSubcommand = (runner: FakeProcessRunner): readonly string[] => {
+    const args = runner.lastCall?.args ?? [];
+    return args.slice(args.indexOf('check-ignore'));
+  };
+
+  it('adds --no-index when asked', async () => {
+    const { workspaces, runner } = recorded();
+
+    await workspaces.isIgnored({ cwd: '/repo', path: 'sub/', noIndex: true });
+
+    expect(fromSubcommand(runner)).toEqual(['check-ignore', '--no-index', '-q', '--', 'sub/']);
+  });
+
+  it('leaves the argv exactly as it was without the option', async () => {
+    const { workspaces, runner } = recorded();
+
+    // §6.3 check 8's question, unchanged: Agent Flow's own state files are untracked, and
+    // their answer must not start consulting (or ignoring) the index behind its back.
+    await workspaces.isIgnored({ cwd: '/repo', path: '.agent-flow/state' });
+    expect(fromSubcommand(runner)).toEqual(['check-ignore', '-q', '--', '.agent-flow/state']);
+
+    await workspaces.isIgnored({ cwd: '/repo', path: '.agent-flow/state', noIndex: false });
+    expect(fromSubcommand(runner)).toEqual(['check-ignore', '-q', '--', '.agent-flow/state']);
+  });
+});
+
+describe('listing ignored files builds one ls-files argv, or none (N2, FR-014)', () => {
+  const recorded = (stdout = ''): { workspaces: GitWorkspaces; runner: FakeProcessRunner } => {
+    const runner = new FakeProcessRunner().always({ exitCode: 0, stdout });
+    const workspaces = new GitWorkspaces({
+      git: testGitCommand(runner),
+      fs: new InMemoryFileSystem(),
+      worktreeRoot: '/home/dev/.agent-flow/worktrees',
+    });
+    return { workspaces, runner };
+  };
+
+  const fromSubcommand = (runner: FakeProcessRunner): readonly string[] => {
+    const args = runner.lastCall?.args ?? [];
+    return args.slice(args.indexOf('ls-files'));
+  };
+
+  it('prefixes every pattern with :(glob), after --, in one command', async () => {
+    const { workspaces, runner } = recorded('.env.test\0dir/one\0');
+
+    const outcome = await workspaces.listIgnoredFiles({ cwd: '/repo', patterns: ['.env.test', 'dir/**'] });
+
+    expect(runner.calls).toHaveLength(1);
+    expect(fromSubcommand(runner)).toEqual([
+      'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
+      ':(glob).env.test', ':(glob)dir/**',
+    ]);
+    expect(outcome.ok && outcome.value).toEqual(['.env.test', 'dir/one']);
+  });
+
+  it('refuses -, : and empty patterns without spawning', async () => {
+    for (const pattern of ['-x', ':x', ':(top)x', '']) {
+      const { workspaces, runner } = recorded();
+      const outcome = await workspaces.listIgnoredFiles({ cwd: '/repo', patterns: ['ok', pattern] });
+
+      expect(outcome.ok, JSON.stringify(pattern)).toBe(false);
+      if (!outcome.ok) expect(outcome.failure.code).toBe('git_unsafe_argument');
+      expect(runner.calls).toHaveLength(0);
+    }
+  });
+
+  it('answers no files for no patterns, rather than every ignored file', async () => {
+    const { workspaces, runner } = recorded('node_modules/x\0');
+
+    const outcome = await workspaces.listIgnoredFiles({ cwd: '/repo', patterns: [] });
+
+    expect(outcome.ok && outcome.value).toEqual([]);
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it('refuses a truncated listing rather than copying a subset (§37)', async () => {
+    const runner = new FakeProcessRunner().always({ exitCode: 0, stdout: 'a\0b', truncated: true });
+    const workspaces = new GitWorkspaces({
+      git: testGitCommand(runner),
+      fs: new InMemoryFileSystem(),
+      worktreeRoot: '/home/dev/.agent-flow/worktrees',
+    });
+
+    const outcome = await workspaces.listIgnoredFiles({ cwd: '/repo', patterns: ['**/*'] });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.failure.code).toBe('git_output_truncated');
+  });
+});
+
 describe('an unavailable git surfaces as itself, through every operation', () => {
   const unavailable = (): GitWorkspaces =>
     new GitWorkspaces({

@@ -31,7 +31,8 @@ export type PromptSource =
   | 'agentsMd'
   | 'failureContext'
   | 'collaborationBootstrap'
-  | 'collaboration';
+  | 'collaboration'
+  | 'directoryInstructions';
 
 export interface PromptPart {
   readonly source: PromptSource;
@@ -104,6 +105,17 @@ export interface PromptParts {
    * is off" do not both render as a row of zeroes.
    */
   readonly collaboration: string;
+  /**
+   * The rules of the directories a task touches, read on the agent's behalf (N1, FR-007).
+   *
+   * Appended after the template is rendered rather than interpolated into it, so it is
+   * counted here once — unlike `agentsMd`, whose bytes `stagePrompt` also carries. Its own
+   * source because its owner is neither the stage nor the root file: "the prompt got big"
+   * on a task touching many packages names the nested files as the thing to shrink.
+   *
+   * Optional, read as `''`, so every caller that predates it measures exactly as before.
+   */
+  readonly directoryInstructions?: string;
 }
 
 /**
@@ -140,9 +152,10 @@ export function measurePromptComposition(
       'failureContext',
       'collaborationBootstrap',
       'collaboration',
+      'directoryInstructions',
     ] as const
   )
-    .map((source) => ({ source, bytes: bytesOf(parts[source]) }))
+    .map((source) => ({ source, bytes: bytesOf(parts[source] ?? '') }))
     // A source that contributed nothing is omitted rather than reported at zero: "no
     // advisory model is configured" and "the advisory block came back empty" are different
     // facts, and a row of zeroes tells them apart from neither.

@@ -15,7 +15,13 @@ import { selectReviewer, hasReviewer } from '../core/review/reviewer.js';
 import { normaliseReview } from '../core/review/normalise.js';
 import { projectQualityGates } from '../core/review/gates.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
-import type { Clock } from '../ports/index.js';
+import type { Clock, FileSystem } from '../ports/index.js';
+import {
+  readDirectoryInstructions,
+  type DirectoryInstructions,
+  type DirectoryInstructionsDeps,
+  type DirectorySkip,
+} from './directory-instructions.js';
 import type { ReviewStore } from './review-store.js';
 import type { StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -100,6 +106,15 @@ export interface ReviewRequest {
    */
   readonly workingDirectory?: string;
   readonly signal?: AbortSignal;
+  /**
+   * The reviewed task's directory rules, read from the project directory (N1, FR-002).
+   *
+   * **Not from {@link workingDirectory}**, which is the change under review (SEC-004): a task
+   * that could edit `sub/AGENTS.md` would otherwise be writing the rules its own reviewer is
+   * handed. The project directory is also where the root `agentsMd` above comes from.
+   */
+  readonly directoryInstructions?: string;
+  readonly directoryInstructionsSkipped?: readonly DirectorySkip[];
 }
 
 export interface ReviewOutcomeRecord {
@@ -279,6 +294,12 @@ export class ReviewService {
             ? {}
             : { workingDirectory: request.workingDirectory }),
           ...(request.signal === undefined ? {} : { signal: request.signal }),
+          ...(request.directoryInstructions === undefined
+            ? {}
+            : { directoryInstructions: request.directoryInstructions }),
+          ...(request.directoryInstructionsSkipped === undefined
+            ? {}
+            : { directoryInstructionsSkipped: request.directoryInstructionsSkipped }),
         },
       );
 
@@ -368,8 +389,17 @@ export class ChangeReviewAdapter {
     private readonly options: {
       readonly service: ReviewService;
       readonly store: StateStore;
-      readonly fs: { readFile(path: string): Promise<string>; exists(path: string): Promise<boolean> };
+      /** `stat` and `realPath` for the nested reader's bounds (FR-008); nothing that writes. */
+      readonly fs: Pick<FileSystem, 'readFile' | 'exists' | 'stat' | 'realPath'>;
       readonly projectDir: string;
+      /**
+       * Git's answer to FR-005, for the nested instruction reader (N1).
+       *
+       * Optional in the way {@link diffStat} is: absent, no directory's rules are read and
+       * the review prompt is exactly what it was before (FR-010) — reading without the
+       * ignore check would read the very directories FR-005 excludes.
+       */
+      readonly isIgnoredDirectory?: DirectoryInstructionsDeps['isIgnoredDirectory'];
       /** Produces the change's shape. Absent in sequential mode, where there is no range. */
       readonly diffStat?: (base: string, head: string) => Promise<string>;
       readonly inFlight: (runId: string) => Promise<ReadonlyMap<AgentId, number>>;
@@ -392,6 +422,7 @@ export class ChangeReviewAdapter {
       // run against the wrong tree.
       const workingDirectory =
         integration === undefined ? undefined : await this.options.reviewWorkspace?.(runId);
+      const directory = await this.directoryInstructions(task);
 
       await this.options.service.review({
         runId,
@@ -403,6 +434,10 @@ export class ChangeReviewAdapter {
         changedFiles: result.filesChanged,
         commandResults: result.validation.commands,
         agentsMd: await this.agentsMd(),
+        ...(directory.block === '' ? {} : { directoryInstructions: directory.block }),
+        ...(directory.skipped.length === 0
+          ? {}
+          : { directoryInstructionsSkipped: directory.skipped }),
         inFlight: await this.options.inFlight(runId),
       });
     } catch {
@@ -451,5 +486,23 @@ export class ChangeReviewAdapter {
     const path = `${this.options.projectDir}/AGENTS.md`;
     if (!(await this.options.fs.exists(path))) return 'No AGENTS.md in this repository.';
     return this.options.fs.readFile(path);
+  }
+
+  /**
+   * The reviewed task's directory rules, from the project directory (FR-002, SEC-004).
+   *
+   * **Never from the review workspace.** That tree holds the change under review, and a
+   * task able to edit `sub/AGENTS.md` there would be writing its own reviewer's rules. The
+   * project directory is the tree {@link agentsMd} already reads, so the root and nested
+   * instructions a reviewer receives come from the same place.
+   */
+  private async directoryInstructions(task: Task): Promise<DirectoryInstructions> {
+    const { isIgnoredDirectory, fs, projectDir } = this.options;
+    if (isIgnoredDirectory === undefined) return { block: '', skipped: [] };
+
+    return readDirectoryInstructions(
+      { fs, isIgnoredDirectory },
+      { treeRoot: projectDir, likely: task.files.likely },
+    );
   }
 }

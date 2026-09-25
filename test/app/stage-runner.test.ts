@@ -1100,6 +1100,134 @@ describe('the prompt is measured, by source (AR-09)', () => {
 });
 
 /**
+ * N1 — the rules of the directories a task touches, as their own block (FR-001, FR-007).
+ *
+ * Appended after the rendered template, never interpolated into it: a slot would change
+ * every prompt of a repository with no nested files, and its bytes would be counted inside
+ * `stagePrompt` as well as on their own — the double count `agentsMd` already has.
+ */
+describe('directory instructions are appended and measured as their own source (N1)', () => {
+  // Multi-byte on purpose: the budget is in UTF-8 bytes, and a block of ASCII would pass a
+  // test that counted characters.
+  const BLOCK = '## Directory instructions\n\n### sub/AGENTS.md\n\nUse “tabs” in sub/.';
+
+  async function directoryHarness(advisor?: StageAdvisor) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    const runner = new FakeAgentRunner('claude');
+    fs.seed(
+      `${PROMPTS}/sdd.md`,
+      '---\nrole: sdd\npermissions: read-only\nrequiredVars: [featureRequest]\n---\nWrite an SDD for {{featureRequest}}.\n',
+    );
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('recurring-bookings');
+    const stageRunner = new StageRunner({
+      fs,
+      clock,
+      store,
+      config,
+      capabilities: CAPABILITIES,
+      promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+      getRunner: () => runner,
+      projectDir: PROJECT,
+      ...(advisor === undefined ? {} : { advisor }),
+    });
+    return { store, run, runner, stageRunner };
+  }
+
+  async function measuredOf(store: StateStore, runId: string) {
+    const measured = (await store.readEvents(runId)).find(
+      (event) => event.type === 'stage_context_measured',
+    );
+    const parts = measured?.detail?.['parts'] as { source: string; bytes: number }[];
+    return { detail: measured?.detail ?? {}, bytes: Object.fromEntries(parts.map((p) => [p.source, p.bytes])) };
+  }
+
+  it('puts the block after the rendered template and before the advisory block', async () => {
+    // The rendered template alone, as the runner receives it with nothing appended.
+    const bare = await directoryHarness();
+    bare.runner.pushText('fine');
+    await bare.stageRunner.run(SDD_STAGE, bare.run.runId, { featureRequest: 'x' });
+    const rendered = bare.runner.lastCall?.prompt ?? '';
+
+    const h = await directoryHarness({ advise: async () => '[ADVISORY]\nblock' });
+    h.runner.pushText('fine');
+    await h.stageRunner.run(SDD_STAGE, h.run.runId, { featureRequest: 'x' }, {
+      directoryInstructions: BLOCK,
+    });
+
+    expect(rendered).toContain('Write an SDD for x.');
+    expect(h.runner.lastCall?.prompt).toBe(`${rendered}\n\n${BLOCK}\n\n[ADVISORY]\nblock`);
+  });
+
+  it('sends exactly the prompt it sent before when the block is empty or absent', async () => {
+    const absent = await directoryHarness();
+    absent.runner.pushText('fine');
+    await absent.stageRunner.run(SDD_STAGE, absent.run.runId, { featureRequest: 'x' });
+
+    const empty = await directoryHarness();
+    empty.runner.pushText('fine');
+    await empty.stageRunner.run(SDD_STAGE, empty.run.runId, { featureRequest: 'x' }, {
+      directoryInstructions: '',
+    });
+
+    const present = await directoryHarness();
+    present.runner.pushText('fine');
+    await present.stageRunner.run(SDD_STAGE, present.run.runId, { featureRequest: 'x' }, {
+      directoryInstructions: BLOCK,
+    });
+
+    expect(empty.runner.lastCall?.prompt).toBe(absent.runner.lastCall?.prompt);
+    // Positive control: the block does reach the runner when there is one.
+    expect(present.runner.lastCall?.prompt).not.toBe(absent.runner.lastCall?.prompt);
+    expect(present.runner.lastCall?.prompt).toContain(BLOCK);
+  });
+
+  it('measures the block once, at its UTF-8 byte count, and leaves stagePrompt unchanged', async () => {
+    const without = await directoryHarness();
+    without.runner.pushText('fine');
+    await without.stageRunner.run(SDD_STAGE, without.run.runId, { featureRequest: 'x' });
+
+    const withBlock = await directoryHarness();
+    withBlock.runner.pushText('fine');
+    await withBlock.stageRunner.run(SDD_STAGE, withBlock.run.runId, { featureRequest: 'x' }, {
+      directoryInstructions: BLOCK,
+    });
+
+    const before = await measuredOf(without.store, without.run.runId);
+    const after = await measuredOf(withBlock.store, withBlock.run.runId);
+
+    expect(after.bytes['directoryInstructions']).toBe(new TextEncoder().encode(BLOCK).length);
+    expect(after.bytes['directoryInstructions']).toBeGreaterThan(BLOCK.length);
+    expect(after.bytes['stagePrompt']).toBe(before.bytes['stagePrompt']);
+    expect(before.bytes).not.toHaveProperty('directoryInstructions');
+  });
+
+  it('records the skipped directories on the measurement, and nothing when none were', async () => {
+    const skipped = await directoryHarness();
+    skipped.runner.pushText('fine');
+    await skipped.stageRunner.run(SDD_STAGE, skipped.run.runId, { featureRequest: 'x' }, {
+      directoryInstructions: BLOCK,
+      directoryInstructionsSkipped: [{ directory: 'sub', reason: 'unreadable' }],
+    });
+
+    const clean = await directoryHarness();
+    clean.runner.pushText('fine');
+    await clean.stageRunner.run(SDD_STAGE, clean.run.runId, { featureRequest: 'x' }, {
+      directoryInstructions: BLOCK,
+      directoryInstructionsSkipped: [],
+    });
+
+    expect((await measuredOf(skipped.store, skipped.run.runId)).detail['directoryInstructionsSkipped']).toEqual([
+      { directory: 'sub', reason: 'unreadable' },
+    ]);
+    expect((await measuredOf(clean.store, clean.run.runId)).detail).not.toHaveProperty(
+      'directoryInstructionsSkipped',
+    );
+  });
+});
+
+/**
  * What language a run's artefacts come back in.
  *
  * Three sound decisions combined into one nobody chose: the CLI is English by

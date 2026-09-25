@@ -21,6 +21,7 @@ import {
 } from '../core/failure-classification.js';
 import { redactAndTruncate, redactEvidence } from '../core/evidence-redaction.js';
 import { measurePromptComposition } from '../core/prompt-budget.js';
+import type { DirectorySkip } from './directory-instructions.js';
 import type { LoadedPrompt, PromptLoader } from './prompt-loader.js';
 import type { ReadOnlyOutcome, ReadOnlyTree } from './read-only-workspace.js';
 import type { StateStore } from './state-store.js';
@@ -328,6 +329,24 @@ export interface StageRunOptions {
    * effective runner is the one that runs.
    */
   readonly member?: { readonly runner: string; readonly model?: string };
+  /**
+   * The `## Directory instructions` block for the directories this task touches (N1, FR-001).
+   *
+   * Appended right after the rendered template and before the advisory block, and measured
+   * as its own source. Appended rather than interpolated for the collaboration block's
+   * reason: a `{{directoryInstructions}}` slot would change every prompt of a repository
+   * with no nested files, and its bytes would be counted twice, inside `stagePrompt` too —
+   * the defect `agentsMd` already has. Empty or absent, the prompt is today's, byte for byte.
+   */
+  readonly directoryInstructions?: string;
+  /**
+   * The directories whose instructions could not be read cleanly (FR-009).
+   *
+   * Recorded on `stage_context_measured` rather than as an event or degradation of its own:
+   * a new event type needs `state.schema.ts`, and the fact belongs beside the measurement
+   * of the block it is missing from. Repository-relative, so no absolute path is persisted.
+   */
+  readonly directoryInstructionsSkipped?: readonly DirectorySkip[];
 }
 
 /**
@@ -582,6 +601,11 @@ export class StageRunner {
     // It is also part of the prompt's *base*, so a repair rebuilds from the
     // same material the failed attempt saw — never dropping the advisory.
     let basePrompt = rendered;
+    // N1. Right after the template, so a directory's rules sit next to the root file's
+    // rather than after retrieval context about the code; and first among the appended
+    // blocks, so the prompt stays a deterministic function of its inputs.
+    const directoryBlock = options.directoryInstructions ?? '';
+    if (directoryBlock.length > 0) basePrompt = `${basePrompt}\n\n${directoryBlock}`;
     // Kept beside the prompt rather than folded into it, so AR-09 can attribute the bytes
     // to the source that produced them. "The prompt got big" is not something anybody can
     // act on; "the advisory block is 60% of it" names what to turn off.
@@ -597,7 +621,7 @@ export class StageRunner {
         });
         if (advisory !== undefined && advisory.length > 0) {
           advisoryBlock = advisory;
-          basePrompt = `${rendered}\n\n${advisory}`;
+          basePrompt = `${basePrompt}\n\n${advisory}`;
         }
       } catch {
         // Best effort: advisory context never changes stage control (§14.3).
@@ -657,6 +681,7 @@ export class StageRunner {
         failureContext: vars.failureContext ?? '',
         collaborationBootstrap: bootstrapBlock,
         collaboration: collaborationBlock,
+        directoryInstructions: directoryBlock,
       },
       options.complexity === undefined ? undefined : { complexity: options.complexity },
       runnerWindow,
@@ -681,6 +706,12 @@ export class StageRunner {
       ...(composition.windowDetail === undefined
         ? {}
         : { windowDetail: composition.windowDetail }),
+      // FR-009. Omitted when nothing was skipped, so a stage with no nested files records
+      // exactly the event it recorded before N1.
+      ...(options.directoryInstructionsSkipped === undefined ||
+      options.directoryInstructionsSkipped.length === 0
+        ? {}
+        : { directoryInstructionsSkipped: options.directoryInstructionsSkipped }),
     });
 
     const logLines: string[] = [

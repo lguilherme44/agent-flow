@@ -4,6 +4,7 @@ import { configFieldAt, configFieldCatalog, type ConfigFieldEffect, type ConfigF
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../config/defaults.js';
 import { projectConfigPath } from '../config/loader.js';
 import { resolveConfigSources, type ConfigRecord, type ConfigValueOrigin } from '../config/resolver.js';
+import { decideProjectTrust } from '../config/trust.js';
 import { ConfigSourceCodecError, type ConfigPath, type ConfigSourceCodec, type ConfigSourceDocument } from '../ports/config-source-codec.js';
 import type { ConfigDiagnostic, ConfigSemanticValidator } from '../ports/config-semantic-validator.js';
 import type { FileSystem } from '../ports/file-system.js';
@@ -93,6 +94,8 @@ export interface ConfigEditorOptions {
   readonly globalConfigPath: string;
   /** Registry seam. A project id never becomes a filesystem path by itself. */
   readonly resolveProjectDir: (projectId: string) => string | undefined;
+  /** Decides how trust entries are compared (FR-022). `process.platform` when absent. */
+  readonly platform?: string;
 }
 
 export class ConfigEditorTargetError extends Error {
@@ -190,7 +193,7 @@ class ConfigEditorModule implements ConfigEditor {
     const sources = state.target.scope === 'global'
       ? { defaults: this.defaults, global: candidate.data, project: state.projectDocument?.data }
       : { defaults: this.defaults, global: state.globalDocument.data, project: candidate.data };
-    const resolved = resolveConfigSources(sources);
+    const resolved = resolveConfigSources({ ...sources, projectTrusted: state.projectTrusted });
     diagnostics.push(...this.options.semanticValidator.validate({
       effectiveGlobal: resolved.effectiveGlobal,
       ...(sources.project === undefined ? {} : { projectSource: sources.project }),
@@ -215,10 +218,24 @@ class ConfigEditorModule implements ConfigEditor {
     const globalSource = target.scope === 'global'
       ? source
       : await this.readOptional(this.options.globalConfigPath);
-    const projectPath = target.projectId === undefined ? undefined : projectConfigPath(this.projectDir(target.projectId));
+    const projectDir = target.projectId === undefined ? undefined : this.projectDir(target.projectId);
+    const projectPath = projectDir === undefined ? undefined : projectConfigPath(projectDir);
     const projectSource = target.scope === 'project'
       ? source
       : projectPath === undefined ? undefined : await this.readOptional(projectPath);
+    const globalDocument = this.options.codec.parse(globalSource ?? '{}\n');
+    // Decided once, from the saved global file, and carried to both `validateState` and
+    // `viewOf` — so a preview, a save and `loadConfig` all screen the project the same way
+    // (FR-027). `trust` is not an editable path, so no candidate can change the answer
+    // between this read and the write it guards.
+    const projectTrusted = projectDir === undefined
+      ? false
+      : await decideProjectTrust({
+          fs: this.options.fs,
+          globalRaw: globalDocument.data,
+          projectDir,
+          platform: this.options.platform ?? process.platform,
+        });
     return {
       target,
       path,
@@ -226,15 +243,16 @@ class ConfigEditorModule implements ConfigEditor {
       exists,
       revision: revisionOf(source, exists),
       document: this.options.codec.parse(source),
-      globalDocument: this.options.codec.parse(globalSource ?? '{}\n'),
+      globalDocument,
       ...(projectSource === undefined ? {} : { projectDocument: this.options.codec.parse(projectSource) }),
+      projectTrusted,
     };
   }
 
   private viewOf(state: SourceState): ConfigEditView {
     const global = state.target.scope === 'global' ? state.document.data : state.globalDocument.data;
     const project = state.target.scope === 'project' ? state.document.data : state.projectDocument?.data;
-    const resolved = resolveConfigSources({ defaults: this.defaults, global, project });
+    const resolved = resolveConfigSources({ defaults: this.defaults, global, project, projectTrusted: state.projectTrusted });
     const normalized = this.options.semanticValidator.normalize({
       effectiveGlobal: resolved.effectiveGlobal,
       ...(project === undefined ? {} : { projectSource: project }),
@@ -316,6 +334,8 @@ interface SourceState {
   readonly document: ConfigSourceDocument;
   readonly globalDocument: ConfigSourceDocument;
   readonly projectDocument?: ConfigSourceDocument;
+  /** The global `trust.projectConfig` answer for this target's project (FR-022). */
+  readonly projectTrusted: boolean;
 }
 
 interface CheckedCandidate {

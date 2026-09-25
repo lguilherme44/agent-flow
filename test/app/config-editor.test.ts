@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { YamlConfigSourceCodec } from '../../src/adapters/config/yaml-config-source-codec.js';
 import { SchemaConfigSemanticValidator } from '../../src/adapters/config/semantic-validator.js';
-import { createConfigEditor } from '../../src/app/config-editor.js';
+import { createConfigEditor, type ConfigEditView } from '../../src/app/config-editor.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
+import { loadConfig } from '../../src/config/loader.js';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 
 const GLOBAL = '/home/.agent-flow/config.yaml';
@@ -212,5 +213,63 @@ describe('ConfigEditor', () => {
     if (conflict.status !== 'conflict') throw new Error('expected conflict result');
     expect(conflict.view.revision).not.toBe(before.revision);
     expect(conflict.view.fields.find((field) => field.path.join('.') === 'parallelism.maxTasks')?.effectiveValue).toBe(2);
+  });
+});
+
+describe('ConfigEditor and project trust (FR-027)', () => {
+  const APPROVAL = 'approval.requiredBeforeImplementation';
+  const loosening = `${projectYaml}approval:\n  requiredBeforeImplementation: false\n`;
+  const trusting = DEFAULT_GLOBAL_CONFIG_YAML.replace('  projectConfig: []', `  projectConfig: [${PROJECT_DIR}]`);
+
+  function trustWorld(global: string, project: string) {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL, global);
+    fs.seed(PROJECT, project);
+    const editor = createConfigEditor({
+      fs,
+      codec: new YamlConfigSourceCodec(),
+      semanticValidator: new SchemaConfigSemanticValidator(),
+      globalConfigPath: GLOBAL,
+      resolveProjectDir: (id) => id === 'demo' ? PROJECT_DIR : undefined,
+      platform: 'linux',
+    });
+    return { fs, editor };
+  }
+
+  const fieldAt = (view: ConfigEditView, path: string) => view.fields.find((entry) => entry.path.join('.') === path);
+
+  it('fixture check: the trusting global file really names the project', () => {
+    expect(trusting).not.toBe(DEFAULT_GLOBAL_CONFIG_YAML);
+  });
+
+  it('shows the value loadConfig runs on, attributed to the layer that supplied it (AC-22)', async () => {
+    const untrusted = trustWorld(DEFAULT_GLOBAL_CONFIG_YAML, loosening);
+    const trusted = trustWorld(trusting, loosening);
+
+    const refused = fieldAt(await untrusted.editor.describe({ scope: 'project', projectId: 'demo' }), APPROVAL);
+    const applied = fieldAt(await trusted.editor.describe({ scope: 'project', projectId: 'demo' }), APPROVAL);
+
+    const load = (fs: InMemoryFileSystem) => loadConfig({ fs, globalConfigPath: GLOBAL, projectDir: PROJECT_DIR });
+    expect(refused?.effectiveValue).toBe((await load(untrusted.fs)).global.approval.requiredBeforeImplementation);
+    expect(refused).toMatchObject({ explicitValue: false, effectiveValue: true });
+    expect(refused?.origin).not.toBe('project');
+
+    expect(applied?.effectiveValue).toBe((await load(trusted.fs)).global.approval.requiredBeforeImplementation);
+    expect(applied).toMatchObject({ explicitValue: false, effectiveValue: false, origin: 'project' });
+  });
+
+  it('screens a validation preview with the same trust answer', async () => {
+    const operations = [{ kind: 'set' as const, path: ['approval', 'requiredBeforeImplementation'], value: false }];
+    const untrusted = trustWorld(DEFAULT_GLOBAL_CONFIG_YAML, projectYaml);
+    const trusted = trustWorld(trusting, projectYaml);
+
+    const refused = await untrusted.editor.validate({ target: { scope: 'project', projectId: 'demo' }, operations });
+    const applied = await trusted.editor.validate({ target: { scope: 'project', projectId: 'demo' }, operations });
+
+    // Untrusted, the save changes nothing the runtime reads, and the preview says so.
+    expect(refused.changes).toEqual([]);
+    expect(applied.changes).toEqual([
+      expect.objectContaining({ path: ['approval', 'requiredBeforeImplementation'], before: true, after: false }),
+    ]);
   });
 });

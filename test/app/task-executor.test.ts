@@ -104,7 +104,14 @@ NOTES:
 - none
 `;
 
-async function harness(options: { processRunner?: FakeProcessRunner; config?: GlobalConfig } = {}) {
+async function harness(
+  options: {
+    processRunner?: FakeProcessRunner;
+    config?: GlobalConfig;
+    /** Wires a Git adapter over {@link processRunner}, as production always does. */
+    git?: boolean;
+  } = {},
+) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
   const runner = new FakeAgentRunner('claude', CAPS);
@@ -165,6 +172,15 @@ async function harness(options: { processRunner?: FakeProcessRunner; config?: Gl
       }),
     },
     projectDir: PROJECT,
+    ...(options.git === true
+      ? {
+          workspaces: new GitWorkspaces({
+            git: testGitCommand(processRunner),
+            fs,
+            worktreeRoot: '/home/.agent-flow/worktrees',
+          }),
+        }
+      : {}),
   });
 
   return { fs, clock, store, run, runner, agy, processRunner, executor, config };
@@ -893,6 +909,176 @@ describe('where a task runs (M2-04 §4.2)', () => {
       expect(call.cwd).toBe(PROJECT);
     }
     expect(world.runner.calls.at(-1)?.prompt ?? '').toContain('Project rules');
+  });
+});
+
+/**
+ * N1 — the rules of the directories a task touches reach its implementation prompt (FR-001).
+ *
+ * The runner's isolation flags stop the CLI from loading a nested `CLAUDE.md` itself
+ * (measured 24/09/2026), so without this the rules of a monorepo's packages reach no stage.
+ */
+describe('directory instructions in the implementation prompt (N1)', () => {
+  const WORKSPACE = '/workspace/TASK-001/attempt-1';
+
+  /** Git answers "not ignored" for every directory except the ones named. */
+  const gitAnswering = (ignored: readonly string[] = []) =>
+    new FakeProcessRunner().always((spawn) => {
+      if (spawn.command !== 'git') return { exitCode: 0 };
+      if (!spawn.args.includes('check-ignore')) return { exitCode: 0 };
+      const path = spawn.args.at(-1) ?? '';
+      return { exitCode: ignored.some((dir) => path === `${dir}/`) ? 0 : 1 };
+    });
+
+  const promptOf = async (world: Awaited<ReturnType<typeof harness>>, likely: readonly string[], ws?: string) => {
+    await world.executor.execute(
+      task({ files: { likely } }),
+      world.run.runId,
+      'SDD',
+      ws === undefined
+        ? undefined
+        : {
+            path: ws,
+            attempt: 1,
+            isolation: {
+              base: 'a'.repeat(40),
+              branch: 'agent-flow/AF-2026-001-0f3a91c4bd27e615/TASK-001/attempt-1',
+              relativePath: 'repo-x/AF-2026-001-0f3a91c4bd27e615/TASK-001/attempt-1',
+            },
+          },
+    );
+    return world.runner.calls.at(-1)?.prompt ?? '';
+  };
+
+  const measuredOf = async (world: Awaited<ReturnType<typeof harness>>) => {
+    const event = (await world.store.readEvents(world.run.runId)).find(
+      (entry) => entry.type === 'stage_context_measured',
+    );
+    const parts = event?.detail['parts'] as { source: string; bytes: number }[];
+    return { detail: event?.detail ?? {}, bytes: Object.fromEntries(parts.map((p) => [p.source, p.bytes])) };
+  };
+
+  it('appends sub/AGENTS.md after the rendered template for a task touching sub/x.ts (AC-01)', async () => {
+    // Today's prompt, as a sequential run without nested files produces it.
+    const bare = await harness({ processRunner: gitAnswering(), git: true });
+    bare.runner.pushText(COMPLETED);
+    const today = await promptOf(bare, ['sub/x.ts']);
+
+    const world = await harness({ processRunner: gitAnswering(), git: true });
+    world.runner.pushText(COMPLETED);
+    world.fs.seed(`${PROJECT}/sub/AGENTS.md`, '# Sub rules\n\n- sub uses tabs.\n');
+    const prompt = await promptOf(world, ['sub/x.ts']);
+
+    const block = '## Directory instructions\n\n### sub/AGENTS.md\n\n# Sub rules\n\n- sub uses tabs.';
+    expect(prompt).toBe(`${today}\n\n${block}`);
+    // The root section is untouched: it still carries what it carried (FR-011).
+    // `\r?` because a Windows checkout may carry the template with CRLF endings.
+    expect(prompt).toMatch(/## Project instructions \(AGENTS\.md\)\r?\n\r?\nNo AGENTS\.md in this repository\./);
+  });
+
+  it('adds no heading for a task whose directories have no instructions (AC-01)', async () => {
+    const world = await harness({ processRunner: gitAnswering(), git: true });
+    world.runner.pushText(COMPLETED);
+    world.fs.seed(`${PROJECT}/sub/AGENTS.md`, '# Sub rules\n');
+
+    const prompt = await promptOf(world, ['other/y.ts']);
+
+    expect(prompt).not.toContain('## Directory instructions');
+    expect(prompt).not.toContain('# Sub rules');
+  });
+
+  it('reads from the attempt’s working directory, the tree the root AGENTS.md comes from', async () => {
+    const world = await harness({ processRunner: gitAnswering(), git: true });
+    world.runner.pushText(COMPLETED);
+    world.fs.seed(`${PROJECT}/sub/AGENTS.md`, 'rules the operator just saved\n');
+    world.fs.seed(`${WORKSPACE}/sub/AGENTS.md`, 'rules of this attempt’s base\n');
+
+    const prompt = await promptOf(world, ['sub/x.ts'], WORKSPACE);
+
+    expect(prompt).toContain('### sub/AGENTS.md\n\nrules of this attempt’s base');
+    expect(prompt).not.toContain('rules the operator just saved');
+  });
+
+  it('asks Git with --no-index about the directory, and skips one Git ignores', async () => {
+    const processRunner = gitAnswering(['sub']);
+    const world = await harness({ processRunner, git: true });
+    world.runner.pushText(COMPLETED);
+    world.fs.seed(`${PROJECT}/sub/AGENTS.md`, 'ignored rules\n');
+    world.fs.seed(`${PROJECT}/lib/AGENTS.md`, 'lib rules\n');
+
+    const prompt = await promptOf(world, ['sub/x.ts', 'lib/y.ts']);
+
+    const asked = processRunner.calls.filter((call) => call.args.includes('check-ignore'));
+    expect(asked.map((call) => call.args.slice(call.args.indexOf('check-ignore')))).toEqual([
+      ['check-ignore', '--no-index', '-q', '--', 'lib/'],
+      ['check-ignore', '--no-index', '-q', '--', 'sub/'],
+    ]);
+    expect(prompt).not.toContain('ignored rules');
+    // Positive control: the sibling is read, so the absence above is the ignore rule.
+    expect(prompt).toContain('### lib/AGENTS.md\n\nlib rules');
+  });
+
+  it('measures the block as its own source, at exactly its bytes (AC-06)', async () => {
+    const bare = await harness({ processRunner: gitAnswering(), git: true });
+    bare.runner.pushText(COMPLETED);
+    await promptOf(bare, ['sub/x.ts']);
+
+    const world = await harness({ processRunner: gitAnswering(), git: true });
+    world.runner.pushText(COMPLETED);
+    world.fs.seed(`${PROJECT}/sub/AGENTS.md`, 'Use “tabs”.\n');
+    await promptOf(world, ['sub/x.ts']);
+
+    const block = '## Directory instructions\n\n### sub/AGENTS.md\n\nUse “tabs”.';
+    const before = await measuredOf(bare);
+    const after = await measuredOf(world);
+
+    expect(after.bytes['directoryInstructions']).toBe(new TextEncoder().encode(block).length);
+    expect(after.bytes['stagePrompt']).toBe(before.bytes['stagePrompt']);
+    expect(before.bytes).not.toHaveProperty('directoryInstructions');
+  });
+
+  it('records a skipped directory on the measurement and still reads its sibling', async () => {
+    const world = await harness({ processRunner: gitAnswering(), git: true });
+    world.runner.pushText(COMPLETED);
+    world.fs.seed(`${PROJECT}/sub/AGENTS.md`, 'unreadable rules\n');
+    world.fs.seed(`${PROJECT}/lib/AGENTS.md`, 'lib rules\n');
+    const readFile = world.fs.readFile.bind(world.fs);
+    world.fs.readFile = async (path: string) => {
+      if (path.endsWith('sub/AGENTS.md')) {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: 'EACCES' });
+      }
+      return readFile(path);
+    };
+
+    const prompt = await promptOf(world, ['sub/x.ts', 'lib/y.ts']);
+    const { detail } = await measuredOf(world);
+
+    expect(detail['directoryInstructionsSkipped']).toEqual([{ directory: 'sub', reason: 'unreadable' }]);
+    expect(prompt).toContain('### lib/AGENTS.md\n\nlib rules');
+  });
+
+  it('sends today’s prompt, byte for byte, when no nested file exists or no Git is wired (AC-09)', async () => {
+    // Today's prompt: no Git adapter, which is what every caller predating N1 wires.
+    const today = await harness();
+    today.runner.pushText(COMPLETED);
+    const expected = await promptOf(today, ['sub/x.ts']);
+
+    const noFiles = await harness({ processRunner: gitAnswering(), git: true });
+    noFiles.runner.pushText(COMPLETED);
+    expect(await promptOf(noFiles, ['sub/x.ts'])).toBe(expected);
+    expect((await measuredOf(noFiles)).detail).not.toHaveProperty('directoryInstructionsSkipped');
+
+    // A nested file with no Git adapter is not read (FR-010).
+    const noGit = await harness();
+    noGit.runner.pushText(COMPLETED);
+    noGit.fs.seed(`${PROJECT}/sub/AGENTS.md`, '# Sub rules\n');
+    expect(await promptOf(noGit, ['sub/x.ts'])).toBe(expected);
+
+    // Positive control: the same file with Git wired changes the prompt.
+    const withFile = await harness({ processRunner: gitAnswering(), git: true });
+    withFile.runner.pushText(COMPLETED);
+    withFile.fs.seed(`${PROJECT}/sub/AGENTS.md`, '# Sub rules\n');
+    expect(await promptOf(withFile, ['sub/x.ts'])).not.toBe(expected);
   });
 });
 

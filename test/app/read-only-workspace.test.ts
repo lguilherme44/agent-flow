@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempRepo, type TempRepo } from '../fixtures/temp-repo.js';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { FakeHost } from '../fakes/fake-host.js';
-import { openReadOnlyTree } from '../../src/app/read-only-workspace.js';
+import { openReadOnlyTree, READ_ONLY_REFUSALS } from '../../src/app/read-only-workspace.js';
+import { gitFailure, gitOk } from '../../src/adapters/git/git-command.js';
 
 /**
  * §6.1b — a read-only stage gets a tree it may ruin.
@@ -219,6 +220,147 @@ describe('a read-only stage runs in a twin of the tree, not in the tree', () => 
     // one that runs where it always did.
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.reason).toBe('no_head');
+  });
+
+  it('holds no ignored file when not opted in, and asks Git nothing more', async () => {
+    repo = await makeTempRepo();
+    mkdirSync(join(repo.dir, 'src'), { recursive: true });
+    repo.write('src/a.ts', 'export const a = 1;\n');
+    repo.write('.gitignore', '.env.test\n');
+    repo.commitAll('first');
+    repo.write('.env.test', 'TOKEN=local\n');
+
+    // Counted rather than assumed: FR-020's "no Git command added" is the claim, and a twin
+    // that listed and found nothing would hold the same files while breaking it.
+    let asked = 0;
+    const real = repo.workspaces;
+    const workspaces = Object.assign(Object.create(real) as typeof real, {
+      listIgnoredFiles: (...args: Parameters<typeof real.listIgnoredFiles>) => {
+        asked += 1;
+        return real.listIgnoredFiles(...args);
+      },
+      isIgnored: (...args: Parameters<typeof real.isIgnored>) => {
+        asked += 1;
+        return real.isIgnored(...args);
+      },
+    });
+
+    for (const copy of [undefined, []]) {
+      const outcome = await openReadOnlyTree(
+        {
+          fs: new NodeFileSystem(),
+          workspaces,
+          host: new FakeHost(4242),
+          ...(copy === undefined ? {} : { copy }),
+        },
+        { source: repo.dir, label: 'discovery' },
+      );
+      if (!outcome.ok) throw new Error(`expected a tree, got ${outcome.reason}`);
+      try {
+        expect(existsSync(join(outcome.tree.cwd, '.env.test'))).toBe(false);
+      } finally {
+        await outcome.tree.release();
+      }
+    }
+
+    expect(asked).toBe(0);
+  });
+
+  it('holds the declared ignored files of its source when opted in, and only those', async () => {
+    repo = await makeTempRepo();
+    mkdirSync(join(repo.dir, 'src'), { recursive: true });
+    repo.write('src/a.ts', 'export const a = 1;\n');
+    repo.write('.gitignore', '.env.test\nlocal.json\n');
+    repo.commitAll('first');
+    // CRLF on purpose: a copy through a string round trip would rewrite it.
+    repo.write('.env.test', 'TOKEN=local\r\nOTHER=2\r\n');
+    repo.write('local.json', '{"undeclared":true}\n');
+
+    const outcome = await openReadOnlyTree(
+      {
+        fs: new NodeFileSystem(),
+        workspaces: repo.workspaces,
+        host: new FakeHost(4242),
+        copy: ['.env.test'],
+      },
+      { source: repo.dir, label: 'discovery' },
+    );
+    if (!outcome.ok) throw new Error(`expected a tree, got ${outcome.reason}: ${outcome.detail}`);
+    try {
+      expect(readFileSync(join(outcome.tree.cwd, '.env.test'))).toEqual(
+        readFileSync(join(repo.dir, '.env.test')),
+      );
+      // The positive control beside it: an ignored file nobody declared stays out.
+      expect(existsSync(join(outcome.tree.cwd, 'local.json'))).toBe(false);
+    } finally {
+      await outcome.tree.release();
+    }
+  });
+
+  it('refuses with no_copy and takes the twin away when a destination already exists', async () => {
+    repo = await makeTempRepo();
+    mkdirSync(join(repo.dir, 'src'), { recursive: true });
+    repo.write('src/a.ts', 'export const a = 1;\n');
+    repo.commitAll('first');
+
+    // A listing that names a file the twin already holds. Git's own listing never reports
+    // a tracked file, so the collision is injected — what is under test is that the copy's
+    // refusal releases the twin and reaches the caller as `no_copy`.
+    const outcome = await openReadOnlyTree(
+      {
+        fs: new NodeFileSystem(),
+        workspaces: Object.assign(Object.create(repo.workspaces) as typeof repo.workspaces, {
+          listIgnoredFiles: () => Promise.resolve(gitOk(['src/a.ts'])),
+        }),
+        host: new FakeHost(4242),
+        copy: ['src/a.ts'],
+      },
+      { source: repo.dir, label: 'no-copy-exists' },
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toBe('no_copy');
+    expect(outcome.detail).toContain('already exists');
+    expect(outcome.detail).not.toContain(repo.dir);
+    expect(outcome.detail).not.toContain('src/a.ts');
+    expect(repo.userGit(['worktree', 'list'])).not.toContain('read-only-no-copy-exists');
+  });
+
+  it('refuses with no_copy and takes the twin away when the listing fails', async () => {
+    repo = await makeTempRepo();
+    mkdirSync(join(repo.dir, 'src'), { recursive: true });
+    repo.write('src/a.ts', 'export const a = 1;\n');
+    repo.commitAll('first');
+
+    const home = repo.dir;
+    const outcome = await openReadOnlyTree(
+      {
+        fs: new NodeFileSystem(),
+        workspaces: Object.assign(Object.create(repo.workspaces) as typeof repo.workspaces, {
+          // A message carrying an absolute path, which is what Git's own text does: the
+          // refusal's detail must be built from the code, not from this.
+          listIgnoredFiles: () =>
+            Promise.resolve(
+              gitFailure({ code: 'git_command_failed', message: `fatal: not a git repository: ${home}` }),
+            ),
+        }),
+        host: new FakeHost(4242),
+        copy: ['.env.test'],
+      },
+      { source: repo.dir, label: 'no-copy-list' },
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.reason).toBe('no_copy');
+    expect(outcome.detail).toContain('git_command_failed');
+    expect(outcome.detail).not.toContain(home);
+    expect(repo.userGit(['worktree', 'list'])).not.toContain('read-only-no-copy-list');
+  });
+
+  it('names no_copy among the refusals the caller may record', () => {
+    expect(READ_ONLY_REFUSALS).toContain('no_copy');
   });
 
   it('positive control: the comparison notices a write into the source', async () => {

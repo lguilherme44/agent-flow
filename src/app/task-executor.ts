@@ -91,6 +91,11 @@ import type { StateStore } from './state-store.js';
 import { attemptLogName, runPaths } from './paths.js';
 import { runCommands } from './verification-commands.js';
 import type { TaskWorkspace } from './task-workspaces.js';
+import {
+  gitIgnoredDirectory,
+  readDirectoryInstructions,
+  type DirectoryInstructions,
+} from './directory-instructions.js';
 import type { CollaborationBlocks, CollaborationService } from './collaboration-service.js';
 import { buildCollaborationBootstrap } from '../core/collaboration/context.js';
 import { buildValidationRegistry } from '../core/validation-registry.js';
@@ -259,6 +264,7 @@ export class TaskExecutor {
     });
 
     const collaborationBlocks = await this.collaborationContextFor(runId, task, assignment.agentId);
+    const directory = await this.readDirectoryInstructions(workingDirectory, task);
 
     let text: string;
     // What actually ran. Taken from the stage result rather than from the
@@ -308,6 +314,12 @@ export class TaskExecutor {
           ...(collaborationBlocks.context === undefined
             ? {}
             : { collaborationContext: collaborationBlocks.context }),
+          // N1 (FR-001). Absent when no directory contributed, so a repository with no
+          // nested instruction files sends exactly the prompt it sent before.
+          ...(directory.block === '' ? {} : { directoryInstructions: directory.block }),
+          ...(directory.skipped.length === 0
+            ? {}
+            : { directoryInstructionsSkipped: directory.skipped }),
           // **Who is actually running this** (M5, §8). Without it the dispatch resolves the
           // *role*, so a member's declared runner was honoured by the capability check and
           // by the independence calculation and ignored by the process that ran — and the
@@ -1158,6 +1170,29 @@ export class TaskExecutor {
       `${content.slice(0, MAX_AGENTS_MD_BYTES)}\n\n` +
       `… [truncated: AGENTS.md is ${String(content.length)} bytes and this prompt ` +
       `carries the first ${String(MAX_AGENTS_MD_BYTES)}]`
+    );
+  }
+
+  /**
+   * The rules of the directories this task touches, from its own working directory (N1).
+   *
+   * The same tree the root `AGENTS.md` above is read from, for the same reason: an attempt
+   * sees the instructions of its base, not whatever the operator has saved since.
+   *
+   * **No Git adapter, no nested read** (FR-010). The ignore check is what keeps an ignored
+   * directory's files out of the prompt, and reading without it would be reading exactly
+   * what FR-005 excludes — so a wiring with no Git answers with today's prompt instead.
+   */
+  private async readDirectoryInstructions(
+    workingDirectory: string,
+    task: Task,
+  ): Promise<DirectoryInstructions> {
+    const { workspaces, fs } = this.options;
+    if (workspaces === undefined) return { block: '', skipped: [] };
+
+    return readDirectoryInstructions(
+      { fs, isIgnoredDirectory: gitIgnoredDirectory(workspaces) },
+      { treeRoot: workingDirectory, likely: task.files.likely },
     );
   }
 }

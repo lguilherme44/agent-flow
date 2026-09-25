@@ -1,11 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ABSENT_OID,
+  GitWorkspaces,
   MINIMUM_SUPPORTED_GIT_VERSION,
   compareGitVersions,
 } from '../../src/adapters/git/git-workspaces.js';
+import { createGitCommand } from '../../src/adapters/git/git-command.js';
+import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
+import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
+import type { ProcessRunner } from '../../src/ports/process-runner.js';
 import { attemptWorkspace, integrationWorkspace } from '../../src/core/worktree-policy.js';
 import type { WorkspaceLocation } from '../../src/core/worktree-policy.js';
 import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
@@ -1092,5 +1097,108 @@ describe('finding the merge that introduced a commit (§14.3 step 5)', () => {
       branch: `refs/heads/${branch}`,
     });
     expect(noMerge.ok && noMerge.value).toBeNull();
+  });
+});
+
+describe('listing ignored files by :(glob) pathspec (N2, FR-014)', () => {
+  // Written before the copy helper relied on any of it, because the SDD's weakest claim
+  // (Risk 8) is exactly this: that `ls-files --others --ignored --exclude-standard` with
+  // `:(glob)` pathspecs lists individual files inside ignored directories, with these
+  // semantics, on the Git this suite runs. That came from Git's documentation, and a fake
+  // would agree with whatever the documentation was read to say.
+
+  /** A repository holding one of each case the semantics distinguish. */
+  async function seeded(): Promise<TempRepo> {
+    const temp = await makeTempRepoWithCommit();
+    temp.write('.gitignore', '*.json\n/dir/\n');
+    // Matched by an ignore rule and tracked anyway: `--others` must never list it.
+    temp.write('tracked.json', '{}\n');
+    temp.userGit(['add', '.gitignore']);
+    temp.userGit(['add', '-f', 'tracked.json']);
+    temp.userGit(['commit', '--quiet', '--no-verify', '-m', 'ignore rules']);
+
+    temp.write('top.json', '{}\n');
+    mkdirSync(join(temp.dir, 'a'), { recursive: true });
+    temp.write('a/nested.json', '{}\n');
+    mkdirSync(join(temp.dir, 'dir', 'sub'), { recursive: true });
+    temp.write('dir/one', '1\n');
+    temp.write('dir/sub/two', '2\n');
+    // Untracked and not ignored: `--ignored` must never list it either.
+    temp.write('loose.txt', 'x\n');
+    return temp;
+  }
+
+  async function listed(temp: TempRepo, patterns: readonly string[]): Promise<readonly string[]> {
+    const outcome = await temp.workspaces.listIgnoredFiles({ cwd: temp.dir, patterns });
+    if (!outcome.ok) throw new Error(`listing failed: ${outcome.failure.code} ${outcome.failure.message}`);
+    return [...outcome.value].sort();
+  }
+
+  it('keeps `*` within one segment', async () => {
+    repo = await seeded();
+
+    expect(await listed(repo, ['*.json'])).toEqual(['top.json']);
+  });
+
+  it('lets `**/` cross any number of directories, including none', async () => {
+    repo = await seeded();
+
+    expect(await listed(repo, ['**/*.json'])).toEqual(['a/nested.json', 'top.json']);
+  });
+
+  it('lists each file inside an ignored directory individually for `dir/**`', async () => {
+    repo = await seeded();
+
+    // Not `dir/`: a directory entry would be copied as nothing, or fail as a file.
+    expect(await listed(repo, ['dir/**'])).toEqual(['dir/one', 'dir/sub/two']);
+  });
+
+  it('never lists a tracked file, even one an ignore rule matches', async () => {
+    repo = await seeded();
+
+    expect(await listed(repo, ['tracked.json'])).toEqual([]);
+    // Positive control: the same rule does match an untracked file, so the empty answer
+    // above is `--others` at work rather than a pattern that matches nothing.
+    expect(await listed(repo, ['top.json'])).toEqual(['top.json']);
+  });
+
+  it('never lists an untracked file no ignore rule matches', async () => {
+    repo = await seeded();
+
+    expect(await listed(repo, ['*'])).not.toContain('loose.txt');
+    expect(await listed(repo, ['loose.txt'])).toEqual([]);
+  });
+
+  it('answers an empty list, not an error, for a pattern that matches nothing', async () => {
+    repo = await seeded();
+
+    expect(await listed(repo, ['nothing-here/**'])).toEqual([]);
+  });
+
+  it('refuses a pattern Git would read as an option or as magic, spawning nothing', async () => {
+    repo = await seeded();
+    const spawned: string[][] = [];
+    const real = new NodeProcessRunner();
+    const counting: ProcessRunner = {
+      run: (options) => {
+        spawned.push([...options.args]);
+        return real.run(options);
+      },
+    };
+    const fs = new NodeFileSystem();
+    const git = await createGitCommand({ processRunner: counting, fs, homeDir: repo.home });
+    const workspaces = new GitWorkspaces({ git, fs, worktreeRoot: repo.worktreeRoot });
+
+    for (const pattern of ['-x', ':x']) {
+      const outcome = await workspaces.listIgnoredFiles({ cwd: repo.dir, patterns: ['top.json', pattern] });
+      expect(outcome.ok, pattern).toBe(false);
+      if (!outcome.ok) expect(outcome.failure.code).toBe('git_unsafe_argument');
+    }
+    expect(spawned).toEqual([]);
+
+    // Positive control: the counter sees a spawn when there is one, so the empty list
+    // above is the refusal rather than a runner nothing goes through.
+    expect((await workspaces.listIgnoredFiles({ cwd: repo.dir, patterns: ['top.json'] })).ok).toBe(true);
+    expect(spawned.some((args) => args.includes('ls-files'))).toBe(true);
   });
 });

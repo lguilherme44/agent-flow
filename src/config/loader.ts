@@ -4,13 +4,15 @@ import {
   EffectiveConfigSchema,
   GlobalConfigSchema,
   ProjectConfigSchema,
+  WorktreeSourceSchema,
   formatValidationError,
   type EffectiveConfig,
 } from '../contracts/index.js';
 import type { FileSystem } from '../ports/index.js';
 import { samePath } from '../core/path-containment.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from './defaults.js';
-import { PROJECT_OVERRIDABLE_KEYS, resolveConfigSources } from './resolver.js';
+import { PROJECT_OVERRIDABLE_KEYS, resolveConfigSources, type IgnoredLoosening } from './resolver.js';
+import { decideProjectTrust } from './trust.js';
 
 /**
  * A configuration problem, phrased for the person who has to fix it.
@@ -67,6 +69,17 @@ function parseOrThrow<S extends z.ZodType>(schema: S, value: unknown, source: st
   return result.data;
 }
 
+export interface LoadConfigWithReportOptions extends LoadConfigOptions {
+  /** Decides how trust entries are compared (FR-022). `process.platform` when absent. */
+  readonly platform?: string;
+}
+
+export interface LoadedConfigReport {
+  readonly config: EffectiveConfig;
+  /** What an untrusted project tried to loosen and was refused, for `doctor` (FR-026). */
+  readonly ignoredLoosenings: readonly IgnoredLoosening[];
+}
+
 /**
  * Resolution order: built-in defaults → global file → project overlay.
  *
@@ -76,6 +89,19 @@ function parseOrThrow<S extends z.ZodType>(schema: S, value: unknown, source: st
  * different, not the whole configuration.
  */
 export async function loadConfig(options: LoadConfigOptions): Promise<EffectiveConfig> {
+  return (await loadConfigWithReport(options)).config;
+}
+
+/**
+ * `loadConfig`, plus the project loosenings the resolver dropped (FR-027).
+ *
+ * A sibling rather than a wider return type: `loadConfig` has some twenty callers that
+ * want the configuration and nothing else, and only `doctor` has anything to say about
+ * what was refused.
+ */
+export async function loadConfigWithReport(
+  options: LoadConfigWithReportOptions,
+): Promise<LoadedConfigReport> {
   const { fs, globalConfigPath, projectDir } = options;
 
   const defaults = (parseYaml(DEFAULT_GLOBAL_CONFIG_YAML) ?? {}) as Record<string, unknown>;
@@ -86,13 +112,35 @@ export async function loadConfig(options: LoadConfigOptions): Promise<EffectiveC
   // command typed in home — which is where a dashboard started at logon lives.
   const projectRaw = samePath(projectPath, globalConfigPath) ? undefined : await readYaml(fs, projectPath);
 
-  const merged = resolveConfigSources({ defaults, global: globalRaw, project: projectRaw }).effectiveGlobal;
+  // Each file's `worktree` section is checked on its own, before the merge (FR-013). After
+  // it, every error is reported against the global path, so a bad pattern in a cloned
+  // repository's config would send its reader to a global file that does not contain it. The
+  // global file is checked too, because a project `copy` list replaces the global one whole
+  // and would otherwise hide a bad global pattern until the day the project dropped its own.
+  if (globalRaw) parseOrThrow(WorktreeSourceSchema, globalRaw, globalConfigPath);
+  if (projectRaw) parseOrThrow(WorktreeSourceSchema, projectRaw, projectPath);
 
-  const global = parseOrThrow(GlobalConfigSchema, merged, globalConfigPath);
+  // Asked only when there is a project file to screen: without one the resolver has no
+  // overlay for the answer to change, and `decideProjectTrust` would resolve paths for it.
+  const projectTrusted = projectRaw
+    ? await decideProjectTrust({
+        fs,
+        globalRaw,
+        projectDir,
+        platform: options.platform ?? process.platform,
+      })
+    : false;
+
+  const resolved = resolveConfigSources({ defaults, global: globalRaw, project: projectRaw, projectTrusted });
+
+  const global = parseOrThrow(GlobalConfigSchema, resolved.effectiveGlobal, globalConfigPath);
 
   const project = projectRaw
     ? parseOrThrow(ProjectConfigSchema, projectRaw, projectPath)
     : undefined;
 
-  return EffectiveConfigSchema.parse({ global, project });
+  return {
+    config: EffectiveConfigSchema.parse({ global, project }),
+    ignoredLoosenings: resolved.ignoredLoosenings,
+  };
 }

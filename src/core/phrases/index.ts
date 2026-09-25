@@ -130,6 +130,18 @@ export interface Phrases {
     readonly noCrossProviderReview: string;
     readonly runnerGrantsNoTools: (runner: string) => string;
     readonly implementationCannotRunCommands: (runner: string) => string;
+    /**
+     * A loosening an untrusted project's config set and the resolver dropped (FR-026).
+     * `path` is the dotted config path, typed verbatim; `trust.projectConfig` is the switch.
+     */
+    readonly projectLooseningIgnored: (path: string) => string;
+    /**
+     * A `worktree.copy` pattern that names a `.env` file or matches one today (FR-018).
+     * `pattern` is typed verbatim, exactly as the operator wrote it.
+     */
+    readonly worktreeCopyExposesEnv: (pattern: string) => string;
+    /** The listing behind rule (b) failed for `pattern`, so it could not be checked (FR-018). */
+    readonly worktreeCopyEnvUnchecked: (pattern: string) => string;
 
     /**
      * The report's own headings and labels.

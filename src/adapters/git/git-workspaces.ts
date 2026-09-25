@@ -621,8 +621,17 @@ export class GitWorkspaces {
    * than folded into `false`. Without this check the run refuses *itself*: its
    * own state files make the tree dirty and check 9 then names files Agent Flow
    * just wrote.
+   *
+   * `noIndex` adds `--no-index`, for the question N1 asks about a *directory*: whether the
+   * ignore rules close it, whatever the index happens to hold. Measured 24/09/2026 with
+   * `sub/` ignored and `sub/AGENTS.md` force-added and committed: `check-ignore -q -- sub/`
+   * answers "not ignored", and with `--no-index` it answers "ignored". Opt-in, because
+   * §6.3 check 8 asks about Agent Flow's own untracked state files and its answer must stay
+   * what it was.
    */
-  async isIgnored(options: RepoContext & { readonly path: string }): Promise<GitResult<boolean>> {
+  async isIgnored(
+    options: RepoContext & { readonly path: string; readonly noIndex?: boolean },
+  ): Promise<GitResult<boolean>> {
     if (options.path.length === 0 || options.path.startsWith('-')) {
       return gitFailure({
         code: 'git_unsafe_argument',
@@ -634,13 +643,69 @@ export class GitWorkspaces {
       subcommand: 'check-ignore',
       cwd: options.cwd,
       timeout: 'quick',
-      args: ['-q', '--', options.path],
+      args: [...(options.noIndex === true ? ['--no-index'] : []), '-q', '--', options.path],
     });
     if (!outcome.ok) return outcome;
 
     if (outcome.value.exitCode === 0) return gitOk(true);
     if (outcome.value.exitCode === 1) return gitOk(false);
     return gitFailure(commandFailed(outcome.value, 'git check-ignore'));
+  }
+
+  /**
+   * `git ls-files -z --others --ignored --exclude-standard -- :(glob)<pattern>…` (N2, FR-014).
+   *
+   * The untracked files Git ignores that the patterns match, repository-relative with `/`.
+   * Git's own `:(glob)` semantics rather than a matcher here: `*` and `?` stay in one
+   * segment, a leading `**` segment crosses directories and `/**` takes everything below — and the listing
+   * names each file inside an ignored directory, never the directory. Measured on real Git
+   * in `git-workspaces.integration.test.ts` before anything relied on it (Risk 8).
+   *
+   * `--others` is what keeps a tracked file out even when an ignore rule matches it, and
+   * `--exclude-standard` is what makes "ignored" mean what `git status` means by it.
+   *
+   * A pattern starting with `-` or `:` is refused before anything is spawned. The config
+   * schema refuses both already (FR-013), and this is the second wall rather than the
+   * first: after `--` Git does not read `-x` as an option, but a pattern is prefixed with
+   * `:(glob)`, and `:(glob):x` or `:(glob)-x` is a pathspec nobody wrote. Empty is refused
+   * for the reason {@link isIgnored} refuses it. No patterns answers no files without a
+   * call: an `ls-files --ignored` with no pathspec lists every ignored file in the tree,
+   * which is the opposite of what an empty declaration means.
+   */
+  async listIgnoredFiles(
+    options: RepoContext & { readonly patterns: readonly string[] },
+  ): Promise<GitResult<readonly string[]>> {
+    for (const pattern of options.patterns) {
+      if (pattern.length === 0 || pattern.startsWith('-') || pattern.startsWith(':')) {
+        return gitFailure({
+          code: 'git_unsafe_argument',
+          message: `"${pattern}" is not a pattern this tool lists ignored files by`,
+        });
+      }
+    }
+    if (options.patterns.length === 0) return gitOk([]);
+
+    const outcome = await this.run({
+      subcommand: 'ls-files',
+      cwd: options.cwd,
+      timeout: 'read',
+      args: [
+        '-z',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '--',
+        ...options.patterns.map((pattern) => `:(glob)${pattern}`),
+      ],
+    });
+    if (!outcome.ok) return outcome;
+
+    // Parsable, not merely successful: a truncated listing would copy a subset and report
+    // the attempt prepared (§37). Risk 5's broad pattern refuses loudly instead.
+    const failed = expectParsableSuccess(outcome.value, 'git ls-files --others --ignored');
+    if (failed !== null) return failed;
+
+    return gitOk(outcome.value.stdout.split('\0').filter((path) => path.length > 0));
   }
 
   /**

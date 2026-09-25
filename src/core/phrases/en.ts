@@ -108,6 +108,17 @@ export const en: Phrases = {
       'refused, unapproved, in a non-interactive session. Grant the binaries those ' +
       `commands already name, e.g. runners.${runner}.args: ` +
       "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)'] — on Windows declare each rule for PowerShell too, e.g. 'PowerShell(npm:*)': Claude Code runs commands with that tool there",
+    projectLooseningIgnored: (path) =>
+      `the project config sets \`${path}\`, and it is ignored: this project is not trusted, ` +
+      'so its config may only tighten your settings. To let it apply, add the project ' +
+      'directory to `trust.projectConfig` in your global config',
+    worktreeCopyExposesEnv: (pattern) =>
+      `the \`worktree.copy\` pattern \`${pattern}\` names or matches a .env file, and what it ` +
+      'matches is copied into every task worktree, where the model can read it. Narrow the ' +
+      'pattern unless those values are meant for the agent',
+    worktreeCopyEnvUnchecked: (pattern) =>
+      `could not list the ignored files the \`worktree.copy\` pattern \`${pattern}\` matches, ` +
+      'so whether it copies a .env file into task worktrees was not checked',
     nodeMissing: 'Node.js is missing from PATH',
     installNode: 'Install Node.js 20+ (https://nodejs.org or via fnm/nvm)',
     gitMissingOrOld: 'Git is missing or older than 2.38',

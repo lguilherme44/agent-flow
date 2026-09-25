@@ -23,6 +23,7 @@ import {
   type RunnerCapabilitiesMap,
 } from '../core/role.js';
 import { compareReasoning } from '../core/reasoning.js';
+import { fileNamedEnv, patternNamesEnvFile } from '../core/env-exposure.js';
 import { THROWAWAY_WORKSPACE_PREFIXES } from '../core/worktree-policy.js';
 import {
   ALL_WORKFLOW_ROLES,
@@ -33,6 +34,7 @@ import {
   type ReasoningLevel,
   type WorkflowRole,
 } from '../contracts/index.js';
+import type { IgnoredLoosening } from '../config/resolver.js';
 import type { FileSystem } from '../ports/file-system.js';
 import type { Host } from '../ports/host.js';
 import type { ProcessRunner } from '../ports/process-runner.js';
@@ -294,6 +296,13 @@ export interface DiagnoseOptions {
   readonly processRunner: ProcessRunner;
   readonly host: Host;
   readonly config: EffectiveConfig;
+  /**
+   * What the resolver refused from an untrusted project, from `loadConfigWithReport`.
+   *
+   * Passed in rather than recomputed: `config` is already the screened result and no longer
+   * says what was dropped, and re-reading the files here would be a second resolver.
+   */
+  readonly ignoredLoosenings?: readonly IgnoredLoosening[];
   readonly projectDir: string;
   readonly promptsDir: string;
   /** Reads an environment variable, for a runner configured with `apiKeyEnv`. */
@@ -475,6 +484,24 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     }
   }
 
+  // One note per loosening an untrusted project set and did not get (FR-026). A note, not a
+  // degradation: the machine works exactly as the operator configured it — what is lost is
+  // the repository's opinion, and naming `trust.projectConfig` is the whole remediation.
+  // Without it, a project whose `--allowedTools` grants stopped applying would find out from
+  // an agent that returned BLOCKED on a denied command, with nothing pointing back here.
+  const ignoredLoosenings = (options.ignoredLoosenings ?? []).map((loosening) =>
+    say.doctor.projectLooseningIgnored(loosening.path.join('.')),
+  );
+
+  const envExposure = await describeEnvExposure({
+    fs,
+    processRunner,
+    homeDir: host.homeDir,
+    projectDir,
+    patterns: config.global.worktree?.copy ?? [],
+    say,
+  });
+
   const verdict = {
     ...baseVerdict,
     notes: [
@@ -485,6 +512,8 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
           (runner) =>
             `${say.doctor.runnerGrantsNoTools(runner)} — ${say.doctor.implementationCannotRunCommands(runner)}`,
         ),
+      ...ignoredLoosenings,
+      ...envExposure,
     ],
   };
   const unresolvableRoles = rolesThatCannotRun(capabilities);
@@ -878,6 +907,54 @@ function effortsByRunner(config: GlobalConfig): Map<string, readonly ReasoningLe
       [...levels].sort((a, b) => compareReasoning(a, b)),
     ]),
   );
+}
+
+/**
+ * One note per `worktree.copy` pattern that would put a `.env` file in front of the model
+ * (FR-018, SEC-007).
+ *
+ * A note rather than a degradation: copying is opt-in and the operator may mean it — a
+ * `.env.test` holding fixture values is exactly what N2 exists to carry. What must not
+ * happen is carrying one without having been told, and a project may set `worktree.copy`
+ * itself (Risk 3), so this is the only place the operator hears about it.
+ *
+ * Rule (a) reads the pattern as text; rule (b) asks Git what the pattern matches **today**,
+ * with the listing the copy itself uses, and looks at those names — see `core/env-exposure`
+ * for why no glob is matched against `.env`. One listing per pattern, so a failure is
+ * attributed to the pattern it concerns rather than to the whole list, and one warning per
+ * pattern however many rules and files agree.
+ *
+ * With no patterns nothing is built and nothing is spawned (NFR-003): a `doctor` on a
+ * machine that never opted in costs exactly what it cost before.
+ */
+async function describeEnvExposure(options: {
+  fs: FileSystem;
+  processRunner: ProcessRunner;
+  homeDir: string;
+  projectDir: string;
+  patterns: readonly string[];
+  say: Phrases;
+}): Promise<string[]> {
+  if (options.patterns.length === 0) return [];
+
+  const git = await createGitCommand({ processRunner: options.processRunner, fs: options.fs, homeDir: options.homeDir });
+  const workspaces = await createGitWorkspaces({ git, fs: options.fs, homeDir: options.homeDir });
+
+  const notes: string[] = [];
+  for (const pattern of options.patterns) {
+    const byName = patternNamesEnvFile(pattern);
+    const listed = await workspaces.listIgnoredFiles({ cwd: options.projectDir, patterns: [pattern] });
+    const byMatch = listed.ok && listed.value.some((path) => fileNamedEnv(path));
+
+    if (byName || byMatch) {
+      notes.push(options.say.doctor.worktreeCopyExposesEnv(pattern));
+    } else if (!listed.ok) {
+      // Only when (a) did not already warn: a pattern that names `.env` is answered, and
+      // saying its listing failed as well would be a second note about a settled question.
+      notes.push(options.say.doctor.worktreeCopyEnvUnchecked(pattern));
+    }
+  }
+  return notes;
 }
 
 /**

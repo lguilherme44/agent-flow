@@ -39,13 +39,20 @@ describe('measuring what a prompt is made of', () => {
     // Separately, because they have four different owners: the stage prompt is ours, the
     // advisory block is MVP 3's retrieval, `AGENTS.md` is the repository's, and the packet
     // is recovery's. A single total cannot tell anybody which one to shrink.
+    // `directoryInstructions` is N1's: the rules of the directories a task touches, whose
+    // owner is neither the stage nor the root file.
     const measured = measurePromptComposition(
-      parts({ advisory: 'context', failureContext: 'previous attempt' }),
+      parts({
+        advisory: 'context',
+        failureContext: 'previous attempt',
+        directoryInstructions: '## Directory instructions',
+      }),
     );
 
     expect([...measured.parts.map((part) => part.source)].sort()).toEqual([
       'advisory',
       'agentsMd',
+      'directoryInstructions',
       'failureContext',
       'stagePrompt',
     ]);
@@ -190,5 +197,34 @@ describe('availability and relevance are separate sources (M5, I-40)', () => {
     const names = measured.parts.map((p) => p.source);
     expect(names).toContain('collaborationBootstrap');
     expect(names).not.toContain('collaboration');
+  });
+});
+
+describe('the directory instructions source (N1, FR-007)', () => {
+  it('carries exactly the UTF-8 bytes of the block', () => {
+    // Multi-byte, so a count of characters would come out short and fail here.
+    const block = '## Directory instructions\n\n### sub/AGENTS.md\n\n“quoted”';
+    const measured = measurePromptComposition(parts({ directoryInstructions: block }));
+
+    const directory = measured.parts.find((part) => part.source === 'directoryInstructions');
+    expect(directory?.bytes).toBe(new TextEncoder().encode(block).length);
+    expect(directory?.bytes).toBeGreaterThan(block.length);
+  });
+
+  it('is counted once, beside the stage prompt rather than inside it', () => {
+    const block = 'x'.repeat(40);
+    const without = measurePromptComposition(parts());
+    const withBlock = measurePromptComposition(parts({ directoryInstructions: block }));
+
+    expect(withBlock.totalBytes).toBe(without.totalBytes + 40);
+  });
+
+  it('is omitted when empty, and when a caller predating it does not pass it', () => {
+    // The helper passes no `directoryInstructions` at all: that is every existing caller.
+    const absent = measurePromptComposition(parts());
+    const empty = measurePromptComposition(parts({ directoryInstructions: '' }));
+
+    expect(absent.parts.map((part) => part.source)).not.toContain('directoryInstructions');
+    expect(empty).toEqual(absent);
   });
 });

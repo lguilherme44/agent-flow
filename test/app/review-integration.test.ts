@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
+import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
+import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { ReviewStore } from '../../src/app/review-store.js';
 import { ReviewService, ChangeReviewAdapter } from '../../src/app/review-service.js';
@@ -14,8 +18,7 @@ import {
   type Task,
   type TaskResult,
 } from '../../src/contracts/index.js';
-import type { StageRunner } from '../../src/app/stage-runner.js';
-import { StageFailure } from '../../src/app/stage-runner.js';
+import { StageFailure, StageRunner } from '../../src/app/stage-runner.js';
 
 /**
  * A review of one change, end to end through the service (M6-03).
@@ -457,5 +460,169 @@ describe('a review loop has an end (§30, I-46)', () => {
     const records = await h.reviews.readReviews(h.run.runId);
     expect(records).toHaveLength(1);
     expect(records[0]?.verdict).toBe('changes_requested');
+  });
+});
+
+/**
+ * N1 — the reviewed task's directory rules reach the code-review prompt (FR-002, SEC-004).
+ *
+ * Through a real `StageRunner` and the real `code-review` template, because what these
+ * criteria name is the prompt the reviewer receives and the event it records — a scripted
+ * stage runner would prove only that an option was passed.
+ */
+describe('directory instructions reach the reviewer, from the project directory (N1)', () => {
+  const REVIEW_WORKSPACE = '/wk/integration/AF-2026-001';
+  const REAL_PROMPTS = join(import.meta.dirname, '../../prompts');
+  const PROMPTS = '/pkg/prompts';
+  const CAPS = {
+    supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],
+    supportsReadOnly: true,
+    supportsNonInteractive: true,
+    supportsWorkingDirectory: true,
+    structuredOutputStrategy: 'native',
+    nonInteractiveToolGrants: { fileEdit: true, commandExecution: true },
+  } as const;
+
+  const touching = (likely: readonly string[]): Task => ({ ...task(), files: { likely: [...likely] } });
+
+  async function reviewing(options: {
+    seed?: Record<string, string>;
+    /** Wires the Git ignore check; absent is a wiring with no Git adapter (FR-010). */
+    git?: boolean;
+    readFile?: (path: string, read: (path: string) => Promise<string>) => Promise<string>;
+  } = {}) {
+    const fs = new InMemoryFileSystem();
+    for (const file of readdirSync(REAL_PROMPTS)) {
+      if (file.endsWith('.md')) fs.seed(`${PROMPTS}/${file}`, readFileSync(join(REAL_PROMPTS, file), 'utf8'));
+    }
+    for (const [path, content] of Object.entries(options.seed ?? {})) fs.seed(path, content);
+    const readOverride = options.readFile;
+    if (readOverride !== undefined) {
+      const read = fs.readFile.bind(fs);
+      fs.readFile = async (path: string) => readOverride(path, read);
+    }
+
+    const clock = new FixedClock();
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('a feature');
+    const reviews = new ReviewStore({ fs, projectDir: PROJECT });
+    const effective = config(TEAM);
+    await store.appendEvent(run.runId, 'task_assigned', {
+      task: 'TASK-003',
+      agent: 'backend',
+      role: 'executor.normal',
+      reason: 'team_match',
+      candidates: [],
+    });
+
+    const agent = new FakeAgentRunner('claude', CAPS);
+    agent.pushJson({ verdict: 'approve', summary: 'nothing to report', findings: [] });
+
+    const asked: { cwd: string; directory: string }[] = [];
+    const adapter = new ChangeReviewAdapter({
+      service: new ReviewService({
+        clock,
+        store,
+        reviews,
+        stageRunner: new StageRunner({
+          fs,
+          clock,
+          store,
+          config: effective.global,
+          capabilities: { claude: CAPS, agy: CAPS },
+          promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+          getRunner: () => agent,
+          projectDir: PROJECT,
+        }),
+        roster: deriveAgentRoster(effective.global),
+        config: effective,
+        canImplement: () => true,
+      }),
+      store,
+      fs,
+      projectDir: PROJECT,
+      inFlight: async () => new Map(),
+      reviewWorkspace: async () => REVIEW_WORKSPACE,
+      ...(options.git === true
+        ? {
+            isIgnoredDirectory: async (cwd: string, directory: string) => {
+              asked.push({ cwd, directory });
+              return { ok: true as const, value: false };
+            },
+          }
+        : {}),
+    });
+
+    const measured = async () =>
+      (await store.readEvents(run.runId)).find((event) => event.type === 'stage_context_measured')
+        ?.detail ?? {};
+
+    return { adapter, agent, asked, reviews, run, measured, prompt: () => agent.lastCall?.prompt ?? '' };
+  }
+
+  it('carries the project directory’s sub/ block, not the review workspace’s (AC-02)', async () => {
+    const h = await reviewing({
+      git: true,
+      seed: {
+        [`${PROJECT}/sub/AGENTS.md`]: 'project sub rules\n',
+        // Written by the change under review: SEC-004 says it must not reach its reviewer.
+        [`${REVIEW_WORKSPACE}/sub/AGENTS.md`]: 'rules the change wrote for itself\n',
+      },
+    });
+
+    await h.adapter.review(h.run.runId, touching(['sub/x.ts']), result());
+
+    expect(h.prompt()).toContain('## Directory instructions\n\n### sub/AGENTS.md\n\nproject sub rules');
+    expect(h.prompt()).not.toContain('rules the change wrote for itself');
+    expect(h.asked).toEqual([{ cwd: PROJECT, directory: 'sub' }]);
+    // The reviewer still runs in the tree it judges; only the rules come from elsewhere.
+    expect(h.agent.lastCall?.workingDirectory).toBe(REVIEW_WORKSPACE);
+    expect(await h.measured()).not.toHaveProperty('directoryInstructionsSkipped');
+  });
+
+  it('still reviews when sub/AGENTS.md is unreadable, and records why it is missing (AC-08)', async () => {
+    const h = await reviewing({
+      git: true,
+      seed: {
+        [`${PROJECT}/sub/AGENTS.md`]: 'unreadable rules\n',
+        [`${PROJECT}/lib/AGENTS.md`]: 'lib rules\n',
+      },
+      readFile: async (path, read) => {
+        if (path.endsWith('sub/AGENTS.md')) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: 'EACCES' });
+        }
+        return read(path);
+      },
+    });
+
+    await h.adapter.review(h.run.runId, touching(['sub/x.ts', 'lib/y.ts']), result());
+
+    expect(await h.reviews.readReviews(h.run.runId)).toHaveLength(1);
+    expect((await h.measured())['directoryInstructionsSkipped']).toEqual([
+      { directory: 'sub', reason: 'unreadable' },
+    ]);
+    expect(h.prompt()).toContain('### lib/AGENTS.md\n\nlib rules');
+    expect(h.prompt()).not.toContain('unreadable rules');
+  });
+
+  it('sends today’s prompt, byte for byte, with no nested file or no Git adapter (AC-09)', async () => {
+    const today = await reviewing();
+    await today.adapter.review(today.run.runId, touching(['sub/x.ts']), result());
+    const expected = today.prompt();
+    expect(expected).toContain('## Project instructions (AGENTS.md)');
+
+    const noFiles = await reviewing({ git: true });
+    await noFiles.adapter.review(noFiles.run.runId, touching(['sub/x.ts']), result());
+    expect(noFiles.prompt()).toBe(expected);
+
+    const noGit = await reviewing({ seed: { [`${PROJECT}/sub/AGENTS.md`]: '# Sub rules\n' } });
+    await noGit.adapter.review(noGit.run.runId, touching(['sub/x.ts']), result());
+    expect(noGit.prompt()).toBe(expected);
+
+    // Positive control: the same file, with Git wired, does change the prompt.
+    const withFile = await reviewing({ git: true, seed: { [`${PROJECT}/sub/AGENTS.md`]: '# Sub rules\n' } });
+    await withFile.adapter.review(withFile.run.runId, touching(['sub/x.ts']), result());
+    expect(withFile.prompt()).not.toBe(expected);
+    expect(withFile.prompt()).toBe(`${expected}\n\n## Directory instructions\n\n### sub/AGENTS.md\n\n# Sub rules`);
   });
 });

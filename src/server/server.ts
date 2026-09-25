@@ -86,7 +86,7 @@ import {
   type ActionErrorCode,
   type RunActionDeps,
 } from '../app/run-actions.js';
-import { loadConfig } from '../config/loader.js';
+import { loadConfig, loadConfigWithReport } from '../config/loader.js';
 import { buildRegistry, describeRunnerTypes } from '../adapters/runners/registry.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
 import { createGitWorkspaces } from '../adapters/git/git-workspaces.js';
@@ -1074,7 +1074,9 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const query = DoctorQuerySchema.safeParse(request.query ?? {});
     if (!query.success) return badRequest(reply, say(request).invalidDoctorOptions);
 
-    const config = await loadConfig({
+    // With the report, so the page names the project loosenings it refused (FR-027). Only
+    // this route: every other load here wants the configuration and nothing else.
+    const { config, ignoredLoosenings } = await loadConfigWithReport({
       fs: options.fs,
       globalConfigPath: options.globalConfigPath,
       projectDir: project.path,
@@ -1091,6 +1093,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       processRunner: options.processRunner,
       host: options.processHost,
       config,
+      ignoredLoosenings,
       projectDir: project.path,
       promptsDir: options.promptsDir,
       installProbe: query.data.install === true,

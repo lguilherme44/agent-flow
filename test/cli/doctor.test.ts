@@ -1,5 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
+import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
+import { FakeHost } from '../fakes/fake-host.js';
 import { renderDiagnosis, renderRemoteAccess, runDoctorCommand } from '../../src/cli/doctor.js';
 import type { Diagnosis } from '../../src/app/diagnostics.js';
 import { ptBR } from '../../src/core/phrases/pt-BR.js';
@@ -128,7 +134,7 @@ describe('runDoctorCommand CLI surface (FR-023)', () => {
     const effectiveConfig: EffectiveConfig = {
       global: GlobalConfigSchema.parse(parseYaml(DEFAULT_GLOBAL_CONFIG_YAML)),
     };
-    vi.spyOn(configLoader, 'loadConfig').mockResolvedValue(effectiveConfig);
+    vi.spyOn(configLoader, 'loadConfigWithReport').mockResolvedValue({ config: effectiveConfig, ignoredLoosenings: [] });
 
     const globals: GlobalOptions = {
       cwd: '/test',
@@ -155,5 +161,67 @@ describe('runDoctorCommand CLI surface (FR-023)', () => {
       'remote access status cannot be determined from a terminal; ask the running server',
     );
     expect(output).not.toContain('off');
+  });
+
+  describe('in a project the global config does not trust (FR-027)', () => {
+    let root: string;
+
+    beforeEach(async () => {
+      root = await mkdtemp(join(tmpdir(), 'af-doctor-trust-'));
+      await mkdir(join(root, 'project', '.agent-flow'), { recursive: true });
+      await writeFile(
+        join(root, 'project', '.agent-flow', 'config.yaml'),
+        'project:\n  name: demo\n  type: node\nrunners:\n  claude:\n    dangerouslySkipPermissions: true\n',
+      );
+    });
+
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    /**
+     * The real loader on real files, and the real `diagnose` — with only the machine taken
+     * away: no process spawned, no Git home provisioned under the real home directory.
+     */
+    async function doctorWith(globalYaml: string): Promise<string> {
+      const globalConfigPath = join(root, 'global.yaml');
+      await writeFile(globalConfigPath, globalYaml);
+
+      const real = diagnosticsApp.diagnose;
+      const prompts = new InMemoryFileSystem();
+      vi.spyOn(diagnosticsApp, 'diagnose').mockImplementation((options) =>
+        real({
+          ...options,
+          fs: prompts,
+          processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: 'v20.11.0' }),
+          host: new FakeHost(),
+          promptsDir: '/install/prompts',
+          installProbe: false,
+        }),
+      );
+
+      await runDoctorCommand({}, {
+        cwd: join(root, 'project'),
+        globalConfigPath,
+        verbose: false,
+        dryRun: false,
+        json: false,
+        strict: false,
+      });
+      return stdoutChunks.join('');
+    }
+
+    it('prints the note naming the refused path and trust.projectConfig', async () => {
+      const output = await doctorWith('parallelism:\n  maxTasks: 1\n');
+
+      expect(output).toContain('`runners.claude.dangerouslySkipPermissions`');
+      expect(output).toContain('trust.projectConfig');
+    });
+
+    it('positive control: prints no such note once the global list trusts the project', async () => {
+      const output = await doctorWith(`trust:\n  projectConfig: [${JSON.stringify(join(root, 'project'))}]\n`);
+
+      expect(output).not.toContain('`runners.claude.dangerouslySkipPermissions`');
+    });
   });
 });

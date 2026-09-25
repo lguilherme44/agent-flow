@@ -53,9 +53,32 @@ const NONE = 'No AGENTS.md in this repository.';
 
 export async function readProjectInstructions(fs: FileSystem, dir: string): Promise<ProjectInstructions> {
   const agents = await readIfPresent(fs, `${dir}/AGENTS.md`);
+  // CLAUDE.md is opened only when AGENTS.md does not settle it, as before the rule was
+  // extracted: a repository that wrote an AGENTS.md never has its CLAUDE.md read.
+  const claude = needsFallback(agents) ? await readIfPresent(fs, `${dir}/CLAUDE.md`) : undefined;
+  return chooseInstructions(agents, claude);
+}
+
+/**
+ * Whether `agents` leaves the choice to CLAUDE.md — absent, or only the `init` scaffold.
+ *
+ * Exported so a reader applying its own bounds per file can skip opening a CLAUDE.md the
+ * rule would never use.
+ */
+export function needsFallback(agents: string | undefined): boolean {
+  return agents === undefined || isScaffoldOnly(agents);
+}
+
+/**
+ * The rule above, over text already read: `undefined` means the file is absent.
+ *
+ * Pure and separate from the read so the per-directory reader (N1) applies the same rule
+ * to files it opened under its own bounds — one rule, written once, rather than a second
+ * copy that drifts on the scaffold check.
+ */
+export function chooseInstructions(agents?: string, claude?: string): ProjectInstructions {
   if (agents !== undefined && !isScaffoldOnly(agents)) return { source: 'AGENTS.md', text: agents };
 
-  const claude = await readIfPresent(fs, `${dir}/CLAUDE.md`);
   if (claude !== undefined) {
     const block = agents === undefined ? undefined : agentFlowBlock(agents);
     return {

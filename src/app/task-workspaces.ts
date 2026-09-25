@@ -2,6 +2,7 @@ import { CommitOidSchema, type EffectiveConfig, type RunState } from '../contrac
 import type { ProcessRunner } from '../ports/process-runner.js';
 import type { Clock } from '../ports/clock.js';
 import { prepareWorkspace } from './workspace-preparation.js';
+import { copyIgnoredFiles, describeIgnoredCopyFailure } from './ignored-copy.js';
 import { attemptRef, attemptWorkspace } from '../core/worktree-policy.js';
 import { deriveRepoKey, type RepositoryDeps } from './run-git-identity.js';
 
@@ -12,6 +13,8 @@ import { deriveRepoKey, type RepositoryDeps } from './run-git-identity.js';
  *
  * ```text
  * git worktree add --lock --reason … -b <attempt ref> <workspace> <base>
+ *         ↓
+ * copy declared ignored files                     only when worktree.copy is non-empty
  *         ↓
  * assert clean                                    phase: "checkout"
  *         ↓
@@ -203,6 +206,24 @@ export class TaskWorkspaces {
         relativePath: location.value.relativePath,
       },
     };
+
+    // The ignored files the operator declared (N2), before the clean assertion rather than
+    // after the install: they are ignored, so `status` does not see them, and an install
+    // that reads `.env.test` needs it there already. A refusal is `checkout` because the
+    // tree Git wrote is not yet the tree the attempt was promised, and the worktree is
+    // retained like every refused attempt's (§7.4).
+    //
+    // `?.` because a configuration built by hand may predate the key, and absent means
+    // what empty means (FR-020): no Git command added, the worktree exactly today's. The
+    // loader always supplies it.
+    const declared = this.deps.config.global.worktree?.copy ?? [];
+    if (declared.length > 0) {
+      const copied = await copyIgnoredFiles(
+        { fs: this.deps.fs, workspaces: this.deps.workspaces },
+        { from: this.deps.projectDir, to: workspace.path, patterns: declared },
+      );
+      if (!copied.ok) return this.refuse('checkout', [], describeIgnoredCopyFailure(copied));
+    }
 
     // §8.1's sequence, from the module that owns it (AD-44). It lived here and had one
     // caller, which is why the integration worktree never got it — and why `review`

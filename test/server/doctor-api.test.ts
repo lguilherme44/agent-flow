@@ -53,9 +53,9 @@ afterEach(async () => {
   running = undefined;
 });
 
-async function serve(globalConfig = GLOBAL_CONFIG) {
+async function serve(globalConfig = GLOBAL_CONFIG, projectConfig = PROJECT_CONFIG) {
   const fs = new InMemoryFileSystem();
-  fs.seed('/repo/.agent-flow/config.yaml', PROJECT_CONFIG);
+  fs.seed('/repo/.agent-flow/config.yaml', projectConfig);
   fs.seed('/home/.agent-flow/config.yaml', globalConfig);
 
   for (const name of [
@@ -207,6 +207,31 @@ roles:
     const view = (await server.app.inject('/api/v1/doctor?install=true')).json<DoctorView>();
 
     expect(view.install.reason).not.toBe('not_requested');
+  });
+
+  describe('in a project the global config does not trust (FR-027)', () => {
+    const LOOSENING = `${PROJECT_CONFIG}runners:\n  claude:\n    dangerouslySkipPermissions: true\n`;
+    const NOTE = '`runners.claude.dangerouslySkipPermissions`';
+
+    it('returns the refused loosening in notes, and the view keeps its shape', async () => {
+      const baseline = (await (await serve()).server.app.inject('/api/v1/doctor')).json<DoctorView>();
+      await running?.close();
+
+      const { server } = await serve(GLOBAL_CONFIG, LOOSENING);
+      const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
+
+      expect(view.notes.filter((note) => note.includes(NOTE) && note.includes('trust.projectConfig'))).toHaveLength(1);
+      // The note rides in `notes: string[]`; no field was added to carry it.
+      expect(Object.keys(view).sort()).toEqual(Object.keys(baseline).sort());
+    });
+
+    it('positive control: returns no such note once the global list trusts the project', async () => {
+      const { server } = await serve(`${GLOBAL_CONFIG}trust:\n  projectConfig: [/repo]\n`, LOOSENING);
+
+      const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
+
+      expect(view.notes.some((note) => note.includes(NOTE))).toBe(false);
+    });
   });
 
   it('refuses a project it does not know, rather than guessing one', async () => {

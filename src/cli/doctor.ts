@@ -1,5 +1,5 @@
 import { dashboardNode } from './node-runtime.js';
-import { loadConfig } from '../config/loader.js';
+import { loadConfigWithReport } from '../config/loader.js';
 import { NodeFileSystem } from '../adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../adapters/process/node-process-runner.js';
 import { NodeHost } from '../adapters/host/node-host.js';
@@ -60,7 +60,8 @@ export async function runDoctorCommand(
   const processRunner = new NodeProcessRunner();
 
   try {
-    const config = await loadConfig({
+    // With the report, because `doctor` is where a refused project loosening is said (FR-027).
+    const { config, ignoredLoosenings } = await loadConfigWithReport({
       fs,
       globalConfigPath: globals.globalConfigPath,
       projectDir: globals.cwd,
@@ -77,6 +78,7 @@ export async function runDoctorCommand(
       processRunner,
       host: new NodeHost(),
       config,
+      ignoredLoosenings,
       say,
       projectDir: globals.cwd,
       promptsDir: resolvePromptsDir(),

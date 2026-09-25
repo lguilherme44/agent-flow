@@ -514,7 +514,7 @@ emenda se comportam exatamente como hoje.
 
 # Avulsos
 
-- [ ] **N1 · Medir se regras por diretório chegam ao executor**
+- [x] **N1 · Medir se regras por diretório chegam ao executor** — run AF-2026-001, 25/09/2026
       **Medido em 24/09 (Claude 2.1.281): não chegam.** Com `sub/CLAUDE.md` mandando terminar a
       resposta com uma palavra-marcador, a leitura de `sub/data.txt` obedeceu sem flags (controle) e
       **ignorou** com `--setting-sources '' --safe-mode`, as flags do adapter. Falta a injeção. — `src/app/project-instructions.ts:33-72`, `claude-code-runner.ts:394-395`
@@ -526,14 +526,37 @@ emenda se comportam exatamente como hoje.
       **Pronto quando:** a medição está registrada; se implementado, um teste mostra as
       instruções aninhadas no prompt de uma tarefa que toca o diretório, e ausentes numa que
       não toca.
+      **Feito.** Lido no código antes: implementação (`TaskExecutor.readAgentsMd`) e code review
+      (`ChangeReviewAdapter.agentsMd`) liam só o `AGENTS.md` da raiz; nenhum leitor via
+      `<dir>/AGENTS.md` ou `<dir>/CLAUDE.md`. Agora os dois prompts recebem um bloco
+      `## Directory instructions`, um `### <dir>/<arquivo>` por diretório ancestral das entradas de
+      `files.likely` (da raiz para baixo, a raiz nunca), anexado depois do template e medido como a
+      fonte `directoryInstructions`. Mesma regra da raiz (AGENTS.md, senão CLAUDE.md), 64 KiB por
+      arquivo, sem seguir symlink para fora da árvore, diretório ignorado pulado
+      (`git check-ignore --no-index`), e diretório ilegível pulado com aviso em
+      `stage_context_measured.detail.directoryInstructionsSkipped` — o leitor nunca lança. O code
+      review lê de `projectDir`, nunca da árvore revisada: uma tarefa não escreve as regras do
+      próprio revisor. Sem arquivo aninhado, os dois prompts são byte a byte os de antes.
 
-- [ ] **N2 · Lista explícita de arquivos ignorados copiados para o worktree** — `src/app/task-workspaces.ts:128-208`
+- [x] **N2 · Lista explícita de arquivos ignorados copiados para o worktree** — `src/app/task-workspaces.ts:128-208` — run AF-2026-001, 25/09/2026
       `worktree.copy: [globs]`, vazio por padrão, aplicado logo depois do `git worktree add`.
       O `doctor` avisa quando um padrão casa com `.env*`: o que é copiado fica legível pelo
       modelo. O checkout descartável só-leitura só recebe o que também estiver declarado para
       ele.
       **Pronto quando:** teste com um arquivo ignorado declarado (aparece no worktree, nunca
       entra em commit) e outro não declarado (não aparece).
+      **Feito.** Lido no código antes: `prepareIsolated` fazia `git worktree add` e seguia direto
+      para `prepareWorkspace`; nada copiava arquivo ignorado. Agora `worktree.copy` (global,
+      sobrescrevível pelo projeto, lista substituída inteira) usa a semântica de pathspec
+      `:(glob)` do Git: uma listagem `ls-files --others --ignored --exclude-standard` no checkout
+      do operador, cópia byte a byte, e a tentativa é recusada (`phase: 'checkout'`, detalhe sem
+      caminho) se a origem sai do repositório por symlink, se o destino já existe, ou se o destino
+      não sai ignorado no worktree — é isso que garante que nunca entra em commit. Padrão inválido
+      (`..`, absoluto, `\`, `.git`, `:` ou `-` no início) é `ConfigError` apontando o arquivo de
+      onde veio. O checkout só-leitura só recebe cópia com `worktree.copyToReadOnly: true`; falha
+      ali libera o checkout e degrada com `no_copy`. O `doctor` avisa quando o último segmento do
+      padrão, lido como texto, começa com `.env`, ou quando o padrão casa hoje com um arquivo
+      `.env*`. Sem a chave, nenhum comando Git a mais.
 
 - [ ] **N3 · Paralelismo visível e medido** — `src/contracts/config.schema.ts:240-253,383-400`, `src/core/concurrency.ts`, Deck
       Hoje `git.useWorktrees: false` e `parallelism.maxTasks: 1` por padrão: tarefas prontas
@@ -543,7 +566,7 @@ emenda se comportam exatamente como hoje.
       **Pronto quando:** o Deck mostra o modo e o limite da run, e a medição está em
       `docs/engineering/` com a decisão sobre o padrão.
 
-- [ ] **N4 · A config do projeto só aperta** — `src/config/resolver.ts:7-13`
+- [x] **N4 · A config do projeto só aperta** — `src/config/resolver.ts:7-13` — run AF-2026-001, 25/09/2026
       Um repositório pode hoje ligar `dangerouslySkipPermissions`, acrescentar `args` que
       liberam ferramentas, apontar MCPs e desligar `approval.requiredBeforeImplementation`. Regra
       nova, como no ai-jail: a config do projeto só restringe; liberar exige confiança declarada
@@ -552,6 +575,54 @@ emenda se comportam exatamente como hoje.
       traz (agy em skip-permissions).
       **Pronto quando:** num projeto não confiável, as quatro liberações são ignoradas e
       relatadas (testes); num diretório confiável, valem; um projeto que só restringe não muda.
+      **Feito.** Lido no código antes: `resolveConfigSources` copiava cada chave de
+      `PROJECT_OVERRIDABLE_KEYS` inteira do projeto para o overlay, sem checagem nenhuma. Agora a
+      config global tem `trust.projectConfig` (diretórios absolutos; cada um confia nele e em tudo
+      abaixo), lida só do arquivo global — um projeto não se declara confiável. `decideProjectTrust`
+      compara os dois lados já resolvidos por `realPath`, sem diferenciar maiúsculas nem separador
+      no Windows, e não toca o disco quando a lista não existe. Num projeto não confiável o
+      resolver descarta, para todo runner que o projeto nomeia (inclusive um que só ele declara):
+      `dangerouslySkipPermissions: true`; a lista `args` **inteira** quando algum token é
+      `--allowedTools`, `--allowed-tools`, `--dangerously-skip-permissions` ou `--permission-mode`
+      (também na forma `--flag=valor`); qualquer `mcp`; e `approval.requiredBeforeImplementation:
+      false`. Vale o valor global ou o padrão, `originOf` nunca atribui o valor descartado ao
+      projeto, e cada descarte vai em `ignoredLoosenings` e numa nota do `doctor` que nomeia
+      `trust.projectConfig`. Escolher runner, modelo, esforço, papéis, paralelismo, retry,
+      fallback, idioma e `worktree` continua com o projeto. O agy em skip-permissions já tinha
+      saído da config deste repositório (desligado, sem `dangerouslySkipPermissions`); os grants
+      de `runners.claude.args` que ela traz agora só valem numa máquina cuja config global confia
+      no checkout, e o comentário da própria config diz isso.
+
+      **Riscos que ficam** (nenhum resolvido aqui; cada um é candidato a item próprio):
+      - **O worktree de integração não recebe `worktree.copy`.** Os comandos de validação final da
+        run (`integrator.ts`) rodam onde nenhum arquivo ignorado foi copiado: um teste que precisa
+        de `.env.test` passa na tarefa e falha na revisão da run. Fechar é pequeno (o mesmo helper
+        depois da criação do worktree de integração), mas encosta no caminho de revisão perto de
+        `run-actions.ts`, que a F7a é dona.
+      - **Os grants deste repositório somem sem confiança global.** A validação continua rodando
+        no orquestrador, mas os agentes pulam diagnósticos ou voltam BLOCKED num comando negado.
+        Mitigado pela nota do `doctor` e pelo comentário na config.
+      - **O princípio "só aperta" não está inteiro.** Fora das quatro liberações nomeadas, um
+        projeto não confiável ainda pode: declarar `worktree.copy`, que deixa os arquivos
+        ignorados do operador — `.env` inclusive — legíveis pelo modelo (o aviso do `doctor` é a
+        única guarda); definir `runners.<x>.command`; apontar `baseUrl` com `apiKeyEnv`; e passar
+        flags de outros CLIs, como as de sandbox do codex.
+      - **Descartar a lista `args` inteira** por causa de um token de grant descarta junto flags
+        inofensivas. Escolhido contra filtrar token a token, que deixaria os argumentos do
+        `--allowedTools` variádico soltos como posicionais.
+      - **Padrão largo em `worktree.copy`** (`**/*`) num repo Node lista `node_modules` e pode
+        bater no teto de saída do Git: a tentativa é recusada, alto, em toda tentativa, até o
+        padrão ser estreitado.
+      - **Sem teto total para as instruções aninhadas.** Só o limite de 64 KiB por arquivo; uma
+        tarefa que toca muitos diretórios fundos gera um prompt grande. A fonte
+        `directoryInstructions` no orçamento torna isso visível.
+      - **Instruções aninhadas em dobro** quando um runner Claude declara `mcp`: sem
+        `--safe-mode`, o CLI pode carregar o `CLAUDE.md` aninhado por conta própria, além da cópia
+        injetada. Não medido.
+      - **A afirmação mais fraca do desenho:** que `ls-files --others --ignored
+        --exclude-standard` com pathspecs `:(glob)` lista arquivo a arquivo dentro de diretórios
+        ignorados, com essa semântica, no Git for Windows. Vem da documentação do Git, não de
+        medição; os testes de subprocesso com repositório real são o que decide.
 
 ---
 

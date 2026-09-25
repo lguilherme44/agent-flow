@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
-import { loadConfig, ConfigError } from '../../src/config/loader.js';
+import { loadConfig, loadConfigWithReport, ConfigError } from '../../src/config/loader.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 
 const GLOBAL_PATH = '/home/u/.agent-flow/config.yaml';
@@ -221,6 +221,191 @@ describe('shipped default config', () => {
     const config = await load(fs);
     const enabled = Object.entries(config.global.runners).filter(([, r]) => r.enabled);
     expect(enabled.map(([id]) => id)).toEqual(['claude']);
+  });
+});
+
+describe('worktree and trust sections', () => {
+  const projectYaml = 'project:\n  name: some-api\n  type: node\n';
+
+  const failure = async (fs: InMemoryFileSystem): Promise<Error> => {
+    const error = await load(fs).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ConfigError);
+    return error as Error;
+  };
+
+  it('defaults both sections when neither file names them', async () => {
+    const config = await load(new InMemoryFileSystem());
+    expect(config.global.worktree).toEqual({ copy: [], copyToReadOnly: false });
+    expect(config.global.trust).toEqual({ projectConfig: [] });
+  });
+
+  it('defaults both sections for a global file written before they existed', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'runners:\n  claude:\n    type: claude-code-cli\n');
+    const config = await load(fs);
+    expect(config.global.worktree).toEqual({ copy: [], copyToReadOnly: false });
+    expect(config.global.trust).toEqual({ projectConfig: [] });
+  });
+
+  it('lets a project worktree.copy replace the global list whole', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'worktree:\n  copy: [a, c]\n');
+    fs.seed(PROJECT_PATH, `${projectYaml}worktree:\n  copy: [b]\n`);
+    const config = await load(fs);
+    expect(config.global.worktree.copy).toEqual(['b']);
+  });
+
+  it('ignores a trust section in the project file (SEC-001)', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/home/u/wk]\n');
+    // The worktree line is the positive control: this project file is read and overlaid.
+    fs.seed(PROJECT_PATH, `${projectYaml}trust:\n  projectConfig: [/repo]\nworktree:\n  copy: [b]\n`);
+    const config = await load(fs);
+    expect(config.global.trust.projectConfig).toEqual(['/home/u/wk']);
+    expect(config.global.worktree.copy).toEqual(['b']);
+  });
+
+  it('names the project file for a bad project pattern, and the global file for a global one (AC-13)', async () => {
+    const inProject = new InMemoryFileSystem();
+    inProject.seed(PROJECT_PATH, `${projectYaml}worktree:\n  copy: ['../x']\n`);
+    const projectError = await failure(inProject);
+    expect(projectError.message).toContain(PROJECT_PATH);
+    expect(projectError.message).not.toContain(GLOBAL_PATH);
+    expect(projectError.message).toContain('worktree.copy.0');
+
+    const inGlobal = new InMemoryFileSystem();
+    inGlobal.seed(GLOBAL_PATH, "worktree:\n  copy: ['../x']\n");
+    inGlobal.seed(PROJECT_PATH, projectYaml);
+    const globalError = await failure(inGlobal);
+    expect(globalError.message).toContain(GLOBAL_PATH);
+    expect(globalError.message).not.toContain(PROJECT_PATH);
+  });
+
+  it('names the global file for a bad global pattern the project list replaces', async () => {
+    // After the merge the project list is all that is left, so only the per-file check sees it.
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, "worktree:\n  copy: ['/x']\n");
+    fs.seed(PROJECT_PATH, `${projectYaml}worktree:\n  copy: [b]\n`);
+    const error = await failure(fs);
+    expect(error.message).toContain(GLOBAL_PATH);
+  });
+
+  it.each(['', 'a\\b', '/x', 'C:/x', '../x', 'a/../b', '.git/x', ':x', '-x'])(
+    'refuses the pattern %j, naming the project file (FR-013)',
+    async (pattern) => {
+      const fs = new InMemoryFileSystem();
+      fs.seed(PROJECT_PATH, `${projectYaml}worktree:\n  copy: [${JSON.stringify(pattern)}]\n`);
+      const error = await failure(fs);
+      expect(error.message).toContain(PROJECT_PATH);
+      expect(error.message).toContain('worktree.copy.0');
+    },
+  );
+
+  it.each(['.env.test', 'config/**/*.json', 'dir/**'])('accepts the pattern %j', async (pattern) => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(PROJECT_PATH, `${projectYaml}worktree:\n  copy: [${JSON.stringify(pattern)}]\n`);
+    const config = await load(fs);
+    expect(config.global.worktree.copy).toEqual([pattern]);
+  });
+
+  it('refuses a trust.projectConfig that is a string, naming the global file (FR-022)', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'trust:\n  projectConfig: "C:/wk"\n');
+    const error = await failure(fs);
+    expect(error.message).toContain(GLOBAL_PATH);
+    expect(error.message).toContain('trust.projectConfig');
+  });
+});
+
+describe('project trust (FR-027)', () => {
+  const projectYaml = 'project:\n  name: some-api\n  type: node\n';
+  const loosenings =
+    `${projectYaml}approval:\n  requiredBeforeImplementation: false\n` +
+    'runners:\n  claude:\n    dangerouslySkipPermissions: true\n' +
+    "    args: ['--allowedTools', 'Bash(x)']\n    mcp:\n      config: mcp.json\n";
+
+  /** Counts every `realPath` call, so "no filesystem cost" is measured, not assumed. */
+  function spied(fs: InMemoryFileSystem): { fs: InMemoryFileSystem; realPaths: string[] } {
+    const realPaths: string[] = [];
+    const original = fs.realPath.bind(fs);
+    fs.realPath = (path: string) => {
+      realPaths.push(path);
+      return original(path);
+    };
+    return { fs, realPaths };
+  }
+
+  const withReport = (fs: InMemoryFileSystem) =>
+    loadConfigWithReport({ fs, globalConfigPath: GLOBAL_PATH, projectDir: '/repo', platform: 'linux' });
+
+  it('reports what an untrusted project tried to loosen, and applies none of it', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(PROJECT_PATH, loosenings);
+
+    const { config, ignoredLoosenings } = await withReport(fs);
+
+    expect(ignoredLoosenings.map(({ path }) => path.join('.')).sort()).toEqual([
+      'approval.requiredBeforeImplementation',
+      'runners.claude.args',
+      'runners.claude.dangerouslySkipPermissions',
+      'runners.claude.mcp',
+    ]);
+    expect(config.global.approval.requiredBeforeImplementation).toBe(true);
+    expect(config.global.runners['claude']?.dangerouslySkipPermissions).toBe(false);
+    expect(config.global.runners['claude']?.mcp).toBeUndefined();
+  });
+
+  it('returns the same config through loadConfig as through loadConfigWithReport', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(PROJECT_PATH, loosenings);
+
+    expect(await load(fs)).toEqual((await withReport(fs)).config);
+  });
+
+  it('calls realPath zero times when the global file has no trust list (NFR-003)', async () => {
+    const { fs, realPaths } = spied(new InMemoryFileSystem());
+    fs.seed(GLOBAL_PATH, 'parallelism:\n  maxTasks: 1\n');
+    fs.seed(PROJECT_PATH, loosenings);
+
+    await load(fs);
+
+    expect(realPaths).toEqual([]);
+  });
+
+  it('positive control: the spy does see realPath once a trust list exists', async () => {
+    const { fs, realPaths } = spied(new InMemoryFileSystem());
+    fs.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/elsewhere]\n');
+    fs.seed(PROJECT_PATH, loosenings);
+
+    await load(fs);
+
+    expect(realPaths).not.toEqual([]);
+  });
+
+  it('applies the four loosenings through loadConfig when the global list covers the project', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/repo]\n');
+    fs.seed(PROJECT_PATH, loosenings);
+
+    const config = await load(fs);
+    expect(config.global.approval.requiredBeforeImplementation).toBe(false);
+    expect(config.global.runners['claude']?.dangerouslySkipPermissions).toBe(true);
+    expect(config.global.runners['claude']?.args).toEqual(['--allowedTools', 'Bash(x)']);
+    expect(config.global.runners['claude']?.mcp).toBeDefined();
+    expect((await withReport(fs)).ignoredLoosenings).toEqual([]);
+  });
+
+  it('does not let a project trust itself from its own file (AC-20)', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(PROJECT_PATH, `${loosenings}trust:\n  projectConfig: [/repo]\n`);
+
+    const { config, ignoredLoosenings } = await withReport(fs);
+
+    expect(config.global.approval.requiredBeforeImplementation).toBe(true);
+    expect(ignoredLoosenings).toHaveLength(4);
   });
 });
 

@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { initProject } from '../../src/app/init-project.js';
-import { readProjectInstructions } from '../../src/app/project-instructions.js';
+import {
+  AGENTS_BEGIN,
+  AGENTS_END,
+  AGENTS_MD_SCAFFOLD,
+  chooseInstructions,
+  readProjectInstructions,
+} from '../../src/app/project-instructions.js';
 
 /**
  * What every stage is told about the repository's own rules.
@@ -74,5 +80,55 @@ describe('readProjectInstructions', () => {
     const read = await readProjectInstructions(new InMemoryFileSystem(), DIR);
     expect(read.source).toBe('none');
     expect(read.text).toBe('No AGENTS.md in this repository.');
+  });
+});
+
+/**
+ * The same rule over text already read, so the per-directory reader (N1) can apply it to
+ * files it opened under its own bounds without a second copy of the scaffold check.
+ */
+describe('chooseInstructions', () => {
+  const BLOCK = [AGENTS_BEGIN, '', '## Validation', '', '- `test`: `npm test`', '', AGENTS_END].join('\n');
+  const SCAFFOLD = [...AGENTS_MD_SCAFFOLD, BLOCK, ''].join('\n');
+
+  it('chooses AGENTS.md when it carries the repository’s own rules', () => {
+    const chosen = chooseInstructions('# Rules\n\n- Never touch billing.\n', '# Other rules\n');
+
+    expect(chosen).toEqual({ source: 'AGENTS.md', text: '# Rules\n\n- Never touch billing.\n' });
+  });
+
+  it('falls back to CLAUDE.md when AGENTS.md is only the scaffold, keeping the agent-flow block', () => {
+    const chosen = chooseInstructions(SCAFFOLD, '# Rules\n\n- Run tests in the container.\n');
+
+    expect(chosen.source).toBe('CLAUDE.md');
+    expect(chosen.text).toBe(
+      [
+        '<!-- Read from CLAUDE.md: this repository has no AGENTS.md of its own. -->',
+        '# Rules\n\n- Run tests in the container.',
+        '',
+        BLOCK,
+        '',
+      ].join('\n'),
+    );
+    expect(chosen.text).not.toContain('Describe the boundaries that must not be crossed');
+  });
+
+  it('carries no agent-flow block into the CLAUDE.md text when there is no AGENTS.md', () => {
+    const chosen = chooseInstructions(undefined, '# Rules\n');
+
+    expect(chosen).toEqual({
+      source: 'CLAUDE.md',
+      text: '<!-- Read from CLAUDE.md: this repository has no AGENTS.md of its own. -->\n# Rules\n',
+    });
+    // Positive control: the block is carried when the scaffold held one.
+    expect(chooseInstructions(SCAFFOLD, '# Rules\n').text).toContain(AGENTS_BEGIN);
+  });
+
+  it('keeps a scaffold-only AGENTS.md when there is no CLAUDE.md to fall back to', () => {
+    expect(chooseInstructions(SCAFFOLD, undefined)).toEqual({ source: 'AGENTS.md', text: SCAFFOLD });
+  });
+
+  it('says so when neither is present', () => {
+    expect(chooseInstructions()).toEqual({ source: 'none', text: 'No AGENTS.md in this repository.' });
   });
 });

@@ -14,6 +14,7 @@ import { StageRunner } from './stage-runner.js';
 import { PromptLoader } from './prompt-loader.js';
 import { TaskExecutor, canImplementWith } from './task-executor.js';
 import { ReviewService, ChangeReviewAdapter } from './review-service.js';
+import { gitIgnoredDirectory } from './directory-instructions.js';
 import { ReviewStore } from './review-store.js';
 import { Scheduler } from './scheduler.js';
 import { PlanningPipeline } from './planning-pipeline.js';
@@ -253,6 +254,15 @@ export async function buildExecutionContext(
           trust: { allowedEffectiveModels },
         });
 
+  // N2: the read-only twin receives the declared ignored files only when the operator asked
+  // for that separately. `copy` alone is a statement about attempt worktrees, and the twin's
+  // module keeps ignored files out by design, so without both halves the twin is exactly
+  // today's and no Git command is added (FR-017, FR-020). `?.` for the reason
+  // `TaskWorkspaces` gives: a configuration built by hand may predate the key.
+  const worktree = config.global.worktree;
+  const readOnlyCopy =
+    worktree?.copyToReadOnly === true && worktree.copy.length > 0 ? worktree.copy : undefined;
+
   const stageRunner = new StageRunner({
     fs,
     clock,
@@ -269,7 +279,15 @@ export async function buildExecutionContext(
     // §6.1b: a read-only stage gets a disposable twin of whatever tree it was going to
     // read, and the stage runner never learns how a checkout is made.
     openReadOnlyTree: (input) =>
-      openReadOnlyTree({ fs, workspaces, host: options.host }, input),
+      openReadOnlyTree(
+        {
+          fs,
+          workspaces,
+          host: options.host,
+          ...(readOnlyCopy === undefined ? {} : { copy: readOnlyCopy }),
+        },
+        input,
+      ),
     ...(advisor === undefined ? {} : { advisor }),
   });
 
@@ -392,6 +410,10 @@ export async function buildExecutionContext(
     store,
     fs,
     projectDir: options.projectDir,
+    // N1: the ignore check the reviewer's nested instructions need, over the same Git
+    // adapter the executor's reader uses — one rule for both stages, read from the project
+    // directory by the adapter rather than from the tree under review (SEC-004).
+    isIgnoredDirectory: gitIgnoredDirectory(workspaces),
     // **No diff stat, deliberately.** Producing one here would make this a second place
     // that composes the review workflow with Git, which `run-actions.ts` already owns —
     // and the reviewer has a working directory and the list of files that changed. A

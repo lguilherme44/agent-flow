@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
+import { join, relative } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
+import { createGitCommand } from '../../src/adapters/git/git-command.js';
+import { GitWorkspaces } from '../../src/adapters/git/git-workspaces.js';
+import type { ProcessRunner } from '../../src/ports/process-runner.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { TaskWorkspaces } from '../../src/app/task-workspaces.js';
@@ -613,6 +616,238 @@ describe('nothing here creates a marker or a commit (M2-05 boundary)', () => {
     expect(repo.userGit(['rev-list', '--count', base]).trim()).toBe(
       repo.userGit(['rev-list', '--count', `agent-flow/${RUN_KEY}/TASK-001/attempt-1`]).trim(),
     );
+  });
+});
+
+describe('declared ignored files are copied into the worktree (N2)', () => {
+  /** `workspacesFor`, with `worktree.copy` set — or the key present and empty. */
+  function copying(temp: TempRepo, copy: readonly string[], workspaces = temp.workspaces): TaskWorkspaces {
+    return new TaskWorkspaces({
+      workspaces,
+      fs: new NodeFileSystem(),
+      host: new FakeHost(1000, 'test-host', [1000], temp.home),
+      projectDir: temp.dir,
+      processRunner: new NodeProcessRunner(),
+      config: { global: { worktree: { copy, copyToReadOnly: false } } } as unknown as EffectiveConfig,
+      clock: new FixedClock(),
+    });
+  }
+
+  /** The adapter over the real Git, with every argv it sends recorded. */
+  async function recordingWorkspaces(temp: TempRepo): Promise<{ workspaces: GitWorkspaces; sent: string[] }> {
+    const sent: string[] = [];
+    const real = new NodeProcessRunner();
+    const recording: ProcessRunner = {
+      run: (options) => {
+        sent.push(JSON.stringify({ cwd: options.cwd, args: options.args }));
+        return real.run(options);
+      },
+    };
+    const fs = new NodeFileSystem();
+    const git = await createGitCommand({ processRunner: recording, fs, homeDir: temp.home });
+    return { workspaces: new GitWorkspaces({ git, fs, worktreeRoot: temp.worktreeRoot }), sent };
+  }
+
+  /** Every file in a tree, repository-relative, `.git` excluded. */
+  function filesIn(root: string): string[] {
+    return (readdirSync(root, { recursive: true, withFileTypes: true }) as Dirent[])
+      .filter((entry) => entry.isFile())
+      .map((entry) => relative(root, join(entry.parentPath, entry.name)).replace(/\\/g, '/'))
+      .filter((path) => path !== '.git' && !path.startsWith('.git/'))
+      .sort();
+  }
+
+  /** A repository that ignores `.env.test` and `local.json`, holding both, one with CRLF. */
+  async function withIgnoredFiles(): Promise<TempRepo> {
+    const temp = await makeTempRepoWithCommit();
+    temp.write('.gitignore', '.env.test\nlocal.json\n');
+    temp.commitAll('ignore local files');
+    // CRLF on purpose: a copy through a string round trip, or a checkout filter, is the
+    // way these bytes would change, and `core.autocrlf` is pinned off by the fixture.
+    writeFileSync(join(temp.dir, '.env.test'), Buffer.from('API_URL=http://localhost\r\nTOKEN=test\r\n'));
+    temp.write('local.json', '{"undeclared":true}\n');
+    return temp;
+  }
+
+  it('holds the declared file with identical bytes, and keeps it out of the tree (AC-10)', async () => {
+    repo = await withIgnoredFiles();
+    const base = repo.head();
+
+    const outcome = await copying(repo, ['.env.test']).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 1,
+      base,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const path = outcome.workspace.path;
+    expect(readFileSync(join(path, '.env.test')).equals(readFileSync(join(repo.dir, '.env.test')))).toBe(true);
+    expect(readFileSync(join(path, '.env.test')).includes(Buffer.from('\r\n'))).toBe(true);
+    // Ignored and undeclared: not copied.
+    expect(existsSync(join(path, 'local.json'))).toBe(false);
+
+    // The tree an attempt commit would be made of, built the way the receipt builds it.
+    expect((await repo.workspaces.stageAll({ cwd: path })).ok).toBe(true);
+    const tree = await repo.workspaces.writeTree({ cwd: path });
+    expect(tree.ok).toBe(true);
+    if (!tree.ok) return;
+    const names = repo.userGit(['ls-tree', '-r', '--name-only', tree.value]).split('\n');
+    expect(names).not.toContain('.env.test');
+    // Positive control: the listing is of the tree that was staged, not of an empty one.
+    expect(names).toContain('README.md');
+    expect(names).toContain('.gitignore');
+  });
+
+  it('copies every file under a declared directory pattern', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.write('.gitignore', '/fixtures/\n');
+    repo.commitAll('ignore fixtures');
+    mkdirSync(join(repo.dir, 'fixtures', 'deep'), { recursive: true });
+    repo.write('fixtures/one.txt', '1\n');
+    repo.write('fixtures/deep/two.txt', '2\n');
+    const base = repo.head();
+
+    const outcome = await copying(repo, ['fixtures/**']).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 1,
+      base,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(readFileSync(join(outcome.workspace.path, 'fixtures', 'deep', 'two.txt'), 'utf8')).toBe('2\n');
+    expect(readFileSync(join(outcome.workspace.path, 'fixtures', 'one.txt'), 'utf8')).toBe('1\n');
+  });
+
+  it('issues exactly today\'s Git commands, and writes today\'s tree, with the key absent or empty (AC-11)', async () => {
+    repo = await withIgnoredFiles();
+    const base = repo.head();
+    const normalise = (sent: readonly string[]): string[] =>
+      sent.map((argv) => argv.replace(/attempt-\d/g, 'attempt-N'));
+
+    // Today: no `worktree` key at all, as every configuration built before N2 is.
+    const today = await recordingWorkspaces(repo);
+    const absent = await new TaskWorkspaces({
+      workspaces: today.workspaces,
+      fs: new NodeFileSystem(),
+      host: new FakeHost(1000, 'test-host', [1000], repo.home),
+      projectDir: repo.dir,
+      processRunner: new NodeProcessRunner(),
+      config: { global: {} } as unknown as EffectiveConfig,
+      clock: new FixedClock(),
+    }).prepare({ state: isolatedRun(base), taskId: 'TASK-001', attempt: 1, base });
+
+    const empty = await recordingWorkspaces(repo);
+    const declaredEmpty = await copying(repo, [], empty.workspaces).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 2,
+      base,
+    });
+
+    expect(absent.ok && declaredEmpty.ok).toBe(true);
+    if (!absent.ok || !declaredEmpty.ok) return;
+    expect(normalise(empty.sent)).toEqual(normalise(today.sent));
+    expect(today.sent.some((argv) => argv.includes('ls-files') || argv.includes('check-ignore'))).toBe(false);
+    expect(filesIn(declaredEmpty.workspace.path)).toEqual(filesIn(absent.workspace.path));
+    expect(filesIn(absent.workspace.path)).not.toContain('.env.test');
+
+    // Positive control: a declaration does add the listing and the check, so the equality
+    // above is the absence of one rather than a recorder that sees nothing.
+    const declared = await recordingWorkspaces(repo);
+    const copied = await copying(repo, ['.env.test'], declared.workspaces).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 3,
+      base,
+    });
+    expect(copied.ok).toBe(true);
+    expect(declared.sent.some((argv) => argv.includes('ls-files'))).toBe(true);
+    expect(declared.sent.some((argv) => argv.includes('check-ignore'))).toBe(true);
+  });
+
+  it('refuses a file whose ignore rule lives only in an untracked .gitignore (AC-12)', async () => {
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    // Never committed, so the worktree Git writes has no such rule, and the copied file
+    // would be untracked and *not* ignored there — which `add -A` commits.
+    repo.write('.gitignore', '.env.test\n');
+    repo.write('.env.test', 'TOKEN=secret\n');
+
+    const outcome = await copying(repo, ['.env.test']).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 1,
+      base,
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure.phase).toBe('checkout');
+    // Refused by the post-copy ignore check, not by something else on the way.
+    expect(outcome.failure.detail).toContain('is not ignored in the workspace');
+    const serialised = JSON.stringify(outcome.failure);
+    expect(serialised).not.toContain(repo.dir.replace(/\\/g, '/'));
+    expect(serialised).not.toContain(repo.worktreeRoot);
+    expect(serialised).not.toContain(repo.home);
+    expect(serialised).not.toContain('.env.test');
+    expect(serialised).not.toContain('fatal');
+    // Retained, like every refused attempt (§7.4).
+    const listed = repo.userGit(['worktree', 'list', '--porcelain']);
+    expect(listed.split('\n\n').find((block) => block.includes('TASK-001')) ?? '').toContain('locked agent-flow');
+  });
+
+  it('succeeds when a declared pattern matches nothing (AC-14)', async () => {
+    repo = await withIgnoredFiles();
+    const base = repo.head();
+
+    const outcome = await copying(repo, ['nothing-here/**']).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 1,
+      base,
+    });
+
+    expect(outcome.ok).toBe(true);
+  });
+
+  it('refuses with phase "checkout" and the Git failure code when the listing fails (AC-14)', async () => {
+    repo = await withIgnoredFiles();
+    const base = repo.head();
+    const root = repo.dir;
+    const failing = new Proxy(repo.workspaces, {
+      get(target, property, receiver) {
+        if (property === 'listIgnoredFiles') {
+          return async () => ({
+            ok: false as const,
+            failure: {
+              code: 'git_timed_out' as const,
+              message: `git ls-files exceeded its timeout in ${root}`,
+              stderr: `warning: could not open directory '${root}/private/'`,
+            },
+          });
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const outcome = await copying(repo, ['.env.test'], failing).prepare({
+      state: isolatedRun(base),
+      taskId: 'TASK-001',
+      attempt: 1,
+      base,
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.failure.phase).toBe('checkout');
+    expect(outcome.failure.detail).toContain('git_timed_out');
+    expect(JSON.stringify(outcome.failure)).not.toContain(root);
+    expect(JSON.stringify(outcome.failure)).not.toContain('warning');
   });
 });
 
