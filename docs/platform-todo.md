@@ -514,7 +514,7 @@ emenda se comportam exatamente como hoje.
 
 # Avulsos
 
-- [x] **N1 · Medir se regras por diretório chegam ao executor** — run AF-2026-001, 25/09/2026
+- [x] **N1 · Medir se regras por diretório chegam ao executor** — 72bda11, 25/09
       **Medido em 24/09 (Claude 2.1.281): não chegam.** Com `sub/CLAUDE.md` mandando terminar a
       resposta com uma palavra-marcador, a leitura de `sub/data.txt` obedeceu sem flags (controle) e
       **ignorou** com `--setting-sources '' --safe-mode`, as flags do adapter. Falta a injeção. — `src/app/project-instructions.ts:33-72`, `claude-code-runner.ts:394-395`
@@ -538,7 +538,7 @@ emenda se comportam exatamente como hoje.
       review lê de `projectDir`, nunca da árvore revisada: uma tarefa não escreve as regras do
       próprio revisor. Sem arquivo aninhado, os dois prompts são byte a byte os de antes.
 
-- [x] **N2 · Lista explícita de arquivos ignorados copiados para o worktree** — `src/app/task-workspaces.ts:128-208` — run AF-2026-001, 25/09/2026
+- [x] **N2 · Lista explícita de arquivos ignorados copiados para o worktree** — `src/app/task-workspaces.ts:128-208` — 72bda11, 25/09
       `worktree.copy: [globs]`, vazio por padrão, aplicado logo depois do `git worktree add`.
       O `doctor` avisa quando um padrão casa com `.env*`: o que é copiado fica legível pelo
       modelo. O checkout descartável só-leitura só recebe o que também estiver declarado para
@@ -566,7 +566,7 @@ emenda se comportam exatamente como hoje.
       **Pronto quando:** o Deck mostra o modo e o limite da run, e a medição está em
       `docs/engineering/` com a decisão sobre o padrão.
 
-- [x] **N4 · A config do projeto só aperta** — `src/config/resolver.ts:7-13` — run AF-2026-001, 25/09/2026
+- [x] **N4 · A config do projeto só aperta** — `src/config/resolver.ts:7-13` — 72bda11, 25/09
       Um repositório pode hoje ligar `dangerouslySkipPermissions`, acrescentar `args` que
       liberam ferramentas, apontar MCPs e desligar `approval.requiredBeforeImplementation`. Regra
       nova, como no ai-jail: a config do projeto só restringe; liberar exige confiança declarada
@@ -623,6 +623,25 @@ emenda se comportam exatamente como hoje.
         --exclude-standard` com pathspecs `:(glob)` lista arquivo a arquivo dentro de diretórios
         ignorados, com essa semântica, no Git for Windows. Vem da documentação do Git, não de
         medição; os testes de subprocesso com repositório real são o que decide.
+
+- [ ] **N5 · Pendências das revisões da run dos avulsos (`72bda11`)**
+      Achados que a revisão do plano e a revisão final deixaram abertos, nenhum bloqueante:
+      1. **[médio]** Duas decisões da composição sem teste: `readOnlyCopy` só com
+         `worktree.copyToReadOnly: true` e `copy` não vazio, e `isIgnoredDirectory` passado ao
+         `ChangeReviewAdapter`. Nenhum teste via `buildExecutionContext` pega a remoção de qualquer
+         uma das duas.
+      2. **[médio]** No modo sequencial o revisor lê as regras aninhadas de `projectDir`, a árvore
+         que a tarefa acabou de editar: "a tarefa não escreve as regras do próprio revisor" só vale
+         em modo worktree. Documentar o limite ou ler do commit base.
+      3. **[médio]** A prova de "prompt byte a byte igual" compara dois caminhos que passam pelo
+         código novo; falta uma renderização capturada do `master` anterior.
+      4. **[baixo]** Cópia recusada (a checagem de ignorado falhou) deixa o arquivo não ignorado no
+         worktree retido: remover a cópia na recusa.
+      5. **[baixo]** `trust.projectConfig` aceita caminho relativo e o descarta calado: o schema
+         deveria recusar, ou o `doctor` nomear o que pulou.
+      6. **[baixo]** Duplicações: `MAX_INSTRUCTIONS_BYTES`/`bounded()` copiam o limite do
+         `readAgentsMd`; `resolveQuietly` e `isRecord` repetidos em três arquivos.
+      **Pronto quando:** cada item tem teste (ou decisão escrita) e controle positivo.
 
 ---
 

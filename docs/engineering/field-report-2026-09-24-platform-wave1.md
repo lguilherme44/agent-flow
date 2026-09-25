@@ -198,6 +198,20 @@ Duas tentativas gastas assim. A "evidência" mostrada no `status` foi o `stderr`
 dizendo "o comando X passou do limite de N s"; (2) limite configurável por comando; (3) o scheduler
 considerar a carga — várias suítes inteiras em paralelo na mesma máquina se sabotam.
 
+### A-22 · `files.likely` tratado como lista fechada derruba tarefa certa — alto (P7.1, P7.3)
+
+Na run dos avulsos, duas tarefas com validação **verde** (inclusive gates do Deck) pararam por
+`scope_violation`: uma estreitou o tipo de dependência num arquivo da tarefa anterior (quatro
+tentativas, a mesma decisão, porque era necessária), a outra pôs um teste no arquivo onde já
+moravam todos os testes daquela rota em vez do arquivo que o plano previa. `files.likely` diz
+"provável", mas a aceitação o trata como lista fechada; o planejador erra a lista e o executor
+paga. A saída foi o `revalidate` — que, por desenho, não reaplica a checagem de escopo a uma
+árvore aceita por pessoa (`task-revalidation.ts:56-63`) — duas vezes. Oportunidades: (1) testes
+novos ou alterados em arquivo de teste existente do mesmo módulo não contam como fora do escopo;
+(2) arquivo de outra tarefa **já integrada** do mesmo plano vira aviso, não recusa; (3) o canal
+de resposta do P7.1 aceita "arquivo fora do escopo: aceito" como decisão registrada, sem gastar
+tentativas.
+
 ## Fechamento da execução (medido por quem conduziu, depois do FEATURE COMPLETE)
 
 | Gate | Base (`7306ca8`) | Depois |
