@@ -224,6 +224,24 @@ operador retomar), sem gastar tentativa — como o planejamento já faz ("This d
 the task's attempts"). Custou um `retry --force` e a mensagem sugere a decisão errada (a tarefa
 não precisa de "mais tempo de modelo", precisa esperar o limite).
 
+### A-24 · Quarto defeito de especificação do condutor, e o `--decision` pagando a conta — informação
+
+Na F7b, a lista de negadores que escrevi no pedido incluía `no` — em português, a contração de
+"em + o". "Corrigir a expiração no token JWT" teria perdido a classe HIGH-RISK. A revisão do plano
+pegou com o exemplo exato. É o quarto erro do condutor que ela pega (saldo por onda, regra de glob
+do `.env`, "tarefa diferente sob id preservado", e este). A diferença desta vez: a correção entrou
+por `revise --decision` (P7.5, entregue na véspera), registrada como emenda e sem gastar o ciclo de
+revisão — o mesmo defeito que custou uma run inteira da F7a (A-18) custou só um replanejamento.
+
+### A-25 · Achado médio de revisão aprovada não tem como chegar ao executor — médio (P7.5)
+
+A revisão do plano da F7b passou com três achados médios concretos (um teste que falta para a lista
+de `--allowedTools` esvaziada pela deduplicação, uma tarefa grande demais, orientação de teste
+invertida). `approve --attach-findings` recusa: *"there is no failed review of this plan to hand
+over"*. O desenho do P7.5 cobriu só a revisão reprovada. Com revisão aprovada, as saídas são gastar
+um ciclo de `revise` ou aprovar e conferir à mão no fim. Oportunidade: `--attach-findings` também
+para achados de uma revisão que passou.
+
 ## Fechamento da execução (medido por quem conduziu, depois do FEATURE COMPLETE)
 
 | Gate | Base (`7306ca8`) | Depois |

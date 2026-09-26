@@ -40,7 +40,7 @@ terá run própria.
       **Pronto quando:** uma tarefa bloqueada é respondida e reexecutada sem `revise` nem
       `--force`, e o prompt do attempt seguinte contém a resposta (teste).
 
-- [ ] **P7.2 · O executor roda os comandos declarados** — `src/adapters/runners/claude-code-runner.ts:146-231`, prompts de planejamento
+- [x] **P7.2 · O executor roda os comandos declarados** — `0eab98d`, 26/09 — `src/adapters/runners/claude-code-runner.ts:146-231`, prompts de planejamento
       Os comandos de `commands`/`validationCommands` viram regras de `--allowedTools`
       automaticamente, nos dois shells no Windows, sem abrir nada além do declarado. O
       planejador e o revisor recebem a lista do que o executor pode rodar; medição que ele não
@@ -68,7 +68,7 @@ terá run própria.
       **Pronto quando:** teste do teto nos dois caminhos; os achados anexados aparecem no prompt
       das tarefas afetadas.
 
-- [ ] **P7.6 · Classificação sem palavra solta** — `src/core/adaptive-workflow.ts:30-64,143`
+- [x] **P7.6 · Classificação sem palavra solta** — `0eab98d`, 26/09 — `src/core/adaptive-workflow.ts:30-64,143`
       Menção negada ou incidental não eleva a classe; o motivo mostra o trecho que pesou; o
       operador corrige a classe (para cima ou para baixo) pela CLI e pelo Deck, e a correção fica
       registrada.
@@ -96,7 +96,7 @@ terá run própria.
       **Pronto quando:** revisão em andamento conta como "em movimento" (teste), e toda run que a
       lista marca como esperando por alguém tem um item com ação na fila (teste).
 
-- [ ] **P7.9 · "Completo" não sai com gate exigido sem rodar** — `src/core/definition-of-done.ts:55-80`, `src/app/read-only-workspace.ts:24-31`, `src/app/run-actions.ts:2451-2464`
+- [x] **P7.9 · "Completo" não sai com gate exigido sem rodar** — `0eab98d`, 26/09 — `src/core/definition-of-done.ts:55-80`, `src/app/read-only-workspace.ts:24-31`, `src/app/run-actions.ts:2451-2464`
       Na AF-2026-001 o SDD exigia `typecheck:deck` e `test:deck` (NFR-005/NFR-007) e a run saiu
       "FEATURE COMPLETE" sem eles terem rodado em lugar nenhum: a verificação mecânica só roda o
       que está em `commands`, e os revisores trabalham num checkout descartável que **não leva
