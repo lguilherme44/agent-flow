@@ -212,6 +212,17 @@ novos ou alterados em arquivo de teste existente do mesmo módulo não contam co
 de resposta do P7.1 aceita "arquivo fora do escopo: aceito" como decisão registrada, sem gastar
 tentativas.
 
+### A-23 · Quota esgotada queima todas as tentativas em um minuto — alto
+
+Na F7a′, a TASK-003 bateu no limite de sessão da assinatura às 18:33. A recuperação tratou
+`runner_quota_exhausted` como reparo de ambiente e recolocou a tarefa na fila **três vezes
+seguidas** — 23s, 30s, 22s, cada uma falhando no mesmo limite — até esgotar as tentativas e parar
+com *"Decide whether this task is worth more model time, then retry with --force"*. O horário de
+reset estava no envelope (*"resets 7:10pm"*). O certo é pausar a run até esse horário (ou até o
+operador retomar), sem gastar tentativa — como o planejamento já faz ("This did not spend one of
+the task's attempts"). Custou um `retry --force` e a mensagem sugere a decisão errada (a tarefa
+não precisa de "mais tempo de modelo", precisa esperar o limite).
+
 ## Fechamento da execução (medido por quem conduziu, depois do FEATURE COMPLETE)
 
 | Gate | Base (`7306ca8`) | Depois |
