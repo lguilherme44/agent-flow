@@ -1,5 +1,6 @@
 import { isAbsolute, relative } from 'node:path';
 import { renderFailureContext } from '../core/failure-context.js';
+import { renderTaskOperatorContext } from '../core/amendments.js';
 import { stringify as toYaml } from 'yaml';
 import {
   FailedAttemptSchema,
@@ -296,7 +297,17 @@ export class TaskExecutor {
           sdd,
           projectConfig: config.project === undefined ? 'None.' : toYaml(config.project).trim(),
           agentsMd: await this.readAgentsMd(workingDirectory),
-          failureContext: await this.readFailureContext(runId, task.id, workspace?.attempt ?? 1),
+          // The existing slot, joined rather than replaced (FR-004): an empty operator
+          // context drops out, so a run with no amendments sends exactly the value this
+          // line sent before, and the template's byte stream with it (NFR-002). The failure
+          // comes first because it is what this attempt must fix; the answers are what it
+          // must know while fixing it.
+          failureContext: [
+            await this.readFailureContext(runId, task.id, workspace?.attempt ?? 1),
+            await this.operatorContext(runId, task.id),
+          ]
+            .filter((part) => part.length > 0)
+            .join('\n\n'),
         },
         {
           workingDirectory,
@@ -905,6 +916,27 @@ export class TaskExecutor {
       return state.tasks.find((entry) => entry.id === taskId)?.noChangeDeclaredAt !== undefined;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * What an operator told this task, for this attempt (FR-004, FR-018).
+   *
+   * Read from the run state on every attempt rather than from `readFailureContext`'s packet,
+   * because that packet exists only for attempt 2 and later of an automatic recovery — and
+   * a task an operator answered is usually at attempt 1 in sequential mode, where the packet
+   * path is never reached. The answer would have been recorded and never delivered.
+   *
+   * A state that cannot be read answers `''`, as `declaredUnchanged` answers `false`: the
+   * attempt proceeding without the answer is worse than being told, and not worse than the
+   * attempt not running at all.
+   */
+  private async operatorContext(runId: string, taskId: string): Promise<string> {
+    try {
+      const state = await this.options.store.loadRun(runId);
+      return renderTaskOperatorContext(state.amendments ?? [], taskId, state.approvedPlanHash);
+    } catch {
+      return '';
     }
   }
 

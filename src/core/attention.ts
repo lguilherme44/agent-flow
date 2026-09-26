@@ -282,7 +282,10 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
           what: say.attention.reportedBlocked(task.id),
           why: say.attention.sddDoesNotAnswer,
           since: lastEventAt(input.events, 'task_blocked', task.id) ?? input.run.updatedAt,
-          action: { kind: 'inspect', label: say.attention.readWhatAsked(task.id), destructive: false },
+          // `answer` rather than `inspect` (FR-005): the task stopped on a question, and the
+          // one action that moves it is answering. Reading what it asked is part of that act,
+          // which is why the answer form shows the task's notes above the text area.
+          action: { kind: 'answer', label: say.attention.answerBlocked(task.id), destructive: false },
           focus: 'task',
         }),
       );

@@ -238,10 +238,48 @@ export function describe(event: RunEvent, t: Dictionary): Sentence {
       };
     case 'run_rejected':
       return { title: e.planRejected, detail: clip(text(d['reason'])), tone: 'bad' };
+    // P7.5. A decision and an escalation replan without spending a revision, and their
+    // `attemptedRevision` is the count that stayed put rather than `+1`. Read through the
+    // plain sentence it came out as "Revision 2 requested" for a run whose second revision
+    // was never asked for — so `kind` picks the sentence, and a line without it (every run
+    // before this, and every plain revise) reads exactly as it always did.
     case 'revision_requested':
+      if (d['kind'] === 'decision') {
+        return {
+          title: e.decisionRequested(num(d['attemptedRevision']), num(d['maxAllowed'])),
+          detail: clip(text(d['instruction'])),
+          tone: 'warn',
+        };
+      }
+      if (d['kind'] === 'escalation') {
+        return {
+          title: e.escalationRequested(word(t, text(d['fromWorkflow'])), word(t, text(d['toWorkflow'])), num(d['maxAllowed'])),
+          detail: clip(text(d['instruction'])),
+          tone: 'warn',
+        };
+      }
       return { title: e.revisionRequested(num(d['attemptedRevision'])), detail: clip(text(d['instruction'])), tone: 'warn' };
     case 'revision_completed':
+      if (d['kind'] === 'decision') return { title: e.decisionCompleted(num(d['revisionCount'])), tone: 'ok' };
+      if (d['kind'] === 'escalation') {
+        return { title: e.escalationCompleted(word(t, text(d['fromWorkflow'])), word(t, text(d['toWorkflow']))), tone: 'ok' };
+      }
       return { title: e.revisionCompleted(num(d['revisionCount'])), tone: 'ok' };
+    case 'amendment_recorded': {
+      const kind = text(d['kind']);
+      const actor = d['actor'] as { kind?: unknown; label?: unknown } | undefined;
+      return {
+        title: e.amendmentRecorded(
+          text(d['id']) ?? '',
+          kind === undefined ? t.common.none : ((t.outcome.amendmentKind as Readonly<Record<string, string | undefined>>)[kind] ?? word(t, kind)),
+        ),
+        detail: joined([
+          task,
+          actor?.kind === 'keyboard' ? t.outcome.keyboard : actor?.kind === 'device' ? text(actor.label) : undefined,
+        ]),
+        tone: 'idle',
+      };
+    }
     case 'planning_refused':
       return { title: e.planningRefused, detail: clip(text(d['reason'])), tone: 'bad' };
     case 'planning_repair_requested': {

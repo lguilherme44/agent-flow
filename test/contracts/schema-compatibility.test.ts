@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { z } from 'zod';
 import {
+  AmendmentSchema,
   FailedAttemptSchema,
   FailureContextPacketSchema,
   PlanSchema,
+  RunActorSchema,
   RunEventSchema,
   RunStateSchema,
   TaskAttemptResultSchema,
@@ -13,7 +16,13 @@ import {
   VerificationArtifactSchema,
   mechanicalVerificationOf,
   semanticVerificationOf,
+  type MutuallyAssignable,
+  type RunActor,
 } from '../../src/contracts/index.js';
+import { StateStore } from '../../src/app/state-store.js';
+import { runPaths } from '../../src/app/paths.js';
+import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
+import { FixedClock } from '../fakes/fixed-clock.js';
 
 /**
  * Every schema AR-00 touched, against artifacts written before it existed.
@@ -56,6 +65,7 @@ describe('the fixtures are genuinely pre-milestone (guards every assertion below
     const tasks = state['tasks'] as Record<string, unknown>[];
 
     expect(state['autonomy']).toBeUndefined();
+    expect(state['amendments']).toBeUndefined();
     for (const task of tasks) {
       expect(task['infrastructureFailures']).toBeUndefined();
       expect(task['failureClass']).toBeUndefined();
@@ -121,6 +131,129 @@ describe('RunStateSchema (AD-37, AD-46, §8.1, §8.2)', () => {
       expect(task.failureClass).toBeUndefined();
       expect(task.lastFailureAt).toBeUndefined();
     }
+  });
+});
+
+describe('RunStateSchema.amendments (FR-008, NFR-004)', () => {
+  const PROJECT = '/repo';
+
+  async function storeWithLegacyState() {
+    const fs = new InMemoryFileSystem();
+    const legacy = read('state.json') as { runId: string };
+    const path = runPaths(PROJECT, legacy.runId).state;
+    await fs.writeFileAtomic(path, JSON.stringify(legacy, null, 2));
+    return { fs, path, runId: legacy.runId, store: new StateStore({ fs, clock: new FixedClock(), projectDir: PROJECT }) };
+  }
+
+  it('parses a state file written before amendments existed, and leaves the key absent', () => {
+    const parsed = RunStateSchema.parse(read('state.json'));
+    expect('amendments' in parsed).toBe(false);
+  });
+
+  it('does not write the key into a legacy state file on update', async () => {
+    // Absent is not `[]`. A default would add `amendments: []` on the first write, and the
+    // file would then claim a run that predates amendments had been asked about decisions.
+    const { fs, path, runId, store } = await storeWithLegacyState();
+
+    await store.updateRun(runId, (state) => ({ ...state }));
+
+    const written = JSON.parse(await fs.readFile(path)) as Record<string, unknown>;
+    expect(written['updatedAt']).toBeDefined();
+    expect('amendments' in written).toBe(false);
+  });
+
+  it('writes the key once an amendment is appended (positive control)', async () => {
+    // Without this, the test above would also pass if the store dropped the field entirely.
+    const { fs, path, runId, store } = await storeWithLegacyState();
+
+    await store.updateRun(runId, (state) => ({
+      ...state,
+      amendments: [
+        { id: 'AMD-001', kind: 'revision', actor: { kind: 'keyboard' }, at: '2026-09-25T10:00:00.000Z', text: 'Split it.' },
+      ],
+    }));
+
+    const written = JSON.parse(await fs.readFile(path)) as { amendments?: unknown[] };
+    expect(written.amendments).toHaveLength(1);
+  });
+});
+
+describe('AmendmentSchema (FR-008)', () => {
+  const AT = '2026-09-25T10:00:00.000Z';
+  const keyboard = { kind: 'keyboard' };
+  const device = { kind: 'device', deviceId: 'device-1', label: 'Office tablet' };
+  const finding = {
+    severity: 'high',
+    type: 'requirement',
+    description: 'TASK-001 skips the check.',
+    suggestedAction: 'Add the check.',
+  };
+
+  const valid = {
+    answer: { id: 'AMD-001', kind: 'answer', actor: keyboard, at: AT, text: 'Use v2.', task: 'TASK-002', planHash: 'h1' },
+    revision: { id: 'AMD-002', kind: 'revision', actor: device, at: AT, text: 'Split the task.' },
+    decision: { id: 'AMD-003', kind: 'decision', actor: keyboard, at: AT, text: 'Keep the flag.' },
+    escalation: {
+      id: 'AMD-004',
+      kind: 'escalation',
+      actor: keyboard,
+      at: AT,
+      text: 'Touches two modules.',
+      fromWorkflow: 'simple',
+      toWorkflow: 'standard',
+    },
+    forced_approval: { id: 'AMD-005', kind: 'forced_approval', actor: keyboard, at: AT, planHash: 'h1', findingCount: 3 },
+    attached_findings: {
+      id: 'AMD-006',
+      kind: 'attached_findings',
+      actor: device,
+      at: AT,
+      planHash: 'h1',
+      findingCount: 1,
+      findings: [{ index: 0, finding, tasks: ['TASK-001', 'FIX-001'] }],
+    },
+  };
+
+  it.each(Object.entries(valid))('accepts a valid %s amendment', (kind, entry) => {
+    const parsed = AmendmentSchema.parse(entry);
+    expect(parsed.kind).toBe(kind);
+  });
+
+  it('rejects an id that is not AMD-NNN', () => {
+    for (const id of ['AMD-1', 'AMD-0001', 'amd-001', 'TASK-001']) {
+      expect(AmendmentSchema.safeParse({ ...valid.decision, id }).success, id).toBe(false);
+    }
+  });
+
+  it('rejects an actor of unknown kind', () => {
+    expect(
+      AmendmentSchema.safeParse({ ...valid.decision, actor: { kind: 'unattributed' } }).success,
+    ).toBe(false);
+    expect(RunActorSchema.safeParse({ kind: 'device', deviceId: '', label: 'x' }).success).toBe(false);
+  });
+
+  it('rejects an unknown kind and an attached finding routed to no task', () => {
+    expect(AmendmentSchema.safeParse({ ...valid.decision, kind: 'note' }).success).toBe(false);
+    expect(
+      AmendmentSchema.safeParse({
+        ...valid.attached_findings,
+        findings: [{ index: 0, finding, tasks: [] }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ties RunActorSchema to RunActor at the type level', () => {
+    // The same helper `state.schema.ts` asserts with. The drifted type is the check that
+    // the helper can say `false` at all: a device actor without its label is exactly the
+    // drift the assertion exists to catch, and `@ts-expect-error` fails `typecheck` the
+    // moment that line stops being an error.
+    type DriftedActor = { kind: 'keyboard' } | { kind: 'device'; deviceId: string };
+
+    const matches: MutuallyAssignable<z.infer<typeof RunActorSchema>, RunActor> = true;
+    // @ts-expect-error — a schema that lost `label` no longer matches RunActor.
+    const drifted: MutuallyAssignable<DriftedActor, RunActor> = true;
+
+    expect([matches, drifted]).toEqual([true, true]);
   });
 });
 

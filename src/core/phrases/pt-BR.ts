@@ -278,6 +278,7 @@ export const ptBR: Phrases = {
     invalidApproveRequest: 'requisição de aprovação inválida',
     invalidRejectRequest: 'requisição de rejeição inválida',
     invalidRetryRequest: 'requisição de retry inválida',
+    invalidAnswerRequest: 'uma resposta precisa de texto, com no máximo 4000 caracteres',
     invalidStartRequest: 'requisição de start inválida',
     revisionNeedsInstruction: 'uma revisão precisa de uma instrução dizendo o que deve mudar',
     invalidReviewRequest: 'requisição de revisão inválida',
@@ -439,6 +440,17 @@ export const ptBR: Phrases = {
       `${taskId} está BLOCKED: o agente dela respondeu BLOCKED, então ela parou por causa de ` +
       'algo que o SDD não responde.',
     fixSddOrForce: 'Conserte o SDD ou o plano — ou force o retry deliberadamente.',
+    answerOrForce: (taskId) =>
+      `Responda o que ela perguntou com \`agent-flow answer ${taskId}\`, que a recoloca na fila — ` +
+      'ou force o retry deliberadamente com `--force`.',
+    taskNotAnswerable: (taskId, state, heldByDependency) =>
+      `${taskId} está \`${state}\`${heldByDependency ? ', retida por uma tarefa da qual depende' : ''}, ` +
+      'então não há pergunta do agente dela para responder.',
+    onlyBlockedCanBeAnswered:
+      'Só uma tarefa cujo agente parou com BLOCKED pode ser respondida. Uma tarefa retida por ' +
+      'uma dependência é liberada quando essa dependência termina.',
+    answerNeedsText: 'Uma resposta precisa de algum texto.',
+    sayWhatTaskNeeds: 'Escreva o que a tarefa bloqueada precisa saber para continuar.',
 
     runPausedAt: (runId, at) => `${runId} foi pausada em ${at}.`,
     resumeIt: 'Retome com `agent-flow resume`.',
@@ -460,7 +472,10 @@ export const ptBR: Phrases = {
     reviewEvidenceThenRetry: (taskId) =>
       `Revise as evidências da tarefa, e então rode \`agent-flow retry ${taskId}\` — ou ` +
       `\`agent-flow revalidate ${taskId}\` se você mesmo já consertou a worktree dela.`,
-    answerBlockedThenRetry: 'Responda o que a tarefa bloqueada apontou, e então recoloque na fila.',
+    answerBlockedThenRetry: (taskId) =>
+      taskId === undefined
+        ? 'Responda o que a tarefa bloqueada apontou, e então recoloque na fila.'
+        : `Responda o que ${taskId} apontou com \`agent-flow answer ${taskId}\`, que a recoloca na fila.`,
     startNewOrCheckStatus:
       'Comece uma run nova, ou veja em `agent-flow status` o que esta está esperando.',
     planRejected: (runId) => `O plano de ${runId} foi rejeitado, então ele não será executado.`,
@@ -502,9 +517,22 @@ export const ptBR: Phrases = {
     ceremonyBudget: (workflow, cycles) =>
       `STOP_AND_ASK_HUMAN: o workflow ${workflow} atingiu o limite do orçamento de cerimônia ` +
       `(${String(cycles)} ciclo${cycles === 1 ? '' : 's'} de revisão). ` +
-      'Achados não resolvidos exigem aprovação humana ou elevação de workflow.',
+      'Achados não resolvidos exigem aprovação humana ou elevação de workflow: registre uma ' +
+      'decisão com `agent-flow revise --decision`, suba uma classe com `agent-flow revise --escalate`, ' +
+      'ou aprove entregando os achados às tarefas com `agent-flow approve --attach-findings`.',
     reviewResidualFindings:
       'Revise os achados residuais no diálogo de Aprovação e aprove por cima deles, ou comece uma run nova com uma classe de workflow mais alta.',
+    workflowAtCeiling: (workflow) =>
+      `${workflow} é a classe de workflow mais alta, então não há classe para onde escalar.`,
+    decideOrApproveAtCeiling:
+      'Registre uma decisão com `agent-flow revise --decision`, ou aprove entregando os achados às ' +
+      'tarefas com `agent-flow approve --attach-findings`.',
+    implementationStarted: (tasks, count) =>
+      `A implementação já começou (${tasks} ${count === 1 ? 'concluída' : 'concluídas'}), ` +
+      'então a run não pode mais mudar de ' +
+      'classe de workflow.',
+    revisePlainInstead:
+      'Revise o plano com `agent-flow revise`, que mantém a classe atual e gasta um ciclo de revisão.',
 
     featureNeedsDescription: 'Uma feature precisa de uma descrição.',
     sayWhatFeatureDoes:
@@ -557,6 +585,15 @@ export const ptBR: Phrases = {
       'Revise o plano e aprove o resultado — ou aprove por cima da rejeição ' +
       'deliberadamente, o que fica registrado na run.',
     approvalNotPossible: 'A aprovação não é possível no estado atual.',
+    findingsNotAttachable: (state) =>
+      '`--attach-findings` entrega às tarefas os achados de uma revisão de plano reprovada, e ' +
+      `não há revisão reprovada deste plano para entregar. ${state}`,
+    reviewPassedNothingToAttach: 'A revisão de plano em arquivo aprovou este plano.',
+    approveWithoutAttaching: 'Aprove com `agent-flow approve`, que não anexa nada.',
+    attachFindingsOrForce:
+      '`--attach-findings` e `--force` são duas aprovações diferentes: uma entrega às tarefas ' +
+      'os achados de uma revisão reprovada, a outra passa por cima da recusa sem eles.',
+    chooseAttachOrForce: 'Use uma delas, não as duas.',
   },
   board: {
     completed: 'concluída',
@@ -612,6 +649,7 @@ export const ptBR: Phrases = {
     sddDoesNotAnswer:
       'o SDD não responde algo de que a tarefa precisa; a recuperação não destrava isso',
     readWhatAsked: (task) => `Ler o que ${task} perguntou`,
+    answerBlocked: (task) => `Responder ${task}`,
 
     taskFailed: (task) => `${task} falhou`,
     attemptsNoneSatisfied: (attempts) =>

@@ -666,6 +666,16 @@ export const ptBR: Dictionary = {
     reviewedTree: 'árvore revisada',
     integratedTree: 'integrada',
     reviewerFoundNothing: 'O revisor não encontrou nada nesta tarefa.',
+    amendments: 'Emendas',
+    amendmentKind: {
+      answer: 'resposta',
+      revision: 'revisão',
+      decision: 'decisão',
+      escalation: 'escalonamento',
+      forced_approval: 'aprovação forçada',
+      attached_findings: 'achados anexados',
+    },
+    keyboard: 'teclado',
 
     deliveryCouldNotRead: 'Não foi possível ler o registro de entrega desta run.',
     deliveryOptIn: 'A entrega é opcional, e cada escrita no remoto é opcional em separado.',
@@ -870,6 +880,11 @@ export const ptBR: Dictionary = {
     changesNothingTitle: 'Registra que esta tarefa deve mesmo não mudar nada, e a coloca de volta na fila.',
     identicalTree: 'a árvore validada era idêntica à base dela',
     retryAnyway: 'Repetir mesmo assim',
+    agentReported: 'O que o agente relatou',
+    yourAnswer: 'Sua resposta',
+    answerPlaceholder: 'A decisão que a tarefa está esperando. Ela entra no prompt da próxima tentativa, e a tarefa volta para a fila.',
+    sendAnswer: 'Enviar resposta',
+    sending: 'Enviando…',
     attemptsHeading: 'Tentativas',
     didNotSpend: 'não gastou uma tentativa',
     closedByHuman: 'fechada por uma pessoa',
@@ -1071,6 +1086,14 @@ export const ptBR: Dictionary = {
     planRejected: 'Plano recusado',
     revisionRequested: (n: number | undefined) => `Revisão ${n === undefined ? '' : String(n)} pedida`.replace('  ', ' '),
     revisionCompleted: (n: number | undefined) => `Revisão ${n === undefined ? '' : String(n)} concluída`.replace('  ', ' '),
+    decisionRequested: (used: number | undefined, max: number | undefined) =>
+      `Decisão enviada ao planejador${used === undefined || max === undefined ? '' : ` (revisões usadas: ${String(used)} de ${String(max)})`}`,
+    decisionCompleted: (used: number | undefined) =>
+      `Plano atualizado com a decisão${used === undefined ? '' : ` (revisões usadas: ${String(used)})`}`,
+    escalationRequested: (from: string, to: string, max: number | undefined) =>
+      `Escalonado ${from} → ${to}${max === undefined ? '' : ` (até ${String(max)} revisões)`}`,
+    escalationCompleted: (from: string, to: string) => `Escalonamento concluído ${from} → ${to}`,
+    amendmentRecorded: (id: string, kind: string) => `Emenda ${id} registrada · ${kind}`,
     planningRefused: 'Planejamento recusado',
     planningRepair: (repair: number | undefined, max: number | undefined) =>
       `Plano recusado pelas checagens · pedindo de novo ao planejador${repair === undefined ? '' : ` (${String(repair)}/${max === undefined ? '?' : String(max)})`}`,

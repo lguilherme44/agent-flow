@@ -4,7 +4,20 @@ import {
   classifyWorkflow,
   getCeremonyBudget,
   evaluateStopCondition,
+  nextWorkflowClass,
 } from '../../src/core/adaptive-workflow.js';
+
+describe('nextWorkflowClass (FR-014)', () => {
+  it('steps each class up by one', () => {
+    expect(nextWorkflowClass('trivial')).toBe('simple');
+    expect(nextWorkflowClass('simple')).toBe('standard');
+    expect(nextWorkflowClass('standard')).toBe('high-risk');
+  });
+
+  it('has nowhere to go from high-risk', () => {
+    expect(nextWorkflowClass('high-risk')).toBeUndefined();
+  });
+});
 
 describe('Adaptive Workflow Classifier', () => {
   it('classifies documentation and typos as TRIVIAL', () => {

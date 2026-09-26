@@ -94,7 +94,9 @@ function renderStageFailure(error: StageFailure): string {
     invalid_output:
       'The runner produced output that never satisfied the contract. This is not retried on ' +
       'another runner on purpose: a different model would hide the mismatch rather than fix it.',
-    blocked: 'The agent stopped and reported BLOCKED. This needs a human decision, not a retry.',
+    blocked:
+      'The agent stopped and reported BLOCKED. This needs a human decision: answer it with ' +
+      '`agent-flow answer <task>`.',
     execution_failed: 'The runner failed. The original message is above.',
   };
 

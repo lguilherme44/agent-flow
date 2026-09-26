@@ -686,6 +686,17 @@ export const en = {
     reviewedTree: 'reviewed tree',
     integratedTree: 'integrated',
     reviewerFoundNothing: 'The reviewer found nothing on this task.',
+    // P7.4, FR-012. The operator's decisions, above whichever review the run has.
+    amendments: 'Amendments',
+    amendmentKind: {
+      answer: 'answer',
+      revision: 'revision',
+      decision: 'decision',
+      escalation: 'escalation',
+      forced_approval: 'forced approval',
+      attached_findings: 'attached findings',
+    },
+    keyboard: 'keyboard',
 
     deliveryCouldNotRead: 'The delivery record could not be read for this run.',
     deliveryOptIn: 'Delivery is opt-in, and every remote write is separately opt-in.',
@@ -890,6 +901,13 @@ export const en = {
     changesNothingTitle: 'Records that this task is meant to change nothing, then queues it again.',
     identicalTree: 'the validated tree was identical to its base',
     retryAnyway: 'Retry anyway',
+    // P7.1, FR-020. The button that opens this form is labelled by the server; these are
+    // the form's own words.
+    agentReported: 'What the agent reported',
+    yourAnswer: 'Your answer',
+    answerPlaceholder: "The decision the task is waiting for. It goes into the next attempt's prompt, and the task is queued again.",
+    sendAnswer: 'Send answer',
+    sending: 'Sending…',
     attemptsHeading: 'Attempts',
     didNotSpend: 'did not spend an attempt',
     // D19. A task closed by a person's hand must not read like one closed by the model, and
@@ -1073,6 +1091,16 @@ export const en = {
     planRejected: 'Plan rejected',
     revisionRequested: (n: number | undefined) => `Revision ${n === undefined ? '' : String(n)} requested`.replace('  ', ' '),
     revisionCompleted: (n: number | undefined) => `Revision ${n === undefined ? '' : String(n)} completed`.replace('  ', ' '),
+    // P7.5. A decision spends no revision, so it is never numbered as one: the count is the
+    // one that stayed where it was.
+    decisionRequested: (used: number | undefined, max: number | undefined) =>
+      `Decision sent to the planner${used === undefined || max === undefined ? '' : ` (revisions used: ${String(used)} of ${String(max)})`}`,
+    decisionCompleted: (used: number | undefined) =>
+      `Plan updated with the decision${used === undefined ? '' : ` (revisions used: ${String(used)})`}`,
+    escalationRequested: (from: string, to: string, max: number | undefined) =>
+      `Escalated ${from} → ${to}${max === undefined ? '' : ` (up to ${String(max)} revisions)`}`,
+    escalationCompleted: (from: string, to: string) => `Escalation completed ${from} → ${to}`,
+    amendmentRecorded: (id: string, kind: string) => `Amendment ${id} recorded · ${kind}`,
     planningRefused: 'Planning refused',
     planningRepair: (repair: number | undefined, max: number | undefined) =>
       `Plan refused by the checks · asking the planner again${repair === undefined ? '' : ` (${String(repair)}/${max === undefined ? '?' : String(max)})`}`,

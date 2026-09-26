@@ -114,12 +114,16 @@ function stub(
     reviewStatus?: number;
     artifacts?: ArtifactView[];
     contents?: Partial<Record<string, ArtifactContentView>>;
+    /** The run detail. Unset, the run answers 404 — what every test before amendments saw. */
+    run?: unknown;
   } = {},
 ): void {
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const target = String(input);
     if (target.includes('/review')) return response(overrides.review ?? review, overrides.reviewStatus ?? 200);
     if (target.includes('/delivery')) return response(delivery);
+    // `/runs/:id?…` and nothing after the id: the run detail, not one of its sub-resources.
+    if (/\/runs\/[^/?]+\?/.test(target)) return overrides.run === undefined ? response({}, 404) : response(overrides.run);
     if (target.includes('/artifacts/sdd')) return response(sdd);
     const named = /\/artifacts\/(\w+)/.exec(target)?.[1];
     const content = named === undefined ? undefined : overrides.contents?.[named];
@@ -227,6 +231,92 @@ describe('the review a person reads after the run', () => {
     panel('review');
 
     expect(await screen.findByText(t.outcome.reviewCouldNotRead)).toBeInTheDocument();
+  });
+});
+
+/**
+ * P7.4, FR-012 — the operator's decisions, in the Review tab, whichever review the run has.
+ *
+ * The tab returns early four ways (review record failed, loading, run-level branch, and that
+ * branch's own empty state). The first cut of this list lived in the per-task branch and
+ * vanished from exactly the run most likely to carry one: a forced approval over a failed
+ * plan review, where no task was reviewed one by one.
+ */
+describe('the amendments a person recorded', () => {
+  beforeEach(() => clearStore());
+  afterEach(() => vi.unstubAllGlobals());
+
+  const unreviewed = { ...review, reviewed: false, threads: [], gates: [], totals: { ...review.totals, reviews: 0 } };
+
+  const decision = {
+    id: 'AMD-001',
+    kind: 'decision',
+    actor: { kind: 'device', label: 'Office laptop' },
+    at: '2026-09-08T12:00:00Z',
+    text: 'Keep the v1 endpoint; the v2 one is not deployed yet.',
+  };
+
+  const runWith = (amendments: unknown[] | undefined) => ({
+    runId: address.runId,
+    ...(amendments === undefined ? {} : { amendments }),
+  });
+
+  it('shows an amendment on a run with no plan review and no per-task review (revision point 1)', async () => {
+    // `reviewed: false` sends the tab to the run-level reviews, and no `planReview` artifact
+    // sends that branch to its empty state — the deepest early return the tab has.
+    stub({ review: unreviewed, artifacts, run: runWith([decision]) });
+    panel('review');
+
+    expect(await screen.findByText(decision.text)).toBeInTheDocument();
+    expect(screen.getByText(t.outcome.amendmentKind.decision)).toBeInTheDocument();
+    expect(screen.getByText(/Office laptop/)).toBeInTheDocument();
+    // Beside the review's own answer, not instead of it.
+    expect(await screen.findByText(t.outcome.reviewedNothing)).toBeInTheDocument();
+  });
+
+  it('shows it when the review record could not be read', async () => {
+    stub({ review: { message: 'no such run' }, reviewStatus: 404, run: runWith([decision]) });
+    panel('review');
+
+    expect(await screen.findByText(decision.text)).toBeInTheDocument();
+    expect(await screen.findByText(t.outcome.reviewCouldNotRead)).toBeInTheDocument();
+  });
+
+  it('shows it beside the per-task threads, with a keyboard actor named as such', async () => {
+    const answer = { id: 'AMD-002', kind: 'answer', actor: { kind: 'keyboard' }, at: '2026-09-08T12:05:00Z', text: 'Call the v2 endpoint.', task: 'TASK-002' };
+    stub({ run: runWith([decision, answer]) });
+    panel('review');
+
+    expect(await screen.findByText('Call the v2 endpoint.')).toBeInTheDocument();
+    expect(screen.getByText(decision.text)).toBeInTheDocument();
+    expect(screen.getByText(t.outcome.amendmentKind.answer)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`${t.outcome.keyboard}.*TASK-002`))).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /TASK-004/ })).toBeInTheDocument();
+  });
+
+  it('names an escalation’s classes and an attachment’s finding count', async () => {
+    stub({
+      run: runWith([
+        { id: 'AMD-003', kind: 'escalation', actor: { kind: 'keyboard' }, at: '2026-09-08T12:10:00Z', text: 'Needs an SDD.', fromWorkflow: 'simple', toWorkflow: 'standard' },
+        { id: 'AMD-004', kind: 'attached_findings', actor: { kind: 'keyboard' }, at: '2026-09-08T12:20:00Z', planHash: 'abc', findingCount: 3 },
+      ]),
+    });
+    panel('review');
+
+    expect(await screen.findByText(new RegExp(`${t.words.simple} → ${t.words.standard}`))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(t.events.findingCount(3)))).toBeInTheDocument();
+  });
+
+  it('renders the tab as before when the run has no amendments', async () => {
+    // Absent is the shape of every run that never used one, and of every run written before
+    // they existed. The positive control for the three above: no heading, no error.
+    stub({ run: runWith(undefined) });
+    panel('review');
+
+    expect(await screen.findByRole('button', { name: /TASK-004/ })).toBeInTheDocument();
+    expect(screen.queryByText(t.outcome.amendments)).not.toBeInTheDocument();
+    expect(screen.queryByText(t.outcome.reviewCouldNotRead)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

@@ -476,6 +476,15 @@ export const api = {
       { force, expectNoChange },
       scoped(a),
     ),
+  /**
+   * What a person says back to a task that stopped with BLOCKED (P7.1, FR-020).
+   *
+   * The text is the whole body. Who answered is the paired device the server resolves, and
+   * the plan it applies to is the one the run has approved — neither is the browser's to say.
+   * The server records it and requeues the task; the next `run` carries it to the agent.
+   */
+  answer: (a: RunAddress, taskId: string, text: string) =>
+    postJson<ActionResultView>(`/runs/${a.runId}/tasks/${taskId}/answer`, { text }, scoped(a)),
   review: (a: RunAddress, fix = false) =>
     postJson<ActionJobView>(`/runs/${a.runId}/review`, { fix }, scoped(a)),
   /**

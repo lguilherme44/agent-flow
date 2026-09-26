@@ -31,7 +31,7 @@ export interface InstructionFlags {
 /**
  * What the text is called in a refusal, and what an empty one costs.
  *
- * Two commands read text this way and they are not the same text (D15). `revise` reads an
+ * Several commands read text this way and they are not the same text (D15). `revise` reads an
  * instruction about a plan; `feature` reads the description the whole run is planned
  * from — the measured one was 9 KB with backticks, quotes and paragraph breaks, and had
  * to be launched from a Node script with `spawn` because no shell would carry it. A
@@ -53,6 +53,16 @@ export const REVISION_WORDING: InstructionWording = {
 export const DESCRIPTION_WORDING: InstructionWording = {
   noun: 'description',
   empty: 'The description is empty; there is nothing to plan a feature from.',
+};
+
+/**
+ * `answer` reads what a BLOCKED task needs to know (P7.1). It is the third text read this
+ * way, and the one most likely to be long: an agent that stopped usually asked something a
+ * sentence does not settle, and the reply tends to carry a snippet or a list.
+ */
+export const ANSWER_WORDING: InstructionWording = {
+  noun: 'answer',
+  empty: 'The answer is empty; the blocked task would get nothing it did not already have.',
 };
 
 /**

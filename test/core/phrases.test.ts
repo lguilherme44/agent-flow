@@ -102,6 +102,39 @@ describe('the phrase book', () => {
     expect(ptBR.doctor.runLoginOrExport('codex login', 'OPENAI_API_KEY')).toContain(
       'OPENAI_API_KEY',
     );
+    // The button names the task, and the state a refusal names is the persisted one.
+    expect(en.attention.answerBlocked('TASK-003')).toBe('Answer TASK-003');
+    expect(ptBR.attention.answerBlocked('TASK-003')).toBe('Responder TASK-003');
+    expect(ptBR.actions.taskNotAnswerable('TASK-003', 'queued', false)).toContain('`queued`');
+    expect(ptBR.actions.taskNotAnswerable('TASK-003', 'queued', false)).toContain('TASK-003');
+    // The command the operator is told to type, untranslated in both books (FR-006).
+    for (const book of [en, ptBR]) {
+      expect(book.actions.answerBlockedThenRetry('TASK-003')).toContain('`agent-flow answer TASK-003`');
+      expect(book.actions.answerOrForce('TASK-003')).toContain('`agent-flow answer TASK-003`');
+      expect(book.actions.answerOrForce('TASK-003')).toContain('--force');
+      // The three ways past the ceiling, and the two escalation refusals (FR-015, FR-019).
+      expect(book.actions.ceremonyBudget('STANDARD', 2)).toContain('`agent-flow revise --decision`');
+      expect(book.actions.ceremonyBudget('STANDARD', 2)).toContain('`agent-flow revise --escalate`');
+      expect(book.actions.ceremonyBudget('STANDARD', 2)).toContain(
+        '`agent-flow approve --attach-findings`',
+      );
+      expect(book.actions.workflowAtCeiling('HIGH-RISK')).toContain('HIGH-RISK');
+      expect(book.actions.decideOrApproveAtCeiling).toContain('`agent-flow revise --decision`');
+      expect(book.actions.implementationStarted('TASK-001', 1)).toContain('TASK-001');
+      expect(book.actions.revisePlainInstead).toContain('`agent-flow revise`');
+    }
+  });
+
+  it('keeps the old sentence when no blocked task can be answered', () => {
+    // `undefined` is what `refuseUnrunnable` passes when every block is a dependency, and
+    // the rendering suite never passes it, so this branch is held here. The text is the one
+    // `master` shipped as a plain string.
+    expect(en.actions.answerBlockedThenRetry(undefined)).toBe(
+      'Answer what the blocked task reported, then retry it.',
+    );
+    expect(ptBR.actions.answerBlockedThenRetry(undefined)).toBe(
+      'Responda o que a tarefa bloqueada apontou, e então recoloque na fila.',
+    );
   });
 
   it('agrees with the count it is given', () => {

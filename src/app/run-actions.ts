@@ -10,6 +10,7 @@ import {
   type TaskState,
   type WorkflowClass,
   type RunActor,
+  type Amendment,
 } from '../contracts/index.js';
 import { PlanningRefusal, type PipelineOptions } from './planning-pipeline.js';
 import { StageFailure } from './stage-runner.js';
@@ -21,6 +22,7 @@ import {
   approveRun as recordApproval,
   checkApproval,
   planHash,
+  type ApprovalCheck,
   type ApprovalRefusal,
 } from './approval.js';
 import {
@@ -93,7 +95,8 @@ import {
   type DoneCheck,
   type MechanicalVerification,
 } from '../core/definition-of-done.js';
-import { getCeremonyBudget } from '../core/adaptive-workflow.js';
+import { getCeremonyBudget, nextWorkflowClass } from '../core/adaptive-workflow.js';
+import { renderAmendmentsForReview, routeFindings } from '../core/amendments.js';
 import { planningResume } from '../core/resume.js';
 import { renderReplanInput, sameReplanRequest, type ReplanInput } from '../core/replan-input.js';
 // The reason vocabulary is shared with the projection `status` reads it back through, so
@@ -151,6 +154,12 @@ export type ActionErrorCode =
   // is a stack trace where a person needed a sentence.
   | 'task_completed'
   | 'task_in_flight'
+  /**
+   * `answer` on a task with no question outstanding (P7.1): anything but the agent's own
+   * BLOCKED. Its own code rather than `task_blocked`, which means the opposite — "this task
+   * is waiting for an answer" — and a client that retried on one would loop on the other.
+   */
+  | 'task_not_answerable'
   | 'unmet_dependencies'
   | 'run_busy'
   /**
@@ -175,6 +184,24 @@ export type ActionErrorCode =
   | 'not_paused'
   | 'invalid_input'
   | 'ceremony_budget_exceeded'
+  /**
+   * `revise --escalate` with nowhere to go (FR-015): the run is already `high-risk`. Not
+   * `ceremony_budget_exceeded`, which a client reads as "a decision or an escalation gets
+   * past this" — and an escalation is exactly what cannot.
+   */
+  | 'workflow_at_ceiling'
+  /**
+   * `revise --escalate` after a task has completed (FR-015). A higher class re-runs stages
+   * whose output the completed work was built against, so changing class under it would
+   * leave integrated code answering to a plan nobody approved it against.
+   */
+  | 'implementation_started'
+  /**
+   * `approve --attach-findings` over anything but a failed review of this plan (FR-016).
+   * Not the refusal it met: `review_missing` would tell a client `--force` gets past it, and
+   * attaching is exactly what cannot — there are no findings of this plan to attach.
+   */
+  | 'findings_not_attachable'
   /**
    * Planning could not start, or stopped, for a reason the CLI already had a sentence for.
    *
@@ -606,6 +633,17 @@ export interface ApproveResult {
   readonly planHash: string;
   readonly taskCount: number;
   readonly forced: boolean;
+  /** `--attach-findings` only: how many findings were attached (FR-021). */
+  readonly attachedFindings?: number;
+  /** `--attach-findings` only: how many distinct tasks received at least one of them. */
+  readonly tasksReached?: number;
+}
+
+/** How a person asked to approve. Both absent is the plain gate. */
+export interface ApproveOptions {
+  readonly force?: boolean;
+  /** Approve over a failed review with its findings handed to the tasks (FR-016). */
+  readonly attachFindings?: boolean;
 }
 
 /**
@@ -631,16 +669,91 @@ export interface ApproveResult {
  *
  * `describeApprovalGate` above takes no lock. It is a read, and refusing to *show*
  * somebody the gate because a run is busy would help nobody.
+ *
+ * **`--attach-findings` is refused before the lock, and asked again under it** — `answerTask`'s
+ * shape (C-19). Both of its refusals are answerable from what is on disk, and FR-016 says a
+ * refused attachment writes nothing; asking under the lease would write an acquire/release
+ * pair about an approval that never happened. The second asking, in `grantApproval`, is the
+ * one that counts.
  */
 export async function approve(
   deps: RunActionDeps,
   runId: string,
-  options: { force?: boolean } = {},
+  options: ApproveOptions = {},
 ): Promise<ActionOutcome<ApproveResult>> {
+  const say = deps.say ?? en;
   const store = storeFor(deps);
+
+  if (options.attachFindings === true) {
+    const conflicting = refuseAttachWithForce(options, say);
+    if (conflicting !== undefined) return failed(conflicting);
+
+    const state = await loadRun(store, runId);
+    if (state === null) return failed(noSuchRun(runId, say));
+    const check = checkApproval(
+      state,
+      await loadPlanArtifact(store, runId),
+      await loadReview(store, runId),
+    );
+    const unattachable = refuseAttachment(check, say);
+    if (unattachable !== undefined) return failed(unattachable, check.warnings);
+  }
+
   return withExecutionLock(deps, store, runId, 'approve', () =>
     grantApproval(deps, runId, options),
   );
+}
+
+/**
+ * `--attach-findings` with `--force` (FR-016). Two approvals over two different things: one
+ * hands a failed review's findings to the tasks, the other overrides a refusal and hands
+ * nothing. Taking both would leave the record unable to say which of them happened.
+ */
+function refuseAttachWithForce(options: ApproveOptions, say: Phrases): ActionError | undefined {
+  if (options.attachFindings !== true || options.force !== true) return undefined;
+  return {
+    code: 'invalid_input',
+    message: say.actions.attachFindingsOrForce,
+    action: say.actions.chooseAttachOrForce,
+  };
+}
+
+/**
+ * Why this gate has no findings to attach, or nothing when it has (FR-016).
+ *
+ * Only `review_failed` qualifies, because it is the one refusal whose findings are about the
+ * plan on disk: `checkApproval` reaches it only once the review's hash equals this plan's. A
+ * missing review has no findings; a stale or unverifiable one has findings about some other
+ * plan, and routing them by task id would hand a task objections to a document it never saw.
+ * A passing check has nothing to attach. A `plan_rejected` run whose review also failed
+ * qualifies — `review_failed` is checked first, the order `--force` already relies on.
+ *
+ * The message names the state the gate actually found, in that refusal's own sentence, so a
+ * person told no here learns what is true about the run rather than only what is not.
+ */
+function refuseAttachment(check: ApprovalCheck, say: Phrases): ActionError | undefined {
+  if (check.refusal?.kind === 'review_failed') return undefined;
+
+  if (check.refusal === undefined) {
+    return {
+      code: 'findings_not_attachable',
+      message: say.actions.findingsNotAttachable(say.actions.reviewPassedNothingToAttach),
+      action: say.actions.approveWithoutAttaching,
+      detail: { state: 'passed' },
+    };
+  }
+
+  const explained = explainRefusal(
+    check.refusal,
+    FORCIBLE_REFUSALS.has(check.refusal.kind),
+    say,
+  );
+  return {
+    code: 'findings_not_attachable',
+    message: say.actions.findingsNotAttachable(explained.message),
+    ...(explained.action === undefined ? {} : { action: explained.action }),
+    detail: { state: check.refusal.kind },
+  };
 }
 
 /**
@@ -705,12 +818,26 @@ async function planningBaseGate(
   };
 }
 
+/**
+ * The degradation reason of an approval that attached the findings (FR-016). English, like
+ * the reason every other degradation records: it is written into the run's record, which is
+ * read back by whoever opens it, and not rendered through the caller's phrase book.
+ */
+const ATTACHED_FINDINGS_REASON =
+  'the plan was approved with --attach-findings over a failed review: its findings were ' +
+  'attached to the tasks rather than resolved';
+
 async function grantApproval(
   deps: RunActionDeps,
   runId: string,
-  options: { force?: boolean },
+  options: ApproveOptions,
 ): Promise<ActionOutcome<ApproveResult>> {
   const say = deps.say ?? en;
+  // Asked again under the lease, though `approve` already refused it: this is the function
+  // the lock protects, and it must not depend on its caller for a refusal it can make itself.
+  const conflicting = refuseAttachWithForce(options, say);
+  if (conflicting !== undefined) return failed(conflicting);
+
   const context = await buildExecutionContext(deps);
   const state = await loadRun(context.store, runId);
   if (state === null) return failed(noSuchRun(runId, say));
@@ -725,8 +852,12 @@ async function grantApproval(
   const plan = await loadPlanArtifact(context.store, runId);
   const review = await loadReview(context.store, runId);
   const check = checkApproval(state, plan, review);
+  const attaching = options.attachFindings === true;
 
-  if (!check.allowed) {
+  if (attaching) {
+    const unattachable = refuseAttachment(check, say);
+    if (unattachable !== undefined) return failed(unattachable, check.warnings);
+  } else if (!check.allowed) {
     const refusal = check.refusal;
     const forcible = refusal !== undefined && FORCIBLE_REFUSALS.has(refusal.kind);
 
@@ -743,8 +874,54 @@ async function grantApproval(
     });
   }
 
-  const forced = !check.allowed && options.force === true;
-  await recordApproval(context.store, runId, plan, { forced });
+  // An attachment is a forced approval: the review failed and the gate did not hold. What it
+  // adds is where the findings go, and `run_approved` keeps its four keys either way — the
+  // amendment below is the record of the attachment, not a fifth field on the event.
+  const forced = attaching || (!check.allowed && options.force === true);
+  const hash = planHash(plan);
+  await recordApproval(context.store, runId, plan, {
+    forced,
+    ...(attaching ? { degradationReason: ATTACHED_FINDINGS_REASON } : {}),
+  });
+
+  // `review_failed` is the refusal whose review is about this plan, so only its override is a
+  // decision about findings worth recording (FR-010). Forcing past a missing or stale review
+  // overrules no finding, and appends nothing, as it did before amendments existed.
+  const failedReview = check.refusal?.kind === 'review_failed' ? check.refusal.review : undefined;
+  let attachment: { readonly findings: number; readonly tasks: number } | undefined;
+
+  if (attaching && failedReview !== undefined) {
+    // Every finding of the review on file, by its index in that review, and none subtracted
+    // for an adjudication (FR-017): `adjudications[].findingIndex` counts the *previous*
+    // review's findings, so subtracting by it would drop findings of this one at random.
+    const routes = routeFindings(
+      failedReview.findings,
+      plan.tasks.map((task) => task.id),
+    );
+    // `routeFindings` returns one route per finding, by index, so the lookup always lands;
+    // `flatMap` is how the index access is narrowed without inventing a finding for a miss.
+    const findings = routes.flatMap((route) => {
+      const finding = failedReview.findings[route.index];
+      return finding === undefined ? [] : [{ index: route.index, finding, tasks: [...route.tasks] }];
+    });
+    await appendAmendment(deps, context, runId, {
+      kind: 'attached_findings',
+      planHash: hash,
+      findingCount: failedReview.findings.length,
+      findings,
+    });
+    attachment = {
+      findings: findings.length,
+      tasks: new Set(routes.flatMap((route) => route.tasks)).size,
+    };
+  } else if (forced && failedReview !== undefined) {
+    await appendAmendment(deps, context, runId, {
+      kind: 'forced_approval',
+      planHash: hash,
+      findingCount: failedReview.findings.length,
+    });
+  }
+
   await recordActor(context.store, runId, 'approve', deps.actor);
 
   // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
@@ -753,7 +930,15 @@ async function grantApproval(
   await clearAutonomy(context.store, runId);
 
   return done(
-    { runId, planHash: planHash(plan), taskCount: plan.tasks.length, forced },
+    {
+      runId,
+      planHash: hash,
+      taskCount: plan.tasks.length,
+      forced,
+      ...(attachment === undefined
+        ? {}
+        : { attachedFindings: attachment.findings, tasksReached: attachment.tasks }),
+    },
     check.warnings,
   );
 }
@@ -916,7 +1101,9 @@ async function requeue(
     return failed({
       code: 'task_blocked',
       message: say.actions.taskAnsweredBlocked(taskId),
-      action: say.actions.fixSddOrForce,
+      // `answer` is named first because it is the path that gives the next attempt what the
+      // last one asked for; `--force` alone re-runs the same prompt that stopped (FR-006).
+      action: say.actions.answerOrForce(taskId),
       forcible: true,
     });
   }
@@ -952,6 +1139,41 @@ async function requeue(
   // the plan to add a field would invalidate a gate somebody already passed.
   const declaredAt = options.expectNoChange === true ? context.clock.now() : undefined;
 
+  await writeRequeue(deps, context, runId, taskId, {
+    forced: options.force === true,
+    declaredAt,
+    action: 'retryTask',
+  });
+
+  return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
+}
+
+/**
+ * The write half of a requeue, shared by `retry` and `answer` (P7.1).
+ *
+ * One function rather than two copies, because an answer *is* a requeue that carries the
+ * operator's text (FR-003): if the two wrote their own bookkeeping, the first change to one
+ * of them — a new counter reset, a new event key — would make an answered task come back
+ * into the queue in a different shape from a retried one, and nothing would say so.
+ *
+ * `answered` is written only when true, so a retry's `task_requeued` keeps exactly the keys
+ * it had before answering existed.
+ */
+async function writeRequeue(
+  deps: RunActionDeps,
+  context: ExecutionContext,
+  runId: string,
+  taskId: string,
+  options: {
+    readonly forced: boolean;
+    readonly declaredAt?: string | undefined;
+    readonly answered?: true;
+    /** The `operator_action` this requeue is recorded under. */
+    readonly action: string;
+  },
+): Promise<void> {
+  const { declaredAt } = options;
+
   await context.store.updateRun(runId, (current) => ({
     ...current,
     tasks: current.tasks.map((task) =>
@@ -974,8 +1196,9 @@ async function requeue(
   }));
   await context.store.appendEvent(runId, 'task_requeued', {
     task: taskId,
-    forced: options.force === true,
+    forced: options.forced,
     ...(declaredAt === undefined ? {} : { expectsNoChange: true }),
+    ...(options.answered === true ? { answered: true } : {}),
   });
 
   // Its own event, because it is its own fact. A requeue and a declaration of intent are
@@ -992,9 +1215,181 @@ async function requeue(
   // stay spent; the count of calls made *with no intervening human action* is by definition
   // broken by this one.
   await clearAutonomy(context.store, runId);
-  await recordActor(context.store, runId, 'retryTask', deps.actor);
+  await recordActor(context.store, runId, options.action, deps.actor);
+}
 
-  return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
+// ---------------------------------------------------------------------------
+// amendments
+// ---------------------------------------------------------------------------
+
+/** What a use case says about an amendment. The id, the time and the actor are not its to say. */
+type AmendmentDraft = Omit<Amendment, 'id' | 'at' | 'actor'>;
+
+/**
+ * Appends one operator decision to the run's record (FR-008).
+ *
+ * The id is computed *inside* the `updateRun` mutator, from the list that mutator is
+ * handed, because `updateRun` is the one place writes to a state file are serialised: an
+ * id computed from a snapshot read earlier would give two concurrent appends the same
+ * `AMD-NNN`. The list is spread and extended, never edited — an entry once written is
+ * evidence, and a record whose past can change is not one.
+ *
+ * The actor is `deps.actor`, which the adapter resolved (SEC-003), rather than a field of
+ * the draft: a draft is built from what a caller sent, and no request may say who it is.
+ */
+async function appendAmendment(
+  deps: RunActionDeps,
+  context: ExecutionContext,
+  runId: string,
+  draft: AmendmentDraft,
+): Promise<Amendment> {
+  const at = context.clock.now();
+
+  const next = await context.store.updateRun(runId, (current) => {
+    const existing = current.amendments ?? [];
+    const id = `AMD-${String(existing.length + 1).padStart(3, '0')}`;
+    return { ...current, amendments: [...existing, { ...draft, id, actor: deps.actor, at }] };
+  });
+
+  // Read back from what was written rather than from the object built above, so the event
+  // names the entry as the schema parsed it.
+  const amendment = next.amendments?.[next.amendments.length - 1];
+  if (amendment === undefined) {
+    throw new Error(`Run ${runId}: the amendment was not recorded.`);
+  }
+  await context.store.appendEvent(runId, 'amendment_recorded', {
+    id: amendment.id,
+    kind: amendment.kind,
+    ...(amendment.task === undefined ? {} : { task: amendment.task }),
+    actor: amendment.actor,
+  });
+  return amendment;
+}
+
+// ---------------------------------------------------------------------------
+// answer
+// ---------------------------------------------------------------------------
+
+export interface AnswerResult {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly attempts: number;
+  readonly amendmentId: string;
+}
+
+/**
+ * Answers what an agent-blocked task asked, and puts it back in the queue (P7.1).
+ *
+ * The product told the operator to "answer what the blocked task reported, then retry it"
+ * and had no way to answer, so the only road left was `retry --force` — which gave the next
+ * attempt the identical prompt. Answering is the requeue with the text recorded, and it
+ * needs no force: the force gate exists so nobody re-runs a BLOCKED task *without* an
+ * answer, and this is the path that supplies one.
+ *
+ * **Refused before the lock, and asked again under it** (C-19). Every refusal here is
+ * answerable from persisted state, so asking it under the lease would write an
+ * acquire/release pair about work that never happened — and a refusal must leave the event
+ * log as it found it. The question is repeated inside, because the state may have moved
+ * between the two reads, and the answer that counts is the one taken while holding the
+ * lease.
+ *
+ * The lock operation is `'retry'` (NFR-007): an older build must still be able to read a
+ * lock file this one writes, and `ExecutionLockSchema` knows no other value.
+ */
+export async function answerTask(
+  deps: RunActionDeps,
+  runId: string,
+  taskId: string,
+  text: string,
+): Promise<ActionOutcome<AnswerResult>> {
+  const say = deps.say ?? en;
+  const answer = text.trim();
+  if (answer.length === 0) {
+    return failed({
+      code: 'invalid_input',
+      message: say.actions.answerNeedsText,
+      action: say.actions.sayWhatTaskNeeds,
+    });
+  }
+
+  const store = storeFor(deps);
+  const unanswerable = refuseUnanswerable(await loadRun(store, runId), runId, taskId, say);
+  if (unanswerable !== undefined) return failed(unanswerable);
+
+  return withExecutionLock(deps, store, runId, 'retry', () =>
+    recordAnswer(deps, runId, taskId, answer),
+  );
+}
+
+async function recordAnswer(
+  deps: RunActionDeps,
+  runId: string,
+  taskId: string,
+  answer: string,
+): Promise<ActionOutcome<AnswerResult>> {
+  const say = deps.say ?? en;
+  const context = await buildExecutionContext(deps);
+  const state = await loadRun(context.store, runId);
+
+  const unanswerable = refuseUnanswerable(state, runId, taskId, say);
+  if (unanswerable !== undefined) return failed(unanswerable);
+  // `refuseUnanswerable` is silent only for a loaded run holding this task.
+  const entry = state?.tasks.find((task) => task.id === taskId);
+  if (state === null || entry === undefined) return failed(noSuchRun(runId, say));
+
+  // Order is the audit's: the decision, then what it caused, then who made it.
+  const amendment = await appendAmendment(deps, context, runId, {
+    kind: 'answer',
+    text: answer,
+    task: taskId,
+    // Bound to the plan the answer was given about, so a replan retires it from the prompts
+    // (FR-004). Omitted rather than written as `undefined` on a run with no approved hash.
+    ...(state.approvedPlanHash === undefined ? {} : { planHash: state.approvedPlanHash }),
+  });
+  await writeRequeue(deps, context, runId, taskId, {
+    forced: false,
+    answered: true,
+    action: 'answer',
+  });
+
+  return done({ runId, taskId, attempts: entry.attempts, amendmentId: amendment.id });
+}
+
+/**
+ * Why this task cannot be answered, or nothing when it can (FR-002).
+ *
+ * Only the agent's own BLOCKED is a question. A dependency block never ran, so there is
+ * nothing to answer and the scheduler releases it by itself; every other state has no
+ * question outstanding. A `blocked` task with no `blockReason` is state written before the
+ * reason existed, and it is read as agent-blocked — the conservative default the schema and
+ * the retry gate already use, and here the one that lets a person unstick legacy state
+ * without `--force`.
+ */
+function refuseUnanswerable(
+  state: RunState | null,
+  runId: string,
+  taskId: string,
+  say: Phrases,
+): ActionError | undefined {
+  if (state === null) return noSuchRun(runId, say);
+
+  const entry = state.tasks.find((task) => task.id === taskId);
+  if (entry === undefined) {
+    return {
+      code: 'no_such_task',
+      message: say.actions.taskNeverRan(taskId, runId),
+      action: say.actions.onlyBlockedCanBeAnswered,
+    };
+  }
+
+  const heldByDependency = entry.state === 'blocked' && entry.blockReason === 'dependency';
+  if (entry.state === 'blocked' && !heldByDependency) return undefined;
+
+  return {
+    code: 'task_not_answerable',
+    message: say.actions.taskNotAnswerable(taskId, entry.state, heldByDependency),
+    action: say.actions.onlyBlockedCanBeAnswered,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1173,6 +1568,11 @@ async function refuseUnrunnable(
   // AR §3.6 calls a contract violation.
   const waiting = state.tasks.filter((task) => task.state === 'review_required');
   const blocked = state.tasks.filter((task) => task.state === 'blocked');
+  // The task `answer` can take, which is not always the first blocked one: a dependency
+  // block has no question to answer, and naming it would send the operator to a refusal.
+  // A missing `blockReason` is legacy state and reads as agent-blocked, as it does for
+  // `answer` itself.
+  const answerable = blocked.find((task) => task.blockReason !== 'dependency');
   // **The third state, and it was falling through to "start a new run"** (D13-adjacent).
   //
   // Measured end to end: a task whose validation failed sits at `failed`, which is neither
@@ -1213,7 +1613,7 @@ async function refuseUnrunnable(
       waiting.length > 0
         ? say.actions.reviewEvidenceThenRetry(waiting[0]?.id ?? '')
         : blocked.length > 0
-          ? say.actions.answerBlockedThenRetry
+          ? say.actions.answerBlockedThenRetry(answerable?.id)
           : failed.length > 0
             ? say.actions.reviewEvidenceThenRetry(failed[0]?.id ?? '')
             : say.actions.startNewOrCheckStatus,
@@ -1434,7 +1834,21 @@ export interface ReviseResult {
   readonly taskCount: number;
   readonly reviewVerdict?: 'PASS' | 'FAIL';
   readonly approvalCleared: boolean;
+  /**
+   * The rest is filled only by `--decision` and `--escalate`, for the CLI to say what the
+   * budget did (FR-021). A plain revision leaves them absent, so its result is today's.
+   */
+  readonly mode?: 'decision' | 'escalation';
+  /** The count after the revision — unchanged, which is the point of both modes. */
+  readonly revisionCount?: number;
+  /** The ceiling of the class the run is now in. */
+  readonly maxAllowed?: number;
+  /** Escalation only: the class before, and the class the classifier actually settled on. */
+  readonly fromWorkflow?: WorkflowClass;
+  readonly toWorkflow?: WorkflowClass;
 }
+
+export type ReviseMode = 'revision' | 'decision' | 'escalation';
 
 /**
  * Re-plans with an extra instruction (§91) — the other long one.
@@ -1729,6 +2143,18 @@ export async function revise(
    * reviews later.
    */
   from: RunStage = 'planning',
+  /**
+   * What this revision is, for the budget (P7.5). A `revision` says the plan is wrong and
+   * spends a cycle. A `decision` settles a question the plan left open — it replans with
+   * the decision as the instruction, so the decision reaches the plan and the executors, but
+   * it spends nothing and works at the ceiling and on `trivial`. An `escalation` replans one
+   * class up, under that class's stages and budget, keeping the count it has already spent.
+   *
+   * **Measured.** The first attempt of this very feature exhausted its budget on operator
+   * decisions — each one a `revise` costing the same cycle as "the plan is bad" — and was left
+   * with `approve --force`, whose findings reach no executor.
+   */
+  mode: ReviseMode = 'revision',
 ): Promise<ActionOutcome<ReviseResult>> {
   const say = deps.say ?? en;
   const trimmed = instruction.trim();
@@ -1740,7 +2166,51 @@ export async function revise(
   }
 
   const store = storeFor(deps);
-  return withExecutionLock(deps, store, runId, 'revise', () => replan(deps, runId, trimmed, from));
+
+  if (mode === 'escalation') {
+    // Refused before the lock, and asked again under it — `answerTask`'s shape (C-19). Both
+    // refusals are answerable from persisted state, and asking them under the lease would
+    // write an acquire/release pair about an escalation that never happened (FR-015: nothing
+    // is written). The second asking is the one that counts.
+    const state = await loadRun(store, runId);
+    if (state === null) return failed(noSuchRun(runId, say));
+    const refused = refuseEscalation(state, say);
+    if (refused !== undefined) return failed(refused);
+  }
+
+  return withExecutionLock(deps, store, runId, 'revise', () =>
+    replan(deps, runId, trimmed, from, mode),
+  );
+}
+
+/**
+ * Why this run cannot move up a class, or nothing when it can (FR-015).
+ *
+ * The top class has nowhere to go. A run with completed work cannot change class under it:
+ * the stages a higher class adds would rewrite the specification that work was built and
+ * integrated against, and the plan would stop describing the code. Plain `revise` is named
+ * instead, because it keeps the class and is what such a run can still do.
+ */
+function refuseEscalation(state: RunState, say: Phrases): ActionError | undefined {
+  const workflow = state.workflow ?? 'standard';
+  if (nextWorkflowClass(workflow) === undefined) {
+    return {
+      code: 'workflow_at_ceiling',
+      message: say.actions.workflowAtCeiling(workflow.toUpperCase()),
+      action: say.actions.decideOrApproveAtCeiling,
+    };
+  }
+
+  const completed = state.tasks.filter((task) => task.state === 'completed').map((task) => task.id);
+  if (completed.length > 0) {
+    return {
+      code: 'implementation_started',
+      message: say.actions.implementationStarted(completed.join(', '), completed.length),
+      action: say.actions.revisePlainInstead,
+    };
+  }
+
+  return undefined;
 }
 
 async function replan(
@@ -1748,6 +2218,7 @@ async function replan(
   runId: string,
   trimmed: string,
   from: RunStage = 'planning',
+  mode: ReviseMode = 'revision',
 ): Promise<ActionOutcome<ReviseResult>> {
   const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
@@ -1757,24 +2228,47 @@ async function replan(
   const notCurrent = await requireCurrent(context, runId, say);
   if (notCurrent !== undefined) return failed(notCurrent);
 
+  // The effective class: the ceiling check reads it, and an escalation records it as where it
+  // came from. A run classified before `workflow` was persisted planned as `standard`.
   const workflow = state.workflow ?? 'standard';
   const currentRevisions = state.revisionCount ?? 0;
   const budget = getCeremonyBudget(workflow);
 
-  if (workflow === 'trivial') {
-    return failed({
-      code: 'ceremony_budget_exceeded',
-      message: say.actions.trivialNoRevision,
-      action: say.actions.approveAsIsOrStandard,
-    });
+  let target = workflow;
+  if (mode === 'escalation') {
+    const refused = refuseEscalation(state, say);
+    if (refused !== undefined) return failed(refused);
+    // `refuseEscalation` is silent only when there is a class above this one.
+    target = nextWorkflowClass(workflow) ?? workflow;
   }
 
-  if (currentRevisions >= budget.maxRevisionCycles) {
-    return failed({
-      code: 'ceremony_budget_exceeded',
-      message: say.actions.ceremonyBudget(workflow.toUpperCase(), budget.maxRevisionCycles),
-      action: say.actions.reviewResidualFindings,
-    });
+  // The two budget refusals belong to the revision alone. A decision and an escalation skip
+  // both, which is what they are for — the baseline in `revise-budget.test.ts` holds the
+  // plain path to them.
+  if (mode === 'revision') {
+    if (workflow === 'trivial') {
+      return failed({
+        code: 'ceremony_budget_exceeded',
+        message: say.actions.trivialNoRevision,
+        action: say.actions.approveAsIsOrStandard,
+      });
+    }
+
+    if (currentRevisions >= budget.maxRevisionCycles) {
+      return failed({
+        code: 'ceremony_budget_exceeded',
+        message: say.actions.ceremonyBudget(workflow.toUpperCase(), budget.maxRevisionCycles),
+        action: say.actions.reviewResidualFindings,
+      });
+    }
+  }
+
+  // Recorded once the refusals are behind it and before anything is replanned, so a
+  // revision whose pipeline then fails is still on the record as asked for (FR-009). An
+  // escalation's amendment waits for the pipeline instead: it names the class reached, and
+  // only the classifier knows that.
+  if (mode !== 'escalation') {
+    await appendAmendment(deps, context, runId, { kind: mode, text: trimmed });
   }
 
   let approvalCleared = false;
@@ -1800,13 +2294,21 @@ async function replan(
     instruction: trimmed,
   });
 
+  // A plain revision's events keep today's keys exactly, with no `kind` (NFR-001). The new
+  // modes say what they are, and name the count they did *not* spend: `attemptedRevision` is
+  // the current count rather than `+1`, because nothing is being attempted against the budget.
+  // `maxAllowed` is the ceiling of the class the replan runs under.
+  const counted = mode === 'revision';
+  const maxAllowed = getCeremonyBudget(target).maxRevisionCycles;
   await context.store.appendEvent(runId, 'revision_requested', {
     instruction: trimmed,
     // On the record, because it decides which artefacts this revision can change. A
     // reader asking "why does the plan still contradict the SDD" gets the answer here.
     from,
-    attemptedRevision: currentRevisions + 1,
-    maxAllowed: budget.maxRevisionCycles,
+    ...(counted ? {} : { kind: mode }),
+    attemptedRevision: counted ? currentRevisions + 1 : currentRevisions,
+    maxAllowed,
+    ...(mode === 'escalation' ? { fromWorkflow: workflow, toWorkflow: target } : {}),
     // D14. What the planner was actually given, on the record — so `status` and the
     // Deck can say the findings were forwarded instead of leaving a reader to trust it.
     findingsForwarded: replan.findingsForwarded,
@@ -1817,23 +2319,52 @@ async function replan(
 
   const pipeline = buildPlanningPipeline(context);
 
-  const result = await pipeline.run(runId, replan.text, { from, workflow });
+  const result = await pipeline.run(runId, replan.text, { from, workflow: target });
 
-  const nextRevisionCount = currentRevisions + 1;
-  await context.store.updateRun(runId, (entry) => ({
-    ...entry,
-    revisionCount: nextRevisionCount,
-  }));
+  if (counted) {
+    const nextRevisionCount = currentRevisions + 1;
+    await context.store.updateRun(runId, (entry) => ({
+      ...entry,
+      revisionCount: nextRevisionCount,
+    }));
+    await context.store.appendEvent(runId, 'revision_completed', {
+      instruction: trimmed,
+      revisionCount: nextRevisionCount,
+    });
+
+    return done({
+      runId,
+      taskCount: result.plan.tasks.length,
+      ...(result.review === undefined ? {} : { reviewVerdict: result.review.verdict }),
+      approvalCleared,
+    });
+  }
+
+  // The class asked for is not necessarily the class reached: a high-risk signal refuses any
+  // lower override (`adaptive-workflow.ts`), so an escalation from `simple` can land on
+  // `high-risk`. What the classifier wrote is what is recorded.
+  const reached = (await loadRun(context.store, runId))?.workflow ?? target;
+  const escalated = mode === 'escalation' ? { fromWorkflow: workflow, toWorkflow: reached } : {};
+
   await context.store.appendEvent(runId, 'revision_completed', {
     instruction: trimmed,
-    revisionCount: nextRevisionCount,
+    revisionCount: currentRevisions,
+    kind: mode,
+    ...escalated,
   });
+  if (mode === 'escalation') {
+    await appendAmendment(deps, context, runId, { kind: 'escalation', text: trimmed, ...escalated });
+  }
 
   return done({
     runId,
     taskCount: result.plan.tasks.length,
     ...(result.review === undefined ? {} : { reviewVerdict: result.review.verdict }),
     approvalCleared,
+    mode,
+    revisionCount: currentRevisions,
+    maxAllowed: getCeremonyBudget(reached).maxRevisionCycles,
+    ...escalated,
   });
 }
 
@@ -2395,12 +2926,24 @@ async function judgeRun(
   // ---- Final review: the implementation against the approved SDD.
   const authors = authorsOf(await context.store.readEvents(runId));
 
+  // The operator's decisions join the specification the final reviewer is told is the
+  // contract (FR-011), because the code was built after them: a reviewer holding only the
+  // SDD would judge an answered task against the question rather than the answer. Appended
+  // only when there is one, so a run with none sends the prompt `master` sent (NFR-002) —
+  // and through `sdd` rather than a new placeholder, which would render an empty line into
+  // every final review of every run.
+  const amendments = state.amendments ?? [];
+  const reviewedSdd =
+    amendments.length === 0
+      ? effectiveSdd
+      : `${effectiveSdd}\n\n${renderAmendmentsForReview(amendments)}`;
+
   options.onStage?.('final-review');
   const finalResult = await context.stageRunner.run(
     FINAL_REVIEW_STAGE,
     runId,
     {
-      sdd: effectiveSdd,
+      sdd: reviewedSdd,
       plan: JSON.stringify(plan, null, 2),
       diffStat:
         tree.value.integration === undefined

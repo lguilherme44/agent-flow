@@ -271,6 +271,7 @@ export const en: Phrases = {
     invalidApproveRequest: 'invalid approve request',
     invalidRejectRequest: 'invalid reject request',
     invalidRetryRequest: 'invalid retry request',
+    invalidAnswerRequest: 'an answer needs text, at most 4000 characters',
     invalidStartRequest: 'invalid start request',
     revisionNeedsInstruction: 'a revision needs an instruction saying what should change',
     invalidReviewRequest: 'invalid review request',
@@ -427,6 +428,17 @@ export const en: Phrases = {
       `${taskId} is BLOCKED: its agent answered BLOCKED, so it stopped because of ` +
       'something the SDD does not answer.',
     fixSddOrForce: 'Fix the SDD or the plan — or force the retry deliberately.',
+    answerOrForce: (taskId) =>
+      `Answer what it asked with \`agent-flow answer ${taskId}\`, which queues it again — ` +
+      'or force the retry deliberately with `--force`.',
+    taskNotAnswerable: (taskId, state, heldByDependency) =>
+      `${taskId} is \`${state}\`${heldByDependency ? ', held back by a task it depends on' : ''}, ` +
+      'so there is no question from its agent to answer.',
+    onlyBlockedCanBeAnswered:
+      'Only a task whose agent stopped with BLOCKED can be answered. A task held back by a ' +
+      'dependency is released when that dependency completes.',
+    answerNeedsText: 'An answer needs some text.',
+    sayWhatTaskNeeds: 'Write what the blocked task needs to know to continue.',
 
     runPausedAt: (runId, at) => `${runId} was paused at ${at}.`,
     resumeIt: 'Resume it with `agent-flow resume`.',
@@ -448,7 +460,10 @@ export const en: Phrases = {
     reviewEvidenceThenRetry: (taskId) =>
       `Review the task's evidence, then \`agent-flow retry ${taskId}\` — or ` +
       `\`agent-flow revalidate ${taskId}\` if you already fixed its worktree by hand.`,
-    answerBlockedThenRetry: 'Answer what the blocked task reported, then retry it.',
+    answerBlockedThenRetry: (taskId) =>
+      taskId === undefined
+        ? 'Answer what the blocked task reported, then retry it.'
+        : `Answer what ${taskId} reported with \`agent-flow answer ${taskId}\`, which queues it again.`,
     startNewOrCheckStatus:
       'Start a new run, or check `agent-flow status` for what this one is waiting on.',
     planRejected: (runId) => `The plan for ${runId} was rejected, so it will not be executed.`,
@@ -488,9 +503,22 @@ export const en: Phrases = {
     ceremonyBudget: (workflow, cycles) =>
       `STOP_AND_ASK_HUMAN: ${workflow} workflow reached its ceremony budget limit ` +
       `(${String(cycles)} revision cycle${cycles === 1 ? '' : 's'}). ` +
-      'Unresolved findings require human approval or workflow elevation.',
+      'Unresolved findings require human approval or workflow elevation: record a decision with ' +
+      '`agent-flow revise --decision`, move up a class with `agent-flow revise --escalate`, or ' +
+      'approve with the findings handed to the tasks with `agent-flow approve --attach-findings`.',
     reviewResidualFindings:
       'Review residual findings in Approval dialog and approve over them, or start a new run with a higher workflow class.',
+    workflowAtCeiling: (workflow) =>
+      `${workflow} is the highest workflow class, so there is no class to escalate to.`,
+    decideOrApproveAtCeiling:
+      'Record a decision with `agent-flow revise --decision`, or approve with the findings handed ' +
+      'to the tasks with `agent-flow approve --attach-findings`.',
+    implementationStarted: (tasks, count) =>
+      `Implementation has started (${tasks} ${count === 1 ? 'has' : 'have'} completed), so the ` +
+      'run can no longer change its ' +
+      'workflow class.',
+    revisePlainInstead:
+      'Revise the plan with `agent-flow revise`, which keeps the current class and spends a revision cycle.',
 
     featureNeedsDescription: 'A feature needs a description.',
     sayWhatFeatureDoes:
@@ -543,6 +571,15 @@ export const en: Phrases = {
       'Revise the plan and approve the result — or approve over the rejection ' +
       'deliberately, which is recorded on the run.',
     approvalNotPossible: 'Approval is not possible in the current state.',
+    findingsNotAttachable: (state) =>
+      '`--attach-findings` hands the findings of a failed plan review to the tasks, and there ' +
+      `is no failed review of this plan to hand over. ${state}`,
+    reviewPassedNothingToAttach: 'The plan review on file passed this plan.',
+    approveWithoutAttaching: 'Approve with `agent-flow approve`, which attaches nothing.',
+    attachFindingsOrForce:
+      '`--attach-findings` and `--force` are two different approvals: one hands a failed ' +
+      "review's findings to the tasks, the other overrides the refusal without them.",
+    chooseAttachOrForce: 'Pass one of them, not both.',
   },
   board: {
     completed: 'completed',
@@ -596,6 +633,7 @@ export const en: Phrases = {
     sddDoesNotAnswer:
       'the SDD does not answer something the task needs; recovery does not release this',
     readWhatAsked: (task) => `Read what ${task} asked`,
+    answerBlocked: (task) => `Answer ${task}`,
 
     taskFailed: (task) => `${task} failed`,
     attemptsNoneSatisfied: (attempts) =>

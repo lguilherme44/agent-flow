@@ -284,6 +284,48 @@ describe('a forced approval is visible where people look', () => {
     const approved = events.find((event) => event.type === 'run_approved');
     expect(approved?.detail['forced']).toBe(true);
   });
+
+  it('records a caller-given reason in place of the default, and keeps kind and impact (FR-016)', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+
+    await approveRun(store, run.runId, plan(), {
+      forced: true,
+      degradationReason: 'the findings were attached rather than resolved',
+    });
+
+    const state = await store.loadRun(run.runId);
+    const degradation = state.degradations.find((d) => d.kind === 'forced_approval');
+    expect(degradation?.reason).toBe('the findings were attached rather than resolved');
+    expect(degradation?.impact).toMatch(/review/i);
+    // The event is the one every approval writes; the reason changes nothing in it.
+    const approved = (await store.readEvents(run.runId)).find((event) => event.type === 'run_approved');
+    expect(Object.keys(approved?.detail ?? {}).sort()).toEqual(
+      ['approvedAt', 'forced', 'planHash', 'taskCount'].sort(),
+    );
+  });
+
+  it('keeps the default reason when none is given', async () => {
+    // The control for the test above: a reason that was always the given one would pass it.
+    const store = makeStore();
+    const run = await store.createRun('f');
+
+    await approveRun(store, run.runId, plan(), { forced: true });
+
+    const state = await store.loadRun(run.runId);
+    expect(state.degradations.find((d) => d.kind === 'forced_approval')?.reason).toBe(
+      'the plan was approved with --force, over a failed or missing review',
+    );
+  });
+
+  it('records no degradation for an unforced approval, whatever reason it is handed', async () => {
+    const store = makeStore();
+    const run = await store.createRun('f');
+
+    await approveRun(store, run.runId, plan(), { degradationReason: 'unused' });
+
+    expect((await store.loadRun(run.runId)).degradations).toHaveLength(0);
+  });
 })
 
 // Found running the corrective loop end to end. `review --fix` adds FIX tasks

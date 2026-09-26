@@ -153,3 +153,24 @@ describe('getJson', () => {
     expect(revokeRes.ok).toBe(true);
   });
 });
+
+describe('api.answer', () => {
+  it('posts the text, and only the text, to the task’s answer route', async () => {
+    const fetchMock = vi.fn(
+      async (_input: unknown, _init?: RequestInit) =>
+        new Response(JSON.stringify({ runId: 'AF-2026-001', warnings: [] }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.answer({ projectId: 'p1', runId: 'AF-2026-001' }, 'TASK-002', 'use the v2 endpoint');
+
+    const target = String(fetchMock.mock.calls[0]?.[0]);
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(target).toContain('/api/v1/runs/AF-2026-001/tasks/TASK-002/answer?');
+    expect(target).toContain('projectId=p1');
+    expect(init?.method).toBe('POST');
+    // No actor, no plan hash: the server resolves both, and a body that carried them could
+    // put an answer in somebody else's name (SEC-003).
+    expect(JSON.parse(String(init?.body))).toEqual({ text: 'use the v2 endpoint' });
+  });
+});

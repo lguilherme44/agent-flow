@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import type { ArtifactContentView, ArtifactName, ArtifactView, AttentionFocus, DeliveryView, ReviewView } from '@contracts/index.js';
+import type { AmendmentView, ArtifactContentView, ArtifactName, ArtifactView, AttentionFocus, DeliveryView, ReviewView, RunDetailView } from '@contracts/index.js';
 import { api, keys, type RunAddress } from '../../lib/api';
 import { useResource } from '../../lib/store';
-import { formatRelative } from '../../lib/time';
+import { formatRelative, formatStamp } from '../../lib/time';
 import {
   checkTone,
   deliveryTone,
@@ -13,7 +13,7 @@ import {
   severityTone,
   threadTone,
 } from '../../lib/tone';
-import { useT, word } from '../../lib/i18n';
+import { useT, word, type Dictionary } from '../../lib/i18n';
 import { Block, Chip, Empty, Notice, Skeleton } from '../../components/ui';
 import { TelemetryTab } from './Telemetry';
 import { TeamTab } from './Team';
@@ -113,7 +113,77 @@ export function Outcome({ address, tab, onTab, reviewFreshness }: {
   );
 }
 
+/**
+ * The Review tab: the operator's amendments, then whichever review the run has.
+ *
+ * **A wrapper, and not a list inside the body, because the body returns early four ways** —
+ * the review record failing, still loading, the run-level branch, and that branch's own
+ * empty and loading states. A list placed inside any one of them disappears in the others,
+ * and the run most likely to carry an amendment (a forced approval over a failed plan
+ * review, a decision recorded before anything was reviewed per task) is exactly the one
+ * that takes an early return (FR-012).
+ */
 function ReviewTab({ address, reviewFreshness }: { readonly address: RunAddress; readonly reviewFreshness: string | undefined }) {
+  return (
+    <>
+      <Amendments address={address} />
+      <ReviewBody address={address} reviewFreshness={reviewFreshness} />
+    </>
+  );
+}
+
+/**
+ * What the operator decided, oldest first (P7.4, FR-012).
+ *
+ * Its own read of the run detail rather than a prop, so it renders whatever the review
+ * record does — the key is the one `RunPage` already holds, so this is the same cached
+ * answer and not a second request. Nothing renders when the field is absent: that is the
+ * shape of every run that never used an amendment, and of every run written before they
+ * existed, and a failed read of the run is reported by the page, not by this list.
+ */
+function Amendments({ address }: { readonly address: RunAddress }) {
+  const t = useT();
+  const run = useResource<RunDetailView>(keys.run(address), () => api.run(address));
+  const amendments = run.data?.amendments;
+  if (amendments === undefined || amendments.length === 0) return null;
+
+  return (
+    <Block title={t.outcome.amendments} count={String(amendments.length)}>
+      <ul className="run-review__findings" aria-label={t.outcome.amendments}>
+        {amendments.map((amendment) => (
+          <li key={amendment.id} className="run-review__finding">
+            <Chip tone="idle">{t.outcome.amendmentKind[amendment.kind]}</Chip>
+            <div>
+              <p className="faint">
+                {[
+                  amendment.id,
+                  amendment.actor.kind === 'keyboard' ? t.outcome.keyboard : amendment.actor.label,
+                  formatStamp(Date.parse(amendment.at), t.time),
+                  amendmentSubject(amendment, t),
+                ]
+                  .filter((part): part is string => part !== undefined && part !== '')
+                  .join(' · ')}
+              </p>
+              {amendment.text === undefined ? null : <p>{amendment.text}</p>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Block>
+  );
+}
+
+/** What an amendment was about: a task, a change of class, or the findings it carried. */
+function amendmentSubject(amendment: AmendmentView, t: Dictionary): string | undefined {
+  if (amendment.task !== undefined) return amendment.task;
+  if (amendment.fromWorkflow !== undefined && amendment.toWorkflow !== undefined) {
+    return `${word(t, amendment.fromWorkflow)} → ${word(t, amendment.toWorkflow)}`;
+  }
+  const findings = amendment.findingCount ?? amendment.findings?.length;
+  return findings === undefined ? undefined : t.events.findingCount(findings);
+}
+
+function ReviewBody({ address, reviewFreshness }: { readonly address: RunAddress; readonly reviewFreshness: string | undefined }) {
   const t = useT();
   const review = useResource<ReviewView>(keys.review(address), () => api.reviewRecord(address));
   const data = review.data;

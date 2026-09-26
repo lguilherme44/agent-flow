@@ -138,6 +138,17 @@ export function getCeremonyBudget(workflow: WorkflowClass): CeremonyBudget {
 }
 
 /**
+ * The class one step up, for `revise --escalate` (FR-014). `undefined` for `high-risk`,
+ * which has nowhere to go: returning `high-risk` again would let an escalation succeed
+ * without changing anything, and the caller refuses instead.
+ *
+ * Read from {@link WORKFLOW_CLASSES} rather than restated, so the order has one owner.
+ */
+export function nextWorkflowClass(workflow: WorkflowClass): WorkflowClass | undefined {
+  return WORKFLOW_CLASSES[WORKFLOW_CLASSES.indexOf(workflow) + 1];
+}
+
+/**
  * Whether the text mentions any of these as a **word**.
  *
  * `includes` was the original test and it was wrong in a way that only shows up in prose:

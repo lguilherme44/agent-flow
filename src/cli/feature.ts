@@ -15,7 +15,14 @@ import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-c
 import type { StateStore } from '../app/state-store.js';
 import { resolveRole } from '../core/role.js';
 import { runPaths } from '../app/paths.js';
-import { createRunWithIdentity, revise } from '../app/run-actions.js';
+import {
+  createRunWithIdentity,
+  revise,
+  type ActionError,
+  type ReviseMode,
+  type ReviseResult,
+  type RunActionDeps,
+} from '../app/run-actions.js';
 import {
   chooseInstructionSource,
   DESCRIPTION_WORDING,
@@ -317,9 +324,54 @@ export function writeStageProgress(stage: string, status: string, verbose: boole
  * product as a response to a review finding is not a kindness.
  */
 const REVISABLE_STAGES = ['sdd', 'planning'] as const;
+
+export interface ReviseCommandFlags extends InstructionFlags {
+  readonly from?: string;
+  /** `--decision`: replan without spending a revision cycle (FR-013). */
+  readonly decision?: boolean;
+  /** `--escalate`: replan one workflow class up, under its budget (FR-014). */
+  readonly escalate?: boolean;
+}
+
+/** The seams a test replaces. The defaults are what every real invocation uses. */
+export interface ReviseCommandDeps {
+  readonly io: InstructionIO;
+  readonly revise: typeof revise;
+  readonly actionDeps: (globals: GlobalOptions) => RunActionDeps;
+}
+
+/**
+ * Which budget mode the flags ask for, or the refusal of asking for two (FR-015).
+ *
+ * Refused here rather than in the use case because the use case cannot be asked it: `revise`
+ * takes one mode, so "both" is a sentence only the command line can form. A decision spends
+ * nothing inside the class and an escalation changes the class; picking one of them for the
+ * operator would record a decision they did not make.
+ */
+export function reviseModeOf(
+  flags: Pick<ReviseCommandFlags, 'decision' | 'escalate'>,
+): { readonly ok: true; readonly mode: ReviseMode } | { readonly ok: false; readonly error: ActionError } {
+  if (flags.decision === true && flags.escalate === true) {
+    return {
+      ok: false,
+      error: {
+        code: 'invalid_input',
+        message:
+          '--decision and --escalate are two different decisions: a decision replans within ' +
+          'this workflow class, an escalation moves the run to the next one.',
+        action: 'Choose one of them.',
+      },
+    };
+  }
+  if (flags.decision === true) return { ok: true, mode: 'decision' };
+  if (flags.escalate === true) return { ok: true, mode: 'escalation' };
+  return { ok: true, mode: 'revision' };
+}
+
 export async function runReviseCommand(
-  flags: InstructionFlags & { readonly from?: string },
+  flags: ReviseCommandFlags,
   globals: GlobalOptions,
+  seams: ReviseCommandDeps = { io: nodeInstructionIO(), revise, actionDeps },
 ): Promise<ExitCodeValue> {
   try {
     // Validated before anything is read: a bad stage name should not open an editor.
@@ -334,6 +386,14 @@ export async function runReviseCommand(
       return ExitCode.CONFIG_ERROR;
     }
 
+    // Beside `--from`, and for the same reason: two budget modes at once is a refusal that
+    // needs no state, so it must not cost an editor session or a state read.
+    const chosen = reviseModeOf(flags);
+    if (!chosen.ok) {
+      process.stderr.write(`${render(chosen.error)}\n`);
+      return exitCodeFor(chosen.error);
+    }
+
     // AR-08: the instruction may arrive as an argument, a file, stdin or an editor buffer.
     // Which one is decided first because it is pure and free, and a bad invocation should
     // not reach the filesystem at all.
@@ -343,7 +403,7 @@ export async function runReviseCommand(
       return ExitCode.CONFIG_ERROR;
     }
 
-    const deps = actionDeps(globals);
+    const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run to revise.\n');
@@ -353,14 +413,14 @@ export async function runReviseCommand(
     // Read only once there is something to revise. `--edit` opens an editor and waits, and
     // asking someone to compose a revision for a run that does not exist is the kind of
     // wasted effort a check costing one state read prevents.
-    const read = await readInstruction(source, nodeInstructionIO());
+    const read = await readInstruction(source, seams.io);
     if (!read.ok) {
       process.stderr.write(`${read.reason}\n`);
       return ExitCode.CONFIG_ERROR;
     }
     const instruction = read.instruction;
 
-    const outcome = await revise(deps, runId, instruction, from as RunStage);
+    const outcome = await seams.revise(deps, runId, instruction, from as RunStage, chosen.mode);
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
@@ -374,6 +434,7 @@ export async function runReviseCommand(
     process.stdout.write(
       [
         `${String(outcome.value.taskCount)} tasks planned.`,
+        ...describeBudget(outcome.value),
         '',
         nextStepAfterPlanning(outcome.value.reviewVerdict),
         '',
@@ -389,12 +450,42 @@ export async function runReviseCommand(
 }
 
 /**
+ * What the budget did, for the two modes that exist to not spend it (FR-021).
+ *
+ * Said back because it is the whole point of the flag: an operator who typed `--decision`
+ * at the ceiling needs to see the count did not move, or they will assume it did and stop
+ * making decisions. A plain revision prints nothing new, so its output is today's.
+ */
+function describeBudget(result: ReviseResult): string[] {
+  if (result.mode === undefined) return [];
+
+  const count =
+    result.revisionCount === undefined || result.maxAllowed === undefined
+      ? []
+      : [
+          `Revision count unchanged: ${String(result.revisionCount)} of ${String(result.maxAllowed)}.`,
+        ];
+
+  if (result.mode === 'decision') return ['', 'Decision recorded.', ...count];
+
+  const moved =
+    result.fromWorkflow === undefined || result.toWorkflow === undefined
+      ? []
+      : [`Workflow class: ${result.fromWorkflow} → ${result.toWorkflow}.`];
+  return ['', 'Escalation recorded.', ...moved, ...count];
+}
+
+/**
  * The four sources, wired to the machine.
  *
  * `$VISUAL` before `$EDITOR` before `vi`, which is the order every other tool that opens an
  * editor uses. `stdio: 'inherit'` because the editor owns the terminal while it runs.
+ *
+ * Exported for `answer` (P7.1), which reads its text through the same four sources. `what`
+ * is the word in the editor's header, so a person answering a task is not told to write a
+ * revision.
  */
-function nodeInstructionIO(): InstructionIO {
+export function nodeInstructionIO(what = 'revision'): InstructionIO {
   return {
     readFile: (path) => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
     readStdin: async () => {
@@ -409,7 +500,7 @@ function nodeInstructionIO(): InstructionIO {
         file,
         [
           '',
-          '# Write the revision below. Lines starting with # are ignored.',
+          `# Write the ${what} below. Lines starting with # are ignored.`,
           '# Save an empty file to cancel.',
           '',
         ].join('\n'),

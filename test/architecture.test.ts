@@ -2238,9 +2238,13 @@ describe('there is exactly one run execution lock (AF-L01)', () => {
     // `revalidate` joined them in D19. It runs the task's validation commands inside an
     // attempt worktree and then writes an attempt artifact, a marker and the task's state
     // — every one of which the scheduler also writes, so the two must not run together.
+    //
+    // `retry` is listed twice: `answerTask` requeues under the same operation (P7.1,
+    // NFR-007), because an older build cannot read a lock file naming a value it lacks.
     expect(locked.sort()).toEqual([
       'approve',
       'reject',
+      'retry',
       'retry',
       'revalidate',
       'review',

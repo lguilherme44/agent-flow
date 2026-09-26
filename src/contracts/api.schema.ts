@@ -8,6 +8,7 @@ import {
   WorkflowClassSchema,
   PipelineStageSchema,
   RunStageSchema,
+  type AmendmentKind,
   type Degradation,
   type PipelineStage,
   type PipelineStatus,
@@ -281,6 +282,20 @@ export const RetryRequestSchema = z.object({
 });
 
 /**
+ * `agent-flow answer`, from the browser (P7.1, FR-007).
+ *
+ * The one field is the sentence a person typed, bounded like a revision instruction and in
+ * the same trust class: it reaches the next attempt's prompt as quoted data and is never run,
+ * parsed or resolved (SEC-001). The absences are the contract too (SEC-002, SEC-003). No
+ * actor — who answered is the paired device the server resolved, and a body that could say
+ * otherwise could put an answer in somebody else's name. No plan hash — the answer is bound
+ * to whatever plan the run has approved, which the use case reads.
+ */
+export const AnswerRequestSchema = z.object({
+  text: z.string().trim().min(1).max(4_000),
+});
+
+/**
  * `agent-flow review`, from the browser (Deck).
  *
  * The last step of every run was a command a person had to remember to type: seven runs
@@ -527,6 +542,58 @@ export interface RunDetailView extends RunSummaryView {
    * because there is one function that produces it.
    */
   readonly runtime: RunProjection;
+  /**
+   * The operator decisions the run recorded, oldest first (P7.4, FR-012).
+   *
+   * **Absent, not empty, when there are none** — the shape of every run written before
+   * amendments existed, and of every run that never used them, so the view of such a run is
+   * byte for byte what it was.
+   */
+  readonly amendments?: readonly AmendmentView[];
+}
+
+/**
+ * Who made an operator decision, as a reader is shown it.
+ *
+ * The device's label and not its id. The id is half of the session cookie
+ * (`deviceId.secret`), and a detail view any paired device can read is no place to hand out
+ * half of another device's credential; the label is what the person named the device, and
+ * what they will recognise.
+ */
+export type AmendmentActorView =
+  | { readonly kind: 'keyboard' }
+  | { readonly kind: 'device'; readonly label: string };
+
+/**
+ * One finding an `attached_findings` amendment handed to tasks (FR-017), as the Review tab
+ * lists it: enough to say which finding went where, not the whole finding again.
+ */
+export interface AttachedFindingView {
+  /** Its position in the review it was copied from. */
+  readonly index: number;
+  readonly severity: Finding['severity'];
+  readonly description: string;
+  /** The tasks it was routed to, resolved once, when it was attached. */
+  readonly tasks: readonly string[];
+}
+
+/** One attributed operator decision, as the Deck's Review tab shows it (FR-012). */
+export interface AmendmentView {
+  /** `AMD-NNN`, sequential per run. */
+  readonly id: string;
+  readonly kind: AmendmentKind;
+  readonly actor: AmendmentActorView;
+  readonly at: string;
+  readonly text?: string;
+  /** The task an answer was given to. */
+  readonly task?: string;
+  /** The plan the decision was made about. */
+  readonly planHash?: string;
+  readonly fromWorkflow?: WorkflowClass;
+  readonly toWorkflow?: WorkflowClass;
+  /** How many findings the review overruled or attached had. */
+  readonly findingCount?: number;
+  readonly findings?: readonly AttachedFindingView[];
 }
 
 export interface IntegrationConflictView {

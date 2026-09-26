@@ -293,6 +293,8 @@ export interface Phrases {
     readonly invalidApproveRequest: string;
     readonly invalidRejectRequest: string;
     readonly invalidRetryRequest: string;
+    /** The answer route's body failed its schema: empty, or over the length bound (FR-007). */
+    readonly invalidAnswerRequest: string;
     readonly invalidStartRequest: string;
     readonly revisionNeedsInstruction: string;
     readonly invalidReviewRequest: string;
@@ -446,6 +448,17 @@ export interface Phrases {
     readonly runReconcilesFirst: string;
     readonly taskAnsweredBlocked: (taskId: string) => string;
     readonly fixSddOrForce: string;
+    /** The `task_blocked` retry refusal's action: answer the task, or force the retry. */
+    readonly answerOrForce: (taskId: string) => string;
+    /**
+     * `answer` on a task with no question outstanding. `state` is the task's persisted state
+     * and passes through untranslated; `heldByDependency` says a `blocked` one is waiting on
+     * another task rather than on a person.
+     */
+    readonly taskNotAnswerable: (taskId: string, state: string, heldByDependency: boolean) => string;
+    readonly onlyBlockedCanBeAnswered: string;
+    readonly answerNeedsText: string;
+    readonly sayWhatTaskNeeds: string;
 
     readonly runPausedAt: (runId: string, at: string) => string;
     readonly resumeIt: string;
@@ -459,7 +472,11 @@ export interface Phrases {
     readonly noRunnableFailed: (runId: string, tasks: string, count: number) => string;
     readonly noRunnableInState: (runId: string, status: string) => string;
     readonly reviewEvidenceThenRetry: (taskId: string) => string;
-    readonly answerBlockedThenRetry: string;
+    /**
+     * `taskId` is the first agent-blocked task, which `answer` can take. `undefined` when
+     * every blocked task is waiting on a dependency, which no answer releases.
+     */
+    readonly answerBlockedThenRetry: (taskId: string | undefined) => string;
     readonly startNewOrCheckStatus: string;
     readonly planRejected: (runId: string) => string;
     readonly revisePlanOrStartNew: string;
@@ -489,8 +506,18 @@ export interface Phrases {
     readonly revisionNeedsInstruction: string;
     readonly trivialNoRevision: string;
     readonly approveAsIsOrStandard: string;
+    /**
+     * The ceiling refusal of plain `revise`. Names the three ways past it that spend no cycle
+     * (FR-019): a decision, an escalation, and approving with the findings attached.
+     */
     readonly ceremonyBudget: (workflow: string, cycles: number) => string;
     readonly reviewResidualFindings: string;
+    /** `revise --escalate` on the top class. `workflow` is the class, already upper-cased. */
+    readonly workflowAtCeiling: (workflow: string) => string;
+    readonly decideOrApproveAtCeiling: string;
+    /** `revise --escalate` after `tasks` (comma-joined ids, `count` of them) have completed. */
+    readonly implementationStarted: (tasks: string, count: number) => string;
+    readonly revisePlainInstead: string;
 
     readonly featureNeedsDescription: string;
     readonly sayWhatFeatureDoes: string;
@@ -535,6 +562,17 @@ export interface Phrases {
     readonly planWasRejected: string;
     readonly revisePlanOrApproveOver: string;
     readonly approvalNotPossible: string;
+    /**
+     * `approve --attach-findings` over anything but a failed review (FR-016). `state` is the
+     * sentence naming what the gate actually found, already in this language — the refusal's
+     * own message, or `reviewPassedNothingToAttach` when there was no refusal.
+     */
+    readonly findingsNotAttachable: (state: string) => string;
+    readonly reviewPassedNothingToAttach: string;
+    readonly approveWithoutAttaching: string;
+    /** `--attach-findings` together with `--force`: two approvals, and only one can happen. */
+    readonly attachFindingsOrForce: string;
+    readonly chooseAttachOrForce: string;
   };
   /**
    * A board card's one-line reason, and it is the sentence, not the lane (M7 §12).
@@ -602,6 +640,8 @@ export interface Phrases {
     readonly reportedBlocked: (task: string) => string;
     readonly sddDoesNotAnswer: string;
     readonly readWhatAsked: (task: string) => string;
+    /** The `agent_blocked` item's button (FR-005). */
+    readonly answerBlocked: (task: string) => string;
 
     readonly taskFailed: (task: string) => string;
     readonly attemptsNoneSatisfied: (attempts: number) => string;

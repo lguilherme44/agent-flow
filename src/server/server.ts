@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import {
   AnalyticsQuerySchema,
+  AnswerRequestSchema,
   ConfigApplyRequestSchema,
   ConfigEditorQuerySchema,
   CleanRequestSchema,
@@ -70,6 +71,7 @@ import { projectRelativePaths, registerProject } from '../app/init-project.js';
 import { cleanWorkspace, DEFAULT_RUNS_KEPT } from '../app/workspace-cleanup.js';
 import { RunExecutionLock, type LockRefusal } from '../app/run-execution-lock.js';
 import {
+  answerTask,
   approve,
   cancel,
   createFeatureRun,
@@ -1512,6 +1514,39 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       taskId: outcome.value.taskId,
       attempts: outcome.value.attempts,
       forced: outcome.value.forced,
+    });
+  });
+
+  /**
+   * Answering a BLOCKED task (P7.1, FR-007). Synchronous, like retry: it records the answer
+   * and requeues, and spawns nothing — the next `run` is what carries it to an agent.
+   *
+   * The actor is the one `depsFor` resolved from the device session (SEC-003). The body is
+   * parsed by a schema with one field, so an `actor` key a client adds is stripped before the
+   * handler sees it, and there is no path by which a request names who answered.
+   */
+  app.post('/api/v1/runs/:runId/tasks/:taskId/answer', async (request, reply) => {
+    const params = TaskParamsSchema.safeParse(request.params);
+    if (!params.success) return badRequest(reply, say(request).invalidRunOrTaskId);
+
+    const project = projectOf(request.query);
+    if (project === undefined) return notFound(reply, say(request).noSuchProject);
+
+    const body = AnswerRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, say(request).invalidAnswerRequest);
+
+    const outcome = await answerTask(
+      depsFor(project, sayFor(request.query), request),
+      params.data.runId,
+      params.data.taskId,
+      body.data.text,
+    );
+
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+    return actionResult(params.data.runId, outcome.warnings, {
+      taskId: outcome.value.taskId,
+      attempts: outcome.value.attempts,
+      amendmentId: outcome.value.amendmentId,
     });
   });
 

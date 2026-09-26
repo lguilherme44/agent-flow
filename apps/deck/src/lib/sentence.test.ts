@@ -111,3 +111,80 @@ describe('describe', () => {
     expect(say({ at, type: 'forge_publish_failed', detail: {} }, en).tone).toBe('bad');
   });
 });
+
+/**
+ * P7.5 — a decision and an escalation are not revisions, and the feed must not number them.
+ *
+ * Both write `revision_requested` with `attemptedRevision` set to the count that did *not*
+ * move. Read through the plain sentence, a decision at the ceiling of a standard run came out
+ * as "Revision 2 requested" — a revision nobody asked for — and the obvious `+1` fix would
+ * have said "3 of 2".
+ */
+describe('decisions and escalations in the feed', () => {
+  const decision = {
+    at,
+    type: 'revision_requested',
+    detail: { instruction: 'Keep the v1 endpoint.', from: 'planning', kind: 'decision', attemptedRevision: 2, maxAllowed: 2 },
+  };
+
+  it('says a decision was sent, with the count it left unchanged', () => {
+    for (const [dict, sentence, count] of [
+      [en, 'Decision sent to the planner', '2 of 2'],
+      [ptBR, 'Decisão enviada ao planejador', '2 de 2'],
+    ] as const) {
+      const { title } = say(decision, dict);
+      expect(title).toContain(sentence);
+      expect(title).toContain(count);
+      expect(title).not.toContain('Revision 2 requested');
+      expect(title).not.toContain('Revisão 2 pedida');
+      expect(title).not.toContain('3 of 2');
+      expect(title).not.toContain('3 de 2');
+    }
+    expect(say(decision, en).title).toBe('Decision sent to the planner (revisions used: 2 of 2)');
+    expect(say(decision, ptBR).title).toBe('Decisão enviada ao planejador (revisões usadas: 2 de 2)');
+    expect(say(decision, en).detail).toBe('Keep the v1 endpoint.');
+  });
+
+  it('says a decision’s completion without numbering a revision', () => {
+    const completed = { at, type: 'revision_completed', detail: { instruction: 'x', revisionCount: 2, kind: 'decision' } };
+    expect(say(completed, en).title).toBe('Plan updated with the decision (revisions used: 2)');
+    expect(say(completed, en).title).not.toContain('Revision');
+  });
+
+  it('names both classes of an escalation, and the new class’s ceiling', () => {
+    const escalation = {
+      at,
+      type: 'revision_requested',
+      detail: { instruction: 'Needs an SDD.', kind: 'escalation', attemptedRevision: 1, maxAllowed: 2, fromWorkflow: 'simple', toWorkflow: 'standard' },
+    };
+    expect(say(escalation, en).title).toBe('Escalated simple → standard (up to 2 revisions)');
+    expect(say(escalation, ptBR).title).toContain(`${ptBR.words.simple} → ${ptBR.words.standard}`);
+
+    const completed = { at, type: 'revision_completed', detail: { revisionCount: 1, kind: 'escalation', fromWorkflow: 'simple', toWorkflow: 'high-risk' } };
+    // The class reached, which the classifier may have raised past the one asked for.
+    expect(say(completed, en).title).toBe('Escalation completed simple → high risk');
+  });
+
+  it('reads a revision without a kind exactly as it always did', () => {
+    // The positive control: every plain revise, and every run before this, carries no `kind`.
+    const plain = { at, type: 'revision_requested', detail: { instruction: 'split the file', attemptedRevision: 2, maxAllowed: 2 } };
+    expect(say(plain, en)).toEqual({ title: 'Revision 2 requested', detail: 'split the file', tone: 'warn' });
+    expect(say(plain, ptBR).title).toBe('Revisão 2 pedida');
+    expect(say({ at, type: 'revision_completed', detail: { revisionCount: 2 } }, en)).toEqual({ title: 'Revision 2 completed', tone: 'ok' });
+  });
+
+  it('says an amendment was recorded, by whom and about what', () => {
+    const recorded = {
+      at,
+      type: 'amendment_recorded',
+      detail: { id: 'AMD-003', kind: 'answer', task: 'TASK-002', actor: { kind: 'device', deviceId: 'dev_1', label: 'Office laptop' } },
+    };
+    expect(say(recorded, en)).toEqual({ title: 'Amendment AMD-003 recorded · answer', detail: 'TASK-002 · Office laptop', tone: 'idle' });
+    expect(say(recorded, ptBR).title).toBe('Emenda AMD-003 registrada · resposta');
+    // The device id is half a credential; the feed names the device by its label only.
+    expect(say(recorded, en).detail).not.toContain('dev_1');
+
+    const keyboard = { at, type: 'amendment_recorded', detail: { id: 'AMD-004', kind: 'decision', actor: { kind: 'keyboard' } } };
+    expect(say(keyboard, en)).toEqual({ title: 'Amendment AMD-004 recorded · decision', detail: 'keyboard', tone: 'idle' });
+  });
+});

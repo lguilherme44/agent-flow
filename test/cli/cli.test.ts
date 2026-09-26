@@ -114,9 +114,12 @@ describe('error rendering', () => {
     expect(renderError(new StageFailure('sdd', 'auth_required', 'x')).message).toMatch(/log in/i);
   });
 
-  it('says that BLOCKED needs a person, not a retry (§23)', () => {
+  it('says that BLOCKED needs a person, and names the command that answers it (§23, FR-006)', () => {
     const rendered = renderError(new StageFailure('sdd', 'blocked', 'needs a decision'));
-    expect(rendered.message).toMatch(/human decision/i);
+    expect(rendered.message).toContain(
+      'The agent stopped and reported BLOCKED. This needs a human decision: answer it with ' +
+        '`agent-flow answer <task>`.',
+    );
   });
 
   /**

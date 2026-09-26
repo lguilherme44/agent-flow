@@ -460,6 +460,9 @@ describe('the server, against the request that used to answer 202', () => {
       `/api/v1/runs/${run.runId}/revise?projectId=demo`,
       `/api/v1/runs/${run.runId}/start?projectId=demo`,
       `/api/v1/runs/${run.runId}/tasks/TASK-001/retry?projectId=demo`,
+      // P7.1, SEC-004: the answer requeues a task exactly as retry does, so it is guarded
+      // exactly as retry is.
+      `/api/v1/runs/${run.runId}/tasks/TASK-001/answer?projectId=demo`,
     ]) {
       const response = await server.app.inject({
         method: 'POST',

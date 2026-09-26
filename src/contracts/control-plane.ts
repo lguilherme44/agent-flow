@@ -107,6 +107,8 @@ export const ATTENTION_ACTIONS = [
   'approve',
   'revise',
   'retry',
+  /** `agent-flow answer`: records the operator's answer to a BLOCKED task and requeues it. */
+  'answer',
   'resume',
   'start',
   /** `agent-flow review`: verification, the reviewers and the Definition of Done. */

@@ -1772,6 +1772,183 @@ describe('UI-27 — the write API', () => {
     });
   });
 
+  describe('answer (P7.1, FR-007)', () => {
+    const answer = (server: RunningServer, runId: string, taskId: string, payload: unknown) =>
+      server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${runId}/tasks/${taskId}/answer`,
+        payload: payload as Record<string, unknown>,
+      });
+
+    it('answers a BLOCKED task: 200, the task queued, and one answer amendment', async () => {
+      const { server, store, run } = await serve();
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+
+      const response = await answer(server, run.runId, 'FIX-001', { text: '  use the v2 endpoint ' });
+
+      expect(response.statusCode).toBe(200);
+      // Retry's shape, because it is retry's sibling: the run at the top, the rest in detail.
+      expect(response.json()).toEqual({
+        runId: run.runId,
+        warnings: [],
+        detail: { taskId: 'FIX-001', attempts: 1, amendmentId: 'AMD-001' },
+      });
+
+      const state = await store.loadRun(run.runId);
+      expect(state.tasks.find((task) => task.id === 'FIX-001')?.state).toBe('queued');
+      expect(state.amendments).toEqual([
+        expect.objectContaining({ kind: 'answer', task: 'FIX-001', text: 'use the v2 endpoint' }),
+      ]);
+    });
+
+    it('takes the actor from the server, never from the body (SEC-003)', async () => {
+      const { server, store, run } = await serve();
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+
+      const response = await answer(server, run.runId, 'FIX-001', {
+        text: 'use the v2 endpoint',
+        actor: { kind: 'device', deviceId: 'forged', label: 'Somebody else' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      // No device session on this request, so the server resolved the keyboard — and the
+      // body's claim went nowhere. The paired-device half is in `session-guard.test.ts`.
+      expect((await store.loadRun(run.runId)).amendments?.[0]?.actor).toEqual({ kind: 'keyboard' });
+    });
+
+    it('400s an empty text and a text over 4000 characters, and writes nothing', async () => {
+      const { server, store, run } = await serve();
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+      const before = await store.loadRun(run.runId);
+
+      for (const payload of [{ text: '' }, { text: '   \n' }, { text: 'x'.repeat(4_001) }, {}]) {
+        const response = await answer(server, run.runId, 'FIX-001', payload);
+        expect(response.statusCode, JSON.stringify(payload).slice(0, 40)).toBe(400);
+      }
+      expect(await store.loadRun(run.runId)).toEqual(before);
+
+      // Positive control for the bound: exactly 4000 is an answer.
+      const atBound = await answer(server, run.runId, 'FIX-001', { text: 'x'.repeat(4_000) });
+      expect(atBound.statusCode).toBe(200);
+    });
+
+    it('404s an unknown task and an unknown run', async () => {
+      const { server, run } = await serve();
+
+      const task = await answer(server, run.runId, 'TASK-999', { text: 'x' });
+      const missingRun = await answer(server, 'AF-2026-999', 'FIX-001', { text: 'x' });
+
+      expect(task.statusCode).toBe(404);
+      expect(task.json<ActionErrorView>().error).toBe('no_such_task');
+      expect(missingRun.statusCode).toBe(404);
+      expect(missingRun.json<ActionErrorView>().error).toBe('no_such_run');
+    });
+
+    it('409s a queued task and a dependency-blocked one: neither asked anything', async () => {
+      const { server, store, run } = await serve();
+
+      // FIX-001 starts queued.
+      const queued = await answer(server, run.runId, 'FIX-001', { text: 'x' });
+      expect(queued.statusCode).toBe(409);
+      expect(queued.json<ActionErrorView>().error).toBe('task_not_answerable');
+
+      await store.updateRun(run.runId, (current) => ({
+        ...current,
+        tasks: current.tasks.map((task) =>
+          task.id === 'FIX-001'
+            ? { ...task, state: 'blocked' as const, blockReason: 'dependency' as const }
+            : task,
+        ),
+      }));
+      const held = await answer(server, run.runId, 'FIX-001', { text: 'x' });
+      expect(held.statusCode).toBe(409);
+      expect(held.json<ActionErrorView>().error).toBe('task_not_answerable');
+      expect((await store.loadRun(run.runId)).amendments).toBeUndefined();
+    });
+  });
+
+  describe('amendments on the run detail (FR-012)', () => {
+    it('omits the key for a run without amendments, and lists them once there are', async () => {
+      const { server, store, run } = await serve();
+
+      const before = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      // Absent, not `[]`: the view of a run that never used one is what it always was.
+      expect('amendments' in before).toBe(false);
+
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+      await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
+        payload: { text: 'use the v2 endpoint' },
+      });
+
+      const after = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      expect(after.amendments).toEqual([
+        {
+          id: 'AMD-001',
+          kind: 'answer',
+          actor: { kind: 'keyboard' },
+          at: expect.any(String) as string,
+          text: 'use the v2 endpoint',
+          task: 'FIX-001',
+        },
+      ]);
+    });
+
+    it('shows a device by its label and never its id, and an attached finding by its route', async () => {
+      const { server, store, run } = await serve();
+      await store.updateRun(run.runId, (current) => ({
+        ...current,
+        amendments: [
+          {
+            id: 'AMD-001',
+            kind: 'attached_findings',
+            actor: { kind: 'device', deviceId: 'device-secret-half', label: 'Tablet' },
+            at: '2026-08-09T20:00:00.000Z',
+            planHash: 'sha256:abc',
+            findingCount: 1,
+            findings: [
+              {
+                index: 0,
+                finding: {
+                  severity: 'high',
+                  type: 'requirement',
+                  description: 'FIX-001 logs the token.',
+                  suggestedAction: 'Redact it.',
+                  evidence: [],
+                },
+                tasks: ['FIX-001'],
+              },
+            ],
+          },
+        ],
+      }));
+
+      const detail = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+
+      expect(detail.amendments).toEqual([
+        {
+          id: 'AMD-001',
+          kind: 'attached_findings',
+          actor: { kind: 'device', label: 'Tablet' },
+          at: '2026-08-09T20:00:00.000Z',
+          planHash: 'sha256:abc',
+          findingCount: 1,
+          findings: [
+            { index: 0, severity: 'high', description: 'FIX-001 logs the token.', tasks: ['FIX-001'] },
+          ],
+        },
+      ]);
+      expect(JSON.stringify(detail)).not.toContain('device-secret-half');
+    });
+  });
+
   describe('feature', () => {
     it('creates the run at once, and plans it as a job whose id the 202 carries', async () => {
       const { server, fs } = await serve();

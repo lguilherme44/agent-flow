@@ -3,6 +3,8 @@ import type { Phrases } from '../core/phrases/index.js';
 import { recoveryCostAgainstBaseline } from '../core/prompt-budget.js';
 import {
   PlanSchema,
+  type Amendment,
+  type AmendmentView,
   type ArtifactContentView,
   type ArtifactView,
   type Plan,
@@ -130,6 +132,41 @@ export interface RunReaderOptions {
   readonly globalConfigPath?: string;
 }
 
+/**
+ * One recorded operator decision, as the Review tab reads it (FR-012).
+ *
+ * A projection, not a copy: the device id is dropped (see `AmendmentActorView`), and an
+ * attached finding keeps only what says which finding went where. Every optional field is
+ * spread only when present, so the view never carries a key the record does not have.
+ */
+function amendmentView(amendment: Amendment): AmendmentView {
+  return {
+    id: amendment.id,
+    kind: amendment.kind,
+    actor:
+      amendment.actor.kind === 'device'
+        ? { kind: 'device', label: amendment.actor.label }
+        : { kind: 'keyboard' },
+    at: amendment.at,
+    ...(amendment.text === undefined ? {} : { text: amendment.text }),
+    ...(amendment.task === undefined ? {} : { task: amendment.task }),
+    ...(amendment.planHash === undefined ? {} : { planHash: amendment.planHash }),
+    ...(amendment.fromWorkflow === undefined ? {} : { fromWorkflow: amendment.fromWorkflow }),
+    ...(amendment.toWorkflow === undefined ? {} : { toWorkflow: amendment.toWorkflow }),
+    ...(amendment.findingCount === undefined ? {} : { findingCount: amendment.findingCount }),
+    ...(amendment.findings === undefined
+      ? {}
+      : {
+          findings: amendment.findings.map((attached) => ({
+            index: attached.index,
+            severity: attached.finding.severity,
+            description: attached.finding.description,
+            tasks: [...attached.tasks],
+          })),
+        }),
+  };
+}
+
 export class RunReader {
   constructor(private readonly options: RunReaderOptions) {}
 
@@ -237,6 +274,11 @@ export class RunReader {
       isolation: await this.isolationOf(project, state),
       integrationConflicts: await this.conflictsOf(project, state.runId),
       runtime: await this.runtimeOf(project, state, say),
+      // Absent rather than `[]` for a run with none, so the view of every run that never used
+      // an amendment is exactly what it was before they existed (FR-012).
+      ...(state.amendments === undefined || state.amendments.length === 0
+        ? {}
+        : { amendments: state.amendments.map(amendmentView) }),
     };
   }
 

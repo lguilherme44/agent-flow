@@ -25,6 +25,7 @@ import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import { actionDeps } from '../../src/cli/approve.js';
 import { attributionOf, type RunActor } from '../../src/contracts/state.schema.js';
 import { decideTaskRecovery } from '../../src/core/recovery-policy.js';
+import { ptBR } from '../../src/core/phrases/index.js';
 import { GlobalConfigSchema } from '../../src/contracts/index.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 import { parse as parseYaml } from 'yaml';
@@ -551,6 +552,19 @@ describe('blocked retries split by provenance (dependency vs agent)', () => {
 
     const refused = await retryTask(deps, runId, 'TASK-001');
     expect(refusal(refused).code).toBe('task_blocked');
+    if (refused.ok) return;
+    expect(refused.error.forcible).toBe(true);
+    // The refusal names the road that gives the next attempt what it asked for, and still
+    // the deliberate one (FR-006).
+    expect(refused.error.action).toContain('`agent-flow answer TASK-001`');
+    expect(refused.error.action).toContain('--force');
+
+    const inPortuguese = await retryTask(fakeRunActionDeps({ ...deps, say: ptBR }), runId, 'TASK-001');
+    expect(refusal(inPortuguese).code).toBe('task_blocked');
+    if (inPortuguese.ok) return;
+    expect(inPortuguese.error.action).toContain('`agent-flow answer TASK-001`');
+    expect(inPortuguese.error.action).toContain('--force');
+    expect(inPortuguese.error.action).not.toBe(refused.error.action);
 
     const forced = await retryTask(deps, runId, 'TASK-001', { force: true });
     expect(forced.ok).toBe(true);
@@ -682,6 +696,88 @@ describe('run refuses before it takes the lock (C-19)', () => {
     if (outcome.ok) return;
     expect((outcome.error.action ?? '').length).toBeGreaterThan(0);
     expect(`${outcome.error.message} ${outcome.error.action ?? ''}`).toMatch(/review_required|review|TASK-001/i);
+  });
+
+  describe('a run held by blocked tasks names the one `answer` can take (FR-006)', () => {
+    // TASK-004 depends on TASK-003, so neither is ready and the run has nothing to do.
+    const HELD_PLAN = {
+      feature: 'weekly-recurrence',
+      tasks: [
+        { ...PLAN.tasks[0], id: 'TASK-003' },
+        { ...PLAN.tasks[0], id: 'TASK-004', dependencies: ['TASK-003'] },
+      ],
+    };
+
+    async function held(tasks: readonly { id: string; blockReason?: 'agent' | 'dependency' }[]) {
+      const world = await project();
+      await world.store.writeArtifact(world.runId, 'plan', JSON.stringify(HELD_PLAN, null, 2));
+      await world.store.updateRun(world.runId, (state) => ({
+        ...state,
+        approved: true,
+        status: 'approved',
+        tasks: tasks.map((task) => ({
+          id: task.id,
+          state: 'blocked' as const,
+          attempts: task.blockReason === 'dependency' ? 0 : 1,
+          infrastructureFailures: 0,
+          ...(task.blockReason === undefined ? {} : { blockReason: task.blockReason }),
+        })),
+      }));
+      return world;
+    }
+
+    async function refusedAction(
+      world: Awaited<ReturnType<typeof held>>,
+      say?: typeof ptBR,
+    ): Promise<string> {
+      const outcome = await start(
+        say === undefined ? world.deps : fakeRunActionDeps({ ...world.deps, say }),
+        world.runId,
+      );
+      if (outcome.ok) throw new Error('expected a refusal');
+      expect(outcome.error.code).toBe('nothing_to_run');
+      return outcome.error.action ?? '';
+    }
+
+    it('skips a dependency-blocked task listed first, in both languages', async () => {
+      // Listed first on purpose: naming `blocked[0]` would send the operator to answer a
+      // task that has no question, and `answer` would refuse it.
+      const world = await held([
+        { id: 'TASK-004', blockReason: 'dependency' },
+        { id: 'TASK-003', blockReason: 'agent' },
+      ]);
+
+      const english = await refusedAction(world);
+      const portuguese = await refusedAction(world, ptBR);
+
+      for (const action of [english, portuguese]) {
+        expect(action).toContain('`agent-flow answer TASK-003`');
+        expect(action).not.toContain('TASK-004');
+      }
+      expect(portuguese).not.toBe(english);
+    });
+
+    it('reads a blocked task with no recorded reason as agent-blocked', async () => {
+      const world = await held([
+        { id: 'TASK-004', blockReason: 'dependency' },
+        { id: 'TASK-003' },
+      ]);
+
+      expect(await refusedAction(world)).toContain('`agent-flow answer TASK-003`');
+    });
+
+    it('says what master said when every block is a dependency', async () => {
+      // No task has a question, so there is no id to name and the sentence is unchanged.
+      const world = await held([
+        { id: 'TASK-003', blockReason: 'dependency' },
+        { id: 'TASK-004', blockReason: 'dependency' },
+      ]);
+
+      expect(await refusedAction(world)).toBe('Answer what the blocked task reported, then retry it.');
+      expect(await refusedAction(world, ptBR)).toBe(
+        'Responda o que a tarefa bloqueada apontou, e então recoloque na fila.',
+      );
+    });
   });
 
   it('does not take the lock for a run that is already finished', async () => {

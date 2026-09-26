@@ -744,6 +744,64 @@ describe('session guard server behaviors (TASK-003)', () => {
       },
     });
   });
+
+  it('Answering from a paired device records the device, whatever actor the body names; unpaired is 401 (P7.1, SEC-003, SEC-004)', async () => {
+    const { server, fs, clock, runId } = await serve({
+      remoteAccess: { admittedAddresses: ['192.168.1.9'] },
+    });
+    const store = new StateStore({ fs, clock, projectDir: '/repo' });
+    await store.updateRun(runId, (current) => ({
+      ...current,
+      tasks: [
+        { id: 'TASK-001', state: 'blocked', blockReason: 'agent', attempts: 1, infrastructureFailures: 0 },
+      ],
+    }));
+
+    const headers = {
+      host: '192.168.1.9:4782',
+      'x-agent-flow-client': '1',
+      'content-type': 'application/json',
+    };
+    const url = `/api/v1/runs/${runId}/tasks/TASK-001/answer`;
+    // A body that claims to be the keyboard. Were it believed, a remote device could put its
+    // answer in the name of whoever sits at the machine.
+    const payload = { text: 'use the v2 endpoint', actor: { kind: 'keyboard' } };
+
+    // Unpaired: refused by the session stage before the handler, so nothing is recorded.
+    const unpaired = await server.app.inject({
+      method: 'POST',
+      url,
+      remoteAddress: '192.168.1.5',
+      headers,
+      payload,
+    });
+    expect(unpaired.statusCode).toBe(401);
+    expect((await store.loadRun(runId)).amendments).toBeUndefined();
+
+    const pairRes = await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/pair',
+      remoteAddress: '192.168.1.5',
+      headers,
+      payload: { code: server.pairing!.code, label: 'Paired Phone' },
+    });
+    expect(pairRes.statusCode).toBe(200);
+    const { deviceId, label } = JSON.parse(pairRes.body);
+    const cookie = (pairRes.headers['set-cookie'] as string).split(';')[0]!;
+
+    const answered = await server.app.inject({
+      method: 'POST',
+      url,
+      remoteAddress: '192.168.1.5',
+      headers: { ...headers, cookie },
+      payload,
+    });
+    expect(answered.statusCode).toBe(200);
+
+    const amendments = (await store.loadRun(runId)).amendments;
+    expect(amendments).toHaveLength(1);
+    expect(amendments?.[0]?.actor).toEqual({ kind: 'device', deviceId, label });
+  });
 });
 
 /**

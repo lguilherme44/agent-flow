@@ -16,7 +16,12 @@ import {
 import { runStatusCommand } from './status.js';
 import { runMapCommand } from './map.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
-import { runRunCommand, runRetryCommand, runRevalidateCommand } from './run.js';
+import {
+  runAnswerCommand,
+  runRunCommand,
+  runRetryCommand,
+  runRevalidateCommand,
+} from './run.js';
 import { runReviewCommand } from './review.js';
 import { runForgeCommand, type ForgeAction } from './forge.js';
 import { runCleanCommand } from './clean.js';
@@ -209,7 +214,13 @@ export async function main(argv: string[]): Promise<number> {
     .command('approve')
     .description('Approve the plan so implementation may begin')
     .option('--force', 'approve despite a failed or missing review (recorded on the run)')
-    .action(async (options: { force?: boolean }, command: Command) => {
+    // FR-016. The other way past a failed review: `--force` overrules the findings and hands
+    // them to nobody, this hands each task the findings that concern it.
+    .option(
+      '--attach-findings',
+      'approve over a failed review, handing its findings to the tasks they cite (recorded on the run)',
+    )
+    .action(async (options: { force?: boolean; attachFindings?: boolean }, command: Command) => {
       exitCode = await runApproveCommand(options, globalOptions(command));
     });
 
@@ -234,14 +245,31 @@ export async function main(argv: string[]): Promise<number> {
     // contradicts a specification nothing can change, and the next review rejects it for
     // the contradiction — a cycle that cannot converge.
     .option('--from <stage>', 're-enter at a stage (sdd, planning — default: planning)')
+    // P7.5. A decision and "the plan is bad" used to cost the same cycle, and the first
+    // attempt of this feature spent its whole budget on decisions.
+    .option('--decision', 'the instruction is a decision: replan without spending a revision cycle')
+    .option('--escalate', 'replan at the next workflow class, under its budget')
     .action(
       async (
         instruction: string | undefined,
-        options: { file?: string; edit?: boolean; from?: string },
+        options: {
+          file?: string;
+          edit?: boolean;
+          from?: string;
+          decision?: boolean;
+          escalate?: boolean;
+        },
         command: Command,
       ) => {
         exitCode = await runReviseCommand(
-          { argument: instruction, file: options.file, edit: options.edit, from: options.from },
+          {
+            argument: instruction,
+            file: options.file,
+            edit: options.edit,
+            from: options.from,
+            decision: options.decision,
+            escalate: options.escalate,
+          },
           globalOptions(command),
         );
       },
@@ -278,6 +306,32 @@ export async function main(argv: string[]): Promise<number> {
     ) => {
       exitCode = await runRetryCommand(taskId, options, globalOptions(command));
     });
+
+  program
+    .command('answer')
+    // P7.1. Beside `retry` because it is the retry a BLOCKED task was waiting for: the same
+    // requeue, carrying the text the next attempt needs, and no `--force`.
+    .description('Answer what a BLOCKED task asked, and queue it again')
+    .argument('<taskId>', 'for example TASK-004')
+    // Optional for the reason `revise`'s instruction is (AR-08): an answer with a snippet or a
+    // list does not survive being a shell argument.
+    .argument('[text]', 'the answer, or - to read stdin')
+    .option('--file <path>', 'read the answer from a file')
+    .option('--edit', 'write the answer in $EDITOR')
+    .action(
+      async (
+        taskId: string,
+        text: string | undefined,
+        options: { file?: string; edit?: boolean },
+        command: Command,
+      ) => {
+        exitCode = await runAnswerCommand(
+          taskId,
+          { argument: text, file: options.file, edit: options.edit },
+          globalOptions(command),
+        );
+      },
+    );
 
   program
     .command('revalidate')

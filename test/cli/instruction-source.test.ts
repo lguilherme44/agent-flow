@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { chooseInstructionSource, readInstruction } from '../../src/cli/instruction-source.js';
+import {
+  ANSWER_WORDING,
+  chooseInstructionSource,
+  readInstruction,
+} from '../../src/cli/instruction-source.js';
 
 /**
  * AR-08 — the shell-quoting hazard, removed.
@@ -107,5 +111,32 @@ describe('reading it', () => {
   it('passes the argument through untouched', async () => {
     const read = await readInstruction({ kind: 'argument', instruction: 'do it' }, io);
     expect(read.ok && read.instruction).toBe('do it');
+  });
+});
+
+describe('the answer wording (P7.1)', () => {
+  it('says "answer" in every refusal, and never "instruction"', async () => {
+    // Somebody who typed `agent-flow answer` and is told about an "instruction" goes to the
+    // wrong command's help — the defect D15 fixed for `feature`.
+    const two = chooseInstructionSource({ argument: 'x', file: 'a.md' }, ANSWER_WORDING);
+    const none = chooseInstructionSource({}, ANSWER_WORDING);
+    const empty = await readInstruction(
+      { kind: 'argument', instruction: '  \n' },
+      { readFile: () => undefined, readStdin: async () => '', openEditor: async () => '' },
+      ANSWER_WORDING,
+    );
+
+    const reasons = [
+      two.kind === 'refused' ? two.reason : '',
+      none.kind === 'refused' ? none.reason : '',
+      empty.ok ? '' : empty.reason,
+    ];
+    for (const reason of reasons) {
+      expect(reason).toMatch(/answer/);
+      expect(reason).not.toMatch(/instruction/);
+    }
+    // Positive control: the default wording is the one that says "instruction".
+    const revision = chooseInstructionSource({});
+    expect(revision.kind === 'refused' && revision.reason).toMatch(/instruction/);
   });
 });

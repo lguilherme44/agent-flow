@@ -149,6 +149,20 @@ describe('stateAt', () => {
     expect(early.tasks.size).toBe(0);
   });
 
+  it('keeps the revision number a decision left unchanged (P7.5)', () => {
+    // A decision writes the count it did not spend as `attemptedRevision`. The fold takes it
+    // as written; a `+1` here would number a revision nobody asked for.
+    const decided = buildTimeline(
+      [
+        event(0, 'revision_requested', { instruction: 'a', attemptedRevision: 1, maxAllowed: 2 }),
+        event(10, 'revision_requested', { instruction: 'b', attemptedRevision: 2, maxAllowed: 2 }),
+        event(20, 'revision_requested', { instruction: 'keep v1', kind: 'decision', attemptedRevision: 2, maxAllowed: 2 }),
+      ],
+      T0 + 100_000,
+    );
+    expect(stateAt(decided, T0 + 30_000).revision).toBe(2);
+  });
+
   it('counts how many lines it read, so the feed can agree with the playhead', () => {
     expect(stateAt(timeline, T0 + 120_000).seen).toBe(4);
     expect(stateAt(timeline, T0 - 1).seen).toBe(0);

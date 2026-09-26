@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AttentionItem, BoardCardView, TaskDetailView } from '@contracts/index.js';
 import { ApiError, api, keys, type RunAddress } from '../../lib/api';
 import type { StateAt } from '../../lib/replay';
@@ -18,13 +18,38 @@ import { Chip, Empty, Notice, Skeleton } from '../../components/ui';
  *
  * The one action here is the one the attention queue recommends for this task. There is
  * no button whose only outcome is a refusal.
+ *
+ * `answerRequest` is the page asking for the answer form from outside — the attention
+ * queue's Answer button lives above this panel. A fresh object per ask, so asking twice for
+ * the same task reopens a form somebody cancelled; it names its task, so a form asked for
+ * one task never opens over another.
  */
-export function Inspector({ address, taskId, card, attention, past, liveState }: { address: RunAddress; taskId: string | undefined; card: BoardCardView | undefined; attention: AttentionItem | undefined; past: StateAt | undefined; liveState: string | undefined }) {
+export function Inspector({ address, taskId, card, attention, past, liveState, answerRequest }: { address: RunAddress; taskId: string | undefined; card: BoardCardView | undefined; attention: AttentionItem | undefined; past: StateAt | undefined; liveState: string | undefined; answerRequest?: { readonly taskId: string } | undefined }) {
   const t = useT();
   const detail = useResource<TaskDetailView>(taskId === undefined ? null : keys.task(address, taskId), () => api.task(address, taskId ?? ''));
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<ApiError | undefined>(undefined);
   const [attemptShown, setAttemptShown] = useState<number | undefined>(undefined);
+  // The task the answer form is open for. A task id rather than a flag, so selecting
+  // another task hides the form instead of carrying a half-typed answer across to it.
+  const [answerFor, setAnswerFor] = useState<string | undefined>(undefined);
+  const [answerText, setAnswerText] = useState('');
+  const [answerRefusal, setAnswerRefusal] = useState<{ readonly code?: string | undefined; readonly message: string; readonly action?: string | undefined } | undefined>(undefined);
+
+  // `answerFor` hides the form on another task, but the text is component state and the
+  // component survives a change of selected task (it has no `key`). Without this, a
+  // half-typed answer to one task was still in the box when the form opened for the next,
+  // one click away from being sent to the wrong task.
+  useEffect(() => {
+    setAnswerText('');
+    setAnswerRefusal(undefined);
+  }, [taskId]);
+
+  useEffect(() => {
+    if (answerRequest === undefined) return;
+    setAnswerFor(answerRequest.taskId);
+    setAnswerRefusal(undefined);
+  }, [answerRequest]);
 
   if (taskId === undefined) {
     return <Empty hint={t.inspector.pickHint}>{t.inspector.noTask}</Empty>;
@@ -41,6 +66,43 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
       invalidate((key) => key.includes(`/runs/${address.runId}`));
     } catch (error) {
       if (error instanceof ApiError) setRefusal(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openAnswer = (): void => {
+    setAnswerFor(taskId);
+    setAnswerRefusal(undefined);
+  };
+
+  const closeAnswer = (): void => {
+    setAnswerFor(undefined);
+    setAnswerRefusal(undefined);
+  };
+
+  /**
+   * Sends the answer (P7.1, FR-020). The server records it and requeues the task in one use
+   * case, the same one `agent-flow answer` calls, so a refusal here is the sentence the
+   * terminal would have printed. Any failure is shown — a cut connection included — because
+   * a form that closed on nothing would leave the person believing the task was answered.
+   */
+  const submitAnswer = async (): Promise<void> => {
+    const text = answerText.trim();
+    if (text === '') return;
+    setBusy(true);
+    setAnswerRefusal(undefined);
+    try {
+      await api.answer(address, taskId, text);
+      setAnswerFor(undefined);
+      setAnswerText('');
+      invalidate((key) => key.includes(`/runs/${address.runId}`));
+    } catch (error) {
+      setAnswerRefusal(
+        error instanceof ApiError
+          ? { code: error.code, message: error.message, action: error.action }
+          : { message: String(error) },
+      );
     } finally {
       setBusy(false);
     }
@@ -140,6 +202,11 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
                   {attention.action.label}
                 </button>
               ) : null}
+              {attention?.action.kind === 'answer' ? (
+                <button type="button" className="btn btn--primary" disabled={busy} aria-expanded={answerFor === taskId} onClick={openAnswer}>
+                  {attention.action.label}
+                </button>
+              ) : null}
               {emptyDiff ? (
                 <button
                   type="button"
@@ -173,6 +240,48 @@ export function Inspector({ address, taskId, card, attention, past, liveState }:
                 ) : null}
               </Notice>
             </div>
+          )}
+
+          {answerFor !== taskId ? null : (
+            <form
+              style={{ marginTop: 12, display: 'grid', gap: 8 }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitAnswer();
+              }}
+            >
+              {/* The agent's question is whatever it wrote in its notes when it stopped. */}
+              {data.notes.length === 0 ? null : (
+                <>
+                  <span className="eyebrow">{t.inspector.agentReported}</span>
+                  <ul className="warnlist">
+                    {data.notes.map((note, index) => (
+                      <li key={index}>{note}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span className="eyebrow">{t.inspector.yourAnswer}</span>
+                {/* 4 000, the server's own bound (`AnswerRequestSchema`), so the limit is met here
+                    rather than discovered as a 400. */}
+                <textarea className="textarea" value={answerText} onChange={(event) => setAnswerText(event.target.value)} placeholder={t.inspector.answerPlaceholder} maxLength={4000} style={{ minHeight: 100 }} />
+              </label>
+              {answerRefusal === undefined ? null : (
+                <Notice tone="bad" k={answerRefusal.code ?? t.common.refused}>
+                  {answerRefusal.message}
+                  {answerRefusal.action === undefined ? '' : ` ${answerRefusal.action}`}
+                </Notice>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="submit" className="btn btn--primary" disabled={busy || answerText.trim() === ''}>
+                  {busy ? t.inspector.sending : t.inspector.sendAnswer}
+                </button>
+                <button type="button" className="btn btn--ghost" disabled={busy} onClick={closeAnswer}>
+                  {t.common.cancel}
+                </button>
+              </div>
+            </form>
           )}
 
           {data.attemptHistory !== undefined && data.attemptHistory.length > 0 ? (

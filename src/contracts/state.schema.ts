@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AnyTaskIdSchema,
   CommitOidSchema,
   FailureClassSchema,
   GitRunKeySchema,
@@ -7,6 +8,7 @@ import {
   IsoTimestampSchema,
   RunIdSchema,
 } from './common.schema.js';
+import { FindingSchema } from './review.schema.js';
 import { TaskStateSchema } from './task.schema.js';
 
 /** Pipeline stages, in order. `stage` on a run points at the last one reached. */
@@ -265,6 +267,72 @@ export const WORKFLOW_CLASSES = ['trivial', 'simple', 'standard', 'high-risk'] a
 export const WorkflowClassSchema = z.enum(WORKFLOW_CLASSES);
 export type WorkflowClass = z.infer<typeof WorkflowClassSchema>;
 
+/**
+ * Who did something to a run, as it is persisted inside an amendment.
+ *
+ * {@link RunActor} was a TypeScript type with no schema, which was enough while an actor
+ * only rode inside an event's open `detail` record. An amendment lives in `state.json`,
+ * which is parsed, so the actor needs a schema — and two declarations of one shape drift
+ * unless something ties them. The assertion under {@link RunActor} is that tie.
+ */
+export const RunActorSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('keyboard') }),
+  z.object({ kind: z.literal('device'), deviceId: z.string().min(1), label: z.string() }),
+]);
+
+/**
+ * The operator decisions a run records (P7.4).
+ *
+ * `revision` spends a revision cycle, `decision` does not, and `escalation` changes the
+ * workflow class — the three are separate kinds because the budget has to tell them apart,
+ * and a record that could not would be the problem this list exists to fix.
+ */
+export const AMENDMENT_KINDS = [
+  'answer',
+  'revision',
+  'decision',
+  'escalation',
+  'forced_approval',
+  'attached_findings',
+] as const;
+export type AmendmentKind = (typeof AMENDMENT_KINDS)[number];
+
+/**
+ * One finding of a failed plan review, carried onto the tasks it cites (FR-017).
+ *
+ * `index` is the finding's position in the review it was copied from, so the record points
+ * back at its source. `tasks` is resolved once, when the finding is attached: resolving it
+ * again at prompt time would let a later plan re-route a decision made about this one.
+ */
+export const AttachedFindingSchema = z.object({
+  index: z.number().int().min(0),
+  finding: FindingSchema,
+  tasks: z.array(AnyTaskIdSchema).min(1),
+});
+export type AttachedFinding = z.infer<typeof AttachedFindingSchema>;
+
+/**
+ * An attributed operator decision, append-only (FR-008).
+ *
+ * Bound to a plan through `planHash`: an answer or an attachment reaches a prompt only
+ * while the run's approved plan is the one it was recorded against, so a replan retires it
+ * from the prompts without removing it from the record.
+ */
+export const AmendmentSchema = z.object({
+  id: z.string().regex(/^AMD-\d{3}$/, 'expected AMD-000'),
+  kind: z.enum(AMENDMENT_KINDS),
+  actor: RunActorSchema,
+  at: IsoTimestampSchema,
+  text: z.string().min(1).optional(),
+  task: AnyTaskIdSchema.optional(),
+  planHash: z.string().min(1).optional(),
+  findingCount: z.number().int().min(0).optional(),
+  fromWorkflow: WorkflowClassSchema.optional(),
+  toWorkflow: WorkflowClassSchema.optional(),
+  findings: z.array(AttachedFindingSchema).optional(),
+});
+export type Amendment = z.infer<typeof AmendmentSchema>;
+
 export const RunStateSchema = z.object({
   runId: RunIdSchema,
   feature: z.string().min(1),
@@ -368,6 +436,15 @@ export const RunStateSchema = z.object({
       grantedAt: IsoTimestampSchema.optional(),
     })
     .optional(),
+
+  /**
+   * Every operator decision recorded on this run, in the order it was made (FR-008).
+   *
+   * `.optional()` and never `.default([])`: a default would write `amendments: []` into
+   * every legacy `state.json` on its first update, and that key would then claim the run
+   * was asked about decisions it predates (NFR-004).
+   */
+  amendments: z.array(AmendmentSchema).optional(),
 
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,
@@ -639,6 +716,15 @@ export const OPERATOR_EVENT_TYPES = [
    * exists to record.
    */
   'task_revalidated',
+  /**
+   * `detail: { id, kind, task?, actor }`. An operator decision was appended to
+   * `state.amendments` (FR-008).
+   *
+   * The entry itself is in `state.json`; this event adds the moment and puts the decision
+   * in the same timeline as what it caused, so a reader of the log sees "answered TASK-002"
+   * immediately before the `task_requeued` it produced rather than having to join two files.
+   */
+  'amendment_recorded',
 ] as const;
 
 export type OperatorEventType = (typeof OPERATOR_EVENT_TYPES)[number];
@@ -650,6 +736,21 @@ export type RunActor =
       readonly deviceId: string;
       readonly label: string;
     };
+
+/**
+ * `true` when each type is assignable to the other, `false` otherwise.
+ *
+ * Tuple-wrapped so a union is compared as a whole rather than distributed member by member,
+ * which would let a schema that dropped one variant still read as a match.
+ */
+export type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+// The tie between `RunActorSchema` and `RunActor`. A field added to, removed from or
+// retyped in either one makes this `false`, and assigning `true` to it fails `typecheck` —
+// which is the point: the drift is caught by the compiler, not by the first state file
+// that carries a device actor the schema no longer accepts.
+const runActorSchemaMatchesRunActor: MutuallyAssignable<z.infer<typeof RunActorSchema>, RunActor> = true;
+void runActorSchemaMatchesRunActor;
 
 export type OperatorAttribution = RunActor | { readonly kind: 'unattributed' };
 

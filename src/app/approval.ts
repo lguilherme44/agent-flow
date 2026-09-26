@@ -124,12 +124,20 @@ export function checkApproval(
   return { allowed: true, warnings };
 }
 
-/** Records approval against a specific plan. */
+/**
+ * Records approval against a specific plan.
+ *
+ * `degradationReason` replaces the reason of a forced approval, and only its reason. A forced
+ * approval that attached the review's findings to the tasks (FR-016) is still a gate that did
+ * not hold, so its kind and impact are the ones every forced approval has; what differs is
+ * what happened to the findings, and a `status` that said "over a failed or missing review"
+ * would hide that they were handed to the executors rather than dropped.
+ */
 export async function approveRun(
   store: StateStore,
   runId: string,
   plan: Plan,
-  options: { forced?: boolean } = {},
+  options: { forced?: boolean; degradationReason?: string } = {},
 ): Promise<RunState> {
   const hash = planHash(plan);
 
@@ -159,7 +167,9 @@ export async function approveRun(
     // overruled a failed review looked identical to one that passed it.
     return store.recordDegradation(runId, {
       kind: 'forced_approval',
-      reason: 'the plan was approved with --force, over a failed or missing review',
+      reason:
+        options.degradationReason ??
+        'the plan was approved with --force, over a failed or missing review',
       impact:
         'the review gate did not hold for this run: whatever the reviewer objected to ' +
         'was accepted by a person rather than resolved',

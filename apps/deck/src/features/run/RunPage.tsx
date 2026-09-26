@@ -57,6 +57,9 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
   const [gateTab, setGateTab] = useState<'decide' | 'revise'>('decide');
   const [featureOpen, setFeatureOpen] = useState(false);
   const [actionNote, setActionNote] = useState<{ tone: 'ok' | 'bad' | 'warn'; text: string } | undefined>(undefined);
+  // The Inspector owns its answer form; this is the page asking it to open one. A new object
+  // on every ask, so the Inspector's effect fires even when the same task is asked twice.
+  const [answerRequest, setAnswerRequest] = useState<{ readonly taskId: string } | undefined>(undefined);
 
   // The address carries the moment and the task, so a reload lands where you were.
   useEffect(() => {
@@ -212,6 +215,15 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
         break;
       case 'review':
         void finalReview();
+        break;
+      case 'answer':
+        // P7.1, FR-020. Its own case: through `default` it only selected the task, and the
+        // person was left to find the form. The answer is typed where the task's notes —
+        // the agent's question — are already on screen.
+        if (item.scope.taskId === undefined) break;
+        setSelected(item.scope.taskId);
+        setScrub(null);
+        setAnswerRequest({ taskId: item.scope.taskId });
         break;
       case 'retry':
       case 'inspect':
@@ -582,7 +594,12 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm"
-                    onClick={() => setSelected(undefined)}
+                    onClick={() => {
+                      setSelected(undefined);
+                      // Closing unmounts the Inspector; a request left standing would reopen
+                      // the form the next time it mounts, for an ask nobody just made.
+                      setAnswerRequest(undefined);
+                    }}
                     title={dict.run.closeInspector}
                   >
                     ✕ {dict.common.clear}
@@ -596,6 +613,7 @@ export function RunPage({ projectId, runId, task, at }: { projectId: string; run
                     attention={attentionFor(selected)}
                     past={past}
                     liveState={liveStates.get(selected)}
+                    answerRequest={answerRequest}
                   />
                 </div>
               </section>

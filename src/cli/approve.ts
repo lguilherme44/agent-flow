@@ -23,18 +23,26 @@ import type { GlobalOptions } from './index.js';
  * exit code.
  */
 export async function runApproveCommand(
-  options: { force?: boolean },
+  options: { force?: boolean; attachFindings?: boolean },
   globals: GlobalOptions,
+  // The seam a test replaces. The default is what every real invocation uses.
+  depsFor: (globals: GlobalOptions) => RunActionDeps = actionDeps,
 ): Promise<ExitCodeValue> {
   try {
-    const deps = actionDeps(globals);
+    const deps = depsFor(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run to approve.\n');
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const outcome = await approve(deps, runId, { force: options.force === true });
+    // Both flags are passed through as given, including together: which combinations are
+    // refused, and why, is the use case's answer (FR-016), so a copy of it here could only
+    // disagree with it.
+    const outcome = await approve(deps, runId, {
+      force: options.force === true,
+      ...(options.attachFindings === true ? { attachFindings: true } : {}),
+    });
 
     // Printed either way, and before the decision: someone approving a degraded
     // run should know what was lost while they still have the choice (R-16).
@@ -45,7 +53,16 @@ export async function runApproveCommand(
       return exitCodeFor(outcome.error);
     }
 
-    if (outcome.value.forced) {
+    const { attachedFindings, tasksReached } = outcome.value;
+    if (attachedFindings !== undefined && tasksReached !== undefined) {
+      // An attachment is a forced approval too, but "--force was given" would be false, and
+      // the counts are what says whether the findings went anywhere (FR-021).
+      process.stdout.write(
+        `Approved over the failed review with its findings attached: ` +
+          `${String(attachedFindings)} finding(s), reaching ${String(tasksReached)} task(s).\n` +
+          'They are not resolved: each task is handed the ones routed to it.\n\n',
+      );
+    } else if (outcome.value.forced) {
       process.stdout.write('Overrode the review gate because --force was given.\n\n');
     }
 

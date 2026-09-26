@@ -1,11 +1,25 @@
 import { describeIsolation } from '../app/run-git-identity.js';
 import { buildExecutionContext, loadPlan } from '../app/execution-context.js';
-import { retryTask, revalidate, start } from '../app/run-actions.js';
+import {
+  answerTask,
+  retryTask,
+  revalidate,
+  start,
+  type RunActionDeps,
+} from '../app/run-actions.js';
 import { explainRouting, routeTask } from '../core/router.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { writeProgress, writeTaskOutcome } from './render/progress.js';
 import { actionDeps, currentRunId, exitCodeFor, printWarnings, render } from './approve.js';
+import { nodeInstructionIO } from './feature.js';
+import {
+  ANSWER_WORDING,
+  chooseInstructionSource,
+  readInstruction,
+  type InstructionFlags,
+  type InstructionIO,
+} from './instruction-source.js';
 import type { GlobalOptions } from './index.js';
 
 /**
@@ -139,6 +153,70 @@ export async function runRetryCommand(
         ? `\nRecorded: ${taskId} is meant to change nothing, so an empty diff will be accepted.\n`
         : '';
     process.stdout.write(`${taskId} is queued again.\n${declared}\nRun it with: agent-flow run\n`);
+    return ExitCode.OK;
+  } catch (error) {
+    const rendered = renderError(error);
+    process.stderr.write(`${rendered.message}\n`);
+    return rendered.exitCode;
+  }
+}
+
+/** The seams a test replaces. The defaults are what every real invocation uses. */
+export interface AnswerCommandDeps {
+  readonly io: InstructionIO;
+  readonly actionDeps: (globals: GlobalOptions) => RunActionDeps;
+}
+
+/**
+ * `agent-flow answer <task> [text]` — reply to what a BLOCKED task asked, and queue it (P7.1).
+ *
+ * Beside `retry` because it is the retry a BLOCKED task was waiting for: the same requeue,
+ * with the text the next attempt needs, and no `--force` — the force gate exists so nobody
+ * re-runs a BLOCKED task without an answer, and this is the command that supplies one.
+ *
+ * **The text is read before anything about the run is** (FR-001). Two sources, or an empty
+ * text, is a refusal about the invocation, and it must not depend on — or cost — a state read.
+ * That is the opposite order from `revise`, which checks for a run before opening an editor.
+ * The price is an editor opened for a project with no run; the gain is that a refusal about
+ * what was typed never waits on, or reports, anything about the run.
+ */
+export async function runAnswerCommand(
+  taskId: string,
+  flags: InstructionFlags,
+  globals: GlobalOptions,
+  seams: AnswerCommandDeps = { io: nodeInstructionIO('answer'), actionDeps },
+): Promise<ExitCodeValue> {
+  try {
+    const source = chooseInstructionSource(flags, ANSWER_WORDING);
+    if (source.kind === 'refused') {
+      process.stderr.write(`${source.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    const read = await readInstruction(source, seams.io, ANSWER_WORDING);
+    if (!read.ok) {
+      process.stderr.write(`${read.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    const deps = seams.actionDeps(globals);
+    const runId = await currentRunId(deps);
+    if (runId === null) {
+      process.stderr.write('No active run.\n');
+      return ExitCode.GATE_NOT_SATISFIED;
+    }
+
+    const outcome = await answerTask(deps, runId, taskId, read.instruction);
+
+    if (!outcome.ok) {
+      process.stderr.write(`${render(outcome.error)}\n`);
+      return exitCodeFor(outcome.error);
+    }
+
+    process.stdout.write(
+      `${taskId} answered and queued; continue with \`agent-flow run\`.\n` +
+        `Recorded as ${outcome.value.amendmentId}.\n`,
+    );
     return ExitCode.OK;
   } catch (error) {
     const rendered = renderError(error);

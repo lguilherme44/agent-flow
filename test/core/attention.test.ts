@@ -12,6 +12,7 @@ import {
   type TeamView,
 } from '../../src/contracts/index.js';
 import { projectAttention, sortAttention, type AttentionInput } from '../../src/core/attention.js';
+import { ptBR } from '../../src/core/phrases/index.js';
 
 /**
  * The queue, and the three properties it is worthless without (M8 §4).
@@ -386,6 +387,21 @@ describe('M8-ACC-14 — every item links to the object that caused it', () => {
       expect(item.action.label.toLowerCase()).not.toContain('log');
       expect(item.what.toLowerCase()).not.toContain('something');
     }
+  });
+
+  it('offers to answer an agent-blocked task, in the reader\'s language (FR-005)', () => {
+    // `inspect` was the honest answer while nothing could answer a BLOCKED task. `answer`
+    // is the use case that does, so the row names it rather than sending a person to read.
+    const facts = { tasks: [task('TASK-002', 'blocked')] };
+
+    const english = projectAttention(input(facts)).find((item) => item.kind === 'agent_blocked');
+    expect(english?.action).toEqual({ kind: 'answer', label: 'Answer TASK-002', destructive: false });
+
+    const portuguese = projectAttention(input({ ...facts, say: ptBR })).find(
+      (item) => item.kind === 'agent_blocked',
+    );
+    expect(portuguese?.action.kind).toBe('answer');
+    expect(portuguese?.action.label).toBe('Responder TASK-002');
   });
 
   it('holds an id stable across two reads of the same facts', () => {
