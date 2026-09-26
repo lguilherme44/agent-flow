@@ -242,6 +242,16 @@ over"*. O desenho do P7.5 cobriu só a revisão reprovada. Com revisão aprovada
 um ciclo de `revise` ou aprovar e conferir à mão no fim. Oportunidade: `--attach-findings` também
 para achados de uma revisão que passou.
 
+### A-26 · O dashboard clássico ficou sem compilar por três dias e nenhum gate viu — alto
+
+O `install:global` do fim da sessão falhou em `build:web`: o P1.2 (`e110140`, 24/09) tornou o
+campo `conduct` obrigatório em `TelemetrySummary`, e a fixture visual do dashboard clássico
+(`apps/web/visual/fixtures.ts`) não foi atualizada. Todas as runs desta sessão validaram com
+`lint`/`typecheck`/`test`/`build` e os gates do Deck; nenhuma declarou `typecheck:web`/`build:web`,
+e o `typecheck` da raiz não inclui `apps/web`. O defeito ficou três dias no `master` publicado. O
+`npm run check` do repositório cobre os dois dashboards — as runs deveriam validar com ele (ou o
+`init` deveria declarar os gates de workspace, A-05), e o P7.9 só ajuda se o gate estiver declarado.
+
 ## Fechamento da execução (medido por quem conduziu, depois do FEATURE COMPLETE)
 
 | Gate | Base (`7306ca8`) | Depois |

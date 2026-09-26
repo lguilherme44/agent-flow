@@ -436,6 +436,11 @@ export const TELEMETRY: TelemetryResponse = {
     },
     byRole: {},
     byStage: {},
+    // No entry here reported turns or denials, so both are the "nobody said" shape.
+    conduct: {
+      turns: { total: 0, reporting: 0, of: 13 },
+      permissionDenials: { count: 0, tools: [], reporting: 0, of: 13 },
+    },
   },
 };
 
