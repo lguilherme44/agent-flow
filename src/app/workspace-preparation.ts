@@ -63,6 +63,12 @@ export interface PreparationRequest {
   readonly path: string;
   /** `project.commands.install`, when the project declares one. */
   readonly install?: string;
+  /**
+   * `execution.commandTimeoutSeconds`. Optional so a caller that has no configuration keeps
+   * `runCommands`' own default; every production caller passes it, because an install that
+   * is killed half-way reads as "the install exited 124" on a workspace that was fine.
+   */
+  readonly timeoutSeconds?: number;
 }
 
 export async function prepareWorkspace(
@@ -78,7 +84,7 @@ export async function prepareWorkspace(
   const install = request.install;
   if (install === undefined || install.trim().length === 0) return { ok: true };
 
-  const ran = await runInstall(deps, install, request.path);
+  const ran = await runInstall(deps, install, request.path, request.timeoutSeconds);
   if (!ran.ok) return ran;
 
   // §8.1, second assertion. Ignored files do not count — `node_modules/` is exactly what
@@ -121,8 +127,14 @@ async function runInstall(
   deps: PreparationDeps,
   command: string,
   cwd: string,
+  timeoutSeconds: number | undefined,
 ): Promise<{ ok: true; exitCode: number } | { ok: false; failure: PreparationFailure }> {
-  const outcome = await runCommands({ processRunner: deps.processRunner, commands: [command], cwd });
+  const outcome = await runCommands({
+    processRunner: deps.processRunner,
+    commands: [command],
+    cwd,
+    ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+  });
 
   if (outcome.passed) {
     return { ok: true, exitCode: outcome.results[0]?.exitCode ?? 0 };

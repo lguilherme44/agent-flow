@@ -400,6 +400,32 @@ export const GlobalConfigSchema = z.object({
        * trade of reproducibility for reach, and it should be made deliberately.
        */
       isolateRunnerSettings: z.boolean().default(true),
+      /**
+       * How long one of the operator's own commands may run before it is killed.
+       *
+       * Covers every line agent-flow runs on the operator's behalf: `commands.install`,
+       * the `lint`/`typecheck`/`test`/`build` of `review`, and the validation ids a task
+       * or a `revalidate` resolves. It was a constant — 900 seconds in
+       * `verification-commands.ts` — and no caller could pass anything else.
+       *
+       * **A constant was the wrong shape, and it was measured, not suspected.** A full
+       * test suite on a machine running two agents at once took longer than 900 seconds,
+       * so every task "failed" validation: the command was killed, reported as exit 124
+       * with no summary, and read as a verdict on the code. How long a suite takes is a
+       * fact about the repository *and* the load on the machine running it, and neither
+       * is something this product can know from here.
+       *
+       * The default is the old constant, so a configuration that does not name this
+       * behaves exactly as before. The ceiling is one day: past that, a hung command is
+       * the likelier explanation than a slow one, and an unbounded value would let a
+       * wedged `npm test` hold the run's lease forever.
+       *
+       * Global only, like the rest of `execution`, which is not in `OVERRIDABLE_KEYS`. How
+       * long a command may occupy the machine is the machine owner's call; a repository
+       * that could raise it would be a repository deciding how long its own code runs
+       * unattended on somebody else's hardware.
+       */
+      commandTimeoutSeconds: z.number().int().positive().max(86_400).default(900),
     })
     .prefault({}),
   /**

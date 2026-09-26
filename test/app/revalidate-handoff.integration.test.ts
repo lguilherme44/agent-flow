@@ -9,6 +9,7 @@ import { WorktreeRecovery } from '../../src/app/worktree-recovery.js';
 import { runPaths } from '../../src/app/paths.js';
 import { revalidateTask, type RevalidationDeps } from '../../src/app/task-revalidation.js';
 import {
+  GlobalConfigSchema,
   PlanSchema,
   ProjectConfigSchema,
   type EffectiveConfig,
@@ -110,6 +111,7 @@ function revalidationDeps(current: WorktreeRun, testCommand: string): Revalidati
         project: { name: 'temp-repo', type: 'node' },
         commands: { test: testCommand },
       }),
+      global: { execution: GlobalConfigSchema.shape.execution.parse({}) },
     },
     projectDir: current.repo.dir,
   };

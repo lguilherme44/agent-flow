@@ -7,6 +7,7 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { probeInstallCleanliness } from '../../src/app/diagnostics.js';
 import { renderInstallProbe } from '../../src/cli/doctor.js';
 import type { EffectiveConfig } from '../../src/contracts/index.js';
+import type { ProcessRunner } from '../../src/ports/index.js';
 import { BORN_DIRTY_FILE, bornDirty, makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
 
 /**
@@ -63,15 +64,22 @@ afterEach(() => {
   repo = undefined;
 });
 
-async function probe(temp: TempRepo, install?: string): Promise<string> {
+async function probe(
+  temp: TempRepo,
+  install?: string,
+  options: { readonly processRunner?: ProcessRunner; readonly commandTimeoutSeconds?: number } = {},
+): Promise<string> {
   const config = {
-    global: {},
+    global:
+      options.commandTimeoutSeconds === undefined
+        ? {}
+        : { execution: { commandTimeoutSeconds: options.commandTimeoutSeconds } },
     ...(install === undefined ? {} : { project: { commands: { install } } }),
   } as unknown as EffectiveConfig;
 
   const finding = await probeInstallCleanliness({
     fs: new NodeFileSystem(),
-    processRunner: new NodeProcessRunner(),
+    processRunner: options.processRunner ?? new NodeProcessRunner(),
     config,
     projectDir: temp.dir,
     host: new FakeHost(4242, 'test-host', [4242], temp.home),
@@ -116,6 +124,23 @@ describe('the install-cleanliness probe (§8.4)', () => {
 
     expect(report).toContain('failed in a fresh checkout');
     expect(report).toContain('every task would fail here');
+  });
+
+  it('gives the install the budget the real preparation gets (execution.commandTimeoutSeconds)', async () => {
+    // Otherwise `doctor` would report "install failed" for an install `run` completes.
+    repo = await makeTempRepoWithCommit();
+    const real = new NodeProcessRunner();
+    const timeouts: number[] = [];
+    const recording: ProcessRunner = {
+      run: (spawn) => {
+        if (spawn.command !== 'git') timeouts.push(spawn.timeoutSeconds);
+        return real.run(spawn);
+      },
+    };
+
+    await probe(repo, 'exit 0', { processRunner: recording, commandTimeoutSeconds: 2400 });
+
+    expect(timeouts).toEqual([2400]);
   });
 
   it('names the checkout phase when a fresh checkout is born dirty', async () => {

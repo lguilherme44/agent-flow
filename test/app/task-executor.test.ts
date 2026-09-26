@@ -299,6 +299,34 @@ describe('validation is run by agent-flow, not reported by the agent (§42)', ()
     expect(proc.lastCall?.args.at(-1)?.replace(/^"(.*)"$/, '$1')).toBe('npm test -- recurrence');
   });
 
+  it('runs them under execution.commandTimeoutSeconds, not the module constant', async () => {
+    // Measured: a full suite on a loaded machine outlived the old 900-second constant, and
+    // every task "failed" validation with exit 124 and no summary. The operator's budget
+    // has to reach the spawn, or raising it changes nothing.
+    const proc = new FakeProcessRunner().always({ exitCode: 0 });
+    const config: GlobalConfig = {
+      ...globalConfig,
+      execution: { ...globalConfig.execution, commandTimeoutSeconds: 2400 },
+    };
+    const { executor, runner, run } = await harness({ processRunner: proc, config });
+    runner.pushText(COMPLETED);
+
+    await executor.execute(task({ validation: ['recurrence'] }), run.runId, 'SDD');
+
+    expect(proc.calls).toHaveLength(1);
+    expect(proc.lastCall?.timeoutSeconds).toBe(2400);
+  });
+
+  it('keeps the old 900 seconds when the setting is left alone', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 0 });
+    const { executor, runner, run } = await harness({ processRunner: proc });
+    runner.pushText(COMPLETED);
+
+    await executor.execute(task({ validation: ['recurrence'] }), run.runId, 'SDD');
+
+    expect(proc.lastCall?.timeoutSeconds).toBe(900);
+  });
+
   it('sends a task to review when its validation fails', async () => {
     // Never to another model (§55): a failing check is information about the
     // work, and routing around it would replace a visible problem with a quiet

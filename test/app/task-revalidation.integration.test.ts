@@ -3,7 +3,8 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
-import { ProjectConfigSchema, type ProjectConfig } from '../../src/contracts/index.js';
+import { GlobalConfigSchema, ProjectConfigSchema, type ProjectConfig } from '../../src/contracts/index.js';
+import type { ProcessSpawnOptions } from '../../src/ports/index.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { runPaths } from '../../src/app/paths.js';
 import { attemptRef, attemptWorkspace } from '../../src/core/worktree-policy.js';
@@ -62,6 +63,8 @@ interface World {
   readonly gitRunKey: string;
   readonly workspacePath: string;
   readonly base: string;
+  /** Every spawn the use case made — Git included — as the real runner received it. */
+  readonly spawned: readonly ProcessSpawnOptions[];
 }
 
 /**
@@ -85,6 +88,8 @@ async function world(
     ids: ['test'],
   },
   taskState: 'failed' | 'blocked' = 'failed',
+  /** `execution.commandTimeoutSeconds`; the schema's default when omitted. */
+  commandTimeoutSeconds?: number,
 ): Promise<World> {
   const current = await makeTempRepoWithCommit();
   repo = current;
@@ -112,14 +117,30 @@ async function world(
     tasks: [{ id: TASK, state: taskState, attempts: 1, infrastructureFailures: 0 }],
   }));
 
+  // The real runner, observed rather than replaced: the commands still run, and what each
+  // spawn was asked to tolerate is kept for the assertion that reads it.
+  const real = new NodeProcessRunner();
+  const spawned: ProcessSpawnOptions[] = [];
   const deps: RevalidationDeps = {
     fs,
     clock,
     host,
     store,
     workspaces: current.workspaces,
-    processRunner: new NodeProcessRunner(),
-    config: { project: projectConfig(testCommand) },
+    processRunner: {
+      run: (options) => {
+        spawned.push(options);
+        return real.run(options);
+      },
+    },
+    config: {
+      project: projectConfig(testCommand),
+      global: {
+        execution: GlobalConfigSchema.shape.execution.parse(
+          commandTimeoutSeconds === undefined ? {} : { commandTimeoutSeconds },
+        ),
+      },
+    },
     projectDir: current.dir,
   };
 
@@ -191,7 +212,7 @@ async function world(
   );
   if (!recorded.ok) throw new Error(recorded.failure.detail);
 
-  return { deps, store, runId: run.runId, gitRunKey, workspacePath: added.value, base };
+  return { deps, store, runId: run.runId, gitRunKey, workspacePath: added.value, base, spawned };
 }
 
 function attemptArtifact(projectDir: string, runId: string, attempt: number): unknown {
@@ -439,7 +460,7 @@ describe('revalidate refuses before the lock, with a reason that names itself', 
 
     const withoutTest: RevalidationDeps = {
       ...deps,
-      config: { project: ProjectConfigSchema.parse({ project: { name: 'x', type: 'node' } }) },
+      config: { ...deps.config, project: ProjectConfigSchema.parse({ project: { name: 'x', type: 'node' } }) },
     };
 
     const outcome = await revalidateTask(withoutTest, runId, TASK, { kind: 'keyboard' });
@@ -447,5 +468,22 @@ describe('revalidate refuses before the lock, with a reason that names itself', 
     if (outcome.ok) return;
     expect(outcome.refusal.code).toBe('task_not_revalidatable');
     expect(outcome.refusal.message).toContain('"test"');
+  });
+});
+
+describe('revalidate runs the commands under the operator\'s budget', () => {
+  it('passes execution.commandTimeoutSeconds to the validation command it spawns', async () => {
+    // A suite that `run` allows 2400 seconds must not be killed at 900 when a person
+    // revalidates it: the same tree, the same command, and a different verdict would be
+    // decided by which verb was typed.
+    const { deps, runId, workspacePath, spawned } = await world(PASSING, undefined, undefined, 2400);
+    writeFileSync(join(workspacePath, 'fixed.txt'), 'by hand\n');
+
+    const outcome = await revalidateTask(deps, runId, TASK, { kind: 'keyboard' });
+
+    expect(outcome.ok && outcome.value.passed).toBe(true);
+    const validation = spawned.filter((call) => call.command !== 'git');
+    expect(validation).toHaveLength(1);
+    expect(validation[0]?.timeoutSeconds).toBe(2400);
   });
 });

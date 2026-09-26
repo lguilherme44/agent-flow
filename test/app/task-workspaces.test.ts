@@ -72,9 +72,18 @@ function generatesUntracked(count: number): string {
     : `for i in $(seq 1 ${count}); do echo x > generated-$i.ts; done`;
 }
 
-function workspacesFor(temp: TempRepo, install?: string): TaskWorkspaces {
+function workspacesFor(
+  temp: TempRepo,
+  install?: string,
+  options: { readonly processRunner?: ProcessRunner; readonly commandTimeoutSeconds?: number } = {},
+): TaskWorkspaces {
   const config = {
-    global: {},
+    // Hand-built and deliberately partial: a configuration that predates a key has to keep
+    // working, which is why the product reads `execution` with `?.` here.
+    global:
+      options.commandTimeoutSeconds === undefined
+        ? {}
+        : { execution: { commandTimeoutSeconds: options.commandTimeoutSeconds } },
     ...(install === undefined ? {} : { project: { commands: { install } } }),
   } as unknown as EffectiveConfig;
 
@@ -83,7 +92,7 @@ function workspacesFor(temp: TempRepo, install?: string): TaskWorkspaces {
     fs: new NodeFileSystem(),
     host: new FakeHost(1000, 'test-host', [1000], temp.home),
     projectDir: temp.dir,
-    processRunner: new NodeProcessRunner(),
+    processRunner: options.processRunner ?? new NodeProcessRunner(),
     config,
     clock: new FixedClock(),
   });
@@ -282,6 +291,29 @@ describe('the install, and what it may leave behind (§8.2, §8.3)', () => {
     });
 
     expect(outcome.ok).toBe(true);
+  });
+
+  it('runs the install under execution.commandTimeoutSeconds', async () => {
+    // A cold install on a loaded machine is as slow as a suite. Killed at the module's
+    // constant, every attempt of the run would be refused at "setup" with exit 124.
+    repo = await makeTempRepoWithCommit();
+    const base = repo.head();
+    const real = new NodeProcessRunner();
+    const timeouts: number[] = [];
+    const recording: ProcessRunner = {
+      run: (spawn) => {
+        if (spawn.command !== 'git') timeouts.push(spawn.timeoutSeconds);
+        return real.run(spawn);
+      },
+    };
+
+    const outcome = await workspacesFor(repo, 'exit 0', {
+      processRunner: recording,
+      commandTimeoutSeconds: 2400,
+    }).prepare({ state: isolatedRun(base), taskId: 'TASK-001', attempt: 1, base });
+
+    expect(outcome.ok).toBe(true);
+    expect(timeouts).toEqual([2400]);
   });
 });
 

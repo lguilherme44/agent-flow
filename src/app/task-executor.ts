@@ -489,6 +489,9 @@ export class TaskExecutor {
             // while the work happened elsewhere would judge a tree the task never
             // touched (§4.2, I-4).
             cwd: workingDirectory,
+            // The operator's budget, not the module's constant: a full suite on a loaded
+            // machine outlives 900 seconds, and a kill here reads as a failed task.
+            timeoutSeconds: config.global.execution.commandTimeoutSeconds,
           });
 
     // Judged against what the task expected, not against exit zero. A test-first

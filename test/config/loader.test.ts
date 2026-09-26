@@ -205,6 +205,49 @@ rules:
   });
 });
 
+describe('execution.commandTimeoutSeconds', () => {
+  const projectYaml = 'project:\n  name: some-api\n  type: node\n';
+
+  it('defaults to 900 seconds, the constant it replaced', async () => {
+    const config = await load(new InMemoryFileSystem());
+    expect(config.global.execution.commandTimeoutSeconds).toBe(900);
+  });
+
+  it('accepts a longer budget from the global file', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'execution:\n  commandTimeoutSeconds: 2400\n');
+
+    const config = await load(fs);
+    expect(config.global.execution.commandTimeoutSeconds).toBe(2400);
+    // Beside the other `execution` keys, not instead of them.
+    expect(config.global.execution.isolateRunnerSettings).toBe(true);
+  });
+
+  it('rejects zero, which would kill every command before it starts', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'execution:\n  commandTimeoutSeconds: 0\n');
+
+    await expect(load(fs)).rejects.toThrowError(ConfigError);
+    await expect(load(fs)).rejects.toThrow(/commandTimeoutSeconds/);
+  });
+
+  it('is global-only: a project cannot raise it, trusted or not', async () => {
+    // How long a repository's own commands may run unattended on this machine is the
+    // machine owner's call. `execution` is absent from the overridable keys, so a project
+    // file naming it changes nothing — and trust, which admits loosenings of overridable
+    // keys, does not reach it either.
+    for (const global of [undefined, 'trust:\n  projectConfig: [/repo]\n']) {
+      const fs = new InMemoryFileSystem();
+      if (global !== undefined) fs.seed(GLOBAL_PATH, global);
+      fs.seed(PROJECT_PATH, `${projectYaml}execution:\n  commandTimeoutSeconds: 86400\n`);
+
+      const config = await load(fs);
+      expect(config.project?.project.name).toBe('some-api');
+      expect(config.global.execution.commandTimeoutSeconds).toBe(900);
+    }
+  });
+});
+
 describe('shipped default config', () => {
   it('is itself valid — the template cannot ship broken', async () => {
     const fs = new InMemoryFileSystem();

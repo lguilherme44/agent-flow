@@ -35,6 +35,7 @@ function world(options: {
   readonly clean?: boolean;
   readonly cleanAfterInstall?: boolean;
   readonly installExit?: number;
+  readonly timeoutSeconds?: number;
 }) {
   const fs = new InMemoryFileSystem();
   let statusCalls = 0;
@@ -65,6 +66,7 @@ function world(options: {
         {
           path: WORKSPACE,
           ...(options.install === undefined ? {} : { install: options.install }),
+          ...(options.timeoutSeconds === undefined ? {} : { timeoutSeconds: options.timeoutSeconds }),
         },
       ),
   };
@@ -148,5 +150,25 @@ describe('the shared preparation sequence (AD-44)', () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(JSON.stringify(outcome.failure)).not.toContain(WORKSPACE);
+  });
+
+  it('runs the install under the timeout it was given (execution.commandTimeoutSeconds)', async () => {
+    // A cold `npm ci` on a loaded machine is as slow as a suite, and a kill half-way reads
+    // as "the install exited 124" on a workspace that was fine.
+    const { prepare, processRunner } = world({ install: 'npm ci', timeoutSeconds: 2400 });
+
+    expect((await prepare()).ok).toBe(true);
+
+    const install = processRunner.calls.filter((call) => call.command !== 'git');
+    expect(install).toHaveLength(1);
+    expect(install[0]?.timeoutSeconds).toBe(2400);
+  });
+
+  it('keeps the module default when no timeout is given', async () => {
+    const { prepare, processRunner } = world({ install: 'npm ci' });
+
+    await prepare();
+
+    expect(processRunner.calls.find((call) => call.command !== 'git')?.timeoutSeconds).toBe(900);
   });
 });

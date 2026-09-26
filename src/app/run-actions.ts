@@ -2258,6 +2258,9 @@ async function judgeRun(
   // preparation and the commands, which are often the longest part (`reviewInProgress`).
   await context.store.appendEvent(runId, 'run_review_started', {});
   const install = context.config.project?.commands?.install;
+  // One budget for every command below, install included: the operator's, because how long
+  // a full suite takes depends on the machine's load and not on anything known here.
+  const commandTimeoutSeconds = context.config.global.execution.commandTimeoutSeconds;
   const isolated = tree.value.integration !== undefined;
   const prepared: PreparationOutcome = isolated
     ? await prepareWorkspace(
@@ -2265,6 +2268,7 @@ async function judgeRun(
         {
           path: tree.value.cwd,
           ...(install === undefined ? {} : { install }),
+          timeoutSeconds: commandTimeoutSeconds,
         },
       )
     : { ok: true };
@@ -2305,6 +2309,7 @@ async function judgeRun(
         processRunner: context.processRunner,
         project: context.config.project,
         cwd: tree.value.cwd,
+        timeoutSeconds: commandTimeoutSeconds,
         onStep: (step, result) => options.onVerificationStep?.(step, result.exitCode === 0),
       })
     : { passed: false, results: [], skipped: [...VERIFICATION_ORDER] };

@@ -781,10 +781,15 @@ export async function probeInstallCleanliness(options: {
       };
     }
 
+    // The budget the real preparation gets (`execution.commandTimeoutSeconds`). A shorter
+    // one here would report `install_failed` for an install that `run` completes. `?.`
+    // because a configuration built by hand may predate the key; absent is the default.
+    const timeoutSeconds = options.config.global.execution?.commandTimeoutSeconds;
     const ran = await runCommands({
       processRunner: options.processRunner,
       commands: [install],
       cwd: added.value,
+      ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
     });
     if (!ran.passed) return { outcome: 'install_failed', command: install };
 

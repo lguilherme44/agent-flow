@@ -26,6 +26,15 @@ describe('config field catalog', () => {
       reason: 'global_only',
       effect: 'server_restart',
     });
+    // The operator's command budget is the machine's, not the repository's.
+    expect(configFieldAt(['execution', 'commandTimeoutSeconds'], 'global')).toMatchObject({
+      valueType: 'integer',
+      editable: true,
+    });
+    expect(configFieldAt(['execution', 'commandTimeoutSeconds'], 'project')).toMatchObject({
+      editable: false,
+      reason: 'global_only',
+    });
     expect(configFieldAt(['project', 'name'], 'global')).toBeUndefined();
     expect(configFieldAt(['project', 'name'], 'project')).toMatchObject({
       editable: true,

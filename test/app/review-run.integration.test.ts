@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
@@ -73,6 +73,8 @@ class RecordingProcessRunner implements ProcessRunner {
   readonly shellCwds: string[] = [];
   /** What each shell was asked to run, in order — AR-04 asserts on the ordering. */
   readonly shellCommands: string[] = [];
+  /** How long each shell was allowed, in the same order (`execution.commandTimeoutSeconds`). */
+  readonly shellTimeouts: number[] = [];
   private readonly real = new NodeProcessRunner();
 
   async run(options: ProcessSpawnOptions): Promise<ProcessResult> {
@@ -81,6 +83,7 @@ class RecordingProcessRunner implements ProcessRunner {
     if (options.command === SHELL) {
       this.shellCwds.push(options.cwd);
       this.shellCommands.push(options.args.join(' '));
+      this.shellTimeouts.push(options.timeoutSeconds);
       return this.real.run(options);
     }
 
@@ -354,6 +357,26 @@ describe('the verification workspace is prepared first (AR-04)', () => {
     const prepared = events.find((event) => event.type === 'workspace_prepared');
 
     expect(prepared?.detail).toMatchObject({ install: 'printf ok', exitCode: 0 });
+  });
+
+  it('gives the install and every verification command the operator\'s timeout', async () => {
+    // `execution.commandTimeoutSeconds` read from the real global file, through the real
+    // execution context: a suite that outlives 900 seconds on a loaded machine must not be
+    // killed here while `run` let it finish.
+    const { current, deps, runner } = await reviewable();
+    run = current;
+    writeFileSync(deps.globalConfigPath, 'execution:\n  commandTimeoutSeconds: 2400\n');
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  install: printf ok\n  test: cat one.txt\n',
+    );
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+
+    expect(runner.shellCommands.some((line) => line.includes('printf ok'))).toBe(true);
+    expect(runner.shellCommands.some((line) => line.includes('cat one.txt'))).toBe(true);
+    expect(new Set(runner.shellTimeouts)).toEqual(new Set([2400]));
   });
 
   /**

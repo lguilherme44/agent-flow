@@ -230,11 +230,15 @@ export class TaskWorkspaces {
     // produced four `exit 127`s in a tree nobody had installed into. An architecture test
     // now forbids a second implementation.
     const install = this.deps.config.project?.commands?.install;
+    // `?.` for the reason `worktree?.copy` above has one; absent falls back to the
+    // module's own default, which is what this key defaults to anyway.
+    const timeoutSeconds = this.deps.config.global.execution?.commandTimeoutSeconds;
     const prepared = await prepareWorkspace(
       { workspaces: this.deps.workspaces, processRunner: this.deps.processRunner },
       {
         path: workspace.path,
         ...(install === undefined ? {} : { install }),
+        ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
       },
     );
 

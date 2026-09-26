@@ -127,7 +127,14 @@ export interface RevalidationDeps {
   readonly store: StateStore;
   readonly workspaces: GitWorkspaces;
   readonly processRunner: ProcessRunner;
-  readonly config: Pick<EffectiveConfig, 'project'>;
+  /**
+   * `project` for the ids, `execution` for how long their commands may run — the same
+   * `execution.commandTimeoutSeconds` the executor honours, so a suite that passes under
+   * `run` is not killed when a person revalidates it.
+   */
+  readonly config: Pick<EffectiveConfig, 'project'> & {
+    readonly global: Pick<EffectiveConfig['global'], 'execution'>;
+  };
   readonly projectDir: string;
 }
 
@@ -363,6 +370,7 @@ export async function revalidateTask(
     // The worktree the person edited, and nothing else. Validating the project directory
     // while the fix lives elsewhere would judge a tree nobody touched (§4.2, I-4).
     cwd: workspacePath,
+    timeoutSeconds: deps.config.global.execution.commandTimeoutSeconds,
   });
 
   // What Git says the tree now holds, measured once and handed to both the judgement and
