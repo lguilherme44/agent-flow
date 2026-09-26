@@ -28,14 +28,12 @@ Pedido completo, com a evidência de cada item, em `~/.agent-flow/requests/opera
 (fora do repositório). Estados antigos em disco continuam legíveis, e runs sem resposta nem
 emenda se comportam exatamente como hoje.
 
-**Em andamento (26/09):** P7.1, P7.4 e P7.5 estão na run AF-2026-002, worktree
-`agent-flow-f7a-operator-answers`, branch `feat/f7a-operator-answers` (plano aprovado, 8
-tarefas). TASK-001 e TASK-002 prontas; a TASK-003 tem o código pronto, mas a validação completa
-estourou o limite fixo de 900s com a máquina a 100% de CPU. O limite agora é configurável
-(`execution.commandTimeoutSeconds`, `f486c76`): retomar com `revalidate TASK-003` usando um
-valor maior, e depois `run` para as tarefas 004 a 008. O P7.3 ficou para uma run própria.
+**Entregue em `1841fc7` (26/09):** P7.1, P7.4 e P7.5 (run AF-2026-002). Ficaram dois achados
+baixos da revisão: a fila do dashboard clássico (`apps/web`) passa a dizer "Answer TASK-NNN" sem
+ter formulário de resposta; e as frases `fixSddOrForce` e `readWhatAsked` ficaram sem uso. O P7.3
+terá run própria.
 
-- [ ] **P7.1 · Responder uma tarefa BLOCKED** — `src/app/run-actions.ts:915`, `src/core/phrases/en.ts:440`
+- [x] **P7.1 · Responder uma tarefa BLOCKED** — `1841fc7`, 26/09 — — `src/app/run-actions.ts:915`, `src/core/phrases/en.ts:440`
       `agent-flow answer <task> "<texto>" | --file <arquivo>` e o mesmo no Deck. A resposta fica
       na tarefa, entra no prompt do próximo attempt, e a tarefa respondida volta à fila **sem
       `--force`**. A frase que hoje manda "responder" passa a nomear o comando que existe.
@@ -56,14 +54,14 @@ valor maior, e depois `run` para as tarefas 004 a 008. O P7.3 ficou para uma run
       **Pronto quando:** teste com três concluídas e uma bloqueada: depois de `revise` + `approve`,
       as três continuam concluídas e a quarta roda com o plano novo.
 
-- [ ] **P7.4 · Decisões do operador como emendas registradas** — `src/contracts/state.schema.ts`, artefato ao lado do SDD
+- [x] **P7.4 · Decisões do operador como emendas registradas** — `1841fc7`, 26/09 — `src/contracts/state.schema.ts`, artefato ao lado do SDD
       Resposta a BLOCKED, `revise` e aprovação por cima de achado viram emendas: quem (identidade
       do P2.5), quando, sobre qual tarefa ou achado, e o texto. Visíveis no Deck; lidas pela
       revisão final.
       **Pronto quando:** cada um dos três tipos gera uma emenda (teste), e o prompt da revisão
       final as inclui.
 
-- [ ] **P7.5 · O orçamento separa replanejamento de decisão** — `src/app/run-actions.ts:1772`, `src/core/adaptive-workflow.ts:99-134`
+- [x] **P7.5 · O orçamento separa replanejamento de decisão** — `1841fc7`, 26/09 — `src/app/run-actions.ts:1772`, `src/core/adaptive-workflow.ts:99-134`
       Resposta a BLOCKED e ajuste pedido pelo operador não gastam ciclo de revisão por qualidade.
       No teto, dois caminhos explícitos e registrados: elevar a classe, ou aprovar **anexando os
       achados abertos às tarefas afetadas** (que chegam aos executores).
