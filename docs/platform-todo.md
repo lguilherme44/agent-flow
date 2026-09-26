@@ -33,7 +33,7 @@ baixos da revisão: a fila do dashboard clássico (`apps/web`) passa a dizer "An
 ter formulário de resposta; e as frases `fixSddOrForce` e `readWhatAsked` ficaram sem uso. O P7.3
 terá run própria.
 
-- [x] **P7.1 · Responder uma tarefa BLOCKED** — `1841fc7`, 26/09 — — `src/app/run-actions.ts:915`, `src/core/phrases/en.ts:440`
+- [x] **P7.1 · Responder uma tarefa BLOCKED** — `1841fc7`, 26/09 — `src/app/run-actions.ts:915`, `src/core/phrases/en.ts:440`
       `agent-flow answer <task> "<texto>" | --file <arquivo>` e o mesmo no Deck. A resposta fica
       na tarefa, entra no prompt do próximo attempt, e a tarefa respondida volta à fila **sem
       `--force`**. A frase que hoje manda "responder" passa a nomear o comando que existe.
