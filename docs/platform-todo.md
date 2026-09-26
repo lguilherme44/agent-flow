@@ -28,6 +28,13 @@ Pedido completo, com a evidência de cada item, em `~/.agent-flow/requests/opera
 (fora do repositório). Estados antigos em disco continuam legíveis, e runs sem resposta nem
 emenda se comportam exatamente como hoje.
 
+**Em andamento (26/09):** P7.1, P7.4 e P7.5 estão na run AF-2026-002, worktree
+`agent-flow-f7a-operator-answers`, branch `feat/f7a-operator-answers` (plano aprovado, 8
+tarefas). TASK-001 e TASK-002 prontas; a TASK-003 tem o código pronto, mas a validação completa
+estourou o limite fixo de 900s com a máquina a 100% de CPU. O limite agora é configurável
+(`execution.commandTimeoutSeconds`, `f486c76`): retomar com `revalidate TASK-003` usando um
+valor maior, e depois `run` para as tarefas 004 a 008. O P7.3 ficou para uma run própria.
+
 - [ ] **P7.1 · Responder uma tarefa BLOCKED** — `src/app/run-actions.ts:915`, `src/core/phrases/en.ts:440`
       `agent-flow answer <task> "<texto>" | --file <arquivo>` e o mesmo no Deck. A resposta fica
       na tarefa, entra no prompt do próximo attempt, e a tarefa respondida volta à fila **sem

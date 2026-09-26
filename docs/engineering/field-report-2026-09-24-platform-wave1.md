@@ -194,6 +194,7 @@ limite fixo de 900s (`src/app/verification-commands.ts:8`, sem configuração), 
 Duas tentativas gastas assim. A "evidência" mostrada no `status` foi o `stderr` de um teste que
 **passa** e imprime `config_invalid` de propósito — nada dizia "timeout". Um condutor sem acesso ao
 `attempt-<n>.json` iria caçar um erro de configuração inexistente.
+**Parcialmente resolvido em `f486c76`:** o limite agora é `execution.commandTimeoutSeconds` (global, padrão 900), aplicado a validação, revalidação, review, install do worktree e sonda do `doctor`. Continua aberto distinguir timeout de falha na mensagem e na evidência.
 **Oportunidades:** (1) timeout de validação distinguido de falha, com a classe e a mensagem
 dizendo "o comando X passou do limite de N s"; (2) limite configurável por comando; (3) o scheduler
 considerar a carga — várias suítes inteiras em paralelo na mesma máquina se sabotam.
