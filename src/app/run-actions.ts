@@ -87,7 +87,13 @@ import { CollaborationStore } from './collaboration-store.js';
 import { projectFindings } from '../core/review/findings.js';
 import { correctiveLinks, correctiveSelection } from '../core/review/corrective.js';
 import { assessIndependence } from '../core/independence.js';
-import { buildValidationRegistry } from '../core/validation-registry.js';
+import { buildValidationRegistry, type ValidationRegistry } from '../core/validation-registry.js';
+import {
+  judgeRequiredGates,
+  type GateEvidence,
+  type GateTask,
+  type RequiredGate,
+} from '../core/required-gates.js';
 import { extractRequirementIds } from '../core/sdd-validator.js';
 import { isResumable } from '../core/run-projection.js';
 import {
@@ -2319,7 +2325,14 @@ async function replan(
 
   const pipeline = buildPlanningPipeline(context);
 
-  const result = await pipeline.run(runId, replan.text, { from, workflow: target });
+  // FR-014. A revision and a decision hand back the class the run already has — the one the
+  // budget ceiling above read — so it is `carried`, and its rationale must not say an
+  // operator chose it. An escalation is an operator asking for the class above.
+  const result = await pipeline.run(runId, replan.text, {
+    from,
+    workflow: target,
+    workflowOrigin: mode === 'escalation' ? 'operator' : 'carried',
+  });
 
   if (counted) {
     const nextRevisionCount = currentRevisions + 1;
@@ -2995,6 +3008,14 @@ async function judgeRun(
     ...e2eBlockingFindings.map(idOf),
   ];
 
+  const requiredGates = await judgePlanGates(
+    context.store,
+    runId,
+    plan,
+    state,
+    buildValidationRegistry(context.config.project),
+  );
+
   // ---- Definition of Done, evaluated as code (§42), over the same tree.
   const doneCheck = checkDefinitionOfDone({
     approved: state.approved,
@@ -3002,6 +3023,7 @@ async function judgeRun(
     mechanicalVerification,
     finalReviewVerdict: finalReview.verdict,
     ...(openBlockingFindings.length > 0 ? { openBlockingFindings } : {}),
+    ...(requiredGates.length > 0 ? { requiredGates } : {}),
   });
   await recordActor(context.store, runId, 'review', deps.actor);
 
@@ -3352,6 +3374,50 @@ async function loadRun(store: StateStore, runId: string): Promise<RunState | nul
   } catch {
     return null;
   }
+}
+
+/**
+ * Every gate the plan's tasks list, judged from what each completed task recorded (FR-025,
+ * FR-028).
+ *
+ * Over `plan.tasks`, which a corrective round rewrites with its FIX tasks appended, so a
+ * gate only a corrective task lists is required too. Only completed tasks' `result.json`
+ * is read: an unfinished task's evidence does not exist yet, and "all tasks completed"
+ * already holds the run open for it. A completed task whose file is missing or will not
+ * parse contributes no evidence, which is `no_result` rather than a pass.
+ */
+async function judgePlanGates(
+  store: StateStore,
+  runId: string,
+  plan: Plan,
+  state: RunState,
+  registry: ValidationRegistry,
+): Promise<RequiredGate[]> {
+  const stateOf = new Map(state.tasks.map((task) => [task.id, task.state]));
+  // `queued` for a plan task with no progress entry, as the DAG and the run graph read it.
+  const tasks: GateTask[] = plan.tasks.map((task) => ({
+    id: task.id,
+    state: stateOf.get(task.id) ?? 'queued',
+    validation: task.validation,
+    validationExpectation: task.validationExpectation,
+  }));
+
+  const results = new Map<string, GateEvidence>();
+  for (const task of tasks) {
+    if (task.state !== 'completed' || task.validation.length === 0) continue;
+    // `readTaskResult` parses before it validates, so a truncated file throws rather than
+    // returning null. Before gates existed `judgeRun` never read these files, and a corrupt one
+    // must not start aborting the whole review now: it is missing evidence, `no_result`.
+    let result: Awaited<ReturnType<StateStore['readTaskResult']>> = null;
+    try {
+      result = await store.readTaskResult(runId, task.id);
+    } catch {
+      result = null;
+    }
+    if (result !== null) results.set(task.id, result.validation);
+  }
+
+  return judgeRequiredGates(tasks, results, (id) => registry.has(id));
 }
 
 async function loadPlanArtifact(store: StateStore, runId: string): Promise<Plan | null> {

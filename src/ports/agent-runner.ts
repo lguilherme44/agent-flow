@@ -211,6 +211,16 @@ export interface RunnerCapabilities {
     readonly commandExecution: boolean;
     /** Commands known to be denied in this environment, when discoverable. */
     readonly deniedCommands?: readonly string[];
+    /**
+     * Command lines this runner may run by prefix without a confirmation (FR-007), sorted.
+     *
+     * Absent means the runner does not report them, which is not the same as reporting
+     * none: a caller asking "what can the executor run" has to be able to tell "nothing"
+     * from "unknown", and only an adapter that parses its own grant syntax knows which.
+     */
+    readonly grantedCommandPrefixes?: readonly string[];
+    /** True when the runner may run any command at all. Absent under the same rule. */
+    readonly grantsAnyCommand?: boolean;
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildValidationRegistry,
+  declareValidationRemedy,
   unknownValidationIds,
 } from '../../src/core/validation-registry.js';
 import { ProjectConfigSchema, TaskSchema } from '../../src/contracts/index.js';
@@ -88,5 +89,15 @@ describe('unknownValidationIds', () => {
     ]);
 
     expect(found).toHaveLength(2);
+  });
+});
+
+describe('declareValidationRemedy (FR-023)', () => {
+  it('names where the entry goes and the shape it takes, for this id', () => {
+    const remedy = declareValidationRemedy('test-deck');
+    expect(remedy).toContain('validationCommands');
+    expect(remedy).toContain('.agent-flow/config.yaml');
+    expect(remedy).toContain('"<id>: <command>"');
+    expect(remedy).toContain('"test-deck: <command>"');
   });
 });

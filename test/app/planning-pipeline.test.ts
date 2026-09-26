@@ -15,6 +15,7 @@ import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../../src/contracts/index.js';
 import { agentFlowPaths, runPaths } from '../../src/app/paths.js';
 import { computeFingerprint, writeFingerprint } from '../../src/app/discovery-cache.js';
+import type { ExecutorCommands } from '../../src/core/command-grants.js';
 import { stringify as toYaml } from 'yaml';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -134,7 +135,11 @@ const goodPlan = {
 };
 
 async function harness(
-  options: { processRunner?: FakeProcessRunner; planningBaseGate?: PlanningGate } = {},
+  options: {
+    processRunner?: FakeProcessRunner;
+    planningBaseGate?: PlanningGate;
+    executorCommands?: ExecutorCommands;
+  } = {},
 ) {
   const fs = new InMemoryFileSystem();
   const clock = new FixedClock();
@@ -171,6 +176,7 @@ async function harness(
     ...(options.planningBaseGate === undefined
       ? {}
       : { planningBaseGate: options.planningBaseGate }),
+    ...(options.executorCommands === undefined ? {} : { executorCommands: options.executorCommands }),
   });
 
   return { fs, clock, store, run, runner, pipeline, processRunner };
@@ -561,6 +567,114 @@ describe('plan validation', () => {
     // The planner answered twice and no more: the bound holds.
     expect(runner.calls.filter((call) => call.prompt.includes('Rules the plan must satisfy'))).toHaveLength(2);
   });
+
+  /** A plan asking the executor for a device run: `npm run e2e:android` is neither declared nor granted. */
+  const citing = {
+    ...goodPlan,
+    tasks: [
+      { ...goodPlan.tasks[0], description: 'Domain types, confirmed with `npm run e2e:android`.' },
+      goodPlan.tasks[1],
+    ],
+  };
+  const moved = {
+    ...goodPlan,
+    operatorVerifications: [{ check: 'Run `npm run e2e:android` on a device.', reason: 'The executor has no device.' }],
+  };
+  const bounded: ExecutorCommands = { known: true, any: false, prefixes: ['npm test'] };
+
+  it('holds the planner to what the executor can run, and accepts the measurement moved out (FR-009)', async () => {
+    const { pipeline, run, runner, store } = await harness({ executorCommands: bounded });
+    runner.pushText('# Architecture').pushText('# Impact').pushText(SDD_TEXT);
+    runner.pushJson(citing).pushJson(moved).pushJson(PASSING_REVIEW);
+
+    const result = await pipeline.run(run.runId, 'Add recurring bookings');
+
+    expect(result.plan.operatorVerifications).toHaveLength(1);
+    const repair = (await store.readEvents(run.runId)).find((e) => e.type === 'planning_repair_requested');
+    const problems = (repair?.detail['problems'] as string[]).join(' ');
+    expect(problems).toContain('task TASK-001');
+    expect(problems).toContain('in its description');
+    expect(problems).toContain('`npm run e2e:android`');
+    expect(problems).toContain('operatorVerifications');
+  });
+
+  it('claims nothing about the executor when the wiring did not say what it can run', async () => {
+    // Positive control for the test above: the refusal came from the executor's command set.
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushText('# Architecture').pushText('# Impact').pushText(SDD_TEXT);
+    runner.pushJson(citing).pushJson(PASSING_REVIEW);
+
+    await pipeline.run(run.runId, 'Add recurring bookings');
+
+    expect((await store.readEvents(run.runId)).some((e) => e.type === 'planning_repair_requested')).toBe(false);
+  });
+
+  it('refuses requiredEvidence the task does not validate with, even with the executor unknown (FR-024)', async () => {
+    const evidenced = {
+      ...goodPlan,
+      tasks: [{ ...goodPlan.tasks[0], validation: ['test'], requiredEvidence: ['test-deck'] }, goodPlan.tasks[1]],
+    };
+    const { pipeline, run, runner } = await harness();
+    runner.pushText('# Architecture').pushText('# Impact').pushText(SDD_TEXT);
+    runner.always({ ok: true, text: JSON.stringify(evidenced), json: evidenced, durationMs: 1 });
+
+    await expect(pipeline.run(run.runId, 'x')).rejects.toThrow(/nothing would run it/);
+  });
+
+  it('tells the planner how an undeclared validation id is declared (FR-023)', async () => {
+    const undeclared = { ...goodPlan, tasks: [{ ...goodPlan.tasks[0], validation: ['e2e'] }, goodPlan.tasks[1]] };
+    const { pipeline, run, runner } = await harness();
+    runner.pushText('# Architecture').pushText('# Impact').pushText(SDD_TEXT);
+    runner.always({ ok: true, text: JSON.stringify(undeclared), json: undeclared, durationMs: 1 });
+
+    const raised = await pipeline.run(run.runId, 'x').catch((error: unknown) => error);
+
+    expect((raised as Error).message).toContain('validationCommands');
+    expect((raised as Error).message).toContain('"<id>: <command>"');
+    expect((raised as Error).message).toContain('available: test');
+  });
+});
+
+describe('what the planner and the plan reviewer are told the executor can run (FR-018, FR-019)', () => {
+  const planningPrompt = (runner: FakeAgentRunner): string =>
+    runner.calls.find((call) => call.prompt.includes('ROLE: PLANNING_AGENT'))?.prompt ?? '';
+  const reviewPrompt = (runner: FakeAgentRunner): string =>
+    runner.calls.find((call) => call.prompt.includes('ROLE: PLAN_REVIEW_AGENT'))?.prompt ?? '';
+
+  it('hands both the executor commands the composition root computed', async () => {
+    const executorCommands: ExecutorCommands = {
+      known: true,
+      any: false,
+      prefixes: ['npm test', 'npx vitest'],
+    };
+    const { pipeline, run, runner } = await harness({ executorCommands });
+    scriptHappyPath(runner);
+
+    await pipeline.run(run.runId, 'Add recurring bookings');
+
+    for (const prompt of [planningPrompt(runner), reviewPrompt(runner)]) {
+      expect(prompt).toContain('- `npm test`');
+      expect(prompt).toContain('- `npx vitest`');
+    }
+    expect(planningPrompt(runner)).toContain('operatorVerifications');
+    expect(reviewPrompt(runner)).toContain('- test (runs: npm test)');
+    expect(reviewPrompt(runner)).toContain('a gate the SDD requires that no task lists');
+  });
+
+  it('says the executor may run anything, and names no refusal, when every route may', async () => {
+    const { pipeline, run, runner } = await harness({
+      executorCommands: { known: true, any: true, prefixes: [] },
+    });
+    scriptHappyPath(runner);
+
+    await pipeline.run(run.runId, 'Add recurring bookings');
+
+    expect(planningPrompt(runner)).toContain('may run any command');
+    // The citation check does not run under an any-grant (FR-009), so the prompt must not
+    // threaten a refusal the checks will never make.
+    expect(planningPrompt(runner)).not.toContain('is rejected.');
+    expect(reviewPrompt(runner)).toContain('may run any command');
+  });
 });
 
 describe('SDD structural validation', () => {
@@ -909,6 +1023,83 @@ describe('Adaptive Workflow Pipeline Execution', () => {
 
     const updated = await store.loadRun(run.runId);
     expect(updated.workflow).toBe('high-risk');
+  });
+});
+
+/**
+ * FR-014. Where the class came from, recorded by the entry point that knows.
+ *
+ * `explicitOverride = options.workflow ?? state.workflow` made every re-plan and every
+ * `--from` resume record "Explicit workflow override set by operator" when no operator had
+ * touched the class.
+ */
+describe('the origin of the workflow class (FR-014)', () => {
+  const ONE_TASK_PLAN = { ...goodPlan, tasks: goodPlan.tasks.slice(0, 1) };
+
+  async function classified(store: StateStore, runId: string): Promise<Record<string, unknown>> {
+    const events = (await store.readEvents(runId)).filter((e) => e.type === 'workflow_classified');
+    expect(events).toHaveLength(1);
+    return events[0]?.detail ?? {};
+  }
+
+  it('records an operator override with what the request alone detects', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushJson(goodPlan);
+    runner.pushJson(PASSING_REVIEW);
+
+    const result = await pipeline.run(run.runId, 'Add customer feedback form', { workflow: 'simple' });
+
+    const detail = await classified(store, run.runId);
+    expect(detail).toMatchObject({ workflow: 'simple', origin: 'operator', requested: 'simple', detected: 'standard' });
+    expect(detail['evidence']).toEqual([]);
+    // The keys every earlier reader relied on are still there.
+    expect(Object.keys(detail)).toEqual(expect.arrayContaining(['workflow', 'rationale', 'budget', 'highRiskSignals']));
+    expect(detail['rationale']).toContain('set by operator');
+
+    // The same classification reaches the caller, so `feature` can render it.
+    expect(result.classification).toMatchObject({ workflow: 'simple', origin: 'operator', detected: 'standard' });
+  });
+
+  it('records a class read back from the run as carried, and never says an operator set it', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    await store.updateRun(run.runId, (s) => ({ ...s, workflow: 'trivial' }));
+    runner.pushJson(ONE_TASK_PLAN);
+
+    const result = await pipeline.run(run.runId, 'Add customer feedback form');
+
+    const detail = await classified(store, run.runId);
+    expect(detail).toMatchObject({ workflow: 'trivial', origin: 'carried', requested: 'trivial', detected: 'standard' });
+    expect(String(detail['rationale'])).not.toMatch(/operator/i);
+    expect(result.classification?.origin).toBe('carried');
+  });
+
+  it('records a class a caller says it carried as carried', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    runner.pushJson(ONE_TASK_PLAN);
+
+    await pipeline.run(run.runId, 'Add customer feedback form', { workflow: 'trivial', workflowOrigin: 'carried' });
+
+    const detail = await classified(store, run.runId);
+    expect(detail).toMatchObject({ origin: 'carried', requested: 'trivial' });
+    expect(String(detail['rationale'])).not.toMatch(/operator/i);
+  });
+
+  it('records a class nothing overrode as detected, with the excerpt that decided it and no requested', async () => {
+    // Positive control for the two above: with neither an option nor a persisted class, the
+    // origin is the classifier's and there is no `requested` key at all.
+    const { pipeline, run, runner, store } = await harness();
+    scriptHappyPath(runner);
+
+    await pipeline.run(run.runId, 'Add user authentication with JWT token');
+
+    const detail = await classified(store, run.runId);
+    expect(detail).toMatchObject({ workflow: 'high-risk', origin: 'detected', detected: 'high-risk' });
+    expect(detail).not.toHaveProperty('requested');
+    expect(detail['evidence']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ signal: 'token', excerpt: 'Add user authentication with JWT token', source: 'text' }),
+      ]),
+    );
   });
 });
 

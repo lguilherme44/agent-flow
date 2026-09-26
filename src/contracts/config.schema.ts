@@ -719,6 +719,15 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 export const EffectiveConfigSchema = z.object({
   global: GlobalConfigSchema,
   project: ProjectConfigSchema.optional(),
+  /**
+   * Whether `trust.projectConfig` covers this project (N4), as the loader decided it.
+   *
+   * Carried because the decision used to be computed and then discarded, and the executor's
+   * command grants derived from `commands` need the same answer the `args` screen used.
+   * Optional, never defaulted: absent reads as untrusted, so a fake or a caller that built a
+   * config by hand gets today's argv rather than grants nobody decided on (SEC-001).
+   */
+  projectTrusted: z.boolean().optional(),
 });
 export type EffectiveConfig = z.infer<typeof EffectiveConfigSchema>;
 

@@ -449,6 +449,35 @@ describe('revise --escalate refuses with nothing written (FR-015)', () => {
   });
 });
 
+/**
+ * FR-014. A revision and a decision hand back the class the run already has, so it is
+ * `carried`; an escalation is an operator asking for the class above. Every re-plan used to
+ * record "Explicit workflow override set by operator".
+ */
+describe('the origin a re-plan records (FR-014)', () => {
+  const cases = [
+    { name: 'revise', mode: 'revision', workflow: 'standard', origin: 'carried', requested: 'standard' },
+    { name: 'revise --decision', mode: 'decision', workflow: 'standard', origin: 'carried', requested: 'standard' },
+    // `state.workflow ?? 'standard'`: a run with no recorded class is carried as standard.
+    { name: 'revise --decision on a run with no class', mode: 'decision', workflow: undefined, origin: 'carried', requested: 'standard' },
+    { name: 'revise --escalate', mode: 'escalation', workflow: 'trivial', origin: 'operator', requested: 'simple' },
+  ] as const;
+
+  for (const { name, mode, workflow, origin, requested } of cases) {
+    it(`${name} records ${origin} with ${requested}`, async () => {
+      const { store, deps, runId } = await approvedRun({ workflow, revisionCount: 0, specified: true });
+
+      const outcome = await revise(deps, runId, 'keep it to one module', 'planning', mode);
+
+      expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+      const detail = only(await store.readEvents(runId), 'workflow_classified');
+      expect(detail).toMatchObject({ origin, requested, workflow: requested });
+      if (origin === 'carried') expect(String(detail['rationale'])).not.toMatch(/operator/i);
+      else expect(String(detail['rationale'])).toContain('set by operator');
+    });
+  }
+});
+
 describe('the ceiling refusal names the ways past it (FR-019)', () => {
   it('names revise --decision, revise --escalate and approve --attach-findings in both books', () => {
     for (const book of [en, ptBR]) {

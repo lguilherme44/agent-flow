@@ -8,10 +8,12 @@ import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
+import { testGitCommand } from '../fakes/test-git-command.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { StageRunner } from '../../src/app/stage-runner.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { TaskExecutor } from '../../src/app/task-executor.js';
+import { PlanningPipeline } from '../../src/app/planning-pipeline.js';
 import { review } from '../../src/app/run-actions.js';
 import { planHash } from '../../src/app/approval.js';
 import { runPaths } from '../../src/app/paths.js';
@@ -21,9 +23,12 @@ import {
   ProjectConfigSchema,
   TaskSchema,
   type Amendment,
+  type ProjectConfig,
 } from '../../src/contracts/index.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 import type { ProcessSpawnOptions } from '../../src/ports/index.js';
+import type { ExecutorCommands } from '../../src/core/command-grants.js';
+import { PlanReviewService } from '../../src/app/plan-review-service.js';
 
 /**
  * NFR-002 — with no operator amendment, the implementation and final-review prompts are
@@ -42,6 +47,12 @@ import type { ProcessSpawnOptions } from '../../src/ports/index.js';
  * `TaskExecutor` and `StageRunner` exactly as a sequential run sends it; the final-review
  * prompt goes through `review()` and is read off the stdin of the spawned CLI, which is where
  * the Claude adapter puts it. A stub template would make both comparisons trivially true.
+ *
+ * **The planning and plan-review prompts, the same way.** The executor-commands work appends
+ * one placeholder to each of the five planning and plan-review templates, and promises that
+ * for a project with no declared command and no runner grant it renders as nothing. Their five
+ * fixtures were captured from the templates before any of them was edited, through the real
+ * `PlanningPipeline`, and are read here under the same rule: no update flag.
  */
 
 const REAL_PROMPTS = join(import.meta.dirname, '../../prompts');
@@ -370,6 +381,224 @@ async function renderFinalReview(
   return lf(received[0] ?? '');
 }
 
+// ---- The planning and plan-review prompts ----------------------------------------------
+
+/**
+ * The runner's view of itself when it grants no command: no `commandExecution`, and none of
+ * the fields a runner uses to report which commands it may run. Together with a project that
+ * declares no command, this is the case in which the executor block the planning and
+ * plan-review prompts gain must render as nothing (NFR-002).
+ */
+const NO_GRANT_CAPS = {
+  ...CAPS,
+  nonInteractiveToolGrants: { fileEdit: true, commandExecution: false },
+} as const;
+
+/** A project with no `commands` and no `validationCommands`: the registry has no id. */
+const COMMANDLESS_PROJECT = ProjectConfigSchema.parse({ project: { name: 'demo', type: 'node' } });
+
+const PLANNING_REQUEST = 'Add a CSV export to the report page.';
+
+/** Every section the SDD stage's contract requires, so the stage accepts it on the first call. */
+const PLANNING_SDD = `# Software Design Document
+
+## Context
+x
+## Problem
+x
+## Current Behavior
+x
+## Desired Behavior
+x
+## Functional Requirements
+- FR-001: The report page offers a CSV export of the rows it shows.
+## Non-Functional Requirements
+- NFR-001: The export completes within one second.
+## Architecture
+x
+## Components Affected
+x
+## Database Changes
+x
+## API Changes
+x
+## Frontend Changes
+x
+## Domain Changes
+x
+## Contracts and Interfaces
+x
+## Security
+x
+## Observability
+x
+## Migration Strategy
+x
+## Testing Strategy
+x
+## Edge Cases
+x
+## Risks
+x
+## Alternatives Considered
+x
+## Acceptance Criteria
+- AC-001: The export holds exactly the visible rows.
+`;
+
+/** One task covering the SDD's only requirement, and no validation: nothing is declared. */
+const PLANNED = {
+  feature: 'csv-export',
+  tasks: [
+    {
+      id: 'TASK-001',
+      title: 'Add the export button',
+      description: 'Add a button that exports the current report as CSV.',
+      complexity: 'normal',
+      risk: 'low',
+      dependencies: [],
+      requirements: ['FR-001'],
+      acceptanceCriteria: ['The button downloads a CSV of the visible rows.'],
+      validation: [],
+    },
+  ],
+};
+
+interface PlanningRenders {
+  readonly planning: string;
+  /** Absent for `trivial`, which has no plan review. */
+  readonly planReview?: string;
+}
+
+/**
+ * The prompts the planner and the plan reviewer receive, through the real `PlanningPipeline`.
+ *
+ * The workflow is passed explicitly, so the class — and therefore which template renders —
+ * is the test's choice rather than the classifier's. Every stage before planning answers with
+ * fixed text, so what the planner is handed (`sdd`, `architectureImpact`) is the same on every
+ * host. The prompts are picked by their role line rather than by call index, so a stage added
+ * before planning cannot silently shift which prompt is compared.
+ */
+async function renderPlanning(
+  workflow: 'trivial' | 'simple' | 'standard',
+  /** The project planned for. Every fixture is rendered for the commandless one. */
+  project: ProjectConfig = COMMANDLESS_PROJECT,
+  /** What the executor may run, as the composition root computes it; absent is unknown. */
+  executorCommands?: ExecutorCommands,
+): Promise<PlanningRenders> {
+  const fs = new InMemoryFileSystem();
+  const clock = new FixedClock();
+  const runner = new FakeAgentRunner('claude', NO_GRANT_CAPS);
+  const prompts = '/pkg/prompts';
+  const processRunner = new FakeProcessRunner().always({ exitCode: 1 });
+
+  seedRealPrompts(fs, prompts);
+  fs.seed(`${PROJECT}/AGENTS.md`, AGENTS_MD);
+
+  const globalConfig = GlobalConfigSchema.parse(parseYaml(DEFAULT_GLOBAL_CONFIG_YAML));
+  const store = new StateStore({ fs, clock, projectDir: PROJECT });
+  const run = await store.createRun('csv export');
+
+  const stageRunner = new StageRunner({
+    fs,
+    clock,
+    store,
+    config: globalConfig,
+    capabilities: { claude: NO_GRANT_CAPS },
+    promptLoader: new PromptLoader({ fs, promptsDir: prompts }),
+    getRunner: () => runner,
+    projectDir: PROJECT,
+  });
+
+  const pipeline = new PlanningPipeline({
+    fs,
+    clock,
+    store,
+    stageRunner,
+    processRunner,
+    git: testGitCommand(processRunner),
+    config: { global: globalConfig, project },
+    capabilities: { claude: NO_GRANT_CAPS },
+    ...(executorCommands === undefined ? {} : { executorCommands }),
+    providerOf: () => 'claude-code-cli',
+    projectDir: PROJECT,
+  });
+
+  if (workflow === 'standard') {
+    runner.pushText('# Architecture\n\nA Node service.');
+    runner.pushText('# Architecture Impact\n\nTouches the report page.');
+    runner.pushText(PLANNING_SDD);
+  }
+  runner.pushJson(PLANNED);
+  if (workflow !== 'trivial') runner.pushJson(PASS);
+
+  await pipeline.run(run.runId, PLANNING_REQUEST, { workflow });
+
+  const withRole = (role: string): string[] =>
+    runner.calls.map((call) => call.prompt).filter((prompt) => prompt.includes(`ROLE: ${role}`));
+  const planning = withRole('PLANNING_AGENT');
+  const planReview = withRole('PLAN_REVIEW_AGENT');
+
+  const expectedReviews = workflow === 'trivial' ? 0 : 1;
+  if (planning.length !== 1 || planReview.length !== expectedReviews) {
+    throw new Error(
+      `expected one planning and ${String(expectedReviews)} plan-review prompt(s), got ` +
+        `${String(planning.length)} and ${String(planReview.length)}`,
+    );
+  }
+
+  const review = planReview[0];
+  return {
+    planning: lf(planning[0] ?? ''),
+    ...(review === undefined ? {} : { planReview: lf(review) }),
+  };
+}
+
+/**
+ * The plan-review prompt as the corrective round asks for it: straight through
+ * `PlanReviewService.review`, with no `executorContext` (FR-019).
+ *
+ * The inputs are the ones the standard fixture was rendered from, so the only thing this
+ * render could differ by is the executor block a caller that passes nothing must not get.
+ */
+async function renderReviewWithoutContext(): Promise<string> {
+  const fs = new InMemoryFileSystem();
+  const clock = new FixedClock();
+  const runner = new FakeAgentRunner('claude', NO_GRANT_CAPS);
+  const prompts = '/pkg/prompts';
+
+  seedRealPrompts(fs, prompts);
+  fs.seed(`${PROJECT}/AGENTS.md`, AGENTS_MD);
+
+  const globalConfig = GlobalConfigSchema.parse(parseYaml(DEFAULT_GLOBAL_CONFIG_YAML));
+  const store = new StateStore({ fs, clock, projectDir: PROJECT });
+  const run = await store.createRun('csv export');
+
+  const stageRunner = new StageRunner({
+    fs,
+    clock,
+    store,
+    config: globalConfig,
+    capabilities: { claude: NO_GRANT_CAPS },
+    promptLoader: new PromptLoader({ fs, promptsDir: prompts }),
+    getRunner: () => runner,
+    projectDir: PROJECT,
+  });
+
+  runner.pushJson(PASS);
+  await new PlanReviewService({ store, stageRunner, providerOf: () => 'claude-code-cli' }).review({
+    runId: run.runId,
+    plan: PlanSchema.parse(PLANNED),
+    sdd: PLANNING_SDD,
+    architectureImpact: '# Architecture Impact\n\nTouches the report page.',
+    authors: ['claude'],
+  });
+
+  const prompt = runner.calls.at(-1)?.prompt;
+  if (prompt === undefined) throw new Error('the plan review never reached the runner');
+  return lf(prompt);
+}
+
 // ---- The comparisons -------------------------------------------------------------------
 
 describe('the implementation prompt, with no amendments, is the one master sent (NFR-002)', () => {
@@ -512,5 +741,131 @@ describe('the final-review prompt carries every operator amendment (FR-011)', ()
     expect(rendered).toContain('- Subject: TASK-001');
     expect(rendered).toContain('- Findings in the review: 2');
     expect(rendered).toContain('- Finding 0 (medium, test-gap) → TASK-001: Nothing tests an empty report (marker-finding).');
+  });
+});
+
+describe('the planning and plan-review prompts, for a commandless project, are the ones master sent (NFR-002)', () => {
+  /** A project declaring one command: what makes the executor block render. */
+  const DECLARING = ProjectConfigSchema.parse({
+    project: { name: 'demo', type: 'node' },
+    commands: { test: 'npm test' },
+  });
+
+  it('renders planning.md and plan-review.md equal to their fixtures (standard)', async () => {
+    const rendered = await renderPlanning('standard');
+
+    expect(rendered.planning).toBe(fixture('planning.json'));
+    expect(rendered.planReview).toBe(fixture('plan-review.json'));
+  });
+
+  it('renders planning-simple.md and plan-review-simple.md equal to their fixtures (simple)', async () => {
+    const rendered = await renderPlanning('simple');
+
+    expect(rendered.planning).toBe(fixture('planning-simple.json'));
+    expect(rendered.planReview).toBe(fixture('plan-review-simple.json'));
+  });
+
+  it('renders planning-trivial.md equal to its fixture (trivial)', async () => {
+    const rendered = await renderPlanning('trivial');
+
+    expect(rendered.planning).toBe(fixture('planning-trivial.json'));
+    expect(rendered.planReview).toBeUndefined();
+  });
+
+  it('differs from the planning fixtures once the project declares a command', async () => {
+    // POSITIVE CONTROL. The executor block these prompts gain renders only when a command is
+    // declared or granted, so a declared command has to reach every planning prompt, or the
+    // equalities above could not tell a commandless render from any other.
+    for (const [workflow, name] of [
+      ['standard', 'planning.json'],
+      ['simple', 'planning-simple.json'],
+      ['trivial', 'planning-trivial.json'],
+    ] as const) {
+      const rendered = await renderPlanning(workflow, DECLARING);
+
+      expect(rendered.planning, workflow).toContain('npm test');
+      expect(rendered.planning, workflow).not.toBe(fixture(name));
+    }
+  });
+
+  /** What `executorCommandsOf` answers for an executor granted exactly the declared line. */
+  const GRANTED: ExecutorCommands = { known: true, any: false, prefixes: ['npm test'] };
+
+  it('puts the executor block after the ids in all three planning prompts (FR-018)', async () => {
+    for (const workflow of ['standard', 'simple', 'trivial'] as const) {
+      const { planning } = await renderPlanning(workflow, DECLARING, GRANTED);
+
+      const ids = planning.indexOf('- test (runs: npm test)');
+      const block = planning.indexOf('### What the executor may run');
+      expect(ids, workflow).toBeGreaterThan(-1);
+      expect(block, workflow).toBeGreaterThan(ids);
+      // Before the sentence that follows the ids in every template: the placeholder is on
+      // the ids' own line, so the block cannot land anywhere else.
+      expect(planning.indexOf("A task's `validation` field takes"), workflow).toBeGreaterThan(block);
+      expect(planning, workflow).toContain('- `npm test`');
+      expect(planning, workflow).toContain('"operatorVerifications": [');
+      // The executor is bounded, so the planner is told what the citation check refuses.
+      expect(planning, workflow).toContain('neither a validation id nor this list covers is rejected');
+    }
+  });
+
+  it('puts the ids with their commands and the executor block right after the plan in both plan reviews (FR-019)', async () => {
+    for (const [workflow, next, requirer] of [
+      ['standard', '## What has already been checked mechanically', 'SDD'],
+      ['simple', '## What to look for', 'feature request'],
+    ] as const) {
+      const { planReview = '' } = await renderPlanning(workflow, DECLARING, GRANTED);
+
+      const block = planReview.indexOf('## What can run');
+      expect(block, workflow).toBeGreaterThan(planReview.indexOf('"feature": "csv-export"'));
+      expect(planReview.indexOf(next), workflow).toBeGreaterThan(block);
+      const section = planReview.slice(block, planReview.indexOf(next));
+      expect(section, workflow).toContain('- test (runs: npm test)');
+      expect(section, workflow).toContain('- `npm test`');
+      expect(section, workflow).toContain('something it cannot run');
+      expect(section, workflow).toContain(`a gate the ${requirer} requires that no task lists`);
+    }
+  });
+
+  it('renders the blocks for a commandless project whose executor may run any command', async () => {
+    // FR-018's condition has three arms; the declared-command arm is covered above, and this
+    // is the grant arm on its own — no id, so only the executor can have turned it on.
+    const any: ExecutorCommands = { known: true, any: true, prefixes: [] };
+    const standard = await renderPlanning('standard', COMMANDLESS_PROJECT, any);
+
+    expect(standard.planning).toContain('may run any command');
+    expect(standard.planning).not.toContain('is rejected.');
+    expect(standard.planReview).toContain('## What can run');
+    expect(standard.planReview).toContain('None configured.');
+    expect(standard.planning).not.toBe(fixture('planning.json'));
+  });
+
+  it('says the runner does not report its commands when the executor is unknown', async () => {
+    const { planning, planReview } = await renderPlanning('simple', DECLARING);
+
+    expect(planning).toContain('does not report which commands it may run');
+    expect(planReview).toContain('does not report which commands it may run');
+  });
+
+  it('still equals the fixtures when the executor reports it may run nothing (NFR-002)', async () => {
+    // The production shape of "no command and no grant": the runner reports its prefixes,
+    // and there are none. Unknown (the cases above) is a different answer and is not this.
+    const none: ExecutorCommands = { known: true, any: false, prefixes: [] };
+    const standard = await renderPlanning('standard', COMMANDLESS_PROJECT, none);
+    const simple = await renderPlanning('simple', COMMANDLESS_PROJECT, none);
+    const trivial = await renderPlanning('trivial', COMMANDLESS_PROJECT, none);
+
+    expect(standard.planning).toBe(fixture('planning.json'));
+    expect(standard.planReview).toBe(fixture('plan-review.json'));
+    expect(simple.planning).toBe(fixture('planning-simple.json'));
+    expect(simple.planReview).toBe(fixture('plan-review-simple.json'));
+    expect(trivial.planning).toBe(fixture('planning-trivial.json'));
+  });
+
+  it('renders the review a corrective round asks for, with no executorContext, as the fixture', async () => {
+    // The corrective round passes nothing, whatever the project declares: its review prompt
+    // is the one it always was. The positive control is the FR-019 test above, where the
+    // pipeline passes a context and the same template grows the block.
+    expect(await renderReviewWithoutContext()).toBe(fixture('plan-review.json'));
   });
 });

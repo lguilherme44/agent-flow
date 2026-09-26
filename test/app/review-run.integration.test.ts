@@ -9,6 +9,8 @@ import { buildDag } from '../../src/core/dag.js';
 import type { ProcessResult, ProcessRunner, ProcessSpawnOptions } from '../../src/ports/index.js';
 import { makeWorktreeRun, type WorktreeRun } from '../fixtures/worktree-run.js';
 import { shellInvocation } from '../../src/app/verification-commands.js';
+import { renderOutcome } from '../../src/cli/review.js';
+import { runPaths } from '../../src/app/paths.js';
 
 /**
  * The shell the product actually spawns, asked rather than assumed.
@@ -129,8 +131,14 @@ const PLAN = {
   ],
 };
 
-/** A run with one task integrated, its plan and SDD on disk, ready to review. */
-async function reviewable(): Promise<{
+/**
+ * A run with one task integrated, its plan and SDD on disk, ready to review.
+ *
+ * `gateRan: false` records the task's `result.json` with no command result, which is what a
+ * task that listed `test` without running it leaves behind — the plan requires the gate and
+ * nothing executed it (FR-028). The default records the one command the plan's `test` names.
+ */
+async function reviewable({ gateRan = true }: { gateRan?: boolean } = {}): Promise<{
   current: WorktreeRun;
   deps: RunActionDeps;
   runner: RecordingProcessRunner;
@@ -144,11 +152,35 @@ async function reviewable(): Promise<{
 
   await current.seed(['TASK-001']);
   await current.plant('TASK-001', 1, { write: { 'one.txt': 'one\n' } });
+  const result = current.resultFor('TASK-001');
   await current.integrator.integrate({
     runId: current.runId,
     workspace: prepared.workspace,
     dag: buildDag([{ id: 'TASK-001', dependencies: [] }]),
-    attempts: [{ task: 'TASK-001', attempt: 1, result: current.resultFor('TASK-001') }],
+    attempts: [
+      {
+        task: 'TASK-001',
+        attempt: 1,
+        result: gateRan
+          ? {
+              ...result,
+              validation: {
+                ...result.validation,
+                commands: [
+                  {
+                    command: 'cat one.txt',
+                    exitCode: 0,
+                    durationMs: 1,
+                    stdout: 'one\n',
+                    stderr: '',
+                    truncated: false,
+                  },
+                ],
+              },
+            }
+          : result,
+      },
+    ],
   });
 
   await current.store.writeArtifact(current.runId, 'sdd', '# SDD\n\nIt should do one thing.\n');
@@ -309,6 +341,77 @@ describe('review runs over the integration tree (§19.1, §19.2)', () => {
     expect(current.repo.userGit(['status', '--porcelain=v1', '--untracked-files=all'])).toBe(
       before.status,
     );
+  });
+});
+
+/**
+ * FR-026 to FR-030 — "complete" is never reported while a gate the plan required did not run.
+ *
+ * The same fixture twice, differing only in whether TASK-001's `result.json` holds a result
+ * for the `test` its plan lists. Every other condition holds in both: the review's own
+ * commands pass and the final review says PASS — which is exactly how the defect reached
+ * FEATURE COMPLETE before.
+ */
+describe('the Definition of Done requires every gate the plan lists (FR-026, FR-030)', () => {
+  it('ends NOT DONE when the plan declares a gate no task ran, and the output names it', async () => {
+    const { current, deps } = await reviewable({ gateRan: false });
+    run = current;
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    // Everything the Definition of Done knew about before still holds.
+    expect(outcome.value.mechanicalVerification).toBe('PASS');
+    expect(outcome.value.finalReview.verdict).toBe('PASS');
+
+    expect(outcome.value.done.done).toBe(false);
+    expect(outcome.value.done.missing).toEqual(['required gates ran and passed']);
+    expect((await current.store.loadRun(current.runId)).status).not.toBe('completed');
+
+    const printed = renderOutcome(outcome.value);
+    expect(printed).toContain('✗ required gates ran and passed — test NOT_RUN (TASK-001)');
+    expect(printed).toContain('no command result');
+    expect(printed).toContain('NOT DONE');
+    expect(printed).not.toContain('FEATURE COMPLETE');
+  });
+
+  it('treats a result.json that will not parse as missing evidence, not as a review that crashes', async () => {
+    // Before gates, `judgeRun` never read these files. A truncated one must end NOT DONE with
+    // the gate NOT_RUN — not throw out of `review` and take the whole job down with it.
+    const { current, deps } = await reviewable();
+    run = current;
+    writeFileSync(runPaths(current.repo.dir, current.runId).taskResult('TASK-001'), '{"truncated": ');
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.done.done).toBe(false);
+    expect(outcome.value.done.missing).toEqual(['required gates ran and passed']);
+    expect(renderOutcome(outcome.value)).toContain('test NOT_RUN (TASK-001)');
+  });
+
+  it('ends completed and prints FEATURE COMPLETE when the same gate ran and passed', async () => {
+    // The positive control: without it, the case above could pass because the condition
+    // is never met, rather than because the gate did not run.
+    const { current, deps } = await reviewable();
+    run = current;
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.done.done).toBe(true);
+    expect(outcome.value.done.conditions.at(-1)).toEqual({
+      name: 'required gates ran and passed',
+      met: true,
+    });
+    expect((await current.store.loadRun(current.runId)).status).toBe('completed');
+
+    const printed = renderOutcome(outcome.value);
+    expect(printed).toContain('✓ required gates ran and passed');
+    expect(printed).toContain('FEATURE COMPLETE');
   });
 });
 

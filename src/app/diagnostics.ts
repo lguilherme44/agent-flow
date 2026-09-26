@@ -1,4 +1,5 @@
-import { buildRegistry, type RunnerRegistry } from '../adapters/runners/registry.js';
+import type { RunnerRegistry } from '../adapters/runners/registry.js';
+import { registryFor } from './executor-commands.js';
 import { en, type Phrases } from '../core/phrases/index.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
 import {
@@ -23,6 +24,13 @@ import {
   type RunnerCapabilitiesMap,
 } from '../core/role.js';
 import { compareReasoning } from '../core/reasoning.js';
+import {
+  commandGrantsFor,
+  runnerCommandGrants,
+  type CommandGrantExclusionReason,
+  type RunnerCommandGrants,
+} from '../core/command-grants.js';
+import { buildValidationRegistry } from '../core/validation-registry.js';
 import { fileNamedEnv, patternNamesEnvFile } from '../core/env-exposure.js';
 import { THROWAWAY_WORKSPACE_PREFIXES } from '../core/worktree-policy.js';
 import {
@@ -109,6 +117,12 @@ export type CapabilityObservation =
       readonly permissions: 'read-only' | 'write';
       /** Present when a write role's runner cannot exercise a tool class it needs (C-04). */
       readonly permissionFinding?: PermissionFinding;
+      /**
+       * What a write role's runner may run without asking (FR-021), as its adapter reports
+       * it. Absent for a read-only role and for a runner that does not report it — "not
+       * reported" is not "nothing", and rendering one as the other would be a false finding.
+       */
+      readonly commandGrants?: RunnerCommandGrants;
     }
   | {
       /**
@@ -379,7 +393,7 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     ? await probeInstallCleanliness({ fs, processRunner, config, projectDir, host })
     : { outcome: 'skipped', reason: 'not_requested' };
 
-  const registry = buildRegistry(config.global, {
+  const registry = registryFor(config, {
     processRunner,
     fs,
     ...(options.env === undefined ? {} : { env: options.env }),
@@ -462,9 +476,12 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
   // run, so a project with none is never nagged. And it is a note rather than a
   // degradation: with no grant configured anywhere it would otherwise be true of every
   // default installation, and a DEGRADED that is always on is worth nothing (C-4).
-  const declaresCommands = Object.values(config.project?.commands ?? {}).some(
-    (command) => typeof command === 'string' && command.trim().length > 0,
-  );
+  //
+  // "Declares commands" is read over the validation registry (FR-022), not `commands` alone:
+  // a project whose only gates are `validationCommands` entries asks the executor for exactly
+  // the same thing, and reading `commands` alone left it with no note at all.
+  const declaresCommands =
+    config.project !== undefined && buildValidationRegistry(config.project).ids.length > 0;
   const grantless = new Set<string>();
   if (declaresCommands) {
     for (const role of ['executor.trivial', 'executor.normal', 'executor.complex'] as const) {
@@ -493,6 +510,22 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     say.doctor.projectLooseningIgnored(loosening.path.join('.')),
   );
 
+  // Why the executor was granted none of the declared commands, when the reason is trust
+  // (FR-003). Without it the grantless note above would send the operator to hand-write
+  // `--allowedTools` rules for commands the project already declares — the real switch is
+  // `trust.projectConfig`, and `registryFor` read the same flag to decide.
+  const untrustedCommands =
+    declaresCommands && config.projectTrusted !== true ? [say.doctor.projectCommandsNotGranted] : [];
+
+  // One note per declared line that gets no grant (FR-004), from the same computation
+  // `registryFor` used, so the note names exactly what the executor was not given. Said
+  // whatever the trust: a line with shell syntax stays ungranted once the project is trusted,
+  // and finding that out after trusting it would be a second round trip.
+  const excludedCommands = commandGrantsFor(config.project, config.projectTrusted === true).excluded.map(
+    (exclusion) =>
+      say.doctor.declaredCommandNotGranted(exclusion.id, exclusion.line, exclusionReason(exclusion.reason, say)),
+  );
+
   const envExposure = await describeEnvExposure({
     fs,
     processRunner,
@@ -512,6 +545,8 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
           (runner) =>
             `${say.doctor.runnerGrantsNoTools(runner)} — ${say.doctor.implementationCannotRunCommands(runner)}`,
         ),
+      ...untrustedCommands,
+      ...excludedCommands,
       ...ignoredLoosenings,
       ...envExposure,
     ],
@@ -545,6 +580,22 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
         }
       : { known: false },
   };
+}
+
+/** The sentence for why a declared line gets no grant, in the reader's book (FR-004). */
+function exclusionReason(reason: CommandGrantExclusionReason, say: Phrases): string {
+  switch (reason) {
+    case 'install':
+      return say.doctor.grantExcludedInstall;
+    case 'empty':
+      return say.doctor.grantExcludedEmpty;
+    case 'line_break':
+      return say.doctor.grantExcludedLineBreak;
+    case 'wildcard':
+      return say.doctor.grantExcludedWildcard;
+    case 'shell_syntax':
+      return say.doctor.grantExcludedShellSyntax;
+  }
 }
 
 /**
@@ -600,6 +651,12 @@ export function observeCapabilities(
           ...(resolved.model === undefined ? {} : { model: resolved.model }),
         });
         return finding === undefined ? {} : { permissionFinding: finding };
+      })(),
+      ...(() => {
+        // Write roles only: a read-only invocation never carries a derived grant (SEC-004),
+        // so reporting one under a reviewer would describe a permission it never has.
+        const grants = permissions === 'write' ? runnerCommandGrants(declared.nonInteractiveToolGrants) : undefined;
+        return grants === undefined ? {} : { commandGrants: grants };
       })(),
     });
   }

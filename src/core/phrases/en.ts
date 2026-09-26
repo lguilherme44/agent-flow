@@ -119,6 +119,19 @@ export const en: Phrases = {
     worktreeCopyEnvUnchecked: (pattern) =>
       `could not list the ignored files the \`worktree.copy\` pattern \`${pattern}\` matches, ` +
       'so whether it copies a .env file into task worktrees was not checked',
+    projectCommandsNotGranted:
+      'the commands this project declares are not granted to the executor: the project is ' +
+      'not covered by `trust.projectConfig`, so it may not widen what an agent can run. ' +
+      'To grant them, add the project directory to `trust.projectConfig` in your global config',
+    declaredCommandNotGranted: (id, line, why) =>
+      `the declared command \`${id}\` (\`${line}\`) is not granted to the executor: ${why}`,
+    grantExcludedInstall: 'install is a preparation step Agent Flow runs before the executor starts',
+    grantExcludedEmpty: 'it is empty',
+    grantExcludedLineBreak: 'it spans more than one line',
+    grantExcludedWildcard:
+      'it contains a wildcard (`*` or `?`), so a prefix grant would allow more than it names',
+    grantExcludedShellSyntax:
+      'it contains shell syntax or quoting, so a prefix grant would allow more than it names',
     nodeMissing: 'Node.js is missing from PATH',
     installNode: 'Install Node.js 20+ (https://nodejs.org or via fnm/nvm)',
     gitMissingOrOld: 'Git is missing or older than 2.38',
@@ -192,6 +205,8 @@ export const en: Phrases = {
     effortSupported: (effective, supported) => `effort ${effective} (supported: ${supported})`,
     doesNotDeclareToolClass: (runner, toolClass) =>
       `"${runner}" does not declare ${toolClass}, which this role's prompts need`,
+    mayRunCommands: (prefixes) => `may run: ${prefixes}`,
+    mayRunAnyCommand: 'may run any command',
     declaredCapabilitiesCaveat: [
       'Declared capabilities are read from the adapters, never inferred from a run that',
       'happened to succeed. A missing grant is a warning: it does not stop execution.',

@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { DoctorView } from '@contracts/index.js';
 import { DoctorPanel } from './DoctorPanel';
-import { ptBR as t } from '../../lib/i18n';
+import { en, ptBR as t } from '../../lib/i18n';
 
 /**
  * 7.5 — the answer, on the screen.
@@ -219,6 +219,61 @@ describe('the doctor panel', () => {
     );
 
     expect(screen.getByText(/plan review falls back to the same provider/)).toBeTruthy();
+  });
+
+  describe("a write role's command grants (FR-021)", () => {
+    const executor = (commandGrants?: { any: boolean; prefixes: string[] }): DoctorView =>
+      withReport({
+        capabilities: [
+          {
+            kind: 'resolved',
+            role: 'executor.normal',
+            runner: 'claude',
+            requestedReasoning: 'medium',
+            effectiveReasoning: 'medium',
+            supportedReasoningLevels: ['low', 'medium', 'high'],
+            reasoningClamped: false,
+            permissions: 'write',
+            ...(commandGrants === undefined ? {} : { commandGrants }),
+          },
+        ],
+      });
+    const row = () => document.querySelector('[data-role="executor.normal"]');
+
+    it('lists what the role may run, under the role', () => {
+      render(<DoctorPanel report={executor({ any: false, prefixes: ['npm run lint', 'npm run typecheck:deck'] })} />);
+
+      expect(row()?.textContent).toContain(t.doctor.mayRun('npm run lint, npm run typecheck:deck'));
+      expect(row()?.textContent).not.toContain(t.doctor.mayRunAnyCommand);
+    });
+
+    it('says the role may run any command, without a list', () => {
+      render(<DoctorPanel report={executor({ any: true, prefixes: ['npm run lint'] })} />);
+
+      expect(row()?.textContent).toContain(t.doctor.mayRunAnyCommand);
+      expect(row()?.textContent).not.toContain(t.doctor.mayRun('npm run lint'));
+    });
+
+    it('shows nothing when the server sent no grant, or an empty one', () => {
+      // The control for both cases above: the same row, the field absent or empty.
+      for (const report of [executor(), executor({ any: false, prefixes: [] })]) {
+        const { unmount } = render(<DoctorPanel report={report} />);
+
+        expect(row()).not.toBeNull();
+        expect(row()?.textContent).not.toContain(t.doctor.mayRun(''));
+        expect(row()?.textContent).not.toContain(t.doctor.mayRunAnyCommand);
+        expect(row()?.querySelector('.doctor-row__grants')).toBeNull();
+        unmount();
+      }
+    });
+
+    it('is worded in both dictionaries, with the command lines left verbatim', () => {
+      expect(en.doctor.mayRun('npm run lint')).toBe('may run: npm run lint');
+      expect(en.doctor.mayRunAnyCommand).toBe('may run any command');
+      expect(t.doctor.mayRun('npm run lint')).toContain('npm run lint');
+      expect(t.doctor.mayRun('npm run lint')).not.toBe(en.doctor.mayRun('npm run lint'));
+      expect(t.doctor.mayRunAnyCommand).not.toBe(en.doctor.mayRunAnyCommand);
+    });
   });
 
   it('hides the fix-list entirely when there is nothing to fix', () => {

@@ -38,6 +38,26 @@ export interface RegistryDependencies {
    * can drive, and the value it reads is a credential a test must be able to withhold.
    */
   readonly env?: (name: string) => string | undefined;
+  /**
+   * Which platform the command-tool grants are spelled for. `process.platform` when absent.
+   *
+   * Injected so a test can build the Windows argv on Linux CI and the reverse, instead of
+   * asserting only whichever half the machine happens to run (NFR-006).
+   */
+  readonly platform?: NodeJS.Platform;
+}
+
+/**
+ * What the project grants the executor, computed from the effective configuration (FR-008).
+ *
+ * A separate required argument rather than a field of the dependencies, so a construction
+ * that forgets it does not compile. There were six call sites when this was added, each
+ * building from `config.global` alone, and the silent failure of a seventh would be an
+ * executor that cannot run what the project declares with nothing saying why.
+ */
+export interface RegistryGrants {
+  /** Declared lines already screened by `core/command-grants`, in registry id order. */
+  readonly commandGrants: readonly string[];
 }
 
 /**
@@ -63,6 +83,8 @@ export interface RunnerSpawnPolicy {
    * customisations (PRI-18).
    */
   readonly isolateSettings: boolean;
+  /** {@link RegistryGrants.commandGrants}. Only the adapter that can spell a grant reads it. */
+  readonly commandGrants: readonly string[];
 }
 
 type RunnerFactory = (
@@ -99,6 +121,11 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       // honours `CLAUDE_CONFIG_DIR` for where that cache lives, so this does too.
       fs: deps.fs,
       modelCatalogDir: join(deps.env?.('CLAUDE_CONFIG_DIR') ?? join(homedir(), '.claude'), 'cache', 'model-catalog'),
+      // The declared commands this project grants its executor, which the adapter spells as
+      // prefix rules on write invocations (FR-001). The other CLI adapters take nothing: their
+      // grant syntax is not modelled, and their argv stays as it was (FR-002).
+      commandGrants: policy.commandGrants,
+      ...(deps.platform === undefined ? {} : { platform: deps.platform }),
     }),
 
   'codex-cli': (id, config, deps, policy) =>
@@ -230,7 +257,9 @@ export function describeRunnerTypes(deps: RegistryDependencies): RunnerTypeDescr
       // called: only `capabilities()` is read from this instance.
       ...(fields.some(({ name }) => name === 'baseUrl') ? { baseUrl: 'http://127.0.0.1/v1' } : {}),
     };
-    const policy: RunnerSpawnPolicy = { envPass: [], isolateSettings: true };
+    // No project is in view here — which types exist is a property of the installation — so
+    // no declared command can be granted.
+    const policy: RunnerSpawnPolicy = { envPass: [], isolateSettings: true, commandGrants: [] };
     return [{ type, fields, capabilities: factory(type, probe, deps, policy).capabilities() }];
   });
 }
@@ -272,6 +301,7 @@ export interface RunnerRegistry {
 export function buildRegistry(
   config: GlobalConfig,
   deps: RegistryDependencies,
+  grants: RegistryGrants,
 ): RunnerRegistry {
   const runners = new Map<string, AgentRunner>();
   const providers = new Map<string, string>();
@@ -291,6 +321,7 @@ export function buildRegistry(
     runners.set(id, factory(id, runnerConfig, deps, {
       envPass: config.execution.passEnv,
       isolateSettings: config.execution.isolateRunnerSettings,
+      commandGrants: grants.commandGrants,
     }));
   }
 

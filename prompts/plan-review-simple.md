@@ -16,7 +16,7 @@ You are READ-ONLY. Do not modify, create or delete any file.
 
 ## Plan
 
-{{plan}}
+{{plan}}{{executorContext}}
 
 ## What to look for
 

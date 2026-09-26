@@ -44,6 +44,38 @@ const observation = (overrides: Partial<ResolvedObservation> = {}): CapabilityOb
   ...overrides,
 });
 
+describe("a write role's command grants (FR-021)", () => {
+  it('lists the prefixes the role may run under the role', () => {
+    const lines = renderCapabilityReport([
+      observation({ commandGrants: { any: false, prefixes: ['npm run lint', 'npm run typecheck:deck'] } }),
+    ]);
+    const role = lines.findIndex((line) => line.includes('executor.normal'));
+    const grants = lines.findIndex((line) => line.includes('may run: npm run lint, npm run typecheck:deck'));
+
+    expect(grants).toBeGreaterThan(role);
+    expect(role).toBeGreaterThanOrEqual(0);
+  });
+
+  it('says the role may run any command, and lists nothing beside it', () => {
+    const lines = renderCapabilityReport([
+      observation({ commandGrants: { any: true, prefixes: ['npm run lint'] } }),
+    ]).join('\n');
+
+    expect(lines).toContain('may run any command');
+    expect(lines).not.toContain('may run: ');
+  });
+
+  it('prints nothing when the runner reports no grant, or reports an empty one', () => {
+    // The control for both lines above: the same observation without the field.
+    for (const lines of [
+      renderCapabilityReport([observation()]).join('\n'),
+      renderCapabilityReport([observation({ commandGrants: { any: false, prefixes: [] } })]).join('\n'),
+    ]) {
+      expect(lines).not.toContain('may run');
+    }
+  });
+});
+
 describe('mechanical capability discovery (AR-01)', () => {
   it('names the requested effort, the effective one and the supported set', () => {
     const lines = renderCapabilityReport([observation()]).join('\n');

@@ -168,6 +168,10 @@ export const en = {
     effort: (level: string) => `effort ${level}`,
     effortNotOffered: (asked: string, actual: string) => `effort ${asked} is not offered — it will run at ${actual}`,
     grantMissing: 'grant missing',
+    // Command lines are typed verbatim — `npm run lint` is not a sentence — so only the verb
+    // around them is translated.
+    mayRun: (prefixes: string) => `may run: ${prefixes}`,
+    mayRunAnyCommand: 'may run any command',
     ready: 'ready',
     stageRouting: 'Stage routing',
     lighterRunnerWouldDo: (n: number) => (n === 1 ? '1 stage does not require the repository: a lighter runner (openai-compatible) could serve it, without checking anything in the code.' : `${String(n)} stages do not require the repository: a lighter runner (openai-compatible) could serve them, without checking anything in the code.`),
@@ -1037,6 +1041,21 @@ export const en = {
     gitIdentityAssigned: 'Git identity assigned',
     isolation: (mode: string) => `${mode} isolation`,
     classifiedAs: (workflow: string) => `Classified as ${workflow}`,
+    // FR-016. Where the class came from, and how to correct it. The commands stay in the
+    // terminal's words: they are what a person types back.
+    classifiedDetected: 'detected from the request',
+    classifiedByOperator: (detected: string) => `set by the operator (the request alone: ${detected})`,
+    classifiedCarried: 'carried over from the earlier classification',
+    classifiedRaised: (requested: string, byOperator: boolean) =>
+      `${byOperator ? 'the operator asked for' : 'carried over as'} ${requested}, raised by high-risk signals`,
+    classifiedNegated: (excerpt: string) => `not counted: ${excerpt}`,
+    classifiedHint:
+      'to correct it: a new run with agent-flow feature "<description>" --workflow <class>, ' +
+      'or agent-flow revise --escalate "<why>" before any task runs',
+    classifiedHintNewRun: 'to correct it: a new run with agent-flow feature "<description>" --workflow <class>',
+    classifiedHintHighRisk:
+      '--workflow cannot lower high risk: if the quoted mention is not what the change does, ' +
+      'rephrase the request in a new run',
     discoveryCacheInvalidated: 'Discovery cache invalidated',
 
     stageStarted: (stage: string) => `${stage} started`,

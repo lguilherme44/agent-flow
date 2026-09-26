@@ -113,6 +113,126 @@ describe('describe', () => {
 });
 
 /**
+ * P7.6 — the class, where it came from, what decided it and how to correct it (FR-016).
+ *
+ * The feed used to print the English rationale verbatim, which in `pt-BR` was the only
+ * English sentence on screen and never said how to undo a class nobody meant.
+ */
+describe('workflow classification in the feed', () => {
+  const rationale = 'High-risk security/data/infrastructure signals detected: token "corrigir a expiração no token JWT".';
+  const highRisk = {
+    at,
+    type: 'workflow_classified',
+    detail: {
+      workflow: 'high-risk',
+      rationale,
+      budget: { workflow: 'high-risk', maxPlanningCalls: 5, maxRevisionCycles: 3, maxTasks: 8 },
+      highRiskSignals: ['token'],
+      origin: 'detected',
+      detected: 'high-risk',
+      evidence: [
+        { signal: 'token', excerpt: 'corrigir a expiração no token JWT', source: 'text' },
+        { signal: 'session', excerpt: 'sem mexer na sessão', source: 'text', negated: true },
+      ],
+    },
+  };
+
+  it('names the class, its origin, the excerpts and the high-risk hint, in both languages', () => {
+    expect(say(highRisk, en)).toEqual({
+      title: 'Classified as high risk',
+      detail:
+        'detected from the request · “corrigir a expiração no token JWT” · not counted: “sem mexer na sessão” · ' +
+        '--workflow cannot lower high risk: if the quoted mention is not what the change does, rephrase the request in a new run',
+      tone: 'idle',
+    });
+    expect(say(highRisk, ptBR)).toEqual({
+      title: 'Classificada como alto risco',
+      detail:
+        'detectada a partir do pedido · “corrigir a expiração no token JWT” · não contou: “sem mexer na sessão” · ' +
+        '--workflow não rebaixa alto risco: se a menção citada não é o que a mudança faz, reescreva o pedido em uma nova run',
+      tone: 'idle',
+    });
+    // The rendering is built from the fields, not the rationale.
+    expect(say(highRisk, en).detail).not.toContain('High-risk security');
+  });
+
+  it('says an operator set the class, what the request alone decided, and how to correct it', () => {
+    const operator = {
+      at,
+      type: 'workflow_classified',
+      detail: {
+        workflow: 'simple',
+        rationale: 'Explicit workflow override set by operator to "simple"; the request alone classifies as "standard".',
+        highRiskSignals: [],
+        origin: 'operator',
+        detected: 'standard',
+        requested: 'simple',
+        evidence: [],
+      },
+    };
+    expect(say(operator, en)).toEqual({
+      title: 'Classified as simple',
+      detail:
+        'set by the operator (the request alone: standard) · to correct it: a new run with ' +
+        'agent-flow feature "<description>" --workflow <class>, or agent-flow revise --escalate "<why>" before any task runs',
+      tone: 'idle',
+    });
+    expect(say(operator, ptBR).title).toBe('Classificada como simples');
+    expect(say(operator, ptBR).detail).toContain('definida pelo operador (só o pedido: padrão)');
+    expect(say(operator, ptBR).detail).toContain('agent-flow revise --escalate');
+  });
+
+  it('says a carried class was carried, and an override the signals raised was raised', () => {
+    const carried = {
+      at,
+      type: 'workflow_classified',
+      detail: { workflow: 'standard', highRiskSignals: [], origin: 'carried', detected: 'standard', requested: 'standard', evidence: [] },
+    };
+    expect(say(carried, en).detail).toContain('carried over from the earlier classification');
+    expect(say(carried, ptBR).detail).toContain('mantida da classificação anterior');
+    expect(say(carried, en).detail).not.toContain('operator');
+
+    const raised = {
+      at,
+      type: 'workflow_classified',
+      detail: {
+        workflow: 'high-risk',
+        highRiskSignals: ['migration'],
+        origin: 'operator',
+        detected: 'high-risk',
+        requested: 'simple',
+        evidence: [{ signal: 'migration', excerpt: 'criar a migration', source: 'text' }],
+      },
+    };
+    expect(say(raised, en).detail).toContain('the operator asked for simple, raised by high-risk signals');
+    expect(say(raised, ptBR).detail).toContain('o operador pediu simples, elevada por sinais de alto risco');
+  });
+
+  it('does not tell a chosen high-risk class, with no signal behind it, that --workflow cannot lower it', () => {
+    const chosen = {
+      at,
+      type: 'workflow_classified',
+      detail: { workflow: 'high-risk', highRiskSignals: [], origin: 'operator', detected: 'standard', requested: 'high-risk', evidence: [] },
+    };
+    expect(say(chosen, en).detail).toContain('--workflow <class>');
+    expect(say(chosen, en).detail).not.toContain('cannot lower');
+    // `revise --escalate` refuses at the ceiling, so it is not offered.
+    expect(say(chosen, en).detail).not.toContain('--escalate');
+  });
+
+  it('reads a line without origin or evidence exactly as it always did', () => {
+    // The positive control: every run before FR-014 wrote only these four keys.
+    const legacy = {
+      at,
+      type: 'workflow_classified',
+      detail: { workflow: 'high-risk', rationale, budget: { maxTasks: 8 }, highRiskSignals: ['token'] },
+    };
+    expect(say(legacy, en)).toEqual({ title: 'Classified as high-risk', detail: rationale, tone: 'idle' });
+    expect(say(legacy, ptBR)).toEqual({ title: 'Classificada como high-risk', detail: rationale, tone: 'idle' });
+  });
+});
+
+/**
  * P7.5 — a decision and an escalation are not revisions, and the feed must not number them.
  *
  * Both write `revision_requested` with `attemptedRevision` set to the count that did *not*

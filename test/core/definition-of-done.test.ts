@@ -222,3 +222,98 @@ describe('a blocking review finding is not done (§43, I-44)', () => {
     expect(result.missing).toEqual([]);
   });
 });
+
+/**
+ * FR-026, FR-027 — a gate the plan required that did not run is not done.
+ *
+ * The final review runs four standard commands; a `validationCommands` entry is run by the
+ * tasks listing it or by nobody, and a `none` task runs nothing and is recorded passing.
+ */
+describe('every gate the plan lists ran and passed (FR-026, FR-027)', () => {
+  const GATE = 'required gates ran and passed';
+  const base = { ...done, taskStates: [...done.taskStates] };
+
+  it('adds no condition when the plan lists no gate', () => {
+    // The list a run with no gate reads is exactly the list it read before.
+    for (const input of [base, { ...base, requiredGates: [] }]) {
+      expect(checkDefinitionOfDone(input).conditions.map((c) => c.name)).toEqual([
+        'SDD approved',
+        'all tasks completed',
+        'lint, tests and build passing',
+        'final review PASS',
+        'no blocking review finding is open',
+      ]);
+    }
+  });
+
+  it('is done, with the condition met and no detail, when every gate passed', () => {
+    const result = checkDefinitionOfDone({
+      ...base,
+      requiredGates: [{ id: 'test-deck', verdict: 'PASS', tasks: ['TASK-001'] }],
+    });
+
+    expect(result.done).toBe(true);
+    expect(result.conditions.at(-1)).toEqual({ name: GATE, met: true });
+  });
+
+  it('is not done with a NOT_RUN gate, and names the gate, the verdict, the task and the remedy', () => {
+    const result = checkDefinitionOfDone({
+      ...base,
+      requiredGates: [
+        { id: 'test', verdict: 'PASS', tasks: ['TASK-001'] },
+        { id: 'test-deck', verdict: 'NOT_RUN', tasks: ['TASK-002'], reason: 'expectation_none' },
+      ],
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.missing).toEqual([GATE]);
+
+    const detail = result.conditions.find((c) => c.name === GATE)?.detail ?? '';
+    expect(detail).toContain('test-deck NOT_RUN (TASK-002)');
+    expect(detail).toContain("validationExpectation 'none'");
+    expect(detail).toMatch(/list "test-deck" in a task's validation with validationExpectation 'pass' or 'fail'/);
+    // Only the unmet gate is named: a passing one in the detail reads as a problem.
+    expect(detail).not.toContain('test PASS');
+  });
+
+  it('says how to declare a gate the configuration no longer has', () => {
+    const result = checkDefinitionOfDone({
+      ...base,
+      requiredGates: [
+        { id: 'typecheck-deck', verdict: 'NOT_RUN', tasks: ['TASK-001'], reason: 'not_declared' },
+      ],
+    });
+
+    const detail = result.conditions.find((c) => c.name === GATE)?.detail ?? '';
+    expect(detail).toContain('no longer declared');
+    expect(detail).toContain('validationCommands');
+    expect(detail).toContain('"typecheck-deck: <command>"');
+  });
+
+  it('names a FAIL gate without telling the reader to make it run', () => {
+    const result = checkDefinitionOfDone({
+      ...base,
+      requiredGates: [{ id: 'lint', verdict: 'FAIL', tasks: ['TASK-003'], reason: 'failed' }],
+    });
+
+    const detail = result.conditions.find((c) => c.name === GATE)?.detail ?? '';
+    expect(result.done).toBe(false);
+    expect(detail).toContain('lint FAIL (TASK-003)');
+    expect(detail).toContain('not satisfied');
+    expect(detail).not.toContain('to make it run');
+  });
+
+  it('lists every unmet gate, and prints a reason it does not know verbatim', () => {
+    const result = checkDefinitionOfDone({
+      ...base,
+      requiredGates: [
+        { id: 'lint', verdict: 'NOT_RUN', tasks: ['TASK-001'], reason: 'no_result' },
+        { id: 'test', verdict: 'NOT_RUN', tasks: [], reason: 'something_newer' },
+      ],
+    });
+
+    const detail = result.conditions.find((c) => c.name === GATE)?.detail ?? '';
+    expect(detail).toContain('lint NOT_RUN (TASK-001): a completed task that lists it has no command result');
+    expect(detail).toContain('; test NOT_RUN: something_newer');
+  });
+});

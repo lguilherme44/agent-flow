@@ -27,7 +27,7 @@ You are READ-ONLY. Do not modify, create or delete any file.
 
 ## Available validation ids
 
-{{validationCommands}}
+{{validationCommands}}{{executorCommands}}
 
 A task's `validation` field takes **ids from this list** — never a command
 line. The orchestrator resolves an id to the command the project configured and

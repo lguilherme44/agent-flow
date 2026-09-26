@@ -150,6 +150,148 @@ describe('the note about an executor that cannot run commands (D-9)', () => {
   });
 });
 
+describe("the executor's command grants, as doctor reports them (FR-003, FR-004, FR-021, FR-022)", () => {
+  const EXECUTORS_ON_CLAUDE = [
+    'runners:',
+    '  claude:',
+    '    type: claude-code-cli',
+    'roles:',
+    '  architect: { runner: claude }',
+    '  executors:',
+    '    trivial: { runner: claude }',
+    '    normal: { runner: claude }',
+    '    complex: { runner: claude }',
+    '',
+  ].join('\n');
+  const TRUSTED = `${EXECUTORS_ON_CLAUDE}trust:\n  projectConfig: [/repo]\n`;
+
+  const DECLARING = [
+    'project:',
+    '  name: demo',
+    '  type: node',
+    'commands:',
+    '  lint: npm run lint',
+    'validationCommands:',
+    '  typecheck-deck: npm run typecheck:deck',
+    '',
+  ].join('\n');
+
+  const GRANTLESS = 'granted no tool beyond editing files';
+  const UNTRUSTED = (say: Phrases) => say.doctor.projectCommandsNotGranted;
+
+  async function diagnosed(global: string, project: string, say?: Phrases) {
+    const fs = new InMemoryFileSystem();
+    fs.seed('/repo/.agent-flow/config.yaml', project);
+    fs.seed('/home/.agent-flow/config.yaml', global);
+    const base = await createOptions();
+    const { config, ignoredLoosenings } = await loadConfigWithReport({
+      fs,
+      globalConfigPath: '/home/.agent-flow/config.yaml',
+      projectDir: '/repo',
+      platform: 'linux',
+    });
+    return diagnose({ ...base, config, ignoredLoosenings, ...(say === undefined ? {} : { say }) });
+  }
+
+  const roleOf = (diagnosis: Awaited<ReturnType<typeof diagnose>>, role: string) =>
+    diagnosis.capabilities.find((entry) => entry.role === role);
+
+  it('reports the declared lines on the write role of a trusted project, and no grantless note', async () => {
+    const diagnosis = await diagnosed(TRUSTED, DECLARING);
+    const executor = roleOf(diagnosis, 'executor.normal');
+
+    expect(executor).toMatchObject({ kind: 'resolved', permissions: 'write' });
+    expect(executor?.kind === 'resolved' ? executor.commandGrants : undefined).toEqual({
+      any: false,
+      prefixes: expect.arrayContaining(['npm run lint', 'npm run typecheck:deck']) as unknown,
+    });
+    expect(diagnosis.notes.some((note) => note.includes(GRANTLESS))).toBe(false);
+    expect(diagnosis.notes).not.toContain(UNTRUSTED(en));
+  });
+
+  it('reports no grant on a read-only role, whatever the runner reports', async () => {
+    // The positive control for "write roles only": the architect runs on the same runner,
+    // whose capabilities carry the same prefixes, and must not show them.
+    const diagnosis = await diagnosed(TRUSTED, DECLARING);
+    const architect = roleOf(diagnosis, 'architect');
+
+    expect(architect).toMatchObject({ kind: 'resolved', permissions: 'read-only' });
+    expect(architect !== undefined && 'commandGrants' in architect).toBe(false);
+  });
+
+  it('grants nothing to the same project untrusted, and says why, beside the grantless note', async () => {
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, DECLARING);
+    const executor = roleOf(diagnosis, 'executor.normal');
+    const grants = executor?.kind === 'resolved' ? executor.commandGrants : undefined;
+
+    expect(grants?.prefixes).not.toContain('npm run lint');
+    expect(grants?.prefixes).not.toContain('npm run typecheck:deck');
+    expect(diagnosis.notes).toContain(UNTRUSTED(en));
+    expect(UNTRUSTED(en)).toContain('trust.projectConfig');
+    expect(diagnosis.notes.some((note) => note.includes(GRANTLESS))).toBe(true);
+  });
+
+  it('counts validationCommands as declared commands, for both notes (FR-022)', async () => {
+    const onlyValidation = 'project:\n  name: demo\n  type: node\ncommands: {}\nvalidationCommands:\n  test-deck: npm run test:deck\n';
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, onlyValidation);
+
+    expect(diagnosis.notes.some((note) => note.includes(GRANTLESS))).toBe(true);
+    expect(diagnosis.notes).toContain(UNTRUSTED(en));
+  });
+
+  it('positive control: a project declaring nothing gets neither note', async () => {
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, 'project:\n  name: demo\n  type: node\ncommands: {}\n');
+
+    expect(diagnosis.notes.some((note) => note.includes(GRANTLESS))).toBe(false);
+    expect(diagnosis.notes).not.toContain(UNTRUSTED(en));
+  });
+
+  it("names each excluded line with its id and reason, in the reader's language (FR-004)", async () => {
+    const project = [
+      'project:',
+      '  name: demo',
+      '  type: node',
+      'commands:',
+      '  install: npm ci',
+      "  lint: 'eslint src/**/*.ts'",
+      "  test: 'vitest run test/?'",
+      "  build: 'npm run a && npm run b'",
+      '  typecheck: npm run typecheck:deck',
+      'validationCommands:',
+      "  echo-home: 'echo $HOME'",
+      '',
+    ].join('\n');
+
+    for (const say of [en, ptBR]) {
+      const { notes } = await diagnosed(TRUSTED, project, say);
+
+      expect(notes).toEqual(
+        expect.arrayContaining([
+          say.doctor.declaredCommandNotGranted('install', 'npm ci', say.doctor.grantExcludedInstall),
+          say.doctor.declaredCommandNotGranted('lint', 'eslint src/**/*.ts', say.doctor.grantExcludedWildcard),
+          say.doctor.declaredCommandNotGranted('test', 'vitest run test/?', say.doctor.grantExcludedWildcard),
+          say.doctor.declaredCommandNotGranted('build', 'npm run a && npm run b', say.doctor.grantExcludedShellSyntax),
+          say.doctor.declaredCommandNotGranted('echo-home', 'echo $HOME', say.doctor.grantExcludedShellSyntax),
+        ]),
+      );
+      // The grantable line is not named: the note lists exclusions, not the declared set.
+      expect(notes.some((note) => note.includes('npm run typecheck:deck'))).toBe(false);
+    }
+  });
+
+  it('names the id and the line verbatim, and the reason in words', () => {
+    const note = en.doctor.declaredCommandNotGranted('lint', 'eslint src/**/*.ts', en.doctor.grantExcludedWildcard);
+
+    expect(note).toContain('`lint`');
+    expect(note).toContain('`eslint src/**/*.ts`');
+    expect(note).toContain('wildcard');
+    expect(ptBR.doctor.declaredCommandNotGranted('lint', 'eslint src/**/*.ts', ptBR.doctor.grantExcludedWildcard)).toContain(
+      '`eslint src/**/*.ts`',
+    );
+    expect(ptBR.doctor.projectCommandsNotGranted).toContain('trust.projectConfig');
+  });
+});
+
 const nodeOf = (diagnosis: Awaited<ReturnType<typeof diagnose>>) => diagnosis.tools.find((tool) => tool.name === 'node');
 
 describe('the Node the dashboard runs on', () => {

@@ -8,7 +8,8 @@ import { PlanningPipeline } from '../../src/app/planning-pipeline.js';
 import { StageRunner } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
-import { GlobalConfigSchema, ReviewResultSchema } from '../../src/contracts/index.js';
+import { GlobalConfigSchema, PlanSchema, ReviewResultSchema } from '../../src/contracts/index.js';
+import { PlanReviewService } from '../../src/app/plan-review-service.js';
 import { runPaths } from '../../src/app/paths.js';
 import { computeFingerprint, writeFingerprint } from '../../src/app/discovery-cache.js';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -126,7 +127,7 @@ async function harness(reviewerRunner: string, options: { codexEnabled?: boolean
   await store.writeArtifact(run.runId, 'architectureImpact', '# Impact');
   await store.writeArtifact(run.runId, 'sdd', SDD_TEXT);
 
-  return { fs, store, run, runners, pipeline };
+  return { fs, store, run, runners, pipeline, stageRunner };
 }
 
 // Regression suite — was `[DEFECT] AF-R01` in test/reanalysis.repro.test.ts.
@@ -348,6 +349,47 @@ describe('verdicts', () => {
     expect(result.review?.verdict).toBe('PASS');
     expect(result.review?.findings).toHaveLength(1);
   });
+});
+
+describe('the executor context a caller passes to the review (FR-019)', () => {
+  const plan = PlanSchema.parse(goodPlan);
+  const planJson = JSON.stringify(plan, null, 2);
+  const CONTEXT = '\n\n## What can run\n\nmarker-executor-context';
+
+  async function reviewPrompt(kind: 'review' | 'reviewSimple', executorContext?: string): Promise<string> {
+    const { store, run, runners, stageRunner } = await harness('codex');
+    runners.codex.pushJson({ verdict: 'PASS', summary: 'Sound.', findings: [] });
+    const service = new PlanReviewService({
+      store,
+      stageRunner,
+      providerOf: (id: string) => (id === 'claude' ? 'claude-code-cli' : 'codex-cli'),
+    });
+    const extra = executorContext === undefined ? {} : { executorContext };
+
+    if (kind === 'review') {
+      await service.review({ runId: run.runId, plan, sdd: SDD_TEXT, architectureImpact: '# Impact', authors: ['claude'], ...extra });
+    } else {
+      await service.reviewSimple({ runId: run.runId, plan, featureRequest: 'f', authors: ['claude'], ...extra });
+    }
+    return runners.codex.calls.at(-1)?.prompt ?? '';
+  }
+
+  for (const kind of ['review', 'reviewSimple'] as const) {
+    it(`${kind} renders it directly after the plan`, async () => {
+      expect(await reviewPrompt(kind, CONTEXT)).toContain(`${planJson}${CONTEXT}`);
+    });
+
+    it(`${kind} renders nothing in its place when none is passed, as the corrective round does`, async () => {
+      const prompt = await reviewPrompt(kind);
+      const afterPlan = prompt.slice(prompt.indexOf(planJson) + planJson.length).replace(/\r\n/g, '\n');
+
+      // Not left as a visible `{{executorContext}}` either: the loader keeps a placeholder it
+      // was not given, so the service has to pass the empty string.
+      expect(prompt).not.toContain('executorContext');
+      expect(prompt).not.toContain('marker-executor-context');
+      expect(afterPlan.startsWith('\n\n## What')).toBe(true);
+    });
+  }
 });
 
 describe('skipping review', () => {

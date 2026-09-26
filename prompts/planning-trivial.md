@@ -20,7 +20,7 @@ You are READ-ONLY. Do not modify, create or delete any file.
 
 ## Available validation ids
 
-{{validationCommands}}
+{{validationCommands}}{{executorCommands}}
 
 A task's `validation` field takes **ids from this list** — never a command line.
 If nothing fits, use an empty list `[]`.

@@ -1,4 +1,5 @@
 import type { TaskState } from '../contracts/index.js';
+import { declareValidationRemedy } from './validation-registry.js';
 
 /**
  * Definition of Done (§42).
@@ -42,6 +43,26 @@ export interface DoneInput {
    * Absent means none, which is exactly how every pre-M6 run behaves.
    */
   readonly openBlockingFindings?: readonly string[];
+  /**
+   * Every gate the plan's tasks list in `validation`, with its verdict (FR-025, FR-026).
+   *
+   * **The final review runs four standard commands and nothing else,** so a
+   * `validationCommands` entry the plan required was run by the tasks listing it or by
+   * nobody — and a task whose expectation is `none` runs nothing and is still recorded as
+   * passing. Without this the run could say FEATURE COMPLETE over a gate that never ran.
+   *
+   * Computed by `judgeRequiredGates`. Absent or empty adds no condition, so a plan that
+   * lists no gate is judged exactly as before.
+   */
+  readonly requiredGates?: readonly RequiredGateVerdict[];
+}
+
+/** One required gate as the Definition of Done reads it; the shape `judgeRequiredGates` returns. */
+export interface RequiredGateVerdict {
+  readonly id: string;
+  readonly verdict: MechanicalVerification;
+  readonly tasks: readonly string[];
+  readonly reason?: string;
 }
 
 export interface DoneCheck {
@@ -105,9 +126,62 @@ export function checkDefinitionOfDone(input: DoneInput): DoneCheck {
           }
         : {}),
     },
+    ...requiredGatesCondition(input.requiredGates ?? []),
   ];
 
   const missing = conditions.filter((condition) => !condition.met).map((c) => c.name);
 
   return { done: missing.length === 0, conditions, missing };
+}
+
+/**
+ * The condition, present only when the plan lists at least one gate (FR-026).
+ *
+ * Absent rather than trivially met otherwise: the conditions list of a run with no gate is
+ * byte-for-byte what it was, which is what every existing reader of it was written against.
+ */
+function requiredGatesCondition(
+  gates: readonly RequiredGateVerdict[],
+): Array<{ name: string; met: boolean; detail?: string }> {
+  if (gates.length === 0) return [];
+
+  const unmet = gates.filter((gate) => gate.verdict !== 'PASS');
+  return [
+    {
+      name: 'required gates ran and passed',
+      met: unmet.length === 0,
+      ...(unmet.length > 0 ? { detail: unmet.map(describeUnmetGate).join('; ') } : {}),
+    },
+  ];
+}
+
+/**
+ * What each reason means, in the words the detail uses (FR-027).
+ *
+ * The remedy is the point. "test-deck NOT_RUN" sends nobody anywhere; saying which task
+ * held it back and what would make it run does.
+ */
+const GATE_REASONS: Readonly<Record<string, string>> = {
+  not_declared: 'the id is no longer declared in the configuration',
+  expectation_none: "a task that lists it has validationExpectation 'none', so it never ran",
+  no_result: 'a completed task that lists it has no command result for it',
+  no_completed_task: 'no completed task lists it',
+  failed: 'its tasks ran it and the validation judgement was not satisfied',
+};
+
+function describeUnmetGate(gate: RequiredGateVerdict): string {
+  const tasks = gate.tasks.length > 0 ? ` (${gate.tasks.join(', ')})` : '';
+  const reason =
+    gate.reason === undefined ? '' : `: ${GATE_REASONS[gate.reason] ?? gate.reason}`;
+  const remedies = [
+    ...(gate.reason === 'not_declared' ? [declareValidationRemedy(gate.id)] : []),
+    ...(gate.verdict === 'NOT_RUN'
+      ? [
+          `to make it run, list "${gate.id}" in a task's validation with ` +
+            `validationExpectation 'pass' or 'fail'`,
+        ]
+      : []),
+  ];
+  const remedy = remedies.length > 0 ? ` — ${remedies.join('; ')}` : '';
+  return `${gate.id} ${gate.verdict}${tasks}${reason}${remedy}`;
 }

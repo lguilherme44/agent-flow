@@ -8,12 +8,14 @@ import {
   RunStageSchema,
   WorkflowClassSchema,
   WORKFLOW_CLASSES,
+  type Plan,
   type RunStage,
   type WorkflowClass,
 } from '../contracts/index.js';
 import { buildExecutionContext, buildPlanningPipeline } from '../app/execution-context.js';
 import type { StateStore } from '../app/state-store.js';
 import { resolveRole } from '../core/role.js';
+import type { WorkflowClassificationResult, WorkflowEvidence } from '../core/adaptive-workflow.js';
 import { runPaths } from '../app/paths.js';
 import {
   createRunWithIdentity,
@@ -195,6 +197,8 @@ export async function runFeatureCommand(
         '',
         `${String(result.plan.tasks.length)} tasks planned.`,
         '',
+        ...(result.classification === undefined ? [] : classificationLines(result.classification)),
+        ...operatorVerificationLines(result.plan),
         ...written.map((artifact) => `  ${artifact.label}  ${artifact.path}`),
         '',
         written.length > 1
@@ -584,6 +588,83 @@ export function nextStepAfterPlanning(verdict: 'PASS' | 'FAIL' | undefined): str
     'Fix the plan with: agent-flow revise "<instruction>"',
     'Or approve anyway with: agent-flow approve --force  (recorded on the run)',
   ].join('\n');
+}
+
+/**
+ * The checks the plan says a person must make, one line each (FR-020).
+ *
+ * Printed because nothing else will ask for them: an operator verification is never a task,
+ * so no scheduler runs it and no gate waits on it. The Deck's run detail has no plan-level
+ * field either (R-7), which leaves this output and `plan.json` as the places a person meets
+ * them. Whitespace is collapsed so a check written across lines still prints as one line.
+ *
+ * Empty when the plan has none, so the output for every plan without them is unchanged.
+ */
+export function operatorVerificationLines(plan: Plan): string[] {
+  const items = plan.operatorVerifications ?? [];
+  if (items.length === 0) return [];
+
+  const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+  return [
+    'Operator verifications — the executor cannot make these; check them yourself:',
+    ...items.map((item) => `  - ${oneLine(item.check)} (${oneLine(item.reason)})`),
+    '',
+  ];
+}
+
+/**
+ * The class this run planned under, where it came from, the words that decided it, and how
+ * to correct it (FR-015).
+ *
+ * `feature` printed nothing about the class, so a request that tripped a bare `token` was
+ * planned `high-risk` — a full discovery on a frontier model and a strict review — with the
+ * operator told nothing until they read `workflow_classified` in the event log. The excerpt
+ * is what makes the class checkable: a person can see at once whether "token" was the thing
+ * the change does or a word in a sentence saying it does not touch one.
+ *
+ * The hint follows what can actually correct it. `--workflow` cannot lower a class that
+ * high-risk signals decided (`adaptive-workflow.ts`, the no-downgrade invariant), so that
+ * case is told to rephrase instead. A `high-risk` class with no signal behind it was chosen,
+ * not detected, so a new run with `--workflow` does lower it; `revise --escalate` is left out
+ * there because `high-risk` is the ceiling it would refuse at.
+ */
+export function classificationLines(classification: WorkflowClassificationResult): string[] {
+  const { workflow, origin, detected, requested } = classification;
+  const raised = requested !== undefined && requested !== workflow;
+  const from =
+    origin === 'detected'
+      ? 'detected from the request'
+      : raised
+        ? `${origin === 'operator' ? 'the operator asked for' : 'carried over as'} ${requested}, ` +
+          'raised by high-risk signals'
+        : origin === 'operator'
+          ? `set by the operator; the request alone classifies as ${detected}`
+          : 'carried over from the earlier classification';
+
+  const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+  const named = (entry: WorkflowEvidence): string =>
+    entry.file === undefined ? entry.signal : `${entry.signal} (file: ${entry.file})`;
+  const evidence = classification.evidence.map((entry) =>
+    entry.negated === true
+      ? `  Not counted (negated) — ${named(entry)}: "${oneLine(entry.excerpt)}"`
+      : `  Decided by ${named(entry)}: "${oneLine(entry.excerpt)}"`,
+  );
+
+  const decidedByRisk = workflow === 'high-risk' && classification.highRiskSignalsDetected.length > 0;
+  const hint = decidedByRisk
+    ? [
+        '  A high-risk class cannot be lowered with --workflow. If the quoted mention is not',
+        '  what this change does, rephrase the request and start a new run.',
+      ]
+    : [
+        '  To correct it, start a new run with:',
+        `    agent-flow feature "<description>" --workflow <class>`,
+        ...(workflow === 'high-risk'
+          ? []
+          : ['  or, before any task runs:', `    agent-flow revise --escalate "<why>"`]),
+      ];
+
+  return [`Workflow: ${workflow} — ${from}.`, ...evidence, ...hint, ''];
 }
 
 // `createRunWithIdentity` lives in `app/run-actions.ts` now: the dashboard creates runs

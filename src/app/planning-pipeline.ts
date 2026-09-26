@@ -19,8 +19,9 @@ import {
   PLANNING_SIMPLE_STAGE,
   SDD_STAGE,
 } from './stages/definitions.js';
-import { checkPlan } from './stages/planning-checks.js';
-import { buildValidationRegistry } from '../core/validation-registry.js';
+import { checkPlan, type PlanCitations } from './stages/planning-checks.js';
+import { buildValidationRegistry, type ValidationRegistry } from '../core/validation-registry.js';
+import type { ExecutorCommands } from '../core/command-grants.js';
 import {
   computeFingerprint,
   fingerprintDifferences,
@@ -32,6 +33,7 @@ import {
   classifyWorkflow,
   getCeremonyBudget,
   type WorkflowClass,
+  type WorkflowClassificationResult,
 } from '../core/adaptive-workflow.js';
 import { readProjectInstructions } from './project-instructions.js';
 
@@ -92,6 +94,15 @@ export interface PlanningPipelineOptions {
   readonly stageRunner: StageRunner;
   readonly config: EffectiveConfig;
   readonly capabilities: RunnerCapabilitiesMap;
+  /**
+   * What the executor may run, from `executorCommandsOf` (FR-008).
+   *
+   * Computed by the composition root rather than here, so the planning pipeline, `doctor`
+   * and the server read one answer from one function. Absent reads as unknown — nothing is
+   * claimed about the executor, so no plan is refused for citing a command — which is what
+   * every wiring that predates the grant was already getting.
+   */
+  readonly executorCommands?: ExecutorCommands;
   /** Maps a runner id to its provider, for judging review independence. */
   readonly providerOf: (runnerId: string) => string | undefined;
   readonly projectDir: string;
@@ -186,6 +197,12 @@ export interface PipelineOptions {
   /** Explicit workflow override or predetermined workflow. */
   readonly workflow?: WorkflowClass;
   /**
+   * Who supplied {@link workflow} (FR-014). Omitted with a `workflow` present means
+   * `operator`, so `feature --workflow` and the Deck's select need say nothing; a re-plan
+   * handing back the class the run already has says `carried`.
+   */
+  readonly workflowOrigin?: 'operator' | 'carried';
+  /**
    * The request carries its own investigation, written by an orchestrating model that
    * already read the code. A fresh discovery is skipped (a valid cached map is still
    * used), and the impact is told to confirm the request's claims in the repository.
@@ -204,6 +221,12 @@ export interface PipelineResult {
   readonly stagesRun: RunStage[];
   /** Absent when the pipeline was asked to stop before review. */
   readonly review?: ReviewResult;
+  /**
+   * The classification this run planned under, so a renderer can say which class, where it
+   * came from, which words decided it and how to correct it (FR-015) without reading the
+   * event log back.
+   */
+  readonly classification?: WorkflowClassificationResult;
 }
 
 /** What {@link PlanningPipeline.warm} measured. It measures; it does not judge. */
@@ -285,9 +308,16 @@ export class PlanningPipeline {
       // Resolve workflow classification safely with deterministic facts & override checks
       const state = await store.loadRun(runId);
       const explicitOverride = options.workflow ?? state.workflow;
+      // FR-014. A class handed in by the caller is the operator's unless the caller says it
+      // is carried; a class read back from the run with nothing handed in is always carried.
+      // Both used to be recorded as "set by operator", so every `--from` resume and every
+      // re-plan claimed a person had chosen a class nobody had touched.
+      const overrideOrigin: 'operator' | 'carried' =
+        options.workflow === undefined ? 'carried' : (options.workflowOrigin ?? 'operator');
       const repoFiles = await collectRepoFactPaths(this.options.fs, this.options.projectDir);
       const classification = classifyWorkflow(featureRequest, {
         explicitOverride,
+        overrideOrigin,
         projectDir: this.options.projectDir,
         projectConfig: this.options.config.project,
         files: repoFiles,
@@ -304,6 +334,12 @@ export class PlanningPipeline {
         rationale: classification.rationale,
         budget,
         highRiskSignals: classification.highRiskSignalsDetected,
+        // Additive keys on an open `detail` (FR-014): a legacy reader sees the four above
+        // exactly as before, and the Deck renders from these when they are present.
+        origin: classification.origin,
+        detected: classification.detected,
+        ...(classification.requested === undefined ? {} : { requested: classification.requested }),
+        evidence: classification.evidence,
       });
 
       // §6.2, moment one: verify repository readiness at planning start
@@ -315,7 +351,12 @@ export class PlanningPipeline {
           runId,
           stage: PLANNING_TRIVIAL_STAGE,
           featureRequest,
-          vars: { projectConfig, validationCommands: this.renderValidationCommands(), agentsMd },
+          vars: {
+            projectConfig,
+            validationCommands: this.renderValidationCommands(),
+            executorCommands: this.renderExecutorCommands(),
+            agentsMd,
+          },
           sddText: '',
           ceremonyProblems: (candidate) =>
             candidate.tasks.length > 1
@@ -328,7 +369,7 @@ export class PlanningPipeline {
         stagesRun.push('planning');
         options.onProgress?.('planning', 'completed');
         await store.updateRun(runId, (s) => ({ ...s, status: 'waiting_for_approval' }));
-        return { runId, plan, stagesRun };
+        return { runId, plan, stagesRun, classification };
       }
 
       // ---- SIMPLE workflow branch (2 model calls: short plan + plan review)
@@ -337,7 +378,12 @@ export class PlanningPipeline {
           runId,
           stage: PLANNING_SIMPLE_STAGE,
           featureRequest,
-          vars: { projectConfig, validationCommands: this.renderValidationCommands(), agentsMd },
+          vars: {
+            projectConfig,
+            validationCommands: this.renderValidationCommands(),
+            executorCommands: this.renderExecutorCommands(),
+            agentsMd,
+          },
           sddText: '',
           ceremonyProblems: (candidate) =>
             candidate.tasks.length > 3
@@ -353,7 +399,7 @@ export class PlanningPipeline {
 
         if (options.skipReview === true) {
           await store.updateRun(runId, (s) => ({ ...s, status: 'waiting_for_approval' }));
-          return { runId, plan, stagesRun };
+          return { runId, plan, stagesRun, classification };
         }
 
         // ---- Plan review
@@ -363,6 +409,7 @@ export class PlanningPipeline {
           plan,
           featureRequest,
           authors: [plannerRunner],
+          executorContext: this.renderExecutorContext('feature request'),
         });
 
         stagesRun.push('plan-review');
@@ -373,7 +420,7 @@ export class PlanningPipeline {
           status: review.verdict === 'PASS' ? 'waiting_for_approval' : 'plan_rejected',
         }));
 
-        return { runId, plan, stagesRun, review };
+        return { runId, plan, stagesRun, review, classification };
       }
 
       // ---- STANDARD / HIGH-RISK workflows: Full ceremony
@@ -423,7 +470,13 @@ export class PlanningPipeline {
         runId,
         stage: PLANNING_STAGE,
         featureRequest,
-        vars: { sdd, architectureImpact, projectConfig, validationCommands: this.renderValidationCommands() },
+        vars: {
+          sdd,
+          architectureImpact,
+          projectConfig,
+          validationCommands: this.renderValidationCommands(),
+          executorCommands: this.renderExecutorCommands(),
+        },
         sddText: sdd,
         // **The bound the run already recorded, finally applied.**
         //
@@ -460,7 +513,7 @@ export class PlanningPipeline {
 
       if (options.skipReview === true) {
         await store.updateRun(runId, (s) => ({ ...s, status: 'waiting_for_approval' }));
-        return { runId, plan, stagesRun };
+        return { runId, plan, stagesRun, classification };
       }
 
       // ---- Plan review, in a fresh context holding only the artifacts (§27).
@@ -471,6 +524,7 @@ export class PlanningPipeline {
         sdd,
         architectureImpact,
         authors: [plannerRunner],
+        executorContext: this.renderExecutorContext('SDD'),
       });
 
       stagesRun.push('plan-review');
@@ -481,7 +535,7 @@ export class PlanningPipeline {
         status: review.verdict === 'PASS' ? 'waiting_for_approval' : 'plan_rejected',
       }));
 
-      return { runId, plan, stagesRun, review };
+      return { runId, plan, stagesRun, review, classification };
     } catch (error) {
       if (error instanceof PlanningRefusal) {
         await store.updateRun(runId, (state) => ({
@@ -559,6 +613,12 @@ export class PlanningPipeline {
   }): Promise<{ plan: Plan; result: Awaited<ReturnType<StageRunner['run']>> }> {
     const { store } = this.options;
     const registry = buildValidationRegistry(this.options.config.project);
+    // Every plan this loop sees is the planner's, so the planner-only rules apply (FR-009,
+    // FR-024). The corrective round calls `checkPlan` without them.
+    const citations: PlanCitations = {
+      declared: registry.ids.map((id) => registry.resolve(id) ?? ''),
+      executor: this.executorCommands(),
+    };
     let request = input.featureRequest;
 
     for (let repair = 0; ; repair += 1) {
@@ -569,7 +629,10 @@ export class PlanningPipeline {
       });
 
       const plan = PlanSchema.parse(result.data);
-      const problems = [...checkPlan(plan, input.sddText, registry), ...input.ceremonyProblems(plan)];
+      const problems = [
+        ...checkPlan(plan, input.sddText, registry, citations),
+        ...input.ceremonyProblems(plan),
+      ];
       if (problems.length === 0) return { plan, result };
 
       await store.appendEvent(input.runId, 'stage_failed', {
@@ -799,15 +862,150 @@ export class PlanningPipeline {
       return 'None configured. Use an empty validation list for every task.';
     }
 
-    return registry.ids
-      .map((id) => `- ${id} (runs: ${registry.resolve(id) ?? ''})`)
-      .join('\n');
+    return validationIdLines(registry).join('\n');
+  }
+
+  /** What the executor may run; unknown when the composition root did not say. */
+  private executorCommands(): ExecutorCommands {
+    return this.options.executorCommands ?? UNKNOWN_EXECUTOR;
+  }
+
+  /**
+   * Whether the executor blocks render at all (FR-018, FR-019).
+   *
+   * Only when there is something to say: a validation id, or an executor that reports a
+   * prefix or may run anything. Otherwise both blocks are the empty string, and the five
+   * prompts are byte-for-byte the ones a commandless project was always sent (NFR-002) —
+   * which is what `rendered-prompt-identity.test.ts` holds against fixtures captured before
+   * any template was edited.
+   */
+  private rendersExecutorBlocks(registry: ValidationRegistry): boolean {
+    const executor = this.executorCommands();
+    return registry.ids.length > 0 || executor.prefixes.length > 0 || executor.any;
+  }
+
+  /**
+   * The planner's executor block, appended to the validation ids (FR-018).
+   *
+   * It exists because a plan could ask the executor for a measurement it has no grant to
+   * make — a build of another branch, a device matrix — and the executor then stops BLOCKED
+   * mid-run on a refusal the planner could have foreseen. So the planner is told what the
+   * executor can run, and where a measurement it cannot run goes instead.
+   *
+   * Starts with the blank line that separates it from the ids, so the placeholder sits on
+   * the ids' own line and an empty value leaves the template exactly as it was.
+   */
+  private renderExecutorCommands(): string {
+    const registry = buildValidationRegistry(this.options.config.project);
+    if (!this.rendersExecutorBlocks(registry)) return '';
+
+    const executor = this.executorCommands();
+    const bounded = executor.known && !executor.any;
+    return [
+      '',
+      '',
+      '### What the executor may run',
+      '',
+      ...describeExecutor(executor),
+      '',
+      ...(bounded
+        ? [
+            'A task whose title, description or acceptance criteria cite, in code, a command that',
+            'neither a validation id nor this list covers is rejected.',
+            '',
+          ]
+        : []),
+      'A measurement the executor cannot make — a build of another branch, a cherry-pick, a',
+      'device matrix — is never a task. Put it in the plan\'s optional top-level',
+      '`operatorVerifications`, one entry per check, and a person makes it:',
+      '',
+      '```json',
+      '"operatorVerifications": [',
+      '  { "check": "What to check, and how.", "reason": "Why the executor cannot." }',
+      ']',
+      '```',
+      '',
+      'Leave the field out when there is none. The commands in this subsection are command',
+      'lines, not validation ids: the ids are the list before it.',
+    ].join('\n');
+  }
+
+  /**
+   * The plan reviewer's block, appended to the plan (FR-019).
+   *
+   * The reviewer used to see neither the validation ids nor what the executor can run, so
+   * it could not notice a task asking for something nobody in the run would execute, nor a
+   * gate the design requires that no task lists — the second is how a run could report
+   * complete with a required gate that never ran. The mechanical citation check (FR-009)
+   * reads only code spans in a declared family; this is its backstop (R-3).
+   *
+   * `requirer` names what states the gates: the SDD, or — for the simple workflow, which
+   * has none — the feature request.
+   */
+  private renderExecutorContext(requirer: 'SDD' | 'feature request'): string {
+    const registry = buildValidationRegistry(this.options.config.project);
+    if (!this.rendersExecutorBlocks(registry)) return '';
+
+    const ids = validationIdLines(registry);
+    return [
+      '',
+      '',
+      '## What can run',
+      '',
+      'Validation ids a task may list, each run by the orchestrator after the task:',
+      '',
+      ...(ids.length === 0 ? ['None configured.'] : ids),
+      '',
+      ...describeExecutor(this.executorCommands()),
+      '',
+      'Also flag, as a finding:',
+      '',
+      '- a task that asks the executor for something it cannot run — a command that neither a',
+      '  validation id nor the executor\'s commands cover. That measurement belongs in the',
+      '  plan\'s `operatorVerifications`, not in a task;',
+      `- a gate the ${requirer} requires that no task lists in its \`validation\`.`,
+    ].join('\n');
   }
 
   /** AGENTS.md, or CLAUDE.md when AGENTS.md has nothing of the repository's — see the module. */
   private async readAgentsMd(): Promise<string> {
     return (await readProjectInstructions(this.options.fs, this.options.projectDir)).text;
   }
+}
+
+/** Nothing claimed about the executor: what an absent `executorCommands` reads as. */
+const UNKNOWN_EXECUTOR: ExecutorCommands = { known: false, any: false, prefixes: [] };
+
+/** One line per validation id, with the command behind it, in registry order. */
+function validationIdLines(registry: ValidationRegistry): string[] {
+  return registry.ids.map((id) => `- ${id} (runs: ${registry.resolve(id) ?? ''})`);
+}
+
+/**
+ * What the executor may run, in the words both prompt blocks share (FR-018, FR-019).
+ *
+ * Unknown is said as unknown rather than as "nothing": a runner that does not report its
+ * grants may well run commands, and telling the planner it cannot would push measurements
+ * the executor could make out to a person.
+ */
+function describeExecutor(executor: ExecutorCommands): string[] {
+  if (!executor.known) {
+    return [
+      'The runner that implements the tasks does not report which commands it may run. Do not',
+      'plan a task that depends on the executor running a command: a check belongs in a',
+      'validation id, or in `operatorVerifications`.',
+    ];
+  }
+  if (executor.any) return ['The executor that implements the tasks may run any command.'];
+  if (executor.prefixes.length === 0) {
+    return ['The executor that implements the tasks may run no command itself.'];
+  }
+  return [
+    'The executor that implements the tasks may run these commands itself — each on its own,',
+    'or followed by more arguments — and no other:',
+    '',
+    ...executor.prefixes.map((prefix) => `- \`${prefix}\``),
+  ];
 }
 
 /** Cache key for discovery output. Currently informational. */

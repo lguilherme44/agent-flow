@@ -123,6 +123,21 @@ export const ptBR: Phrases = {
     worktreeCopyEnvUnchecked: (pattern) =>
       `não foi possível listar os arquivos ignorados que o padrão \`${pattern}\` de \`worktree.copy\` ` +
       'casa, então não foi verificado se ele copia um arquivo .env para os worktrees de tarefa',
+    projectCommandsNotGranted:
+      'os comandos que este projeto declara não são concedidos ao executor: o projeto não ' +
+      'está coberto por `trust.projectConfig`, então não pode ampliar o que um agente pode ' +
+      'rodar. Para concedê-los, adicione o diretório do projeto a `trust.projectConfig` na sua ' +
+      'configuração global',
+    declaredCommandNotGranted: (id, line, why) =>
+      `o comando declarado \`${id}\` (\`${line}\`) não é concedido ao executor: ${why}`,
+    grantExcludedInstall:
+      'install é uma etapa de preparação que o Agent Flow roda antes de o executor começar',
+    grantExcludedEmpty: 'ele está vazio',
+    grantExcludedLineBreak: 'ele ocupa mais de uma linha',
+    grantExcludedWildcard:
+      'ele contém um curinga (`*` ou `?`), então uma concessão por prefixo permitiria mais do que ele nomeia',
+    grantExcludedShellSyntax:
+      'ele contém sintaxe de shell ou aspas, então uma concessão por prefixo permitiria mais do que ele nomeia',
     nodeMissing: 'O Node.js não está no PATH',
     installNode: 'Instale o Node.js 20+ (https://nodejs.org ou via fnm/nvm)',
     gitMissingOrOld: 'O Git não existe ou é mais antigo que 2.38',
@@ -199,6 +214,8 @@ export const ptBR: Phrases = {
     effortSupported: (effective, supported) => `effort ${effective} (suportados: ${supported})`,
     doesNotDeclareToolClass: (runner, toolClass) =>
       `"${runner}" não declara ${toolClass}, que os prompts deste papel precisam`,
+    mayRunCommands: (prefixes) => `pode rodar: ${prefixes}`,
+    mayRunAnyCommand: 'pode rodar qualquer comando',
     declaredCapabilitiesCaveat: [
       'Capacidades declaradas são lidas dos adapters, nunca inferidas de uma run que por',
       'acaso deu certo. Uma concessão ausente é um aviso: ela não impede a execução.',

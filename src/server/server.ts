@@ -89,7 +89,8 @@ import {
   type RunActionDeps,
 } from '../app/run-actions.js';
 import { loadConfig, loadConfigWithReport } from '../config/loader.js';
-import { buildRegistry, describeRunnerTypes } from '../adapters/runners/registry.js';
+import { describeRunnerTypes } from '../adapters/runners/registry.js';
+import { registryFor } from '../app/executor-commands.js';
 import { createGitCommand } from '../adapters/git/git-command.js';
 import { createGitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { referencedRunners } from '../core/health.js';
@@ -913,7 +914,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       globalConfigPath: options.globalConfigPath,
       projectDir: project.path,
     });
-    const registry = buildRegistry(config.global, {
+    const registry = registryFor(config, {
       processRunner: options.processRunner,
       fs: options.fs,
     });
@@ -936,7 +937,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       globalConfigPath: options.globalConfigPath,
       projectDir: project.path,
     });
-    const registry = buildRegistry(config.global, {
+    const registry = registryFor(config, {
       processRunner: options.processRunner,
       fs: options.fs,
     });
@@ -966,7 +967,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
         globalConfigPath: options.globalConfigPath,
         projectDir: project.path,
       });
-      const registry = buildRegistry(config.global, {
+      const registry = registryFor(config, {
         processRunner: options.processRunner,
         fs: options.fs,
       });
@@ -1017,7 +1018,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       globalConfigPath: options.globalConfigPath,
       projectDir: project.path,
     });
-    const registry = buildRegistry(config.global, {
+    const registry = registryFor(config, {
       processRunner: options.processRunner,
       fs: options.fs,
     });

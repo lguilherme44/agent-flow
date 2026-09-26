@@ -114,6 +114,172 @@ describe('command execution grant (D-9)', () => {
   });
 });
 
+describe('derived command grants on write invocations (FR-001, FR-005, FR-006)', () => {
+  const writeInput: AgentRunInput = { ...baseInput, permissions: 'write' };
+
+  interface ArgvCase {
+    readonly platform: NodeJS.Platform;
+    readonly grants?: readonly string[];
+    readonly extraArgs?: readonly string[];
+  }
+
+  async function argvFor(given: ArgvCase, input: AgentRunInput = writeInput): Promise<readonly string[]> {
+    const proc = new FakeProcessRunner().always({ stdout: fixture('success-json.json') });
+    const runner = new ClaudeCodeRunner({
+      id: 'claude',
+      processRunner: proc,
+      platform: given.platform,
+      ...(given.grants === undefined ? {} : { commandGrants: given.grants }),
+      ...(given.extraArgs === undefined ? {} : { extraArgs: given.extraArgs }),
+    });
+    await runner.run(input);
+    return proc.lastCall?.args ?? [];
+  }
+
+  /** The tokens from the derived `--allowedTools` up to and including `acceptEdits`. */
+  function derivedList(args: readonly string[]): readonly string[] {
+    const mode = args.indexOf('acceptEdits');
+    const flag = args.lastIndexOf('--allowedTools', mode);
+    return flag === -1 ? [] : args.slice(flag, mode + 1);
+  }
+
+  it('grants each declared line by prefix, right before the permission mode, on linux', async () => {
+    const args = await argvFor({ platform: 'linux', grants: ['npm run lint'] });
+    expect(derivedList(args)).toEqual(['--allowedTools', 'Bash(npm run lint:*)', '--permission-mode', 'acceptEdits']);
+    expect(args.some((arg) => arg.startsWith('PowerShell('))).toBe(false);
+  });
+
+  it('adds the PowerShell rule right after each Bash rule on win32', async () => {
+    const args = await argvFor({ platform: 'win32', grants: ['npm run lint', 'npm run typecheck:deck'] });
+    expect(derivedList(args)).toEqual([
+      '--allowedTools',
+      'Bash(npm run lint:*)',
+      'PowerShell(npm run lint:*)',
+      'Bash(npm run typecheck:deck:*)',
+      'PowerShell(npm run typecheck:deck:*)',
+      '--permission-mode',
+      'acceptEdits',
+    ]);
+  });
+
+  it('emits a line granted twice once', async () => {
+    const args = await argvFor({ platform: 'linux', grants: ['npm run lint', 'npm run lint'] });
+    expect(args.filter((arg) => arg === 'Bash(npm run lint:*)')).toHaveLength(1);
+  });
+
+  it.each([
+    ['the identical rule', ['--allowedTools', 'Bash(npm run lint:*)']],
+    ['the bare tool', ['--allowedTools', 'Bash']],
+    ['a prefix ending at a word boundary', ['--allowedTools', 'Bash(npm run:*)']],
+    ['a prefix inside a comma list', ['--allowedTools', 'Read,Bash(npm run:*)']],
+    ['a prefix written with an equals sign', ['--allowed-tools=Bash(npm run:*)']],
+  ])('omits the Bash rule the operator already grants with %s', async (_label, extraArgs) => {
+    const args = await argvFor({ platform: 'linux', grants: ['npm run lint'], extraArgs });
+    expect(derivedList(args)).toEqual([]);
+    // The operator's args still ride last, untouched.
+    expect(args.slice(-extraArgs.length)).toEqual(extraArgs);
+  });
+
+  it.each([
+    ['a prefix that splits a word', 'Bash(npm r:*)'],
+    ['an exact rule, which is not modelled', 'Bash(npm run lint)'],
+    ['the other platform tool', 'PowerShell(npm run:*)'],
+  ])('keeps the Bash rule on linux against %s', async (_label, rule) => {
+    const args = await argvFor({ platform: 'linux', grants: ['npm run lint'], extraArgs: ['--allowedTools', rule] });
+    expect(derivedList(args)).toEqual(['--allowedTools', 'Bash(npm run lint:*)', '--permission-mode', 'acceptEdits']);
+  });
+
+  it('on win32, an operator PowerShell prefix suppresses only the PowerShell rule', async () => {
+    const args = await argvFor({
+      platform: 'win32',
+      grants: ['npm run lint'],
+      extraArgs: ['--allowedTools', 'PowerShell(npm run:*)'],
+    });
+    expect(derivedList(args)).toEqual(['--allowedTools', 'Bash(npm run lint:*)', '--permission-mode', 'acceptEdits']);
+  });
+
+  it('on win32, a Bash-only operator rule does not suppress the PowerShell rule', async () => {
+    const args = await argvFor({
+      platform: 'win32',
+      grants: ['npm run lint'],
+      extraArgs: ['--allowedTools', 'Bash(npm run lint:*)'],
+    });
+    expect(derivedList(args)).toEqual(['--allowedTools', 'PowerShell(npm run lint:*)', '--permission-mode', 'acceptEdits']);
+  });
+
+  it('keeps the isolation args and the operator args after the derived list, operator last (SEC-004)', async () => {
+    const extraArgs = ['--allowedTools', 'Read'];
+    const args = await argvFor({ platform: 'linux', grants: ['npm run lint'], extraArgs });
+    expect(args.slice(-extraArgs.length)).toEqual(extraArgs);
+    expect(args.indexOf('Bash(npm run lint:*)')).toBeLessThan(args.indexOf('--setting-sources'));
+    expect(args.indexOf('--setting-sources')).toBeLessThan(args.length - extraArgs.length);
+  });
+
+  it('leaves a read-only invocation exactly as it was (FR-002, SEC-004)', async () => {
+    const withGrants = await argvFor({ platform: 'win32', grants: ['npm run lint'] }, baseInput);
+    const without = await argvFor({ platform: 'win32' }, baseInput);
+    expect(withGrants).toEqual(without);
+    expect(withGrants.some((arg) => arg.includes('npm run lint'))).toBe(false);
+  });
+
+  it('leaves a write invocation with no grants exactly as it was, and grants change it (FR-002)', async () => {
+    const empty = await argvFor({ platform: 'linux', grants: [] });
+    const absent = await argvFor({ platform: 'linux' });
+    const granted = await argvFor({ platform: 'linux', grants: ['npm run lint'] });
+    expect(empty).toEqual(absent);
+    expect(absent).not.toContain('--allowedTools');
+    // Positive control: the same invocation with a grant is a different argv.
+    expect(granted).not.toEqual(absent);
+  });
+});
+
+describe('what the executor may run, as capabilities report it (FR-007)', () => {
+  const grantsOf = (platform: NodeJS.Platform, commandGrants: readonly string[], extraArgs: readonly string[] = []) =>
+    new ClaudeCodeRunner({
+      id: 'claude',
+      processRunner: new FakeProcessRunner(),
+      platform,
+      commandGrants,
+      extraArgs,
+    }).capabilities().nonInteractiveToolGrants;
+
+  it('reports nothing granted, and says so, when there is nothing', () => {
+    const grants = grantsOf('linux', []);
+    expect(grants.commandExecution).toBe(false);
+    expect(grants.grantedCommandPrefixes).toEqual([]);
+    expect(grants.grantsAnyCommand).toBe(false);
+  });
+
+  it('counts a granted declared line as command execution', () => {
+    expect(grantsOf('linux', ['npm run lint']).commandExecution).toBe(true);
+    expect(grantsOf('win32', ['npm run lint']).commandExecution).toBe(true);
+  });
+
+  it('lists the declared lines and the operator prefixes for the platform tool, sorted and once', () => {
+    const grants = grantsOf('linux', ['npm run typecheck', 'npm run lint'], [
+      '--allowedTools',
+      'Bash(npx vitest:*)',
+      'Bash(npm run lint:*)',
+      'PowerShell(npm run build:*)',
+      'Read',
+    ]);
+    expect(grants.grantedCommandPrefixes).toEqual(['npm run lint', 'npm run typecheck', 'npx vitest']);
+    expect(grants.grantsAnyCommand).toBe(false);
+  });
+
+  it('on win32 reads PowerShell prefixes and not Bash ones', () => {
+    const grants = grantsOf('win32', [], ['--allowedTools', 'Bash(npx vitest:*)', 'PowerShell(npx tsc:*)']);
+    expect(grants.grantedCommandPrefixes).toEqual(['npx tsc']);
+  });
+
+  it('reports any command for the bare platform tool only', () => {
+    expect(grantsOf('linux', [], ['--allowedTools', 'Bash']).grantsAnyCommand).toBe(true);
+    expect(grantsOf('linux', [], ['--allowedTools', 'Bash(npm:*)']).grantsAnyCommand).toBe(false);
+    expect(grantsOf('win32', [], ['--allowedTools', 'Bash']).grantsAnyCommand).toBe(false);
+    expect(grantsOf('win32', [], ['--allowedTools', 'PowerShell']).grantsAnyCommand).toBe(true);
+  });
+});
+
 describe('ClaudeCodeRunner model suggestions (AD-13)', () => {
   const CATALOG_DIR = '/home/me/.claude/cache/model-catalog';
 

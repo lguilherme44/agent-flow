@@ -140,7 +140,9 @@ export async function loadConfigWithReport(
     : undefined;
 
   return {
-    config: EffectiveConfigSchema.parse({ global, project }),
+    // The same trust answer the resolver screened `args` with, kept so the grants derived
+    // from `commands` follow it too (SEC-001) instead of each consumer deciding again.
+    config: EffectiveConfigSchema.parse({ global, project, projectTrusted }),
     ignoredLoosenings: resolved.ignoredLoosenings,
   };
 }

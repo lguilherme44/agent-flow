@@ -9,6 +9,7 @@ import { FakeHost } from '../fakes/fake-host.js';
 import { renderDiagnosis, renderRemoteAccess, runDoctorCommand } from '../../src/cli/doctor.js';
 import type { Diagnosis } from '../../src/app/diagnostics.js';
 import { ptBR } from '../../src/core/phrases/pt-BR.js';
+import { en } from '../../src/core/phrases/en.js';
 import { ExitCode } from '../../src/cli/exit-codes.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 import { GlobalConfigSchema, type EffectiveConfig } from '../../src/contracts/index.js';
@@ -222,6 +223,89 @@ describe('runDoctorCommand CLI surface (FR-023)', () => {
       const output = await doctorWith(`trust:\n  projectConfig: [${JSON.stringify(join(root, 'project'))}]\n`);
 
       expect(output).not.toContain('`runners.claude.dangerouslySkipPermissions`');
+    });
+  });
+
+  describe("the executor's command grants (FR-003, FR-004, FR-021)", () => {
+    let root: string;
+    const GRANTLESS = 'granted no tool beyond editing files';
+
+    beforeEach(async () => {
+      root = await mkdtemp(join(tmpdir(), 'af-doctor-grants-'));
+      await mkdir(join(root, 'project', '.agent-flow'), { recursive: true });
+      await writeFile(
+        join(root, 'project', '.agent-flow', 'config.yaml'),
+        [
+          'project:',
+          '  name: demo',
+          '  type: node',
+          'commands:',
+          '  lint: npm run lint',
+          "  test: 'eslint src/**/*.ts'",
+          'validationCommands:',
+          '  typecheck-deck: npm run typecheck:deck',
+          '',
+        ].join('\n'),
+      );
+    });
+
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    /** The real loader and the real `diagnose`, as above, with no process spawned. */
+    async function doctorWith(globalYaml: string): Promise<string> {
+      const globalConfigPath = join(root, 'global.yaml');
+      await writeFile(globalConfigPath, globalYaml);
+
+      const real = diagnosticsApp.diagnose;
+      vi.spyOn(diagnosticsApp, 'diagnose').mockImplementation((options) =>
+        real({
+          ...options,
+          fs: new InMemoryFileSystem(),
+          processRunner: new FakeProcessRunner().always({ exitCode: 0, stdout: 'v20.11.0' }),
+          host: new FakeHost(),
+          promptsDir: '/install/prompts',
+          installProbe: false,
+        }),
+      );
+
+      await runDoctorCommand({}, {
+        cwd: join(root, 'project'),
+        globalConfigPath,
+        verbose: false,
+        dryRun: false,
+        json: false,
+        strict: false,
+      });
+      return stdoutChunks.join('');
+    }
+
+    it('prints the grants under the write role of a trusted project, and no grantless note', async () => {
+      const output = await doctorWith(`trust:\n  projectConfig: [${JSON.stringify(join(root, 'project'))}]\n`);
+      const grants = output.split('\n').find((line) => line.includes('may run: '));
+
+      expect(grants).toContain('npm run lint');
+      expect(grants).toContain('npm run typecheck:deck');
+      expect(output).not.toContain(GRANTLESS);
+      expect(output).not.toContain(en.doctor.projectCommandsNotGranted);
+    });
+
+    it('prints no grant for the same project untrusted, the trust note and the grantless note', async () => {
+      const output = await doctorWith('parallelism:\n  maxTasks: 1\n');
+
+      expect(output).not.toContain('may run: ');
+      expect(output).toContain(en.doctor.projectCommandsNotGranted);
+      expect(output).toContain('trust.projectConfig');
+      expect(output).toContain(GRANTLESS);
+    });
+
+    it('names the excluded line with its id and reason', async () => {
+      const output = await doctorWith('parallelism:\n  maxTasks: 1\n');
+
+      expect(output).toContain(
+        en.doctor.declaredCommandNotGranted('test', 'eslint src/**/*.ts', en.doctor.grantExcludedWildcard),
+      );
     });
   });
 });

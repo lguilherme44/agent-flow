@@ -23,7 +23,7 @@ That is deliberate: your value here is that you can disagree.
 
 ## Plan
 
-{{plan}}
+{{plan}}{{executorContext}}
 
 ## What has already been checked mechanically
 

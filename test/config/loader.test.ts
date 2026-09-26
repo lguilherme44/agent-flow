@@ -450,6 +450,23 @@ describe('project trust (FR-027)', () => {
     expect(config.global.approval.requiredBeforeImplementation).toBe(true);
     expect(ignoredLoosenings).toHaveLength(4);
   });
+
+  it('keeps the trust decision on the config, for the grants derived from commands (SEC-001)', async () => {
+    const covered = new InMemoryFileSystem();
+    covered.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/repo]\n');
+    covered.seed(PROJECT_PATH, loosenings);
+    expect((await load(covered)).projectTrusted).toBe(true);
+
+    const uncovered = new InMemoryFileSystem();
+    uncovered.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/elsewhere]\n');
+    uncovered.seed(PROJECT_PATH, loosenings);
+    expect((await load(uncovered)).projectTrusted).toBe(false);
+
+    // No project file: nothing to trust, whatever the list says.
+    const absent = new InMemoryFileSystem();
+    absent.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/repo]\n');
+    expect((await load(absent)).projectTrusted).toBe(false);
+  });
 });
 
 describe('loadConfig run from the home directory', () => {

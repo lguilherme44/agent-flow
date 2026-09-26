@@ -8,7 +8,8 @@ import {
   type TaskResult,
 } from '../contracts/index.js';
 import { loadConfig } from '../config/loader.js';
-import { buildRegistry, type RunnerRegistry } from '../adapters/runners/registry.js';
+import type { RunnerRegistry } from '../adapters/runners/registry.js';
+import { registryFor } from './executor-commands.js';
 import { StateStore } from './state-store.js';
 import { StageRunner } from './stage-runner.js';
 import { PromptLoader } from './prompt-loader.js';
@@ -23,6 +24,7 @@ import { resolveUtilityModel } from './resolve-utility-model.js';
 import { ContextTelemetryRecorder } from './context-telemetry-recorder.js';
 import { RepositoryRetriever, FileSystemCandidateDiscovery } from '../core/repository-retriever.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
+import { executorCommandsOf } from '../core/command-grants.js';
 import {
   resolveTaskConcurrency,
   type ConcurrencyDecision,
@@ -203,7 +205,7 @@ export async function buildExecutionContext(
     projectDir: options.projectDir,
   });
 
-  const registry = buildRegistry(config.global, {
+  const registry = registryFor(config, {
     processRunner,
     fs,
     // For a runner configured with `apiKeyEnv`. Injected rather than read here, so a test
@@ -595,6 +597,9 @@ export function buildPlanningPipeline(context: ExecutionContext): PlanningPipeli
     },
     config: context.config,
     capabilities: context.capabilities,
+    // Over the capabilities of the registry this context built, so the commands the planner
+    // is held to are the ones the runner that executes the plan will actually be granted.
+    executorCommands: executorCommandsOf(context.config.global.roles, context.capabilities),
     providerOf: context.providerOf,
     projectDir: context.projectDir,
   });

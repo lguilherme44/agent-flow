@@ -32,6 +32,15 @@ export interface PlanReviewRequest {
    * conclusions, which is exactly what independence is supposed to rule out.
    */
   readonly authors: readonly string[];
+  /**
+   * What can run for this plan — the validation ids with their commands, and what the
+   * executor may run — rendered directly after the plan (FR-019).
+   *
+   * Only the planning pipeline passes it. The corrective round passes nothing: its FIX tasks
+   * copy the reviewer's own prose, and its review prompt stays the one it has always been.
+   * Absent renders as the empty string, which the template's placement makes byte-neutral.
+   */
+  readonly executorContext?: string;
 }
 
 /**
@@ -58,6 +67,9 @@ export class PlanReviewService {
       sdd: request.sdd,
       architectureImpact: request.architectureImpact,
       plan: JSON.stringify(request.plan, null, 2),
+      // Always supplied: an undeclared placeholder is left in the prompt as `{{…}}`, so an
+      // absent context has to be passed as the empty string to render as nothing.
+      executorContext: request.executorContext ?? '',
     });
 
     const response = PlanReviewResponseSchema.parse(result.data);
@@ -87,12 +99,15 @@ export class PlanReviewService {
     plan: Plan;
     featureRequest: string;
     authors: readonly string[];
+    /** See {@link PlanReviewRequest.executorContext}. */
+    executorContext?: string;
   }): Promise<ReviewResult> {
     const { store, providerOf } = this.options;
 
     const result = await this.options.stageRunner.run(PLAN_REVIEW_SIMPLE_STAGE, request.runId, {
       featureRequest: request.featureRequest,
       plan: JSON.stringify(request.plan, null, 2),
+      executorContext: request.executorContext ?? '',
     });
 
     const response = PlanReviewResponseSchema.parse(result.data);

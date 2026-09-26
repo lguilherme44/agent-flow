@@ -1165,6 +1165,14 @@ export interface DoctorCapabilityView {
     readonly toolClass: string;
     readonly action: string;
   };
+  /**
+   * What a write role's runner may run without asking (FR-021). Absent when the runner does
+   * not report it, which is not the same as "nothing": `any` false with no `prefixes` is.
+   */
+  readonly commandGrants?: {
+    readonly any: boolean;
+    readonly prefixes: readonly string[];
+  };
   /** `unresolvable` only. */
   readonly errorKind?: string;
   readonly reason?: string;

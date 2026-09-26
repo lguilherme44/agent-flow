@@ -152,6 +152,8 @@ export const ptBR: Dictionary = {
     effort: (level: string) => `esforço ${level}`,
     effortNotOffered: (asked: string, actual: string) => `esforço ${asked} não é oferecido — vai rodar em ${actual}`,
     grantMissing: 'falta permissão',
+    mayRun: (prefixes: string) => `pode rodar: ${prefixes}`,
+    mayRunAnyCommand: 'pode rodar qualquer comando',
     ready: 'pronto',
     stageRouting: 'Roteamento dos estágios',
     lighterRunnerWouldDo: (n: number) => (n === 1 ? '1 estágio não exige o repositório: um runner mais leve (openai-compatible) serviria, mas sem conferir nada no código.' : `${String(n)} estágios não exigem o repositório: um runner mais leve (openai-compatible) serviria, mas sem conferir nada no código.`),
@@ -1010,6 +1012,19 @@ export const ptBR: Dictionary = {
     gitIdentityAssigned: 'Identidade Git definida',
     isolation: (mode: string) => `isolamento ${mode}`,
     classifiedAs: (workflow: string) => `Classificada como ${workflow}`,
+    classifiedDetected: 'detectada a partir do pedido',
+    classifiedByOperator: (detected: string) => `definida pelo operador (só o pedido: ${detected})`,
+    classifiedCarried: 'mantida da classificação anterior',
+    classifiedRaised: (requested: string, byOperator: boolean) =>
+      `${byOperator ? 'o operador pediu' : 'mantida como'} ${requested}, elevada por sinais de alto risco`,
+    classifiedNegated: (excerpt: string) => `não contou: ${excerpt}`,
+    classifiedHint:
+      'para corrigir: uma nova run com agent-flow feature "<descrição>" --workflow <classe>, ' +
+      'ou agent-flow revise --escalate "<motivo>" antes de qualquer tarefa rodar',
+    classifiedHintNewRun: 'para corrigir: uma nova run com agent-flow feature "<descrição>" --workflow <classe>',
+    classifiedHintHighRisk:
+      '--workflow não rebaixa alto risco: se a menção citada não é o que a mudança faz, ' +
+      'reescreva o pedido em uma nova run',
     discoveryCacheInvalidated: 'Cache de descoberta invalidado',
 
     stageStarted: (stage: string) => `${stage} começou`,

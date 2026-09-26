@@ -47,6 +47,60 @@ function scalarsOf(detail: Record<string, unknown>): string | undefined {
   return pairs.length === 0 ? undefined : pairs.join(' · ');
 }
 
+/**
+ * `workflow_classified` from its structured fields (FR-016): the class, where it came from,
+ * the excerpts that decided it, and how to correct it — in the reader's language, where the
+ * recorded rationale is English by design.
+ *
+ * The hint is the one `agent-flow feature` prints. `--workflow` cannot lower a class that
+ * high-risk signals decided, so that case is told to rephrase; a `high-risk` class nothing
+ * detected was chosen, and a new run lowers it, but `revise --escalate` would refuse at the
+ * ceiling and is left out.
+ */
+function classified(d: Record<string, unknown>, t: Dictionary): Sentence {
+  const e = t.events;
+  const workflow = text(d['workflow']);
+  const origin = text(d['origin']);
+  const requested = text(d['requested']);
+  const raised = requested !== undefined && requested !== workflow;
+
+  const from =
+    origin === 'operator' || origin === 'carried'
+      ? raised
+        ? e.classifiedRaised(word(t, requested), origin === 'operator')
+        : origin === 'operator'
+          ? e.classifiedByOperator(word(t, text(d['detected'])))
+          : e.classifiedCarried
+      : origin === 'detected'
+        ? e.classifiedDetected
+        : undefined;
+
+  // One quote per distinct excerpt: several signals in one sentence cut the same excerpt.
+  const counted = new Set<string>();
+  const negated = new Set<string>();
+  for (const entry of Array.isArray(d['evidence']) ? (d['evidence'] as unknown[]) : []) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { excerpt, negated: isNegated } = entry as { excerpt?: unknown; negated?: unknown };
+    const said = text(excerpt);
+    if (said === undefined) continue;
+    (isNegated === true ? negated : counted).add(`“${said}”`);
+  }
+
+  const signals = Array.isArray(d['highRiskSignals']) ? (d['highRiskSignals'] as unknown[]) : [];
+  const hint =
+    workflow === 'high-risk'
+      ? signals.length > 0
+        ? e.classifiedHintHighRisk
+        : e.classifiedHintNewRun
+      : e.classifiedHint;
+
+  return {
+    title: e.classifiedAs(workflow === undefined ? e.aWorkflow : word(t, workflow)),
+    detail: joined([from, ...counted, ...[...negated].map((quoted) => e.classifiedNegated(quoted)), hint]),
+    tone: 'idle',
+  };
+}
+
 export function describe(event: RunEvent, t: Dictionary): Sentence {
   const d = event.detail;
   const e = t.events;
@@ -67,7 +121,12 @@ export function describe(event: RunEvent, t: Dictionary): Sentence {
         tone: 'idle',
       };
     case 'workflow_classified':
-      return { title: e.classifiedAs(text(d['workflow']) ?? e.aWorkflow), detail: clip(text(d['rationale'])), tone: 'idle' };
+      // FR-016. A line from before origin and evidence were recorded carries only the English
+      // rationale, and reads exactly as it always did.
+      if (text(d['origin']) === undefined && !Array.isArray(d['evidence'])) {
+        return { title: e.classifiedAs(text(d['workflow']) ?? e.aWorkflow), detail: clip(text(d['rationale'])), tone: 'idle' };
+      }
+      return classified(d, t);
     case 'discovery_cache_invalidated':
       return {
         title: e.discoveryCacheInvalidated,

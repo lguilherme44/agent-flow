@@ -205,6 +205,238 @@ describe('Adaptive Workflow Classifier', () => {
   });
 });
 
+describe('negation-aware high-risk signals (FR-010, FR-011)', () => {
+  it('does not count a high-risk word a negator covers, and records it as negated evidence', () => {
+    const res = classifyWorkflow('não trafega token nem dado de sessão');
+    expect(res.workflow).not.toBe('high-risk');
+    expect(res.highRiskSignalsDetected).toEqual([]);
+    expect(res.evidence).toContainEqual({
+      signal: 'token',
+      excerpt: 'não trafega token nem dado de sessão',
+      source: 'text',
+      negated: true,
+    });
+
+    // Positive control: the same words without the negator are high-risk, so the negator
+    // is what took the signal out.
+    expect(classifyWorkflow('trafega token nem dado de sessão').workflow).toBe('high-risk');
+  });
+
+  it('keeps high-risk what is not negated, including the hyphen and possessive forms', () => {
+    const requests = [
+      'corrigir a expiração no token JWT',
+      // `sem` is three words before `token`, outside the two-word window.
+      'corrigir o login sem expor o token',
+      'criar a migration que adiciona a coluna status',
+      'fix the auth-token refresh',
+      'move the session-store',
+      'run the pre-migration check',
+      "rotate the token's secret",
+    ];
+    for (const request of requests) {
+      const res = classifyWorkflow(request);
+      expect(res.workflow, request).toBe('high-risk');
+      expect(res.evidence.filter((e) => e.negated !== true).length, request).toBeGreaterThan(0);
+    }
+  });
+
+  it('ends the negation at a sentence break, and only at a real one', () => {
+    expect(classifyWorkflow('Não mexe no CSS. Token rotation for the API').workflow).toBe('high-risk');
+    expect(classifyWorkflow('Não. Token rotation for the API').workflow).toBe('high-risk');
+    expect(classifyWorkflow('Sem\ntoken rotation for the API').workflow).toBe('high-risk');
+    expect(classifyWorkflow('never state; token rotation').workflow).toBe('high-risk');
+    // Positive control: without the break the negator reaches the signal.
+    expect(classifyWorkflow('Não token rotation for the API').workflow).not.toBe('high-risk');
+    // A `.` not followed by whitespace, as in `run-actions.ts`, does not break a sentence.
+    expect(classifyWorkflow('never state.token rotation').workflow).not.toBe('high-risk');
+  });
+
+  it('does not treat `no` or `nem` as negators', () => {
+    const res = classifyWorkflow('não trafega token nem session');
+    expect(res.workflow).toBe('high-risk');
+    expect(res.highRiskSignalsDetected).toEqual(['session']);
+  });
+
+  it('counts the window before the first word of a multi-word signal', () => {
+    const res = classifyWorkflow('ship it without database migration');
+    expect(res.workflow).not.toBe('high-risk');
+    expect(res.evidence.filter((e) => e.negated === true).map((e) => e.signal)).toEqual(
+      expect.arrayContaining(['migration', 'database migration']),
+    );
+  });
+
+  it('counts a signal when any one of its occurrences is not negated', () => {
+    const res = classifyWorkflow('sem token aqui; troca o token da API');
+    expect(res.workflow).toBe('high-risk');
+    expect(res.evidence).toContainEqual({ signal: 'token', excerpt: 'troca o token da API', source: 'text' });
+    expect(res.evidence).toContainEqual({ signal: 'token', excerpt: 'sem token aqui', source: 'text', negated: true });
+  });
+
+  it('applies negation to the file-fact mention words', () => {
+    const negated = classifyWorkflow('Rename the report, without user changes', { files: ['src/auth/jwt.ts'] });
+    expect(negated.workflow).toBe('standard');
+    expect(negated.evidence).toContainEqual({
+      signal: 'auth',
+      excerpt: 'Rename the report, without user changes',
+      source: 'file',
+      file: 'src/auth/jwt.ts',
+      negated: true,
+    });
+
+    // Positive control: the same path with the mention not negated still escalates.
+    const counted = classifyWorkflow('Rename the report for the user', { files: ['src/auth/jwt.ts'] });
+    expect(counted.workflow).toBe('high-risk');
+    expect(counted.evidence).toContainEqual({
+      signal: 'auth',
+      excerpt: 'Rename the report for the user',
+      source: 'file',
+      file: 'src/auth/jwt.ts',
+    });
+    expect(counted.rationale).toContain('"Rename the report for the user"');
+  });
+});
+
+describe('the cross-module guard on simple (FR-012)', () => {
+  const request = 'Change the button color in the Deck feed rendered by run-actions.ts';
+
+  it('keeps a styling request that names cross-module code out of simple, quoting both excerpts', () => {
+    const res = classifyWorkflow(request);
+    expect(res.workflow).toBe('standard');
+    expect(res.rationale).toContain(`color "${request}"`);
+    expect(res.rationale).toContain(`run-actions "${request}"`);
+    expect(res.evidence).toEqual([
+      { signal: 'color', excerpt: request, source: 'text' },
+      { signal: 'run-actions', excerpt: request, source: 'text' },
+    ]);
+
+    // Positive control: without the cross-module mention the styling words still decide.
+    expect(classifyWorkflow('Change the button color in the Deck feed').workflow).toBe('simple');
+  });
+
+  it('matches every cross-module term, with `.` literal', () => {
+    for (const term of ['scheduler', 'state.json', 'state-store', 'state.schema']) {
+      expect(classifyWorkflow(`Adjust the badge color shown by the ${term} module`).workflow, term).toBe('standard');
+    }
+    // `.` is literal: `stateXjson` is not `state.json`.
+    expect(classifyWorkflow('Adjust the badge color shown by stateXjson').workflow).toBe('simple');
+  });
+
+  it('leaves the trivial, high-risk and static-web rules and their order unchanged', () => {
+    expect(classifyWorkflow('Fix typo in the run-actions.ts color label').workflow).toBe('trivial');
+    expect(classifyWorkflow('Change the token color in run-actions.ts').workflow).toBe('high-risk');
+    const staticWeb = classifyWorkflow(request, {
+      projectConfig: ProjectConfigSchema.parse({ project: { name: 'site', type: 'static-web' } }),
+    });
+    expect(staticWeb.workflow).toBe('simple');
+  });
+});
+
+describe('classification evidence (FR-013)', () => {
+  it('cuts the excerpt to the sentence around the match, with whitespace collapsed', () => {
+    const res = classifyWorkflow('First we tidy up.   Then   the\ttoken   refresh moves! Done.');
+    expect(res.evidence).toEqual([{ signal: 'token', excerpt: 'Then the token refresh moves', source: 'text' }]);
+    expect(res.rationale).toBe(
+      'High-risk security/data/infrastructure signals detected: token "Then the token refresh moves".',
+    );
+  });
+
+  it('centres a long sentence on the match, at most 80 characters, with an ellipsis where cut', () => {
+    const filler = 'lorem ipsum dolor sit amet '.repeat(6);
+    const res = classifyWorkflow(`${filler}the token refresh ${filler}`);
+    const [entry] = res.evidence;
+    expect(entry?.signal).toBe('token');
+    expect(entry?.excerpt.length).toBeLessThanOrEqual(80);
+    expect(entry?.excerpt.startsWith('…')).toBe(true);
+    expect(entry?.excerpt.endsWith('…')).toBe(true);
+    expect(entry?.excerpt).toContain('the token refresh');
+    expect(res.rationale).toContain(`token "${entry?.excerpt}"`);
+
+    // Cut on one side only: the match near the start keeps the start and loses the end.
+    const early = classifyWorkflow(`Rotate the token ${filler}`).evidence[0]?.excerpt ?? '';
+    expect(early.length).toBeLessThanOrEqual(80);
+    expect(early.startsWith('Rotate the token')).toBe(true);
+    expect(early.endsWith('…')).toBe(true);
+  });
+
+  it('records the deciding trivial or simple signal', () => {
+    expect(classifyWorkflow('Fix typo in README documentation').evidence).toEqual([
+      { signal: 'typo', excerpt: 'Fix typo in README documentation', source: 'text' },
+    ]);
+    const simple = classifyWorkflow('Add dark mode theme toggle to the landing page');
+    expect(simple.evidence).toEqual([
+      { signal: 'dark mode', excerpt: 'Add dark mode theme toggle to the landing page', source: 'text' },
+    ]);
+    expect(simple.rationale).toContain('dark mode "Add dark mode theme toggle to the landing page"');
+  });
+
+  it('keeps the default rationale when no signal decided', () => {
+    const res = classifyWorkflow('Implement webhooks dispatcher for background jobs');
+    expect(res.evidence).toEqual([]);
+    expect(res.rationale).toBe('Standard feature workflow requiring complete architectural discovery and SDD contract.');
+  });
+});
+
+describe('classification origin (FR-014)', () => {
+  it('is detected without an override', () => {
+    const res = classifyWorkflow('Implement webhooks dispatcher for background jobs');
+    expect(res.origin).toBe('detected');
+    expect(res.detected).toBe('standard');
+    expect(res.requested).toBeUndefined();
+  });
+
+  it('is operator for an override with no origin, or with origin operator', () => {
+    for (const context of [{}, { overrideOrigin: 'operator' as const }]) {
+      const res = classifyWorkflow('Add customer feedback form', { explicitOverride: 'simple', ...context });
+      expect(res.workflow).toBe('simple');
+      expect(res.origin).toBe('operator');
+      expect(res.requested).toBe('simple');
+      expect(res.detected).toBe('standard');
+      expect(res.rationale).toContain('set by operator');
+    }
+  });
+
+  it('is carried for a carried class, whose rationale never says the operator set it', () => {
+    const carried = classifyWorkflow('Add customer feedback form', {
+      explicitOverride: 'standard',
+      overrideOrigin: 'carried',
+    });
+    expect(carried.workflow).toBe('standard');
+    expect(carried.origin).toBe('carried');
+    expect(carried.requested).toBe('standard');
+    expect(carried.detected).toBe('standard');
+    expect(carried.rationale).not.toMatch(/operator/i);
+  });
+
+  it('keeps a carried high-risk class high-risk even when negation now detects nothing', () => {
+    const res = classifyWorkflow('não trafega token nem dado de sessão', {
+      explicitOverride: 'high-risk',
+      overrideOrigin: 'carried',
+    });
+    expect(res.workflow).toBe('high-risk');
+    expect(res.detected).toBe('standard');
+    expect(res.origin).toBe('carried');
+    expect(res.rationale).not.toMatch(/operator/i);
+  });
+
+  it('holds the no-downgrade invariant for a carried class', () => {
+    const res = classifyWorkflow('Add auth token verification to payment gateway', {
+      explicitOverride: 'standard',
+      overrideOrigin: 'carried',
+    });
+    expect(res.workflow).toBe('high-risk');
+    expect(res.detected).toBe('high-risk');
+    expect(res.origin).toBe('carried');
+    expect(res.rationale).not.toMatch(/operator/i);
+    expect(res.rationale).toContain('token "Add auth token verification to payment gateway"');
+  });
+
+  it('ignores an origin given without an override', () => {
+    const res = classifyWorkflow('Add customer feedback form', { overrideOrigin: 'carried' });
+    expect(res.origin).toBe('detected');
+    expect(res.requested).toBeUndefined();
+  });
+});
+
 describe('Ceremony Budget Stop Conditions', () => {
   it('stops TRIVIAL workflow immediately if a revision is attempted', () => {
     const stop = evaluateStopCondition('trivial', 1, true);

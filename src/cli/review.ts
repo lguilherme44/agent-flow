@@ -90,8 +90,11 @@ const STAGE_HEADINGS = {
  * says FEATURE COMPLETE, and a run that fell back to another provider, ran below
  * its configured effort or reviewed itself reached that verdict on weaker terms
  * — the person reading the verdict is the one who needs to know it (R-16).
+ *
+ * Exported so a test can read the words a person reads (FR-030), over an outcome the real
+ * `review` produced, rather than re-deriving them from the Definition of Done.
  */
-function renderOutcome(outcome: ReviewOutcome): string {
+export function renderOutcome(outcome: ReviewOutcome): string {
   const lines: string[] = [];
 
   if (outcome.degradations.length > 0) {

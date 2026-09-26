@@ -364,6 +364,16 @@ export function renderCapabilityReport(
         `      ${finding.action}`,
       );
     }
+
+    // What the role may run without asking (FR-021). Nothing when the runner does not
+    // report it, and nothing for "reports no prefix" either: the grantless note already
+    // says that, with the fix beside it.
+    const grants = observation.commandGrants;
+    if (grants?.any === true) {
+      lines.push(`    ${DASH} ${say.doctor.mayRunAnyCommand}`);
+    } else if (grants !== undefined && grants.prefixes.length > 0) {
+      lines.push(`    ${DASH} ${say.doctor.mayRunCommands(grants.prefixes.join(', '))}`);
+    }
   }
 
   lines.push('', ...say.doctor.declaredCapabilitiesCaveat.map((line) => `  ${line}`), '');

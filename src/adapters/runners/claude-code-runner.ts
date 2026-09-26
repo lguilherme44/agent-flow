@@ -173,6 +173,14 @@ export interface ClaudeCodeRunnerOptions extends BaseRunnerOptions {
   readonly modelCatalogDir?: string;
   /** Which command tool a grant must name. `process.platform` when absent. */
   readonly platform?: NodeJS.Platform;
+  /**
+   * Declared command lines a write invocation may run by prefix (FR-001).
+   *
+   * Already screened by `core/command-grants` — trusted project, no install step, nothing
+   * that would make `<line>:*` broader than the line — so this adapter only spells them.
+   * Absent or empty leaves the argv exactly as it was (FR-002).
+   */
+  readonly commandGrants?: readonly string[];
 }
 
 interface CatalogModel {
@@ -218,26 +226,47 @@ function parseCatalog(value: unknown): ParsedCatalog | undefined {
 }
 
 /**
- * Whether `args` carry `--allowedTools` (or `--allowed-tools`) with an entry for the tool this
- * platform runs commands with: `PowerShell` on Windows, `Bash` elsewhere. A `Bash(...)` rule
- * alone was measured denied on Windows (claude 2.1.280, 23/09/2026), so counting it there
- * reported a grant the executor did not have.
- *
- * The flag is variadic, so every token after it up to the next option is one of its values.
+ * One `--allowedTools` value split into its rules: on commas and whitespace, but never inside
+ * parentheses, so `Bash(npm run lint:*)` stays one rule instead of becoming `Bash(npm`, `run`
+ * and `lint:*)`. Reading the tool name needed only the first piece; reading a prefix needs
+ * the whole rule.
  */
-function grantsCommands(args: readonly string[], platform: NodeJS.Platform): boolean {
-  const tool = platform === 'win32' ? /^PowerShell(\(|$)/ : /^Bash(\(|$)/;
-  const names = (value: string): boolean => value.split(/[\s,]+/).some((entry) => tool.test(entry));
+function splitRules(value: string): string[] {
+  const rules: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of value) {
+    if (char === '(') depth++;
+    else if (char === ')' && depth > 0) depth--;
+    if (depth === 0 && (char === ',' || /\s/.test(char))) {
+      if (current.length > 0) rules.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.length > 0) rules.push(current);
+  return rules;
+}
+
+/**
+ * Every rule `args` carry under `--allowedTools` (or `--allowed-tools`).
+ *
+ * The flag is variadic, so every token after it up to the next option is one of its values;
+ * `--allowedTools=PowerShell(npm:*)` is one token, the value after the sign. Positional or
+ * malformed tokens outside the list contribute nothing.
+ */
+function allowedRules(args: readonly string[]): string[] {
+  const rules: string[] = [];
   let inAllowlist = false;
   for (const token of args) {
     if (token === '--allowedTools' || token === '--allowed-tools') {
       inAllowlist = true;
       continue;
     }
-    // `--allowedTools=PowerShell(npm:*)`: one token, the value after the sign.
     const inline = /^--allowed-?[Tt]ools=(.*)$/.exec(token);
     if (inline !== null) {
-      if (names(inline[1] ?? '')) return true;
+      rules.push(...splitRules(inline[1] ?? ''));
       inAllowlist = false;
       continue;
     }
@@ -245,9 +274,62 @@ function grantsCommands(args: readonly string[], platform: NodeJS.Platform): boo
       inAllowlist = false;
       continue;
     }
-    if (inAllowlist && names(token)) return true;
+    if (inAllowlist) rules.push(...splitRules(token));
   }
-  return false;
+  return rules;
+}
+
+/**
+ * A command tool, spelled as the opening of its rule.
+ *
+ * Not the bare name: a quoted bare `PowerShell` is what the V-01 architecture scan reads as a
+ * shell being spawned, and this adapter spawns none. The bare name is the opener minus its
+ * parenthesis — see {@link bareName}.
+ */
+const BASH = 'Bash(';
+const POWERSHELL = 'PowerShell(';
+type CommandTool = typeof BASH | typeof POWERSHELL;
+
+/** `Bash` out of `Bash(`: the rule that grants the tool with any command at all. */
+function bareName(tool: CommandTool): string {
+  return tool.slice(0, -1);
+}
+
+/**
+ * The tool this platform runs commands with: `PowerShell` on Windows, `Bash` elsewhere. A
+ * `Bash(...)` rule alone was measured denied on Windows (claude 2.1.280, 23/09/2026), so
+ * counting it there reported a grant the executor did not have.
+ */
+function commandToolOf(platform: NodeJS.Platform): CommandTool {
+  return platform === 'win32' ? POWERSHELL : BASH;
+}
+
+/** `P` out of `Tool(P:*)` for this tool, or nothing for any other rule form. */
+function prefixOf(rule: string, tool: CommandTool): string | undefined {
+  if (!rule.startsWith(tool) || !rule.endsWith(':*)')) return undefined;
+  const prefix = rule.slice(tool.length, -':*)'.length);
+  return prefix.length === 0 ? undefined : prefix;
+}
+
+/**
+ * Whether an operator rule already grants `line` for `tool` (FR-006).
+ *
+ * The bare tool, or a prefix rule whose prefix is the line or the line's leading words — a
+ * space boundary, so `Bash(npm run:*)` covers `npm run lint` and `Bash(npm r:*)` does not.
+ * The identical rule is the prefix case with the whole line. Omitting a derived rule under
+ * this test never loses a grant whichever way the CLI matches a prefix; an exact
+ * `Tool(cmd)` or any other wildcard is not modelled and suppresses nothing.
+ */
+function covers(rule: string, tool: CommandTool, line: string): boolean {
+  if (rule === bareName(tool)) return true;
+  const prefix = prefixOf(rule, tool);
+  return prefix !== undefined && (line === prefix || line.startsWith(`${prefix} `));
+}
+
+/** Whether `args` grant this platform's command tool in any form (today's D-9 rule). */
+function grantsCommands(args: readonly string[], platform: NodeJS.Platform): boolean {
+  const tool = commandToolOf(platform);
+  return allowedRules(args).some((rule) => rule === bareName(tool) || rule.startsWith(tool));
 }
 
 /** Numeric, segment by segment: `2.1.280` > `2.1.99`. */
@@ -274,12 +356,39 @@ export class ClaudeCodeRunner extends BaseRunner {
   /** Where `claude` caches the account's model picker. See {@link listModels}. */
   private readonly modelCatalogDir: string | undefined;
   private readonly platform: NodeJS.Platform;
+  /** Declared lines to grant by prefix on write invocations, each once. See {@link derivedRules}. */
+  private readonly commandGrants: readonly string[];
 
   constructor(options: ClaudeCodeRunnerOptions) {
     super(options);
     this.fs = options.fs;
     this.modelCatalogDir = options.modelCatalogDir;
     this.platform = options.platform ?? process.platform;
+    this.commandGrants = [...new Set(options.commandGrants ?? [])];
+  }
+
+  /**
+   * The `--allowedTools` rules derived from the declared commands, minus those the operator's
+   * own args already grant (FR-001, FR-006).
+   *
+   * `Bash(<line>:*)` for every line, and on Windows `PowerShell(<line>:*)` right after it:
+   * the CLI runs commands through PowerShell there, and a Bash rule alone was measured denied.
+   * The Bash rule stays on Windows as well: which tool the CLI picks there was measured on one
+   * release, and a rule for the tool it did not pick costs nothing.
+   *
+   * The operator's args are read after the N4 screen — `extraArgs` is what the resolver let
+   * through — so an untrusted project's own rules suppress nothing here either.
+   */
+  private derivedRules(): string[] {
+    if (this.commandGrants.length === 0) return [];
+
+    const tools: readonly CommandTool[] = this.platform === 'win32' ? [BASH, POWERSHELL] : [BASH];
+    const operator = allowedRules(this.extraArgs);
+    return this.commandGrants.flatMap((line) =>
+      tools
+        .filter((tool) => !operator.some((rule) => covers(rule, tool, line)))
+        .map((tool) => `${tool}${line}:*)`),
+    );
   }
 
   protected defaultCommand(): string {
@@ -287,6 +396,15 @@ export class ClaudeCodeRunner extends BaseRunner {
   }
 
   capabilities(): RunnerCapabilities {
+    const tool = commandToolOf(this.platform);
+    const operator = allowedRules(this.extraArgs);
+    // What a plan may ask of this executor (FR-007): the declared lines it will be granted,
+    // and every prefix the operator granted for the tool this platform actually runs. A Bash
+    // prefix on Windows is left out for the reason `grantsCommands` gives.
+    const grantedCommandPrefixes = [
+      ...new Set([...this.commandGrants, ...operator.flatMap((rule) => prefixOf(rule, tool) ?? [])]),
+    ].sort();
+
     return {
       supportedReasoningLevels: ['low', 'medium', 'high', 'very_high'],
       supportsReadOnly: true,
@@ -311,7 +429,15 @@ export class ClaudeCodeRunner extends BaseRunner {
       // `doctor` itself prints. Reading only the default made the Diagnostics page say
       // "missing permission" for a project whose args granted exactly that, while `doctor`
       // in the terminal said OK — two answers from one configuration.
-      nonInteractiveToolGrants: { fileEdit: true, commandExecution: grantsCommands(this.extraArgs, this.platform) },
+      //
+      // **Also true when a declared command is granted** (FR-007): the write invocation then
+      // carries a prefix rule for it, which is the same grant arriving by another road.
+      nonInteractiveToolGrants: {
+        fileEdit: true,
+        commandExecution: grantsCommands(this.extraArgs, this.platform) || this.commandGrants.length > 0,
+        grantedCommandPrefixes,
+        grantsAnyCommand: operator.includes(bareName(tool)),
+      },
     };
   }
 
@@ -511,6 +637,13 @@ export class ClaudeCodeRunner extends BaseRunner {
       // means the guarantee does not rest on one flag alone.
       args.push('--disallowedTools', ...WRITE_TOOLS);
     } else {
+      // The derived grants, inside this adapter's own argv and right before an option token
+      // (FR-005). `--allowedTools` is variadic, so `--permission-mode` is what ends the list —
+      // with isolation off and no operator args there would otherwise be nothing to end it
+      // but the tail of argv. The isolation args and the operator's `RunnerConfig.args` keep
+      // their positions after this, and with them the last word (SEC-004).
+      const derived = this.derivedRules();
+      if (derived.length > 0) args.push('--allowedTools', ...derived);
       args.push('--permission-mode', 'acceptEdits');
     }
 

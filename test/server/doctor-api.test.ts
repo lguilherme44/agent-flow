@@ -6,6 +6,7 @@ import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { FakeHost } from '../fakes/fake-host.js';
 import type { DoctorView } from '../../src/contracts/index.js';
+import { en } from '../../src/core/phrases/index.js';
 
 /**
  * 7.5 — "can this machine work?", asked over HTTP.
@@ -231,6 +232,71 @@ roles:
       const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
 
       expect(view.notes.some((note) => note.includes(NOTE))).toBe(false);
+    });
+  });
+
+  describe("the executor's command grants (FR-003, FR-004, FR-021, FR-022)", () => {
+    const EXECUTORS = `${GLOBAL_CONFIG}  executors:
+    trivial: { runner: claude }
+    normal: { runner: claude }
+    complex: { runner: claude }
+`;
+    const TRUSTED = `${EXECUTORS}trust:\n  projectConfig: [/repo]\n`;
+    const DECLARING = `project:
+  name: demo
+  type: node
+commands:
+  lint: npm run lint
+  test: 'eslint src/**/*.ts'
+validationCommands:
+  typecheck-deck: npm run typecheck:deck
+`;
+    const GRANTLESS = 'granted no tool beyond editing files';
+    const executorOf = (view: DoctorView) => view.capabilities.find((entry) => entry.role === 'executor.normal');
+
+    it('carries the declared lines on the write role of a trusted project, and no grantless note', async () => {
+      const { server } = await serve(TRUSTED, DECLARING);
+
+      const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
+
+      expect(executorOf(view)?.commandGrants?.prefixes).toEqual(
+        expect.arrayContaining(['npm run lint', 'npm run typecheck:deck']),
+      );
+      expect(executorOf(view)?.commandGrants?.any).toBe(false);
+      expect(view.notes.some((note) => note.includes(GRANTLESS))).toBe(false);
+      expect(view.notes).not.toContain(en.doctor.projectCommandsNotGranted);
+    });
+
+    it('carries no grant for the same project untrusted, the trust note and the grantless note', async () => {
+      const { server } = await serve(EXECUTORS, DECLARING);
+
+      const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
+
+      expect(executorOf(view)?.commandGrants?.prefixes ?? []).not.toContain('npm run lint');
+      expect(view.notes).toContain(en.doctor.projectCommandsNotGranted);
+      expect(view.notes.some((note) => note.includes(GRANTLESS))).toBe(true);
+    });
+
+    it('gives an untrusted project declaring only validationCommands both notes', async () => {
+      const { server } = await serve(
+        EXECUTORS,
+        'project:\n  name: demo\n  type: node\ncommands: {}\nvalidationCommands:\n  test-deck: npm run test:deck\n',
+      );
+
+      const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
+
+      expect(view.notes).toContain(en.doctor.projectCommandsNotGranted);
+      expect(view.notes.some((note) => note.includes(GRANTLESS))).toBe(true);
+    });
+
+    it('names the excluded line with its id and reason', async () => {
+      const { server } = await serve(TRUSTED, DECLARING);
+
+      const view = (await server.app.inject('/api/v1/doctor')).json<DoctorView>();
+
+      expect(view.notes).toContain(
+        en.doctor.declaredCommandNotGranted('test', 'eslint src/**/*.ts', en.doctor.grantExcludedWildcard),
+      );
     });
   });
 

@@ -142,6 +142,26 @@ export interface Phrases {
     readonly worktreeCopyExposesEnv: (pattern: string) => string;
     /** The listing behind rule (b) failed for `pattern`, so it could not be checked (FR-018). */
     readonly worktreeCopyEnvUnchecked: (pattern: string) => string;
+    /**
+     * The project declares commands and is not trusted, so none of them is granted to the
+     * executor (FR-003). `trust.projectConfig` is the switch, typed verbatim.
+     */
+    readonly projectCommandsNotGranted: string;
+    /**
+     * A declared line that gets no grant, whatever the trust (FR-004). `id` and `line` are
+     * typed verbatim — the reader has to find them in `config.yaml` — and `why` is one of the
+     * five sentences below, one per `CommandGrantExclusionReason`.
+     *
+     * Five flat entries rather than a function of the reason: a lookup keyed by a parameter
+     * is the one shape this book's own test cannot render with placeholder arguments, so a
+     * reason nobody translated would pass it.
+     */
+    readonly declaredCommandNotGranted: (id: string, line: string, why: string) => string;
+    readonly grantExcludedInstall: string;
+    readonly grantExcludedEmpty: string;
+    readonly grantExcludedLineBreak: string;
+    readonly grantExcludedWildcard: string;
+    readonly grantExcludedShellSyntax: string;
 
     /**
      * The report's own headings and labels.
@@ -180,6 +200,9 @@ export interface Phrases {
     readonly willBeClamped: (effective: string) => string;
     readonly effortSupported: (effective: string, supported: string) => string;
     readonly doesNotDeclareToolClass: (runner: string, toolClass: string) => string;
+    /** A write role's command grants (FR-021). `prefixes` is the lines, joined, verbatim. */
+    readonly mayRunCommands: (prefixes: string) => string;
+    readonly mayRunAnyCommand: string;
     readonly declaredCapabilitiesCaveat: readonly string[];
     readonly installProbeHeading: string;
     readonly checkoutDirtyBeforeInstall: string;

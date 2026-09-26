@@ -11,6 +11,7 @@ import { runCorrectiveRound } from '../../src/app/corrective-round.js';
 import { projectFindings } from '../../src/core/review/findings.js';
 import { checkApproval, planHash, approveRun } from '../../src/app/approval.js';
 import { buildValidationRegistry } from '../../src/core/validation-registry.js';
+import { checkPlan } from '../../src/app/stages/planning-checks.js';
 import {
   GlobalConfigSchema,
   PlanSchema,
@@ -320,6 +321,51 @@ describe('a corrective plan passes the same mechanical checks', () => {
     // Nothing was written and no review was spent.
     expect(w.runners.claude.calls).toHaveLength(0);
     expect(await w.store.readArtifact(w.run.runId, 'plan')).not.toContain('FIX-001');
+  });
+
+  it('says how to declare an undeclared validation id, and what is available (FR-023)', async () => {
+    const w = await world();
+    const undeclared = PlanSchema.parse({
+      ...PLAN,
+      tasks: [{ ...PLAN.tasks[0], validation: ['e2e'] }],
+    });
+
+    const result = await w.round({ plan: undeclared });
+
+    expect(result.outcome).toBe('invalid_plan');
+    if (result.outcome !== 'invalid_plan') return;
+    const message = result.problems.join(' ');
+    expect(message).toContain('"e2e"');
+    expect(message).toContain('validationCommands');
+    expect(message).toContain('"<id>: <command>"');
+    expect(message).toContain('available: test');
+  });
+
+  it('does not refuse a FIX task that cites an undeclared command (FR-009 is planner-only)', async () => {
+    // FIX tasks transcribe the reviewer's prose. Holding them to the planner's citation rule
+    // would end the round `invalid_plan` for words nobody in the run chose.
+    const w = await world();
+    w.runners.claude.pushJson({ verdict: 'PASS', findings: [] });
+    const citing = ReviewResultSchema.parse({
+      ...FINAL_REVIEW,
+      findings: [
+        {
+          ...FINAL_REVIEW.findings[0],
+          description: 'Nothing proves the screen with `npm run e2e:android` on a device.',
+        },
+      ],
+    });
+
+    const result = await w.round({ finalReview: citing });
+
+    expect(result.outcome).toBe('applied');
+    if (result.outcome !== 'applied') return;
+    // Positive control: the same plan, held to the planner's rule, is refused for that citation.
+    const planner = checkPlan(result.plan, SDD, buildValidationRegistry(w.project), {
+      declared: ['npm test'],
+      executor: { known: true, any: false, prefixes: [] },
+    });
+    expect(planner.join(' ')).toContain('`npm run e2e:android`');
   });
 });
 

@@ -28,7 +28,7 @@ export interface ValidationRegistry {
 }
 
 /** Standard steps, referenceable by their own name when the project defines them. */
-const STANDARD_STEPS = ['install', 'lint', 'typecheck', 'test', 'build'] as const;
+export const STANDARD_STEPS = ['install', 'lint', 'typecheck', 'test', 'build'] as const;
 
 export function buildValidationRegistry(project: ProjectConfig | undefined): ValidationRegistry {
   const commands = new Map<string, string>();
@@ -52,6 +52,23 @@ export function buildValidationRegistry(project: ProjectConfig | undefined): Val
     has: (id) => commands.has(id),
     resolve: (id) => commands.get(id),
   };
+}
+
+/**
+ * How a person makes an undeclared validation id real (FR-023).
+ *
+ * Here, beside the registry that decides what "declared" means, so the plan check and the
+ * Definition of Done give the same remedy in the same words. The refusal used to stop at
+ * "the project does not define it", which told the reader what was wrong and left them to
+ * find out where the list lives and what shape an entry has.
+ *
+ * English, as every refusal the record keeps is.
+ */
+export function declareValidationRemedy(id: string): string {
+  return (
+    `to declare it, add it under validationCommands in .agent-flow/config.yaml ` +
+    `as "<id>: <command>" (here "${id}: <command>")`
+  );
 }
 
 /**

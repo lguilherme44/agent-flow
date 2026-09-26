@@ -2,8 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { z } from 'zod';
+import { parse as parseYaml } from 'yaml';
+import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 import {
   AmendmentSchema,
+  EffectiveConfigSchema,
+  GlobalConfigSchema,
   FailedAttemptSchema,
   FailureContextPacketSchema,
   PlanSchema,
@@ -295,6 +299,34 @@ describe('PlanSchema and TaskSchema (AD-38, C-15, §8.3)', () => {
   });
 });
 
+describe('PlanSchema.operatorVerifications (FR-017, NFR-001)', () => {
+  it('leaves a plan without it serializing byte-identical, with no key added', () => {
+    // A `.default([])` would pass every parse test and still rewrite every plan — and every
+    // `final-review.json` that embeds one — the first time it was read back.
+    const once = JSON.stringify(PlanSchema.parse(read('plan.json')), null, 2);
+    const twice = JSON.stringify(PlanSchema.parse(JSON.parse(once)), null, 2);
+
+    expect(twice).toBe(once);
+    expect(once).not.toContain('operatorVerifications');
+  });
+
+  it('parses a plan that carries it, and keeps it', () => {
+    const plan = read('plan.json') as Record<string, unknown>;
+    const verification = { check: 'Build the release branch on a device.', reason: 'The executor has no device.' };
+    const parsed = PlanSchema.parse({ ...plan, operatorVerifications: [verification] });
+
+    expect(parsed.operatorVerifications).toEqual([verification]);
+    // Positive control for the test above: a plan that has it does serialize the key.
+    expect(JSON.stringify(parsed)).toContain('operatorVerifications');
+  });
+
+  it('refuses an item with an empty check or reason', () => {
+    const plan = read('plan.json') as Record<string, unknown>;
+    expect(PlanSchema.safeParse({ ...plan, operatorVerifications: [{ check: '', reason: 'x' }] }).success).toBe(false);
+    expect(PlanSchema.safeParse({ ...plan, operatorVerifications: [{ check: 'x', reason: '' }] }).success).toBe(false);
+  });
+});
+
 describe('TaskAttemptResultSchema (AD-39, C-15, §8.6)', () => {
   const attempts = [
     'tasks/TASK-001/attempt-1.json',
@@ -560,6 +592,20 @@ describe('the two new artifacts (§8.4, §8.5)', () => {
         correctiveObjective: '',
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('EffectiveConfigSchema.projectTrusted (NFR-001, SEC-001)', () => {
+  const global = GlobalConfigSchema.parse(parseYaml(DEFAULT_GLOBAL_CONFIG_YAML));
+
+  it('parses a config written without it, and leaves it absent rather than defaulted', () => {
+    const parsed = EffectiveConfigSchema.parse({ global });
+    expect(parsed.projectTrusted).toBeUndefined();
+    expect('projectTrusted' in parsed).toBe(false);
+  });
+
+  it('carries the decision when the loader made one (positive control)', () => {
+    expect(EffectiveConfigSchema.parse({ global, projectTrusted: true }).projectTrusted).toBe(true);
   });
 });
 

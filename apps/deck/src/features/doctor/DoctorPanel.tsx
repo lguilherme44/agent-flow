@@ -210,6 +210,19 @@ function CapabilityRow({ entry }: { entry: DoctorCapabilityView }) {
             · {entry.permissionFinding.action}
           </em>
         )}
+        {/* What the role may run without asking (FR-021), as the server reported it. Absent
+            says nothing, and so does an empty list: the grantless note already covers it. */}
+        {entry.commandGrants?.any === true ? (
+          <span className="doctor-row__grants faint">
+            <br />
+            {t.doctor.mayRunAnyCommand}
+          </span>
+        ) : entry.commandGrants !== undefined && entry.commandGrants.prefixes.length > 0 ? (
+          <span className="doctor-row__grants faint">
+            <br />
+            {t.doctor.mayRun(entry.commandGrants.prefixes.join(', '))}
+          </span>
+        ) : null}
       </span>
       <Chip tone={clamped || entry.permissionFinding !== undefined ? 'warn' : 'ok'}>
         {clamped ? t.inspector.clamped : entry.permissionFinding !== undefined ? t.doctor.grantMissing : t.doctor.ready}
