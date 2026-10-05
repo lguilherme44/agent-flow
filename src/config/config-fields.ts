@@ -60,6 +60,7 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   // belongs to the repository, not to whoever happens to be running the CLI.
   enumField('language', [...LOCALES], ['global', 'project']),
   ...['type', 'command', 'baseUrl', 'apiKeyEnv', 'model'].map((key) => field(`runners.*.${key}`, 'string')),
+  enumField('runners.*.structuredOutput', ['json_schema', 'json_object']),
   field('runners.*.enabled', 'boolean'), field('runners.*.args', 'string_list'), field('runners.*.contextWindow', 'integer'),
   // The declared MCP set. Editable for the same reason `args` is — it is how an operator
   // hands a runner the repository's own index — and `servers` is a list rather than a

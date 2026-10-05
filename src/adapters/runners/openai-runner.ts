@@ -68,6 +68,17 @@ export interface OpenAiRunnerOptions {
   readonly apiKey?: string;
   /** The model id to request. Defaults to whatever the server serves. */
   readonly model?: string;
+  /**
+   * How a stage's output schema is enforced on the wire.
+   *
+   * `json_schema` (the default) sends `response_format: { type: 'json_schema', ... }`, which
+   * is what OpenAI and the servers that copied it accept. **DeepSeek answers `This
+   * response_format type is unavailable now`** — measured against `https://api.deepseek.com`
+   * — and several local servers do the same, so a runner for one of those declares
+   * `json_object`: the schema travels in the prompt instead, and the reply is validated here
+   * by the same `JSON.parse`, the same stage validation and the same repair loop.
+   */
+  readonly structuredOutput?: 'json_schema' | 'json_object';
   readonly timeoutSeconds?: number;
   /** Injectable for tests. Production leaves it unset. */
   readonly fetch?: typeof fetch;
@@ -91,6 +102,7 @@ export class OpenAiRunner implements AgentRunner {
   private readonly modelsUrl: string;
   private readonly apiKey?: string;
   private readonly model?: string;
+  private readonly structuredOutput: 'json_schema' | 'json_object';
   private readonly timeoutSeconds: number;
   private readonly fetchImpl: typeof fetch;
 
@@ -102,6 +114,7 @@ export class OpenAiRunner implements AgentRunner {
     this.modelsUrl = modelsUrl;
 
     if (options.apiKey !== undefined) this.apiKey = options.apiKey;
+    this.structuredOutput = options.structuredOutput ?? 'json_schema';
     if (options.model !== undefined) this.model = options.model;
     this.timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -196,17 +209,32 @@ export class OpenAiRunner implements AgentRunner {
       { role: 'user', content: input.prompt },
     ];
 
+    const schema = input.outputSchema;
+    const enforced = schema !== undefined && this.structuredOutput === 'json_schema';
+
+    // The endpoint that cannot enforce it still has to be told the shape: the schema goes
+    // into the last user message, which is also where DeepSeek's own requirement is met —
+    // JSON mode needs the word "json" in the prompt, and an example of the format.
+    if (schema !== undefined && !enforced) {
+      const last = messages[messages.length - 1];
+      if (last !== undefined) {
+        last.content += `\n\nReply with a single json object that satisfies this JSON Schema:\n${JSON.stringify(schema)}`;
+      }
+    }
+
     const body: Record<string, unknown> = {
       model: input.model ?? this.model ?? 'default',
       messages,
-      ...(input.outputSchema === undefined
+      ...(schema === undefined
         ? {}
-        : {
-            response_format: {
-              type: 'json_schema',
-              json_schema: { name: 'response', strict: true, schema: input.outputSchema },
-            },
-          }),
+        : enforced
+          ? {
+              response_format: {
+                type: 'json_schema',
+                json_schema: { name: 'response', strict: true, schema },
+              },
+            }
+          : { response_format: { type: 'json_object' } }),
     };
 
     try {

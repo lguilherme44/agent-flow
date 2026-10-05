@@ -53,6 +53,15 @@ export const RunnerConfigSchema = z.object({
   /** The model id to request. Optional for the same reason `RoleConfig.model` is (AD-13). */
   model: z.string().min(1).optional(),
   /**
+   * How an output schema is enforced on the wire: `json_schema` (default) or `json_object`.
+   *
+   * Only the `openai-compatible` adapter reads it. An endpoint that answers `This
+   * response_format type is unavailable now` — DeepSeek, measured — takes the second: the
+   * schema travels in the prompt and the reply is validated locally, by the parser and the
+   * repair loop the enforced path already uses.
+   */
+  structuredOutput: z.enum(['json_schema', 'json_object']).optional(),
+  /**
    * Extra arguments appended to the argv the adapter builds.
    *
    * The seam for a CLI that has to be told something this schema does not model —
