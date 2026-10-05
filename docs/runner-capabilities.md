@@ -891,3 +891,39 @@ table already marks as the only one validated for agentic work.
 - **A write stage is refused before the request is sent**, rather than accepted and quietly
   producing nothing — which would be an AR-05a false positive arriving from the opposite
   direction.
+
+---
+
+## Providers are a harness property, not a runner property
+
+Three of the four runner types are **harnesses** — `claude-code-cli`, `codex-cli`, `agy-cli`.
+A harness owns the loop and the tools: it reads files, greps, runs commands, edits, and holds a
+working directory. The fourth, `openai-compatible`, is an **inference endpoint**: HTTP in,
+HTTP out, no filesystem on the other side. That is why it declares
+`supportsWorkingDirectory: false`, and why it can serve only the stages whose prompt carries
+its whole input — `planning` and `plan-review`.
+
+So "I only have <provider>" is not a runner question. It is a harness question, and the answer
+lives in the harness: every serious coding agent in this space takes a different model as a
+backend. DeepSeek says it plainly for their own API — *"you can use DeepSeek as the backend
+model directly — no code required"* — and publishes an integration per harness:
+
+| Harness | Point it at another provider with | Notes |
+|---|---|---|
+| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` (DeepSeek serves an Anthropic-format endpoint at `/anthropic`) | the allowlist below already passes `ANTHROPIC_*` and `CLAUDE_*`, so nothing else is needed |
+| Codex | a `model_providers` entry in `~/.codex/config.toml` (DeepSeek ships a setup script) | Codex talks the Responses API, which DeepSeek supports natively; the key stays in Codex's own config |
+| AGY | its own settings / `--model` | model and effort are a pair: a model whose name carries the level (`… (High)`) rejects `--effort` |
+| OpenCode | `/connect`, or a provider block with `baseURL` | 75+ providers through models.dev; not a shipped runner type yet |
+
+**The environment allowlist already anticipates this** (`src/core/process-environment.ts`):
+`ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_`, `GEMINI_`, `GOOGLE_`, `AGY_`,
+`ANTIGRAVITY_`, `OPENCODE_`, `DEEPSEEK_`, `AGENT_FLOW_`, `AF_` pass to the child; everything
+else is dropped (PRI-17) and `execution.passEnv` is the seam for a name that is missing.
+
+**Where each setting lives**, and this is the rule that keeps a team portable:
+
+- the **project** config declares the *work* and the *team*: `commands`, `rules`,
+  `validationCommands`, `commandShell`, `runners.*`;
+- the **global** config of each machine maps `roles.*` to whatever that machine actually has.
+  A project that pins `roles.architect.runner: agy` breaks every checkout without AGY, and the
+  failure arrives as a stage that dies in seconds.
