@@ -362,8 +362,18 @@ export class AgyRunner extends BaseRunner {
       args.push('--model', input.model);
     }
 
-    const effortKey = input.reasoning === 'very_high' ? 'high' : input.reasoning;
-    args.push('--effort', EFFORT[effortKey]);
+    // **`--effort` is not accepted by every model, and the CLI says so in one line.**
+    // Measured against agy 1.2.17 (`--model 'Gemini 3.8 Flash (High)' --effort high`):
+    //   `invalid model selection (…): --effort is not supported for model "… (High)"`
+    // A model whose name already carries the level has nothing left to dial, so the flag
+    // is omitted for those; the `gpt-oss-120b` default still takes it (only `medium`),
+    // and the rest of the catalog takes it as before.
+    const modelCarriesEffort =
+      input.model !== undefined && /\((?:low|medium|high|xhigh|max)\)\s*$/i.test(input.model);
+    if (!modelCarriesEffort) {
+      const effortKey = input.reasoning === 'very_high' ? 'high' : input.reasoning;
+      args.push('--effort', EFFORT[effortKey]);
+    }
 
     if (input.permissions !== 'read-only') {
       args.push('--mode', 'accept-edits');
