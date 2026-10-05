@@ -25,6 +25,9 @@ export const PROJECT_OVERRIDABLE_KEYS = [
 /** Settings that exist only in a project source. */
 export const PROJECT_OWN_KEYS = [
   'project', 'commands', 'validationCommands', 'paths', 'rules',
+  // How this repository's own commands are written — POSIX script or the host's shell.
+  // It travels with the commands it describes, so it lives in the project source only.
+  'commandShell',
 ] as const;
 const projectOverridable = new Set<string>(PROJECT_OVERRIDABLE_KEYS);
 const projectOwned = new Set<string>(PROJECT_OWN_KEYS);

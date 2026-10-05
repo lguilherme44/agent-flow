@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import {
   runVerification,
+  runCommands,
   summariseVerification,
   failureDetail,
   VERIFICATION_ORDER,
@@ -192,5 +193,56 @@ describe('summaries', () => {
   it('returns nothing when everything passed', async () => {
     const proc = new FakeProcessRunner().always({ exitCode: 0 });
     expect(failureDetail(await run(proc, { test: 't' }))).toBe('');
+  });
+});
+
+describe('a project that names its own shell (ProjectConfig.shell)', () => {
+  const naming = (commands: Record<string, string>, shell?: string) =>
+    ProjectConfigSchema.parse({
+      project: { name: 'x', type: 'node-monorepo' },
+      commands,
+      ...(shell === undefined ? {} : { commandShell: shell }),
+    });
+
+  it('runs every verification command through the shell the project named', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 0 });
+    const outcome = await runVerification({
+      processRunner: proc,
+      project: naming({ lint: 'export HUSKY=0 && npx eslint', test: 'npm test' }, 'sh'),
+      cwd: '/repo',
+    });
+
+    expect(outcome.passed).toBe(true);
+    expect(proc.calls.map((call) => call.command)).toEqual(['sh', 'sh']);
+    // One argument, unwrapped: `sh -c` is handed the line exactly as a human wrote it,
+    // which is the whole point of naming a POSIX shell for a line `cmd.exe` cannot parse.
+    expect(proc.calls.map((call) => call.args)).toEqual([
+      ['-c', 'export HUSKY=0 && npx eslint'],
+      ['-c', 'npm test'],
+    ]);
+  });
+
+  it('runs a command line the orchestrator was handed directly through it too', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 0 });
+    await runCommands({
+      processRunner: proc,
+      commands: ['export HUSKY=0 && npm ci'],
+      cwd: '/repo',
+      commandShell: 'sh',
+    });
+
+    expect(proc.lastCall?.command).toBe('sh');
+    expect(proc.lastCall?.args).toEqual(['-c', 'export HUSKY=0 && npm ci']);
+  });
+
+  it('keeps the host shell for auto, which is what a project gets by default', async () => {
+    const proc = new FakeProcessRunner().always({ exitCode: 0 });
+    await runCommands({ processRunner: proc, commands: ['npm test'], cwd: '/repo', commandShell: 'auto' });
+
+    // Asked of the module, so this reads "the host default" rather than "the one shell
+    // Linux has" — the same reason the older test above asks it instead of spelling it out.
+    const host = shellInvocation('npm test');
+    expect(proc.lastCall?.command).toBe(host.command);
+    expect(proc.lastCall?.args).toEqual(host.args);
   });
 });

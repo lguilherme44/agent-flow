@@ -2812,6 +2812,11 @@ async function judgeRun(
         {
           path: tree.value.cwd,
           ...(install === undefined ? {} : { install }),
+          // The shell the repository's commands are written for: `cmd.exe` answers
+          // `'export' is not recognized` to a POSIX line, and this is the caller that runs the install.
+          ...(context.config.project?.commandShell === undefined
+            ? {}
+            : { commandShell: context.config.project.commandShell }),
           timeoutSeconds: commandTimeoutSeconds,
         },
       )

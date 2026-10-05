@@ -64,6 +64,12 @@ export interface PreparationRequest {
   /** `project.commands.install`, when the project declares one. */
   readonly install?: string;
   /**
+   * `project.shell`, when the repository named one. The install is the first command a
+   * run executes, so a POSIX-command repository that is prepared on Windows fails here
+   * before anything else — and fails as `'export' is not recognized`, not as its own error.
+   */
+  readonly commandShell?: string;
+  /**
    * `execution.commandTimeoutSeconds`. Optional so a caller that has no configuration keeps
    * `runCommands`' own default; every production caller passes it, because an install that
    * is killed half-way reads as "the install exited 124" on a workspace that was fine.
@@ -84,7 +90,13 @@ export async function prepareWorkspace(
   const install = request.install;
   if (install === undefined || install.trim().length === 0) return { ok: true };
 
-  const ran = await runInstall(deps, install, request.path, request.timeoutSeconds);
+  const ran = await runInstall(
+    deps,
+    install,
+    request.path,
+    request.timeoutSeconds,
+    request.commandShell,
+  );
   if (!ran.ok) return ran;
 
   // §8.1, second assertion. Ignored files do not count — `node_modules/` is exactly what
@@ -128,11 +140,13 @@ async function runInstall(
   command: string,
   cwd: string,
   timeoutSeconds: number | undefined,
+  commandShell: string | undefined,
 ): Promise<{ ok: true; exitCode: number } | { ok: false; failure: PreparationFailure }> {
   const outcome = await runCommands({
     processRunner: deps.processRunner,
     commands: [command],
     cwd,
+    ...(commandShell === undefined ? {} : { commandShell }),
     ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
   });
 

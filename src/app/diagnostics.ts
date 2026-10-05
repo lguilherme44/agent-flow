@@ -846,6 +846,7 @@ export async function probeInstallCleanliness(options: {
       processRunner: options.processRunner,
       commands: [install],
       cwd: added.value,
+      commandShell: options.config.project?.commandShell,
       ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
     });
     if (!ran.passed) return { outcome: 'install_failed', command: install };

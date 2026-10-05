@@ -712,6 +712,17 @@ export const ProjectConfigSchema = z.object({
     })
     .prefault({}),
   rules: z.object({ architecture: z.array(z.string()).default([]) }).prefault({}),
+  /**
+   * The shell that runs this project's command lines (`commandShell`).
+   *
+   * Absent — the default — keeps the host shell: `cmd.exe` on Windows, `/bin/sh` everywhere
+   * else. A repository whose commands are POSIX script — `export`, `$(...)`, `[ -n ]` —
+   * cannot run under `cmd.exe`, and no syntax is accepted by both, so it names its shell
+   * here instead: `sh` runs every command through a POSIX shell on every platform. On
+   * Windows that shell has to be resolvable (Git for Windows' `bin` on PATH), or named by
+   * absolute path.
+   */
+  commandShell: z.string().min(1).optional(),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 

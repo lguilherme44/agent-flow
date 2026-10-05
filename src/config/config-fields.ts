@@ -91,6 +91,9 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   ...['host', 'owner', 'repo'].map((key) => field(`forge.repository.${key}`, 'string')), field('forge.baseBranch', 'string'), field('forge.labels', 'string_list'),
   ...['requestTimeoutMs', 'maxResponseBytes', 'maxMutationAttempts', 'maxSyncAttempts', 'maxCommentsPerRun', 'maxRecoveryScan'].map((key) => field(`forge.budgets.${key}`, 'integer')),
   field('project.name', 'string', PROJECT), field('project.type', 'string', PROJECT),
+  // The project's own shell, so an operator can switch a POSIX-command repository away
+  // from the host default without editing YAML by hand.
+  field('commandShell', 'string', PROJECT),
   ...['install', 'lint', 'typecheck', 'test', 'build'].map((key) => field(`commands.${key}`, 'string', PROJECT)),
   field('validationCommands.*', 'string', PROJECT), field('paths.source', 'string_list', PROJECT), field('paths.tests', 'string_list', PROJECT), field('rules.architecture', 'string_list', PROJECT),
 ];

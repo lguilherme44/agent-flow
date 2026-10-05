@@ -370,6 +370,7 @@ export async function revalidateTask(
     // The worktree the person edited, and nothing else. Validating the project directory
     // while the fix lives elsewhere would judge a tree nobody touched (§4.2, I-4).
     cwd: workspacePath,
+    commandShell: deps.config.project?.commandShell,
     timeoutSeconds: deps.config.global.execution.commandTimeoutSeconds,
   });
 
