@@ -31,9 +31,20 @@ async function openRun(page: Page, world: World): Promise<{ runId: string; recor
   const runId = await world.runIdOf(project);
   await page.goto(`${world.url}/p/${project}/runs/${runId}`);
   await expect(page.getByRole('heading', { name: runId })).toBeVisible();
+  await showTimeline(page);
   const recorder = page.locator('.recorder');
   await expect(recorder.locator('.recorder__legend')).toBeVisible();
   return { runId, recorder };
+}
+
+/**
+ * The run page opens with the recorder folded under its "Linha do tempo" toggle, and a
+ * reload folds it again. Opened only when closed: a second click would fold it.
+ */
+async function showTimeline(page: Page): Promise<void> {
+  const toggle = page.getByRole('button', { name: /^Linha do tempo [▾▴]$/ });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 }
 
 /** The whole page for context and the recorder alone for reading, both attached. */
@@ -82,6 +93,7 @@ test.describe('Deck recorder, on a real run', () => {
     await exited(coordinator);
     await page.reload();
     await expect(page.getByRole('heading', { name: await world.runIdOf(project) })).toBeVisible();
+    await showTimeline(page);
     await expect(recorder.locator('.svg-attempt[data-outcome="running"][data-task]')).toHaveCount(0);
     await snap(page, recorder, testInfo, 'recorder-recorded');
 
