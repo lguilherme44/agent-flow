@@ -8,7 +8,7 @@ import { reclaimStrayWorkspaces } from '../../src/app/namespace-reclaim.js';
 /**
  * The five findings of the 10/09/2026 dogfood, each with the thing that would fail again.
  *
- * Written from `docs/specs/live-dogfood-remote-control.md`, and four of the five are the
+ * Written from the remote-control dogfood report (in the git history), and four of the five are the
  * same defect wearing different clothes: **a result that was computed and then discarded.**
  * So the assertions are mostly about *reading an answer* — a `GitResult`, a budget, a
  * provider pair — rather than about producing one.

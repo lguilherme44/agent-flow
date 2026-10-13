@@ -224,7 +224,7 @@ fixture `claude/error-max-turns.json`.
 ## `openai-compatible`, against a real server
 
 **Probed:** 2026-08-30 · macOS (darwin 25.6.0), Node v24.13.0
-**Server:** `llama.cpp` (`b1-cd644c3`) on `lellis-dev` (RTX 3060 Ti), reached over an SSH
+**Server:** `llama.cpp` (`b1-cd644c3`) on a LAN machine (RTX 3060 Ti), reached over an SSH
 tunnel at `http://127.0.0.1:8151/v1`
 **Model:** `moe` — Qwen3.6 35B-A3B `UD-IQ4_NL`, 49152 context, `-ngl 99 --n-cpu-moe 30`
 
@@ -254,8 +254,8 @@ mid-stream, and behaviour under a model that emits a partial envelope.
 Reproduce with the server up:
 
 ```bash
-ssh lellis-dev '~/local-llm-lab/linux/llm-server.sh start moe'
-ssh -f -N llm-dev
+# start an OpenAI-compatible server (llama.cpp here) and tunnel it to 127.0.0.1:8151
+ssh -f -N -L 8151:127.0.0.1:8151 <gpu-host>
 node --experimental-strip-types scripts/live-runner-probe.ts
 ```
 

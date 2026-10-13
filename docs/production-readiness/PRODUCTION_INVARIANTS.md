@@ -8,8 +8,7 @@
 > recorded as `TEST: none` and is a debt, not a claim. It may not be cited as evidence in
 > the final report.
 >
-> Companion to [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md). Statuses here are re-measured at
-> the end of the program in [`FINAL_REPORT.md`](FINAL_REPORT.md).
+> The baseline audit and the progress log this list started from are in the git history.
 
 ---
 

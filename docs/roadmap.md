@@ -1,557 +1,497 @@
-# Roadmap
+# Roadmap — do harness ao L4
 
-What is done, what is being built now, and what is deliberately not being built.
+O porquê de cada frente está aqui. A fila executável, com o critério de pronto de cada
+item, está em [`todo.md`](todo.md). Os marcos já entregues (MVP 1 a 3, AR, M4 a M8) estão nas
+specs em [`specs/`](specs/) e no histórico do git.
 
-The normative source for MVP 2 is
-[`specs/mvp2-safe-parallel-execution.md`](specs/mvp2-safe-parallel-execution.md).
-Where this page and that document disagree, the specification wins — and where the
-specification and the code disagree, **the code is the current truth**.
+Origem: uma leitura crítica, feita em 24/09/2026, do artigo
+[*Do copiloto à fábrica de software*](https://nexify.ink/blog/do-copiloto-a-fabrica-de-software/)
+(Nexify, 31/08/2026) contra o `src/` deste repositório, revisada no mesmo dia por uma
+pesquisa de projetos abertos e de casos publicados (seção [Revisão de 24/09](#revisão-de-2409--o-que-a-pesquisa-mudou)
+e [Referências](#referências)). A escada L0–L6 e os princípios são do autor, não uma
+norma: aqui eles servem como **lista de verificação**, não como especificação. Onde este
+documento e o código discordarem, o código é a verdade atual.
+
+---
+
+## A tese: o formato é de L5, a fundação é de L4 incompleto
+
+O artigo define uma *agent platform* pela soma de modelo, contexto, ferramentas, execução,
+identidade, segurança, observabilidade e avaliação. A escada dele:
+
+| Nível | Capacidade | Pergunta para subir |
+|---|---|---|
+| L2 | Coding agents | Como fornecer contexto e feedback confiáveis? |
+| L3 | Agentes + MCP | Como padronizar ferramentas, identidade e permissões? |
+| L4 | Enterprise harness | Como operar agentes com evals, isolamento e observabilidade? |
+| L5 | AI Software Factory | Como redesenhar o SDLC para humanos e agentes? |
+
+O pipeline do Agent Flow **já é** o fluxo que o artigo atribui ao L5: humano especifica →
+agentes planejam, implementam, testam e revisam → a plataforma verifica evidências → humano
+decide onde há julgamento. Mas a pergunta do L4 tem três partes, e só uma está respondida:
+**observabilidade sim, isolamento em parte, evals não**.
+
+O artigo avisa o que acontece nesse arranjo: *"pular degraus costuma produzir um protótipo
+sofisticado apoiado sobre processos frágeis"*. A fragilidade aqui não é de código — a
+suíte, os invariantes e os testes de arquitetura são rigorosos. Ela é de **medição** e de
+**contenção**:
+
+- Os dois field reports de 22 e 23/09 somam 46 itens (12 e 34), todos encontrados em uso
+  manual. Nenhum mecanismo avisaria de uma regressão parecida introduzida amanhã.
+- O D-6 (field report de 22/09, no histórico do git) foi visto comparando **dois planos do mesmo trabalho**: a variância entre runs é real, e
+  hoje só aparece quando alguém calha de rodar duas vezes.
+- O ganho do `--grounded` (planejamento 14m05s → 9m05s) foi *"measured once"*, e o próprio
+  field report de 23/09 diz que
+  precisa de mais runs.
+- Depois do `approve`, o executor trabalha sem ninguém olhando, e o código que ele escreve
+  roda com os privilégios de quem opera: a validação determinística executa os testes que o
+  agente acabou de escrever, e um `Bash(npm test:*)` liberado com um `package.json` editável
+  é execução arbitrária.
+
+---
+
+## Estado atual, princípio por princípio
+
+Levantado lendo `src/` em 24/09/2026, não a documentação.
+
+| Princípio do artigo | Estado | Evidência |
+|---|---|---|
+| Model-agnostic | ✅ | 4 runners (`src/adapters/runners/registry.ts:17-20`); runner e modelo por papel e por estágio (`StageOverrideSchema`, `config.schema.ts:149-181`) |
+| Context-first | ✅ raiz · ❓ por diretório | repo map, fallback AGENTS.md → CLAUDE.md (`app/project-instructions.ts:33-72`), orçamento de prompt por fonte (`core/prompt-budget.ts`). Só as instruções da **raiz** são lidas; com `--setting-sources ''` o CLI do Claude provavelmente não carrega as aninhadas — a medir (N1) |
+| Observable by design | ✅ tempo e custo · ❌ trajetória | telemetria por estágio/modelo (`contracts/result.schema.ts:175-200`), `RunSpend` com `costUsd` (`core/telemetry.ts:136-177`). O envelope `json` do Claude traz `num_turns` e `permission_denials` e o runner **descarta** — o tipo em `claude-code-runner.ts:36-45` nem os declara; o `num_turns` do agy também cai (`agy-runner.ts:329-341`) |
+| Resultado em uso real | ❌ | nenhuma medida de o que acontece com a saída de uma run: se virou merge, quanto a pessoa reescreveu, quantos achados de revisão ela descartou |
+| Julgamento humano na camada certa | ✅ | aprovação presa ao hash do plano (`app/approval.ts`); uma decisão por run, não por clique |
+| Protocol-first (MCP) | 🟡 | só no runner do Claude (`claude-code-runner.ts:394-415`), concedido por servidor inteiro (`mcp__<server>`). O codex roda com `--ignore-user-config` (`codex-runner.ts:174-198`): não herda MCP global, e também não recebe nenhum |
+| Secure execution | 🟡 | `--allowedTools`, `--permission-mode plan` e checkout descartável nos estágios só-leitura, env por allowlist (`ports/process-runner.ts:46-73`), servidor que não lê ambiente (§93). **Sem** sandbox de sistema de arquivos ou de rede na execução; **sem** identidade — `RunActor` é `keyboard` ou `device` (`state.schema.ts:646-654`) |
+| Limite de custo | 🟡 | iterações limitadas (`CeremonyBudget`, `core/adaptive-workflow.ts:6-10`; orçamentos de reparo); **nenhum** teto em USD ou tokens. O Claude 2.1.217+ tem `--max-budget-usd`, não usado |
+| Evaluation-first | ❌ | nada em `src/`, nada no backlog. O harness do AR-10 dirige peças de `app/` e `core/` à mão com cenários roteirizados: testa **o orquestrador**, não modelos nem prompts |
+| Entrada por especificação | 🟡 | `feature --file` (`cli/feature.ts:73`); nenhuma porta que leia um work item; critério de aceite do SDD sem notação testável |
+| Loop até produção | ❌ | a entrega para em PR aberto e checks lidos, só no GitHub (`app/forge-actions.ts:108`, `id: 'github'` literal em `ports/forge.ts:52`) |
+| Texto para quem opera | ❌ | o mesmo campo serve ao agente e à pessoa: critérios de aceite, descrições e achados saem escritos para um verificador conferir, e o Deck mostra esse texto cru |
+| Visibilidade ao vivo | ❌ | nada chega durante uma tarefa: o Claude responde só no fim (`--output-format json`), e a sidebar mostra "modelo não registrado" enquanto a tarefa roda |
+| Paralelismo | 🟡 existe, desligado | DAG do planejador, checagem de arquivo compartilhado e ondas existem; `git.useWorktrees: false` e `parallelism.maxTasks: 1` por padrão (`config.schema.ts:240-253,383-400`) — tarefas prontas esperam na fila |
+| Memória entre runs | ❌ | só o cache da descoberta e o AGENTS.md; nada do que uma run aprendeu chega à seguinte |
+| Config do projeto só aperta | ❌ | `runners` e `approval` são sobrescrevíveis pelo projeto (`config/resolver.ts:7-13`): um repositório clonado pode ligar `dangerouslySkipPermissions` ou desligar o gate de aprovação |
+
+---
+
+## As frentes, em ondas
+
+A ordem é por dependência e por custo. Dentro de uma onda, as frentes andam em paralelo.
 
 ```text
-MVP 1  ─────────────────────────────────►  the execution foundation, complete
-MVP 2  ─────────────────────────────────►  safe parallel execution, complete
-MVP 3  ─────────────────────────────────►  context intelligence & advisory local model, complete
-AR     ─────────────────────────────────►  autonomous execution & recovery, in progress
-M4     ─────────────────────────────────►  collaboration foundation, dogfooded live — and still off
-M5     ─────────────────────────────────►  team orchestration, dogfooded live
-M6     ─────────────────────────────────►  collaborative review & quality gates, dogfooded live
-M7     ─────────────────────────────────►  forge & remote delivery, dogfooded against real GitHub
-                                        ▲
-                                        you are here: M7 built and proved live; M8 next
+Onda 1 — barato, já:   F7  o operador sozinho destrava a run
+                       F0  texto para humano + passo a passo ao vivo
+                       F1a trajetória + resultado em uso real
+                       F4a sandbox nativo dos CLIs (medir, depois ligar)
+                       F3a teto de gasto (opt-in; adiado, ver o todo)
+Onda 2:                F1b corpus + eval run/compare
+                       F3b MCP por ferramenta e por estágio
+Onda 3:                F2  entrada por work item + identidade + critério testável
+                       F6  memória entre runs (depende da F3b)
+Condicional:           F4b container  ──►  F5 gatilho automático · loop até produção
 ```
 
----
+### F7 — O operador sozinho destrava a run
 
-## MVP 1 — the execution foundation · complete
+**Por que no topo.** O Agent Flow vai ser usado por um time, e ninguém do time vai ter outro
+agente conduzindo a run ao lado. Hoje, seis situações reais só se resolvem escrevendo arquivo de
+instrução, forçando comando ou recomeçando — levantadas por quem conduziu runs em 23 e 24/09 e
+conferidas no código:
 
-Specified in [`specs/implementation-spec-v3.md`](specs/implementation-spec-v3.md),
-kept as a historical record. It established everything the current product runs on:
+- **A · BLOCKED sem canal de resposta.** O próprio produto manda *"Answer what the blocked task
+  reported, then retry it"* (`core/phrases/en.ts:440`), mas não existe comando de resposta, e o
+  `retry` de uma tarefa bloqueada exige `--force` (`app/run-actions.ts:915`). A única entrega
+  possível de uma decisão de uma linha é `revise`, que invalida a aprovação.
+- **B · O executor não roda os comandos que o projeto declara.** `commands` é rodado pelo Agent
+  Flow, mas o executor só roda o que estiver em `--allowedTools` — duas vezes no Windows
+  (`Bash(...)` e `PowerShell(...)`). E o planejador pede ao executor medições (build, cherry-pick
+  numa branch de port) que ele não tem como fazer.
+- **C · `revise` no meio da implementação não preserva o pronto.** Tarefas concluídas só não
+  reabrem se a instrução pedir em texto livre; e a tarefa BLOCKED cuja decisão entrou no plano
+  novo continua BLOCKED depois do `approve`.
+- **D · Decisão do operador não fica registrada.** Existe só no arquivo de instrução do
+  `revise`; SDD, estado e revisão final não enxergam quem decidiu o quê.
+- **E · O teto de cerimônia conta decisão do operador como ciclo de revisão**
+  (`app/run-actions.ts:1772`). Esgotado, sobram "aprovar por cima dos achados" (que não chegam
+  aos executores) ou "recomeçar". A run AF-2026-001 bateu no mesmo teto.
+- **F · A classe do workflow sai de palavra solta.** `token` e `migration` estão entre os sinais
+  de alto risco (`core/adaptive-workflow.ts:37,53`) e não há tratamento de negação: *"não
+  trafega token nem dado de sessão"* virou HIGH-RISK.
 
-- the logical role model, the deterministic router and the reasoning abstraction
-- the planning pipeline: discovery → architecture impact → SDD → plan → plan review
-- the approval gate, bound to one exact plan hash
-- the DAG, the scheduler, the task executor, resume and retry
-- validation commands run by the orchestrator, never by an agent
-- final review and Definition of Done evaluated as code
-- the local Web Control Plane, and write actions as use cases both adapters share
-- the inter-process run execution lock
+**O que entrega:** resposta a BLOCKED pela CLI e pelo Deck, registrada e entregue ao próximo
+attempt, sem `--force`; os comandos declarados liberados ao executor nos dois shells, e o
+planejador sabendo o que ele pode rodar; `revise` que preserva o concluído por padrão; decisões
+do operador como emendas registradas que a revisão final lê; orçamento que separa replanejamento
+de decisão, com saída explícita no teto; classificação que ignora menção negada, mostra o trecho
+que pesou e aceita correção registrada.
 
-Two things were designed under MVP 1 and deliberately **not** built. Both are still
-unbuilt, and both have their own document:
+**Fecha quando:** as seis situações se resolvem sem arquivo de instrução, sem `--force` e sem
+recomeçar, pela CLI e pelo Deck.
 
-- [`config-write-design.md`](config-write-design.md) — `PATCH /config`
-- [`pause-resume-cancel-design.md`](pause-resume-cancel-design.md) — `pause` / `resume` / `cancel`
+### F0 — Legível e visível para quem opera
 
----
+**Por que primeiro.** Quem conduz uma run hoje lê texto escrito por uma IA para outra IA e não
+vê nada do que acontece dentro de uma tarefa. Os dois problemas fazem a pessoa depender de outra
+IA para entender a própria ferramenta — o contrário do que o gate humano promete.
 
-## MVP 2 — Safe Parallel Execution · complete
+**Texto para humano.** A causa é de desenho: **um campo serve dois leitores**. O critério de
+aceite "a linha 1 do arquivo continua sendo a primeira linha" está certo para um verificador e é
+ilegível para uma pessoa; nenhum ajuste de prompt resolve enquanto o mesmo campo servir aos dois.
+A correção separa os leitores no schema — cada coisa que o Deck mostra ganha um resumo curto,
+para gente (o que é e por que, sem caminho de arquivo), e o detalhe técnico fica atrás de "ver
+detalhes técnicos". Achados ganham título curto, impacto ("o que quebra para quem") e correção.
+Uma regra de escrita única, compartilhada pelos prompts, e um gate mecânico barato no schema
+(tamanho do resumo, sem crase nem caminho) seguram a regressão até a F1b existir.
 
-Specified in [`specs/mvp2-safe-parallel-execution.md`](specs/mvp2-safe-parallel-execution.md).
-Delivered Git worktree isolation, receipt-first marker verification, deterministic integration,
-crash recovery, and parallel scheduler activation across M2-00 through M2-12.
+**Passo a passo ao vivo.** Medido no Claude 2.1.280: com `--output-format stream-json --verbose`
+chegam, ao vivo, cada chamada de ferramenta (nome e entrada), cada resultado e cada texto
+intermediário. **O raciocínio não:** o bloco `thinking` chegou vazio, só com a assinatura —
+dá para mostrar o que o modelo faz, não o que ele pensa (a medir se alguma configuração expõe
+resumos). O codex (`exec --json`) entrega resumos de raciocínio. A mesma trilha alimenta a
+sidebar e os evals (P1.4). A sidebar mostra ação e alvo ("editou `x.ts`", "rodou `npm test`"),
+**nunca conteúdo**: o Deck pode estar exposto na rede local com pareamento.
 
----
+**O e2e é o caso mais concreto.** O `agent-browser` foi escolhido justamente porque tem um
+dashboard local (porta 4848) com o viewport ao vivo e o feed de comandos de cada sessão. Falta
+o Agent Flow escolher a sessão, em vez de deixar o modelo inventar um nome, subir o dashboard
+e pôr no card do estágio um "Ver navegador ao vivo" — mais um vídeo por cenário, que fica como
+evidência depois que a sessão fecha.
 
-## MVP 3 — Context Intelligence & Advisory Local Model · complete
+**Fecha quando:** a sidebar de uma tarefa em andamento mostra runner, modelo e as últimas
+ações; um e2e em andamento pode ser assistido a partir do Deck; e uma pessoa que não acompanhou a run entende, só pelo Deck, o que cada tarefa faz e por
+que um achado importa.
 
-Specified in [`specs/implementation-spec-v4-draft.md`](specs/implementation-spec-v4-draft.md).
-Introduces an optional, provider-neutral, strictly advisory local UtilityModel layer that reduces
-context bloat and accelerates stage execution while preserving all security invariants.
+### F1 — Trajetória, resultado em uso real e evals
 
-| | Milestone | Status |
+**Por que primeiro.** O Agent Flow já tem juízes — revisão do plano, revisão de código,
+revisão final. O Spotify chegou a mais de 1.500 PRs mergeados com um juiz parecido e
+escreveu depois: *"We have yet to invest in evals for our judge."* É a mesma dívida, e aqui
+ela está prestes a virar a dívida de um time inteiro: toda mudança de prompt ou de workflow
+hoje é julgada por uma amostra.
+
+**O que a pesquisa corrigiu na ordem.** Nenhum caso publicado montou um corpus offline
+antes de operar. Todos mediram **o resultado em uso real** primeiro — Stripe com revisão
+humana de todo PR, Uber com a taxa de falso positivo dos comentários como métrica central,
+Ramp com a fatia de PRs mergeados. Para um time de uns dez, o volume é pequeno, então o
+corpus continua necessário; mas ele vem **depois** de medir o que já acontece de graça.
+
+**F1a — trajetória e resultado em uso real (onda 1).**
+1. Ler do envelope o que ele já traz: turnos, negações de permissão, duração de API. É
+   parsing, não instrumentação. A trilha por tool call (`stream-json`) deixou de ser
+   condicional: a F0 precisa dela para a sidebar ao vivo, e os evals a reaproveitam — lembrando
+   que a Anthropic recomenda avaliar o **resultado**, não o caminho.
+2. Métricas de resultado por run real, carimbadas com o commit do Agent Flow e a
+   configuração: a saída virou merge? quanto a pessoa reescreveu no branch até o merge?
+   quantos achados de revisão ela descartou (falso positivo)? quantas revisões e retries?
+   quanto custou? Merge por squash muda os hashes, então a detecção compara conteúdo, não
+   ancestralidade.
+
+**F1b — corpus e evals offline (onda 2).**
+1. Um contrato de caso copiado de quem já resolveu isso: a estrutura de diretório do
+   [Harbor](https://github.com/harbor-framework/harbor) (instrução, config, ambiente,
+   solução de referência, testes) e a divisão do
+   [SWE-bench](https://github.com/SWE-bench/SWE-bench) entre `FAIL_TO_PASS` (tem que virar)
+   e `PASS_TO_PASS` (não pode quebrar).
+2. Um executor (`agent-flow eval`) que dirige a run pelas mesmas funções de
+   `app/run-actions.ts` que a CLI e o servidor usam, com id único por repetição (o SWE-bench
+   reaproveita resultado por `run_id` — armadilha conhecida) e o commit do Agent Flow e a
+   configuração carimbados em cada registro, como o
+   [benchmark do Aider](https://github.com/Aider-AI/aider/tree/main/benchmark) faz.
+3. Um comparador que mostra **pass@k** (acertou ao menos uma vez) e **pass^k** (acertou
+   todas) por caso. Para uma ferramenta de time, consistência importa mais: a 75% por
+   tentativa, passar as três é 42%. Qualquer limiar de "inconclusivo" é uma heurística nossa,
+   e o relatório diz isso.
+4. Um corpus que começa com 10 a 15 tarefas reais e mira 20 a 50 (a recomendação da
+   Anthropic para começar), dividido em **regressão** (deve passar sempre) e **capacidade**
+   (onde se mede progresso), **fora deste repositório**.
+5. A regra: mudança em `prompts/` ou no workflow só entra com `eval compare` anexado. Para
+   iterar o próprio corpus, o ciclo *sample-tune-sweep* do Airbnb (achar o grupo que falha,
+   ajustar, rodar a amostra, varrer tudo).
+
+**Métricas de trajetória são diagnóstico, não portão.** Um agente pode chegar ao resultado
+certo por um caminho que ninguém previu. O que reprova um caso é o resultado errado ou uma
+ação proibida (caminho fora do escopo, comando negado tentado repetidamente).
+
+**O que não entra.** Eval rodando em CI a cada commit: cada rodada gasta dinheiro de
+modelo, e esse gasto é do dono — a mesma linha que o AR-10 traçou. O CI testa o
+**executor** de eval contra runners roteirizados, de graça.
+
+**Fecha quando:** o resultado em uso real de um mês de runs está medido; existe uma baseline
+do corpus com N=3 por caso; e uma mudança real de prompt foi aceita ou recusada com base
+num `eval compare`.
+
+### F2 — Entrada por work item, identidade e critério testável
+
+**Por que.** O artigo põe o novo gargalo na especificação. Hoje o pedido chega como texto
+que o operador monta à mão; o work item — onde o time já escreve critério de aceite — não
+entra. E *quem* aprovou o plano é registrado como "teclado" ou "dispositivo pareado".
+
+**Decisão explícita: rascunho, não disparo.** O padrão de mercado é o contrário. O agente de
+nuvem do GitHub Copilot e o Devin disparam a run ao atribuir a issue ou pôr um rótulo; para
+Azure Boards, Jira e Linear, o Copilot *"only support[s] creating a pull request directly"*,
+sem etapa de plano. Aqui o work item vira um **rascunho de pedido** que o operador revisa,
+porque o gate de aprovação do plano é o valor central do produto. O meio-termo documentado
+— o tracker dispara o **planejamento**, que é só-leitura, e a run para no gate — fica para
+depois do teto de gasto (F3a) e exige um processo que observe o tracker, então entra pela
+F5. O invariante do M7 (*"the forge is a destination, never an authority"*,
+`test/architecture.test.ts:4788`) continua valendo.
+
+**O que entrega.**
+1. Uma porta de leitura de work item, **separada** do `ForgeProvider` de entrega, e um
+   adaptador de Azure Boards (primeiro, porque é onde o time trabalha).
+2. `agent-flow intake <id> --out <arquivo>`: um rascunho com as seções que o pedido precisa —
+   sintoma, evidência, critério de aceite, branches de port, clientes antigos — marcando o
+   que o work item não trouxe. O texto do item é **conteúdo externo**: entra delimitado como
+   dado, e o estágio que o lê não pode ter ao mesmo tempo ferramenta que escreve e saída de
+   rede (a regra da "trifeta letal", F3).
+3. A origem gravada na run (`provider`, `id`, `url`) e citada na revisão final.
+4. Aprovação com identidade **que já existe**: nenhum projeto pesquisado inventa um sistema
+   de identidade; todos usam a do host (quem assina o commit, quem aprova o PR). A aprovação
+   do PR no Azure DevOps já tem nome; o gate do plano é o único que não tem, e a identidade
+   do git de quem opera resolve.
+5. Critério de aceite em notação testável no SDD — EARS (`WHEN <evento> THE SYSTEM SHALL
+   <comportamento>`), a notação do Kiro. É mudança de prompt, então entra pela regra da F1b.
+
+**O que não entra agora.** PR no Azure Repos. Depende de o `ForgeProvider` deixar de ser
+GitHub-literal (`ports/forge.ts:52`, `app/forge-actions.ts:108`); é o item P2.7 do
+[`todo.md`](todo.md).
+
+**Fecha quando:** um work item real vira pedido, a run registra a origem, e o
+`status`/Deck mostra quem aprovou pelo nome.
+
+### F3 — Teto de gasto e menor privilégio por ferramenta
+
+**Por que.** O artigo separa probabilidade de falha de impacto possível, e diz que o
+impacto precisa ser limitado na arquitetura. Três buracos concretos:
+
+- **Sem teto de gasto.** O Agent Flow já calcula o gasto (`RunSpend`); só não age sobre ele.
+- **MCP concedido por servidor inteiro.** Declarar um MCP de banco de produção para
+  investigação concede junto as ferramentas de escrita dele.
+- **Nenhuma regra que impeça um estágio de juntar as três pernas** da trifeta letal: dado
+  privado, conteúdo não confiável e um canal de saída. O servidor MCP oficial do GitHub já
+  foi explorado exatamente assim.
+
+**F3a — teto de gasto (onda 1).** O teto fica no Agent Flow e **pausa** a run, entrando na
+fila "Precisa de você". Por invocação, o `--max-budget-usd` do Claude entra como
+**segunda linha**: ele encerra o processo (não pausa), então o encerramento vira uma classe
+de falha própria, e não uma falha genérica de runner. O codex não tem equivalente em dólar.
+Os limites de iteração que já existem são a mesma ideia do teto de 2 rodadas de CI do Stripe.
+
+**F3b — MCP por ferramenta e por estágio (onda 2).** Pelos mecanismos nativos, **sem
+gateway**: no Claude, `mcp__<server>__<tool>` e `mcp__<server>__*` em
+`--allowedTools`/`--disallowedTools`; no codex, `enabled_tools`/`disabled_tools` por
+servidor via `-c`, já que a configuração do usuário é ignorada de propósito. Gateways
+(Docker MCP Gateway, agentgateway, ContextForge) resolvem governança entre vários clientes
+simultâneos, que não é o formato do Agent Flow — só entram se um runner não tiver mecanismo
+nativo. As anotações `readOnlyHint`/`destructiveHint` do MCP servem de padrão apenas para
+servidores confiáveis: a própria especificação diz *"clients should never make tool use
+decisions based on ToolAnnotations received from untrusted servers"*.
+
+**Fecha quando:** uma run que cruza o teto para antes da tarefa seguinte, e uma run de teste
+com um MCP de banco só consegue chamar as ferramentas de leitura.
+
+### F4 — Sandbox de execução
+
+**O que a pesquisa corrigiu.** A versão anterior deste roadmap dizia que o sandbox só se
+pagaria quando runs começassem sem uma pessoa, porque "há sempre alguém no gate". Isso
+confundia **aprovar o plano** com **supervisionar a execução** — o plano não mostra o código
+que vai rodar. E todos os casos publicados puseram isolamento **antes** de escalar: o
+Stripe roda cada agente num devbox, o Ramp numa sandbox da Modal, a OpenAI com worktree e
+stack efêmera por branch.
+
+A outra correção: sandbox não exige container. Os próprios CLIs trazem um de sistema
+operacional.
+
+**F4a — sandbox nativo dos CLIs (onda 1: medir, depois ligar).**
+- **codex:** sandbox nativo no Windows (modos `elevated` e `unelevated`), além de Seatbelt no
+  macOS e bwrap+seccomp no Linux. O Agent Flow já passa `-s read-only|workspace-write`, mas
+  com `--ignore-user-config` a chave `[windows] sandbox` do `config.toml` não é lida — é
+  preciso medir o que vale de fato e passar por `-c`.
+- **Claude:** sandbox de arquivos e de rede via `--settings '{"sandbox":{...}}'`, no macOS, no
+  Linux e no WSL2. **Não roda no Windows nativo.**
+- **[sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (`srt`, Apache-2.0):**
+  embrulha qualquer processo — inclusive os comandos de validação que o próprio Agent Flow
+  roda — e tem uma implementação **alfa** para Windows nativo (usuário dedicado, cerca de
+  rede pelo WFP, ACLs do NTFS). Limite conhecido e decisivo aqui: ferramentas instaladas
+  **por usuário** (Node pelo nvm, `pip --user`, scoop) não são alcançáveis pela conta do
+  sandbox — e é exatamente assim que o Node está instalado na máquina de uso diário.
+- **[ai-jail](https://github.com/akitaonrails/ai-jail) (GPL-3.0):** bubblewrap + Landlock +
+  seccomp no Linux, `sandbox-exec` no macOS, home privada por padrão, credenciais do agente só
+  por opt-in, egress por allowlist de hosts. **Não roda no Windows** (só no WSL2). Serve como
+  opção pronta nas máquinas Linux, chamado como programa externo — a licença impede copiar
+  código para cá, não impede invocar o binário.
+
+**F4b — container (condicional).** Só quando a F5 for aprovada. No Windows, todo container
+herda a dependência de Docker Desktop/WSL2, então ele não compra nada sobre o sandbox do
+Claude no WSL2 — e acrescenta daemon, imagens e montagem de credenciais. O `ProcessRunner`
+é uma porta de um método (`ports/process-runner.ts:125-127`) e
+`adapters/process/node-process-runner.ts` é o único ponto de spawn de runner
+(`test/architecture.test.ts:1233`): qualquer embrulho entra por ali, estendendo a regra de
+arquitetura de propósito.
+
+**Regra que não muda: nenhum gatilho automático sem sandbox.**
+
+### F6 — Memória entre runs
+
+**Por que.** Dentro de uma run a memória já é compartilhada entre provedores: SDD, plano e
+pacotes de falha são arquivos que qualquer runner lê. Entre runs, nada passa adiante além do
+cache da descoberta — o que uma run aprendeu (o comando que não existe, o teste que é
+instável, o achado que era falso) morre com ela.
+
+**Candidato: [ai-memory](https://github.com/akitaonrails/ai-memory)** (MIT). Wiki de markdown
+versionado no git como fonte da verdade, índice derivado, handoffs entre agentes, suporte a
+Claude Code, Codex e Antigravity (agy), e **nenhuma chamada a LLM por padrão**.
+
+**O que não funciona:** instalar os hooks dele no Claude Code não captura as runs do Agent
+Flow, porque o Agent Flow isola os runners de propósito (`--setting-sources ''` e
+`--safe-mode` no Claude, `--ignore-user-config` no codex). A integração tem de ser explícita:
+1. ao fim de cada run, o **próprio Agent Flow** grava uma página determinística — o que foi
+   pedido, o que falhou e por quê, quais achados de revisão eram reais;
+2. os estágios de planejamento leem um resumo limitado pelo MCP dele — só ferramentas de
+   leitura, o que **depende da F3b** (sem MCP por ferramenta, conceder o servidor de memória
+   concede junto as de escrita).
+
+**Medir antes de adotar:** o suporte ao Windows nativo é experimental (servidor no WSL2 ou em
+Docker), e o efeito tem de aparecer num `eval compare` com e sem o resumo — o ganho publicado
+de memória de workflows (Agent Workflow Memory) é em navegação web, não em código.
+
+### F5 — Fora de escopo hoje, e a condição de reabrir
+
+| Tema | Por que não agora | Reabre quando |
 |---|---|---|
-| M3-00 | Architecture and probes | **done** |
-| M3-01 | UtilityModel port | **done** |
-| M3-02 | OpenAI-compatible adapter | **done** |
-| M3-03 | ContextPacket | **done** |
-| M3-04 | Repository retrieval | **done** |
-| M3-05 | Hierarchical compression | **done** |
-| M3-06 | Log and diff triage | **done** |
-| M3-07 | Context telemetry | **done** |
-| M3-08 | Primary-runner context integration | **done** |
-| M3-09 | Dogfood and benchmark | **done** |
+| Gatilho automático (webhook, alerta, cron, rótulo no tracker) | run sem pessoa no início exige sandbox e baseline de evals | F1 fechada e F4a ligada |
+| Planejamento disparado pelo tracker, parando no gate | exige observar o tracker e um teto de gasto; usar detecção de borda (disparar na transição, não a cada leitura), como o Devin | F2 e F3a fechadas |
+| Loop até produção (deploy + verificação pós-deploy) | é L5/L6 sem a fundação de L4; deploys de projetos hospedeiros costumam ter passos humanos deliberados | gatilho automático em uso estável |
+| Agente de limpeza recorrente (o "garbage collection" da OpenAI: varre desvios de princípios e abre PRs pequenos) | é um caso de uso novo, não fundação | gatilho automático em uso estável |
+| A2A / colaboração com autoridade | o canal do M4 existe, desligado e consultivo por decisão (I-27); não há demanda medida | um segundo dogfood do M4 que mostre a demanda |
+| RBAC / multiusuário | cada pessoa roda o próprio Agent Flow; não há servidor compartilhado | demanda por workers remotos |
 
-### Core Invariants Guaranteed by MVP 3
+### Achados sem frente própria
 
-- **Zero Workflow Authority**: The UtilityModel is strictly advisory. It cannot sign gates, create markers, modify DAGs, alter verdicts, or execute commands.
-- **Fail-Open Advisory Degradation**: An offline, unconfigured, failing, or timed-out utility model degrades cleanly to an empty advisory context; stage execution continues unaffected.
-- **Deterministic Candidate Discovery**: The repository file universe is discovered via canonical Git/filesystem methods; model-invented paths are rejected by strict trust boundaries.
-- **Symlink & Inode Security**: The secure content reader rejects all symlinks, checks exact file bounds, and snapshots file handles against TOCTOU manipulation.
-- **Credential Containment**: Configuration stores only the environment variable name (`apiKeyEnv`), never secrets. Telemetry, logs, and artifacts are strictly sanitized.
-
----
-
-## Autonomous Execution & Recovery · in progress
-
-Specified in [`specs/autonomous-execution-recovery.md`](specs/autonomous-execution-recovery.md).
-Every milestone through `AR-05b` has landed — the whole mechanical path from a failure
-being *knowable* to a run correcting itself. `recovery.enabled` ships **true**: a
-recoverable failure requeues itself with a Failure Context Packet, and a corrective round
-whose every task falls inside the approved envelope executes without reopening the gate.
-
-`AR-07`'s mechanical half has landed too: `run` refuses before it takes the execution
-lease when nothing is runnable, through the same pure projection every surface reads. The
-evidence run took and released that lease three times with nothing to do.
-
-`AR-09` measures what every stage's prompt is made of, by source, and warns when a task
-the planner called *trivial* receives more context than the repository's own standing
-rules. A one-`grep` call in the evidence environment reported ≈49 k input tokens before
-Agent Flow contributed anything of its own; recovery now adds a bounded packet to a number
-somebody can finally attribute.
-
-`AR-10`'s scenario list from §10.1 runs as a suite against scripted runners: every seeded
-failure is one the evidence run actually hit, and every assertion is a row of §10.2. What
-that suite cannot produce is §10.3's wall-clock and model-time numbers — those need a live
-run against real runners, which is an exercise with a real cost and the owner's to spend.
-
-`AR-07`'s read model reached both surfaces earlier than its rendering did, and that gap
-was this milestone's own instance of the pattern a new architecture test now guards
-against elsewhere — a module built, tested and never called: `projectRun` was computed
-on `RunDetailView` and projected by the CLI, so C-19 … C-22 had one answer rather than
-four derivations — but neither surface's headline, its
-progress bar, its Resume button or its DAG toggle *read* that answer. `state.status`
-stayed the CLI's headline through a whole revision and `run.status` stayed the
-dashboard's; `completedTasks / taskCount` stayed the progress bar and reached 100% with
-verification still pending, exactly as it had in the evidence run. Both now read
-`runtime.status` and `runtime.progress.workflow` — the stage-based axis, monotonic by
-construction — for the headline and the bar; `runtime.resumable` gates Resume and
-`taskCount > 0` gates the DAG toggle. Progress is shown as that one axis rather than as
-three separate bars, and no test yet pins CLI and dashboard text to the same projected
-value across a shared fixture — both are still open, not silently closed.
-
-`AR-08`'s CLI half was done first — `revise` reads a file, stdin or `$EDITOR`, and
-`status` renders the full C-22 escalation — and the dashboard now renders the same two
-things the CLI already did: the escalation banner, and `TaskDetailView.attemptHistory`
-with each attempt's failure class and its own log, in a new Attempts tab. The artifact
-copy action shipped earlier still and was never actually missing; the milestone's own
-table just said so after the fact.
-
-Driven by the first substantial human dogfood, `AF-2026-002`, which delivered 71 lines in
-244 minutes with 16 manual operations — 11 of them after approval, none of them decisions.
-The finding that ordered the milestone: three of six tasks produced a Git tree identical to
-their base and were still recorded `completed` and integrated, so the run's final FAIL was
-caused by false-positive acceptance rather than by anything the corrective path could fix.
-
-The milestone moves the human from *recovery mechanism* to *decision maker*: everything
-mechanically decidable — an uninitialised project, a (runner, model) effort mismatch, an
-absent `node_modules`, a denied command hidden in discarded stderr, two corrective tasks
-writing to one file, a task that changed nothing — is decided by code, bounded by explicit
-budgets, and escalated with a specific action when a budget is exhausted.
-
-| | Milestone | Status |
-|---|---|---|
-| AR-00 | Contracts, vocabulary and probes | **done** |
-| AR-01 | Readiness preflight | **done** |
-| AR-02 | Failure intelligence and evidence | **done** |
-| AR-05a | Acceptance integrity | **done** |
-| AR-06 | DAG and conflict safety | **done** |
-| AR-03 | Autonomous retry and Failure Context Packet | **done** |
-| AR-04 | Verification environment readiness | **done** |
-| AR-05b | Autonomous corrective loop | **done** |
-| AR-07 | Runtime state projection and human gates | mostly done — headline, progress, Resume and DAG-toggle gating on both surfaces read `runtime`; progress is one axis rather than three, no cross-surface pin yet |
-| AR-08 | Recovery UX and CLI ergonomics | **done** — escalation, attempt history and failure class now render on the dashboard, matching the CLI |
-| AR-09 | Cost and context controls | **done** |
-| AR-10 | Dogfood and autonomy benchmark | harness done — live run is the owner's |
-
-Ordered by dependency rather than by number: `AR-05a` precedes the corrective loop because
-correcting damage the system is still creating would be building the loop backwards, and
-`AR-06` precedes `AR-05b` because the corrective generator itself emitted the conflicting
-plan that the evidence run had to reject.
-
-### What AR-00 landed, and what it deliberately did not
-
-Contracts and pure primitives, with **no behaviour change**: the failure taxonomy
-(`FailureClass`, refining `RunnerErrorCode` rather than replacing it), the recovery budgets,
-`capabilities(model?)` and `nonInteractiveToolGrants`, the two new artifact schemas, the
-three-valued mechanical verdict, and four pure modules — evidence redaction, failure
-classification, recovery policy and the runtime projection. `recovery.enabled` ships `false`,
-because a budget nothing enforces must not read as a feature that is on.
-
-**No behaviour changed.** `capabilities(model?)` and the resolver-shaped capability map
-landed, and every shipped adapter still answered the same thing for every model — so
-resolution was byte-identical to before. The measured per-model narrowing that makes the
-existing clamp fire is documented in [`runner-capabilities.md`](runner-capabilities.md) and
-was **AR-01's** to encode; it is encoded now.
-
-Two divergences are worth recording, both now corrected in the specification itself:
-
-- **`scope` was already taken.** AR §8.3 wanted that name for the file-containment mode,
-  and every task in the AF-2026-002 plan carries `scope: "backend" | "docs" | "infra"` as a
-  free-form module label. Redefining it as a two-value enum would have made one of the
-  fixtures the compatibility gate depends on fail to parse, so the containment mode is
-  **`scopeMode`** with the spec's values verbatim.
-- **The `attempt` → `repair` rename is complete in `StageRunner` and partial above it.**
-  Its events and logs now say `repairs`, and both readers accept either spelling so an
-  existing run keeps its numbers. `TelemetryEntry.attempts` and `StageViewResponse.attempts`
-  still carry the repair count for stages under the older name; renaming those is a
-  read-model change and belongs to AR-07.
-
-### What AR-01 landed
-
-The first milestone that changes behaviour, and the change is stated plainly because it is
-a migration: **a previously-fatal configuration now clamps.**
-
-- **An uninitialised project is refused before a run exists.** `checkPlanningPreflight` now
-  asks whether `.agent-flow/config.yaml` exists, in **every** isolation mode — it used to
-  return satisfied immediately when `git.useWorktrees` was off, so a sequential run got no
-  preflight at all. Zero runner invocations, zero runs, HEAD unchanged, exit `CONFIG_ERROR`,
-  and one sentence naming the absent path and `agent-flow init` (C-01).
-- **The effort a (runner, model) pair does not offer is clamped, loudly.** The AGY adapter
-  encodes its measured per-model table; `medium` against a model offering `low` and `high`
-  resolves to `low`, records a `reasoning_clamped` degradation naming requested, effective,
-  supported set, runner and model, publishes the same facts on `stage_started` structurally,
-  and the run proceeds. No runner is invoked at the unsupported level (I-20) and no task
-  attempt is spent finding out (I-22, C-03).
-- **`doctor` reports the pair mechanically, for free.** A new capability section compares
-  what each role asks for with what its pair declares, and warns `permission_not_ready` when
-  a write role's runner does not grant a tool class it needs (C-04). `--deep` stays opt-in
-  and now exercises **every configured effort** plus a read-only tool-use probe — the old
-  probe used the cheapest supported level and would never have exercised the `medium` that
-  broke. Nothing here edits configuration or escalates a permission; repairing a gap is a
-  later milestone's.
-- **`init` refuses during an active run.** It names the run and its `planningBase`, writes
-  nothing, and exits `GATE_NOT_SATISFIED`; `--force` proceeds and records
-  `init_during_active_run` on the run (C-02).
-
-**No persisted schema changed.** The degradation kind and the event name both already
-existed from AR-00, and the structured clamp evidence rides on `RunEvent.detail`, which §8
-keeps an open record precisely so evidence can be enriched without a migration.
-
-**The model id is never reconciled with the effective effort.** One vendor's ids encode an
-effort — `gemini-3.1-pro-high` — while the clamp may land on `low`. The adapter forwards
-both verbatim; the core treats the model as the opaque string AD-13 requires. An
-architecture test forbids any layer above `src/adapters/` from taking a model string apart,
-and confines the per-model table to `src/adapters/runners/`.
-
-### Core invariants added by this milestone
-
-- **I-20 — No unsupported effort is ever invoked**: an effort the resolved (runner, model) pair does not declare is clamped deterministically and recorded, never sent to a runner.
-- **I-21 — No unredacted evidence is persisted**: raw runner output reaches disk, events and HTTP only through a single redaction contract.
-- **I-22 — Preflight failures cost no attempt**: a failure knowable before invocation never increments the work-attempt counter.
-- **I-23 — No completion without observable change**: a validated tree identical to its base cannot complete unless the plan declared it would.
-- **I-24 — No verdict is rendered under a borrowed label**: mechanical verification, semantic review and the Definition of Done are distinct, and `NOT_RUN` is never shown as `PASS`.
-- **I-25 — Bounded corrective autonomy**: a corrective round proceeds without human approval only when every task is inside a mechanically-decided envelope and the budget holds.
-- **I-26 — Runtime status is projected, never persisted**: the CLI and the HTTP API derive status from one pure projection.
+- **N1 — regras por diretório.** O Stripe mantém as regras por diretório, não globais, para
+  que a janela não encha de regra antes de o agente começar; o OpenHands injeta uma regra na
+  primeira vez que o agente toca um arquivo que casa com o caminho dela. O Agent Flow lê só a
+  raiz, e roda o Claude com `--setting-sources ''`. Se as instruções aninhadas de um monorepo
+  não chegam ao executor, isso é perda de contexto silenciosa. Medir primeiro.
+- **N2 — arquivos ignorados no worktree da tarefa.** O worktree não tem o que o git ignora
+  (`.env`, configuração local). O claude-squad tem a mesma dor em aberto
+  ([#260](https://github.com/smtg-ai/claude-squad/issues/260), com um hook de setup proposto
+  em [#270](https://github.com/smtg-ai/claude-squad/pull/270)), e usuários do Conductor
+  escrevem scripts de 50 a 100 linhas para contornar. Aqui a solução é uma lista explícita
+  do que copiar — nunca `.env` por padrão, porque o que vai para o worktree fica legível pelo
+  modelo (a perna "dado privado" da trifeta). O ai-jail resolve o inverso com `mask =
+  [".env"]`: o agente vê que o arquivo existe, sem conteúdo.
+- **N3 — paralelismo visível e medido.** A inteligência existe e está desligada (ver a tabela
+  de estado). Ligar custa um worktree e um install por tarefa, merges na integração e consumo
+  mais rápido da janela de uso de uma assinatura. Em vez de mudar o padrão às cegas: a escolha
+  aparece no Deck ("paralelo: N ao mesmo tempo") e uma run medida compara tempo total e
+  retrabalho de integração contra a mesma run sequencial.
+- **N4 — a config do projeto só aperta.** Hoje um repositório clonado pode, pela própria
+  `.agent-flow/config.yaml`, ligar `dangerouslySkipPermissions`, acrescentar `args` que liberam
+  ferramentas, apontar MCPs e desligar `approval.requiredBeforeImplementation` — e o próprio
+  repositório do Agent Flow vem com o agy em skip-permissions. O ai-jail adota a regra
+  contrária: a config do projeto só pode restringir, e liberar exige confiança declarada na
+  config global (`trust_project_config`). Severidade honesta: rodar num repositório estranho já
+  executa os scripts de install dele; o que piora aqui é o **gate humano** poder ser desligado
+  pelo repositório, e o modelo — guiado por conteúdo possivelmente injetado — ganhar permissão
+  total sem a pessoa decidir.
 
 ---
 
----
+## Revisão de 24/09 — o que a pesquisa mudou
 
-## M5 — Team Orchestration · complete, and dogfooded live
+A primeira versão deste documento saiu da leitura do artigo e do código. A pesquisa de
+projetos e casos corrigiu seis pontos dela:
 
-Specified in [`specs/m5-team-orchestration.md`](specs/m5-team-orchestration.md); the live
-run is [`specs/m5-live-dogfood-report.md`](specs/m5-live-dogfood-report.md).
+1. **F4 estava errada.** "Há sempre alguém no gate" confundia aprovar o plano com
+   supervisionar a execução, e "sandbox = container" ignorava o sandbox nativo dos CLIs. A
+   F4a subiu para a onda 1.
+2. **F1 começava pelo lado caro.** Nenhum caso montou corpus antes de medir o resultado em
+   uso real. A F1a (resultado em uso real) vem antes da F1b (corpus).
+3. **A regra "diferença de até 1 em 3 é inconclusiva" era invenção nossa.** Nenhuma fonte a
+   sustenta. Saiu, entrou pass@k com pass^k, e qualquer limiar é declarado como heurística.
+4. **P1.1/P1.2 eram maiores do que precisavam.** O envelope `json` do Claude já traz turnos e
+   negações; o trabalho é ler o que hoje é descartado.
+5. **P3.1 estava pela metade.** O codex já é isolado da configuração global
+   (`--ignore-user-config`); só o agy precisa ser medido.
+6. **O rascunho de pedido é a posição minoritária**, não a óbvia. Continua sendo a
+   escolhida, agora com o porquê e a alternativa escritos.
 
-The milestone that answers **"who should execute TASK-X, and why"** deterministically. A
-team has members; a member has roles, skills, a capacity and areas it owns; a task's
-requirements are derived from the plan the planner already wrote. Every candidate is
-ranked, every exclusion is named, and the whole ranking is in the audit log — because
-"the AI decided" is not an answer.
-
-**No second router and no second scheduler.** `resolveTaskAgent` kept its position in the
-call graph and got a new body; `core/router.ts` survives as the input its answer is scored
-against. The scheduler stays the only authority on when a task runs and how wide a wave
-may be, and M5 hands it two more reasons to hold a task back.
-
-**A model still decides nothing.** A handoff became a *request* the policy may admit and
-may refuse — an accepted one still passes every filter the ordinary path applies. An
-outbox has no field in which to claim an area, a capacity or an assignee, so the claim is
-discarded by the parse rather than by a check somebody has to remember.
-
-| | Item | |
-|---|---|---|
-| M5-00 | Specification, criticised against the M4 dogfood | **done** |
-| M5-01 | Team and member contracts; roster from both sources | **done** |
-| M5-02 | Skills: normalisation, matching, the score's term | **done** |
-| M5-03 | `TaskRequirements` derivation | **done** |
-| M5-04 | Filtering, scoring, tie-break; `resolveTaskAgent` re-bodied | **done** |
-| M5-05 | Ownership: config, matcher, score, exclusive constraint | **done** |
-| M5-06 | Capacity: the wave's fourth filter and its event | **done** |
-| M5-07 | Handoff admission through the policy | **done** |
-| M5-08 | Assignment log, read model, CLI, dashboard | **done** |
-| M5-09 | Acceptance, concurrency, crash and threat suites; dogfood | **done** — [report](specs/m5-live-dogfood-report.md) |
-
-### What the dogfood cost and bought
-
-Six defects, five of them invisible to a green suite and two invisible from outside the
-product entirely — the task ran, so nothing failed. One was **the M4 deadlock returning
-through a seam M5 added**: an implementation prompt going out with no mention of the
-coordination channel, on the one path that needs a team, a task nobody can take, and a
-fallback role a member staffs.
-
-The channel now costs **772 bytes a task** for availability against M4's 1 373
-unconditional, and nothing more unless something relevant exists. Across nine live tasks,
-nothing was relevant and no agent spoke — the same answer M4 got, at 44 % of the price.
-
-`collaboration.enabled` stays `false` by default. Two milestones have now asked nine and
-five agents whether they had anything to say, and one of fourteen did.
+Na mesma tarde, a primeira run da onda 1 e o uso do Deck acrescentaram quatro frentes e
+achados: a **F0** (texto para humano e passo a passo ao vivo — o que mais atrapalha quem
+conduz uma run), a **F6** (memória entre runs), o **N3** (paralelismo existe e está
+desligado) e o **N4** (a config do projeto pode afrouxar a segurança). E o teto de gasto foi
+tentado e adiado — o porquê está no P3.1 do todo. Por último entrou a **F7** (o operador
+sozinho destrava a run), a partir das runs de outro condutor, e foi para o topo da onda 1: é o
+que separa uma ferramenta de time de uma que precisa de um agente ao lado.
 
 ---
 
-## M4 — Collaboration Foundation · complete, and shipped off
+## Referências
 
-Specified in [`specs/m4-collaboration-foundation.md`](specs/m4-collaboration-foundation.md).
+Estrelas e licenças medidas em 24/09/2026 pela API do GitHub. Números de casos são os que as
+próprias empresas publicaram (autodeclarados).
 
-The milestone that gives a run **agents** rather than only roles: a persistent identity,
-a durable channel between them, and a structured place to put a decision so the next
-agent finds it. Nothing more — teams, skills-based assignment, resource ownership, the
-review protocol and the forge are M5 … M7, and the specification says where each door is
-left open.
+**Projetos**
 
-The three things that make it safe are the three the product already had, applied to a
-new kind of input:
+| Projeto | Estrelas | Licença | O que tirar dele |
+|---|---|---|---|
+| [openai/codex](https://github.com/openai/codex) | 126k | Apache-2.0 | sandbox nativo no Windows; `enabled_tools`/`disabled_tools` de MCP |
+| [github/spec-kit](https://github.com/github/spec-kit) | 139k | MIT | fluxo specify → plan → tasks → implement → *converge* |
+| [Aider-AI/aider](https://github.com/Aider-AI/aider) | 49k | Apache-2.0 | benchmark do **produto**, com commit e configuração em cada registro |
+| [SWE-agent/SWE-agent](https://github.com/SWE-agent/SWE-agent) · [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) | 20k · 8k | MIT | trajetória = histórico linear de mensagens, com visualizador |
+| [Untrivial-ai/agent-orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) | 12k | Apache-2.0 | o análogo mais próximo: orquestrador + worker por worktree + kanban derivado de fatos |
+| [SWE-bench/SWE-bench](https://github.com/SWE-bench/SWE-bench) | 6k | MIT | `FAIL_TO_PASS`/`PASS_TO_PASS`; cache por `run_id` como armadilha |
+| [harbor-framework/harbor](https://github.com/harbor-framework/harbor) | 6k | Apache-2.0 | formato de tarefa de eval (instrução, config, ambiente, solução, testes) |
+| [anthropics/sandbox-runtime](https://github.com/anthropics/sandbox-runtime) | 5k | Apache-2.0 | sandbox de SO para qualquer processo, alfa no Windows nativo |
+| [UKGovernmentBEIS/inspect_ai](https://github.com/UKGovernmentBEIS/inspect_ai) | 3k | MIT | epochs + redutores; log de eval compacto com visualizador |
+| [smtg-ai/claude-squad](https://github.com/smtg-ai/claude-squad) | 9k | **AGPL-3.0** | só as issues (#260, #270); não copiar código |
+| [akitaonrails/ai-memory](https://github.com/akitaonrails/ai-memory) | 8k | MIT | memória entre agentes e runs em markdown versionado, zero LLM por padrão (F6) |
+| [akitaonrails/ai-jail](https://github.com/akitaonrails/ai-jail) | 1k | **GPL-3.0** | sandbox Linux/macOS como binário externo; config de projeto que só aperta; `mask` de `.env` |
 
-- **An agent's message is a proposal, never an instruction.** It is harvested after the
-  process exits, schema-validated, redacted, bounded and re-keyed — the same ordering
-  that makes a validation receipt trustworthy (I-27 … I-29).
-- **Nothing is silently overwritten.** The blackboard is append-only; a supersession by
-  a different author leaves both entries live and *contested*, and both reach the next
-  agent (I-30).
-- **Everything is bounded.** Messages per task, bytes per message, thread depth,
-  handoffs per task, and the byte budget of the block that reaches a prompt — measured
-  through AR-09's existing per-source attribution rather than a second counter (I-31).
+O espaço muda rápido: o vibe-kanban anunciou o fim, o Crystal virou produto fechado e o
+Roo-Code foi arquivado nos últimos sete meses. Nenhum deles serve de referência viva.
 
-`collaboration.enabled` ships **false**, and with it off not one byte of any prompt
-differs from before the milestone. That is AR-00's rule applied: a channel whose first
-real traffic nobody has seen must not read as a feature that is on. M4-08's dogfood is
-what earns the flip.
+**Guias e casos**
 
-| | Milestone | Status |
-|---|---|---|
-| M4-00 | Specification, and the three false documentation claims it found | **done** |
-| M4-01 | Agent identity | **done** |
-| M4-02 | Mailbox, outbox harvest and budgets | **done** |
-| M4-03 | Threads | **done** |
-| M4-04 | Handoffs | **done** |
-| M4-05 | Shared blackboard | **done** |
-| M4-06 | Context integration | **done** |
-| M4-07 | Read model, CLI and dashboard | **done** |
-| M4-08 | Acceptance suite and documentation | **done** |
-| M4-09 | Live dogfood, `AF-2026-002` | **done** — [report](m4-live-dogfood-report.md); `enabled` stays `false` |
-
-### What M4-08 could prove, and what it could not
-
-The acceptance suite drives the **real** `TaskExecutor` against scripted runners, because
-the two claims that matter most are claims about where the calls sit rather than about
-what a function returns: the harvest happens between the agent exiting and the tree being
-captured, and the block reaches the prompt the runner actually receives. Fourteen tests,
-one per row of §14.
-
-The criterion worth naming is the twelfth. **With `collaboration.enabled: false`, the
-prompt a runner receives is byte-identical to the pre-M4 one** — proved by running the same
-task twice, once with the feature off and a full outbox sitting in the workspace, once with
-the block absent from configuration entirely, and comparing the two strings. Not by reading
-the code.
-
-What it cannot produce is a live run. A dogfood against real runners costs real model calls
-and is the owner's to spend — the same line AR-10 drew, for the same reason — and it is
-what would earn the flip to `enabled: true`.
-
-### What the milestone found on its way through
-
-Six defects, all in M4's own code, and every one of them caught by a gate rather than by
-review:
-
-- **The architecture rules caught three.** `CollaborationService` imported `StateStore`,
-  which can write task states — the prose said it never would and the import said it could.
-  `nextMessageId` was exported, tested and called by nothing. `admitHandoff` was written a
-  milestone before it had a caller.
-- **The screenshots caught three more, all with green component tests.** The panel rendered
-  every message of every thread into a 288-pixel box and cut the second thread and the
-  whole blackboard off below the fold. The contested notice listed ids the reader could not
-  act on while the list below repeated both entries with their text. And the empty state
-  rendered "nothing said" over a list of handoffs.
-
-There is also a red gate the M4-00 audit missed and this milestone is reporting rather than
-absorbing: **`npm run test:visual` fails on `master`**, proved in a clean worktree at
-`741941c` — four failures, the same DOM assertions that fail with M4 applied
-(`nothing clips a value it has room for` at 1024, and `the inspector is a pane above 1200`
-at three widths). Not M4's to fix, and not M4's to hide.
-
-### What M4-00 corrected on its way past
-
-Three documentation claims that were false at the moment the audit read them. Recorded
-here rather than fixed silently, because each one had been true once and stopped being
-so without anything noticing:
-
-- **`git.useWorktrees` was documented as inert.** Its schema comment said "read by
-  nothing that executes anything: no execution path creates a worktree" — true when
-  written, false since M2-04 built `TaskWorkspaces`. What is still true is the
-  containment, and the comment now says that instead.
-- **`recovery.enabled` was documented as shipping `false`** in `scheduler.ts` and
-  `execution-context.ts`. It has shipped `true` since AR-03; the schema and the config
-  template both said so, and two comments did not.
-- **Both READMEs listed OpenCode as a runner you can use.** No `opencode` adapter has
-  ever existed. The four that do — `claude-code-cli`, `codex-cli`, `agy-cli`,
-  `openai-compatible` — are now all in the table, which listed two.
+- Anthropic — [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) (pass@k vs pass^k, 20–50 tarefas, avaliar o resultado);
+  [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents);
+  [Claude Code sandboxing](https://www.anthropic.com/engineering/claude-code-sandboxing).
+- OpenAI — [Harness engineering](https://openai.com/index/harness-engineering/) (AGENTS.md
+  como índice, planos versionados, linters de arquitetura, agente de limpeza).
+- Stripe — [Minions](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents)
+  (devbox, blueprints determinísticos + agente, subconjunto curado de ferramentas, ≤2 rodadas
+  de CI, regras por diretório).
+- Spotify — série Honk: [parte 1](https://engineering.atspotify.com/2025/11/spotifys-background-coding-agent-part-1)
+  e [parte 3](https://engineering.atspotify.com/2025/12/feedback-loops-background-coding-agents-part-3)
+  (verificadores determinísticos, juiz LLM que veta ~25%, e a dívida de evals admitida).
+- Ramp — [Why we built our background agent](https://builders.ramp.com/post/why-we-built-our-background-agent).
+- Uber — [uReview](https://www.uber.com/us/en/blog/ureview/) (falso positivo como métrica
+  central da revisão).
+- Airbnb — [migração de testes com LLM](https://airbnb.tech/infrastructure/accelerating-large-scale-test-migration-with-llms/)
+  (*sample-tune-sweep*).
+- Simon Willison — [The lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/).
+- MCP — [ToolAnnotations na especificação](https://modelcontextprotocol.io/specification/2025-06-18/schema).
+- GitHub — [Copilot cloud agent](https://docs.github.com/en/copilot/concepts/agents/coding-agent/about-coding-agent)
+  (Azure Boards, Jira e Linear só criam PR direto).
+- Kiro — [feature specs](https://kiro.dev/docs/specs/feature-specs/) (EARS; tarefas em ondas).
 
 ---
 
-## M5 — Team Orchestration · built and dogfooded live
+## Regras deste roadmap
 
-Specified in [`specs/m5-team-orchestration.md`](specs/m5-team-orchestration.md).
-
-M4 answered *who the agents are*, *what they said* and *what they know*. M5 answers
-*which agents form a team*, *what each can do*, *who should receive a task*, *who owns
-what* and *which work may happen at once*.
-
-The structural decision the specification rests on: **`resolveTaskAgent` already exists
-and is already called on every task.** M4 built that seam deliberately, so M5 replaced
-its body and kept its position — there is no second router and no second scheduler, and
-`core/router.ts` survives as both the fallback path and a *term* in the new score, so a
-high-risk task still gravitates to `executor.complex` even when a trivial executor has
-the skills.
-
-One M5 defect outlived the milestone and was found by M6's live run: a member declared
-`runner:`, the capability check and the independence calculation honoured it, and the
-*dispatch* resolved the role instead — so the runner a member ran on was whatever
-`roles:` said. Fixed in M6, because M6's own independence figures depended on it.
-
-## M6 — Collaborative Review & Quality Gates · built and dogfooded live
-
-Specified in
-[`specs/m6-collaborative-review-quality.md`](specs/m6-collaborative-review-quality.md),
-with the live evidence in
-[`specs/m6-live-dogfood-report.md`](specs/m6-live-dogfood-report.md).
-
-M5 answered *who does the work*. M6 answers *who checks it*, *what exactly they found*,
-*how the implementer responds*, *who verifies the correction*, *what evidence proves
-quality*, and *when the workflow may continue*.
-
-Half of it already existed — structured findings, corrective task generation, the
-separation of semantic review from mechanical validation, `NOT_RUN` as a third value, a
-Definition of Done evaluated as code, validation commands that only a human can author —
-so the milestone is mostly an argument about ten precise gaps rather than a new domain.
-
-Its most useful outcome was not planned. **A mechanism can be written, reviewed, covered
-by tests, and unreachable by any real agent.** Three defects were exactly that shape: a
-function nothing called, an event nothing emitted, and a key the emitter and the reader
-disagreed about — so a finding raised by a live reviewer could never become work, and no
-finding in a real run could ever leave `open`. Two architecture rules now ask that
-question mechanically, one for exported functions and one for declared events.
-
----
-
-## M7 — Forge & Remote Delivery · built and dogfooded against real GitHub
-
-Specified in
-[`specs/m7-forge-github-delivery.md`](specs/m7-forge-github-delivery.md).
-
-M6 ended with a run that can prove which commit is approved. M7 publishes exactly that
-commit, creates exactly one remote artifact for it, and observes the remote **without
-handing it any authority**.
-
-```text
-models propose · Agent Flow decides locally · Forge publishes and observes
-```
-
-Three seams, and the point is that they are three: `GitClient` reads local Git,
-`RemoteGitPublisher` puts one exact commit on one exact ref, `ForgeProvider` talks to an
-API. Creating a pull request needs the commit to exist remotely, and that does not make
-pushing a Forge operation — a provider that could run Git could rewrite history to make
-its own call succeed.
-
-Everything is off by default and every write is separately opt-in. Choosing GitHub names a
-destination; it is not consent to write to it.
-
-**What GitHub decides: nothing.** A `ForgeCheck` shares no field with a `QualityGateResult`,
-a red check cannot move `run.status`, and a forge failure cannot un-complete a completed
-run. Fifteen architecture rules hold those boundaries.
-
-The dogfood ran against this repository: issue #18, branch `agent-flow/AF-2026-004`
-carrying the exact approved commit, pull request #19, and ten real checks read from that
-commit. Rerunning every operation produced no second object.
-
-Its most useful outcome, again, was not planned. **Two defects were found by the real CI
-that no local gate would have caught** — a dashboard panel that logged an error on every
-render because its endpoint was unstubbed in the visual harness, and a packaging smoke that
-had been asserting eleven prompts since M6 added a twelfth. The second had been red in CI
-for a whole milestone, invisible because `test:packaging` is not in the canonical gate list.
-
-## M8 — Control Plane & Operational Kanban · built, and dogfooded live
-
-Four milestones each added a set of authoritative facts and a panel to render them. The
-dashboard became eight correct panels, and an operator still could not answer the four
-questions that decide what they do next: what is happening, what needs me, what is blocked,
-what is delivered.
-
-M8 adds **no workflow authority**. It projects facts the system already decided into an
-*order* and a *lane*, and puts the most actionable one first.
-
-```text
-attention    projected, never stored — no dismiss; an item leaves when its fact does
-lanes        six, projected from task state, the DAG and the run — no `task.column`
-reasons      the join nobody had made: the DAG knew, the deferral knew, the card did not
-snapshot     one read, one instant, so the board and the queue cannot describe two moments
-```
-
-The board carries no drag, and that is the design rather than a gap: dragging BLOCKED →
-DONE would be the browser writing state, and no domain action means "move this task to that
-column". An architecture rule asserts no drag handler exists, which is also what makes the
-board keyboard-operable by construction.
-
-**Two evidence gaps were closed in a second pass, and both of them found something.**
-
-390px was in the spec and had never been photographed — because the dashboard had no
-mobile layout at all: a fixed 240px sidebar took 62% of the screen. It is a drawer below
-1024 now, three rows that never wrapped do, and the new page-overflow assertion caught 187
-pixels produced by the drawer's own geometry. A menu button that rendered at *every* width,
-because a one-class rule ties with Tailwind's `.flex`, was caught by six existing baselines
-at 1280 and 1200 — ten pixels of command bar shifting every page in the app.
-
-`AF-2026-006` was approved and started from the screen. Three tasks proved
-READY → IN PROGRESS → DONE naturally, a fourth reached REVIEW, the board moved with the
-page loaded once and never reloaded, and the stage-lag fix behaved correctly live. The run
-did not reach DONE: its last task was "run the full verification ladder", whose success
-looks identical to doing nothing, and the plan did not declare `expectsNoChange: true` — so
-`assertObservableChange` refused it, which is exactly what C-12 built it for. **The gap is
-in what the planner emits, not in what the operator sees.**
-
-**Phase A came first, and it was not about the UI at all.** M7 closed with `test:packaging`
-red for a whole milestone — CI ran it, CI blocked on it, and no local command asked. The
-gap turned out to be bidirectional: `typecheck:web` and `typecheck:e2e` were in the local
-`check` and in no CI job. `scripts/gates.mjs` is now the only list, CI invokes
-`npm run gate:<lane>` and holds none of its own, and `test/gates.test.ts` proves the drift
-rules fire by mutation rather than assuming they would.
-
-Two defects the work found in its own code, both within an hour of writing it:
-
-- the board asked `core/dag` for readiness, which the server is forbidden to import — and
-  which turned out to be redundant, because `effectiveTaskStates` already resolves `ready`
-  for every reader;
-- a single failed task put a P1 `agent_blocked` on everything downstream of it, because
-  `blocked` is two things — a record the executor wrote and a condition the graph derives —
-  and only the first carries a reason.
-
-## What the live dogfood changed about M4
-
-Recorded here because it is the milestone's most useful outcome and it was not planned.
-
-**M4 shipped a channel that could never carry its first message.** A fresh run's log is
-empty, so no block reached the prompt, so the agent never learned the outbox existed, so
-it wrote none, so the log stayed empty — for every agent, on every run. 366 tests passed,
-because every one of them either seeded the log first or called the harvest directly, and
-one of them asserted the deadlock as though it were the contract.
-
-Fixed, and then the run produced the traffic: a Codex agent on a blocked task wrote a
-`blocker` to the architect and a `risk` to the blackboard, both technically correct and
-both about work another agent had done.
-
-The finding no acceptance criterion asks about: **five agents received the invitation and
-only the blocked one used it.** That is not a defect — a task with a complete SDD and a
-reviewed plan has nothing to ask — but it means the channel's value is concentrated
-exactly where the plan failed, and a default of `true` would put 1 373 bytes on every
-prompt to buy a message that arrives only when something has already gone wrong.
-`collaboration.enabled` stays `false` until a second dogfood reaches an answer and an
-acknowledgement.
-
----
-
-## Beyond this milestone
-
-See [`docs/post-mvp3-backlog.md`](post-mvp3-backlog.md) for non-normative enhancement ideas and future backlog items.
-
-The platform front — trajectory and evals, the CLIs' native sandboxes, a spend ceiling,
-per-tool least privilege and work-item intake with named approval — is planned in [`platform-roadmap.md`](platform-roadmap.md)
-and queued in [`platform-todo.md`](platform-todo.md) (both in Portuguese, like `plan.md` and
-`todo.md`).
+- **Nomes de projetos hospedeiros ficam fora do repositório.** O corpus de eval é feito de
+  código de terceiros: ele vive fora do repo (caminho configurável, por exemplo
+  `~/.agent-flow/evals/`), e o repo só guarda o contrato, o executor e um fixture sintético.
+  Field reports, casos de teste e mensagens de commit seguem a mesma regra.
+- **Rodada de eval com modelo real é decisão do dono**, porque custa dinheiro. O CI nunca
+  dispara uma.
+- **A definição de pronto é a do [`todo.md`](todo.md)**: teste cobrindo o comportamento,
+  controle positivo, verificação rodando o comando de verdade, suíte inteira verde — mais,
+  para itens de F1b, uma rodada registrada com o custo dela.
+- **Medir antes de construir.** Vários itens da fila são medições que podem mudar o desenho
+  do que vem depois (envelope dos CLIs, MCP do agy, sandbox do codex no Windows, `srt` com a
+  toolchain real, regras aninhadas). Eles vêm primeiro de propósito.
+- **Código de terceiros só com licença compatível.** MIT e Apache-2.0 podem ser adaptados com
+  atribuição; AGPL/GPL, não. Formato e ideia não têm licença — código tem.

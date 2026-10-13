@@ -36,10 +36,9 @@ pedido → análise de impacto → documento de design (SDD) → plano → revis
 `v0.1.0`, pré-lançamento, não publicado no npm. Construído e em uso diário: o núcleo de
 execução, ondas paralelas em worktrees isolados, recuperação, gates de revisão, o dashboard
 Deck, turnos e negações de permissão na telemetria, regras por diretório e entrega no GitHub.
-O que vem a seguir — responder uma tarefa bloqueada, progresso ao vivo no dashboard, evals,
-sandboxes nativos, entrada por work item — está em
-[`docs/platform-roadmap.md`](docs/platform-roadmap.md), com a fila em
-[`docs/platform-todo.md`](docs/platform-todo.md). Vêm **desligados** por padrão: execução
+O que vem a seguir — evals, sandboxes nativos, entrada por work item — está em
+[`docs/roadmap.md`](docs/roadmap.md), com a fila em [`docs/todo.md`](docs/todo.md). Vêm
+**desligados** por padrão: execução
 paralela, o canal entre agentes e toda escrita remota num forge.
 
 ## Requisitos
@@ -174,8 +173,7 @@ Detalhes e limites declarados: [`docs/security.md`](docs/security.md).
 
 | | |
 |---|---|
-| [`docs/platform-roadmap.md`](docs/platform-roadmap.md) · [`docs/platform-todo.md`](docs/platform-todo.md) | Para onde o produto vai, e a fila |
-| [`docs/roadmap.md`](docs/roadmap.md) | Marcos já construídos (em inglês) |
+| [`docs/roadmap.md`](docs/roadmap.md) · [`docs/todo.md`](docs/todo.md) | Para onde o produto vai, e a fila |
 | [`docs/web-ui.md`](docs/web-ui.md) | O dashboard e sua API HTTP (em inglês) |
 | [`docs/mcp.md`](docs/mcp.md) | `agent-flow mcp`: as mesmas operações como tools MCP, e a configuração no Claude Code (em inglês) |
 | [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | O que cada CLI de código faz de verdade, medido (em inglês) |

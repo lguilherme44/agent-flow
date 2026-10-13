@@ -4,8 +4,7 @@
 
 **Status: in implementation. M2-00 … M2-06 have landed; M2-07 … M2-12 have not.**
 
-Per-item status is recorded on each work item in §28 and summarised in
-[`../roadmap.md`](../roadmap.md). **The design in this document is unchanged by
+Per-item status is recorded on each work item in §28. **The design in this document is unchanged by
 implementation** — where a probe changed a decision, the item says so in its own
 *What landed* note, and the body was amended at the same time. Sections describing
 items that have not landed still describe a design rather than the code.

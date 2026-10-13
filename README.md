@@ -34,9 +34,8 @@ request → impact analysis → design doc (SDD) → plan → plan review
 `v0.1.0`, pre-release, not published to npm. Built and used daily: the execution core,
 parallel waves in isolated worktrees, recovery, review gates, the Deck dashboard, turns and
 permission denials in telemetry, per-directory rules, and GitHub delivery. What comes next —
-answering a blocked task, live progress in the dashboard, evals, native sandboxes, work-item
-intake — is in [`docs/platform-roadmap.md`](docs/platform-roadmap.md), with the queue in
-[`docs/platform-todo.md`](docs/platform-todo.md). Shipped **off** by default: parallel
+evals, native sandboxes, work-item intake — is in [`docs/roadmap.md`](docs/roadmap.md), with
+the queue in [`docs/todo.md`](docs/todo.md). Shipped **off** by default: parallel
 execution, the agent-to-agent channel and every remote write to a forge.
 
 ## Requirements
@@ -170,8 +169,7 @@ Details and stated limits: [`docs/security.md`](docs/security.md).
 
 | | |
 |---|---|
-| [`docs/platform-roadmap.md`](docs/platform-roadmap.md) · [`docs/platform-todo.md`](docs/platform-todo.md) | Where the product is going, and the queue (pt-BR) |
-| [`docs/roadmap.md`](docs/roadmap.md) | Milestones already built |
+| [`docs/roadmap.md`](docs/roadmap.md) · [`docs/todo.md`](docs/todo.md) | Where the product is going, and the queue (pt-BR) |
 | [`docs/web-ui.md`](docs/web-ui.md) | The dashboard and its HTTP API |
 | [`docs/mcp.md`](docs/mcp.md) | `agent-flow mcp`: the same operations as MCP tools, and the Claude Code setup |
 | [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each coding CLI actually does, measured |
