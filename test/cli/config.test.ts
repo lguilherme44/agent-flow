@@ -45,6 +45,24 @@ describe('CLI config get / set / list commands', () => {
     expect(code).toBe(ExitCode.OK);
   });
 
+  // Dogfood 08/10: `config get language` answered "Key not found" with the key set and in use,
+  // because the effective configuration is { global, project } and the lookup never looked inside.
+  it('gets a top-level global key without --global or a global. prefix', async () => {
+    await writeFile(globalConfigFile, 'language: pt-BR\n', 'utf8');
+    const out: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => (out.push(String(chunk)), true)) as typeof process.stdout.write;
+    try {
+      const code = await runConfigGetCommand('language', {}, {
+        cwd: tempDir, globalConfigPath: globalConfigFile, verbose: false, dryRun: false, json: false, strict: false,
+      });
+      expect(code).toBe(ExitCode.OK);
+    } finally {
+      process.stdout.write = write;
+    }
+    expect(out.join('')).toBe('pt-BR\n');
+  });
+
   it('sets a config value preserving YAML file integrity', async () => {
     const code = await runConfigSetCommand(
       'git.useWorktrees',

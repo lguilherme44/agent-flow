@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AnalyticsView, MetricBucketView, ProjectView } from '@contracts/index.js';
+import type { AnalyticsView, MetricBucketView, ModelQualityView, ProjectView } from '@contracts/index.js';
 import { api, keys } from '../../lib/api';
 import { useResource } from '../../lib/store';
 import { formatDuration } from '../../lib/time';
@@ -132,7 +132,15 @@ export function AnalyticsPage({ projectId }: { projectId?: string }) {
             verbatim
           />
           <Buckets title={t.analytics.byRole} rows={data.byRole} total={data.totals.durationMs} />
-
+          {/* Dogfood 08/10 (Luis): which model in which role, decided with data. Read
+              defensively: a hub from before these sections answers without them. */}
+          {data.byRoleModel === undefined ? null : (
+            <Buckets title={t.analytics.byRoleModel} rows={data.byRoleModel} total={data.totals.durationMs} verbatim />
+          )}
+          {data.byEffort === undefined ? null : (
+            <Buckets title={t.analytics.byEffort} rows={data.byEffort} total={data.totals.durationMs} />
+          )}
+          {data.quality === undefined || data.quality.length === 0 ? null : <Quality rows={data.quality} />}
         </>
       )}
     </main>
@@ -223,6 +231,9 @@ function Buckets({
               />
               <span className="doctor-row__value">
                 {t.telemetry.calls(bucket.count)}
+                {(bucket.usageReporting ?? 0) > 0
+                  ? ` · ${t.telemetry.tokens(bucket.inputTokens ?? 0, bucket.outputTokens ?? 0)}`
+                  : ''}
                 {bucket.retries > 0 ? ` · ${t.telemetry.retried(bucket.retries)}` : ''}
                 {bucket.failures > 0 ? <span style={{ color: 'var(--bad)' }}>{` · ${t.telemetry.failed(bucket.failures)}`}</span> : null}
               </span>
@@ -230,6 +241,48 @@ function Buckets({
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+/** The severities a review uses, most severe first, so the chips read in that order. */
+const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const;
+
+/**
+ * What the code each model wrote looked like (dogfood 08/10): how often it passed first time,
+ * and what its first code review found, by severity. Counts only — what to make of them is
+ * the reader's call, which is why the denominators are always beside them.
+ */
+function Quality({ rows }: { rows: readonly ModelQualityView[] }) {
+  const t = useT();
+  return (
+    <section className="doctor-section" aria-label={t.analytics.quality}>
+      <div className="doctor-section__head">
+        <h3>{t.analytics.quality}</h3>
+      </div>
+      <p className="doctor-note">{t.analytics.qualityHint}</p>
+      <ul className="doctor-list">
+        {rows.map((row) => {
+          const found = SEVERITIES.filter((severity) => (row.findings[severity] ?? 0) > 0);
+          return (
+            <li key={row.model} className="doctor-row">
+              <span className="doctor-row__name mono">{row.model}</span>
+              <span className="doctor-row__value">
+                {t.analytics.firstAttempt(row.firstAttempt, row.tasks)} · {t.analytics.reviewedTasks(row.reviewed)}
+              </span>
+              <span className="doctor-row__value analytics-statuses">
+                {found.length === 0
+                  ? t.analytics.noFindings
+                  : found.map((severity) => (
+                      <Chip key={severity} tone={severity === 'critical' || severity === 'high' ? 'bad' : 'idle'}>
+                        {String(row.findings[severity] ?? 0)} {word(t, severity)}
+                      </Chip>
+                    ))}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

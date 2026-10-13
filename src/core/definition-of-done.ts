@@ -25,6 +25,12 @@ export interface DoneInput {
   readonly approved: boolean;
   readonly taskStates: readonly TaskState[];
   readonly mechanicalVerification: MechanicalVerification;
+  /**
+   * Commands that failed on the head and on the run's base alike (`verification.baseline`,
+   * dogfood 09/10). They do not hold the run, and they are never silent either: the condition
+   * names each one.
+   */
+  readonly preExistingFailures?: readonly string[];
   readonly finalReviewVerdict: 'PASS' | 'FAIL' | null;
   /**
    * Blocking code-review findings still open, by id (§43, I-44).
@@ -55,7 +61,52 @@ export interface DoneInput {
    * lists no gate is judged exactly as before.
    */
   readonly requiredGates?: readonly RequiredGateVerdict[];
+  /**
+   * What the e2e stage saw, when the run has one.
+   *
+   * **A check that did not run is not a pass.** The e2e prompt used to answer `PASS` with a
+   * `NOT RUN:` summary when the application could not be reached or only ran on a device,
+   * and this check never looked at e2e at all — only at its `critical`/`high` findings. A
+   * pilot run (75559) went FEATURE COMPLETE that way with a fix that did not solve the
+   * ticket on the device. A `FAIL` carrying only `medium` findings completed the run too.
+   *
+   * Absent when e2e is disabled, so those runs are judged exactly as before.
+   *
+   * `observation` is a person's own account of watching the change work on a target
+   * agent-flow cannot reach (an iOS device), recorded with `review --e2e-observed` and bound
+   * to the tree under review — the caller passes it only when it describes *this* tree.
+   * It was the missing way out: without it a NOT_RUN came back NOT_RUN on every review, and
+   * the only escape was disabling e2e, which removed the evidence instead of supplying it.
+   * It stands in for a NOT_RUN only. A FAIL is something e2e saw, and no sentence
+   * outranks it.
+   */
+  readonly e2e?: {
+    readonly verdict: MechanicalVerification;
+    readonly reason?: string;
+    readonly observation?: E2EObservation;
+    /**
+     * The integration head under review, when a commit names the tree. Shown in the NOT_RUN
+     * detail so the human can confirm the build they test is this one.
+     */
+    readonly head?: string;
+  };
 }
+
+/** A person's attestation that they saw the change work on the target, and who they are. */
+export interface E2EObservation {
+  /** The observer as they named themselves; the channel, for one recorded before names. */
+  readonly by: string;
+  /**
+   * The channel it was recorded through (`keyboard`, a device label). Printed beside the
+   * name and never instead of it: an AI at this terminal is `keyboard` too.
+   */
+  readonly via?: string;
+  /** Their own words, verbatim. */
+  readonly text: string;
+}
+
+/** How many characters of a head a person is shown, and may type back. */
+export const SHORT_HEAD_LENGTH = 7;
 
 /** One required gate as the Definition of Done reads it; the shape `judgeRequiredGates` returns. */
 export interface RequiredGateVerdict {
@@ -102,7 +153,12 @@ export function checkDefinitionOfDone(input: DoneInput): DoneCheck {
               'the verification commands did not run — the workspace was not prepared, ' +
               'so this is environment readiness rather than a regression',
           }
-        : {}),
+        : input.mechanicalVerification === 'PASS' && (input.preExistingFailures ?? []).length > 0
+          ? {
+              detail:
+                `pre-existing on the base, not counted: ${(input.preExistingFailures ?? []).join(', ')}`,
+            }
+          : {}),
     },
     {
       name: 'final review PASS',
@@ -127,6 +183,7 @@ export function checkDefinitionOfDone(input: DoneInput): DoneCheck {
         : {}),
     },
     ...requiredGatesCondition(input.requiredGates ?? []),
+    ...e2eCondition(input.e2e),
   ];
 
   const missing = conditions.filter((condition) => !condition.met).map((c) => c.name);
@@ -151,6 +208,73 @@ function requiredGatesCondition(
       name: 'required gates ran and passed',
       met: unmet.length === 0,
       ...(unmet.length > 0 ? { detail: unmet.map(describeUnmetGate).join('; ') } : {}),
+    },
+  ];
+}
+
+/**
+ * True when the one thing between this run and done is a person observing the change.
+ *
+ * **Not work for the generator.** `review --fix` turns what is wrong into FIX tasks; here
+ * nothing is wrong that a task could fix — e2e could not reach the target. Running the
+ * round anyway handed it the final review's `medium` findings on a PASS, rewrote the plan
+ * and reopened approval, all to answer a question only a person holding the device can.
+ */
+export function awaitsOnlyE2EObservation(check: DoneCheck, e2e: DoneInput['e2e']): boolean {
+  return (
+    e2e?.verdict === 'NOT_RUN' &&
+    check.missing.length === 1 &&
+    check.missing[0] === E2E_CONDITION
+  );
+}
+
+/** The condition's name, which `missing` carries and callers compare against. */
+export const E2E_CONDITION = 'e2e exercised the change and passed';
+
+/** Present only when the run has an e2e stage; absent keeps other runs byte-for-byte. */
+function e2eCondition(
+  e2e: DoneInput['e2e'],
+): Array<{ name: string; met: boolean; detail?: string }> {
+  if (e2e === undefined) return [];
+
+  // Attested: e2e could not look, and a named person did. Said in those words, so nobody
+  // reading FEATURE COMPLETE mistakes it for something agent-flow observed.
+  if (e2e.verdict === 'NOT_RUN' && e2e.observation !== undefined) {
+    return [
+      {
+        name: E2E_CONDITION,
+        met: true,
+        detail:
+          `not run by agent-flow; observed by ${e2e.observation.by}` +
+          (e2e.observation.via === undefined ? '' : ` (recorded via ${e2e.observation.via})`) +
+          `: "${e2e.observation.text}"`,
+      },
+    ];
+  }
+
+  // **Addressed to whoever reads it, which is usually an AI** — so it asks for the human.
+  // The first version said "exercise it on the target, then record what you saw", which
+  // told the reader to attest on its own observation.
+  const short = e2e.head?.slice(0, SHORT_HEAD_LENGTH);
+  const detail =
+    e2e.verdict === 'NOT_RUN'
+      ? 'e2e did not run, so nobody observed the change working' +
+        (e2e.reason === undefined ? '' : `: ${e2e.reason}`) +
+        ' — ask the human to exercise the change on the target' +
+        (short === undefined ? '' : ` (build ${short})`) +
+        ', then record their words and their name: `agent-flow review --e2e-observed ' +
+        '"<their words>" --observed-by "<their name>"' +
+        (short === undefined ? '' : ` --e2e-head ${short}`) +
+        '` (or make the target reachable and review again)'
+      : e2e.verdict === 'FAIL'
+        ? 'e2e observed the change failing; see its findings'
+        : undefined;
+
+  return [
+    {
+      name: E2E_CONDITION,
+      met: e2e.verdict === 'PASS',
+      ...(detail === undefined ? {} : { detail }),
     },
   ];
 }

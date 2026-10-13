@@ -49,8 +49,10 @@ const roleFields = (prefix: string, scopes = GLOBAL): ConfigFieldDefinition[] =>
   field(`${prefix}.enabled`, 'boolean', scopes),
   field(`${prefix}.runner`, 'string', scopes), field(`${prefix}.model`, 'string', scopes),
   field(`${prefix}.effort`, 'reasoning_level', scopes), field(`${prefix}.timeoutSeconds`, 'integer', scopes),
+  field(`${prefix}.maxTurns`, 'integer', scopes),
   field(`${prefix}.stages.*.runner`, 'string', scopes), field(`${prefix}.stages.*.model`, 'string', scopes),
   field(`${prefix}.stages.*.effort`, 'reasoning_level', scopes), field(`${prefix}.stages.*.timeoutSeconds`, 'integer', scopes),
+  field(`${prefix}.stages.*.maxTurns`, 'integer', scopes),
 ];
 
 /** This metadata is also the write allowlist: unknown paths are never editable. */
@@ -92,7 +94,7 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   ...['requestTimeoutMs', 'maxResponseBytes', 'maxMutationAttempts', 'maxSyncAttempts', 'maxCommentsPerRun', 'maxRecoveryScan'].map((key) => field(`forge.budgets.${key}`, 'integer')),
   field('project.name', 'string', PROJECT), field('project.type', 'string', PROJECT),
   ...['install', 'lint', 'typecheck', 'test', 'build'].map((key) => field(`commands.${key}`, 'string', PROJECT)),
-  field('validationCommands.*', 'string', PROJECT), field('paths.source', 'string_list', PROJECT), field('paths.tests', 'string_list', PROJECT), field('rules.architecture', 'string_list', PROJECT),
+  field('validationCommands.*', 'string', PROJECT), field('verification.baseline', 'string_list', PROJECT), field('paths.source', 'string_list', PROJECT), field('paths.tests', 'string_list', PROJECT), field('rules.architecture', 'string_list', PROJECT),
 ];
 
 const overridable = new Set<string>(PROJECT_OVERRIDABLE_KEYS);

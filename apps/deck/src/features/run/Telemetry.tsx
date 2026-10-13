@@ -4,6 +4,7 @@ import { useResource } from '../../lib/store';
 import { formatDuration } from '../../lib/time';
 import { useT, word, type Dictionary } from '../../lib/i18n';
 import { Chip, Empty, Meter, Notice, Skeleton, Stat } from '../../components/ui';
+import { TimeSpent } from './TimeSpent';
 
 /**
  * What each stage cost, and what its prompt was made of (7.4, AR-09).
@@ -16,7 +17,8 @@ import { Chip, Empty, Meter, Notice, Skeleton, Stat } from '../../components/ui'
  * **No money appears here, at any level.** `AnalyticsView` carries no monetary figure and
  * is not going to; a subscriber's flat fee is not an API rate, and a total that pretended
  * otherwise would be a bill nobody is sending. What a runner reported about *tokens* is a
- * count, and counts are what this draws.
+ * count, and counts are what this draws. The one exception sits at the top of the tab:
+ * `TimeSpent` prints the dollars the runners themselves reported, labelled as no bill.
  *
  * Every number is the server's. The bars are proportions of the run's own total, which is
  * arithmetic over one response rather than a second opinion about it.
@@ -44,6 +46,8 @@ export function TelemetryTab({ address }: { readonly address: RunAddress }) {
 
   return (
     <div className="telemetry">
+      <TimeSpent address={address} />
+
       <div className="telemetry__totals" aria-label={t.telemetry.totals}>
         <Stat label={t.telemetry.stagesAndTasks} value={String(summary.entries)} />
         <Stat label={t.telemetry.totalTime} value={formatDuration(summary.durationMs)} />

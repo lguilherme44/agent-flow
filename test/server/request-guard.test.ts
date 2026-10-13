@@ -10,6 +10,7 @@ import {
   CLIENT_HEADER,
   checkHost,
   checkWrite,
+  decisionChannelOf,
   hostnameOf,
   isAddressLiteral,
   isWriteMethod,
@@ -299,6 +300,33 @@ describe('checkWrite — the cross-origin guard', () => {
 
   it('refuses when there is no host to match against', () => {
     expect(checkWrite({ origin: 'http://127.0.0.1:4782' }, { host: undefined }).ok).toBe(false);
+  });
+});
+
+/**
+ * Which channel a plan-gate decision came through. Derived from the same two headers
+ * `checkWrite` admitted the write on, never from anything the body says about itself.
+ */
+describe('decisionChannelOf — browser or API client', () => {
+  const host = '127.0.0.1:4782';
+
+  it('reads a write carrying this server as its Origin as the Deck', () => {
+    // The Deck sends the client header too; the Origin is what only a browser adds by itself.
+    expect(decisionChannelOf({ origin: 'http://127.0.0.1:4782', client: 'deck' }, host)).toBe('deck');
+    expect(decisionChannelOf({ origin: 'https://127.0.0.1:4782' }, host)).toBe('deck');
+  });
+
+  it('reads a write with no Origin as an API client, whatever its client header says', () => {
+    expect(decisionChannelOf({ client: 'deck' }, host)).toBe('api');
+    expect(decisionChannelOf({ client: 'claude' }, host)).toBe('api');
+    expect(decisionChannelOf({}, host)).toBe('api');
+  });
+
+  it('never reads an opaque or foreign Origin as the Deck', () => {
+    expect(decisionChannelOf({ origin: 'null', client: 'x' }, host)).toBe('api');
+    expect(decisionChannelOf({ origin: '  ', client: 'x' }, host)).toBe('api');
+    expect(decisionChannelOf({ origin: 'https://evil.example', client: 'x' }, host)).toBe('api');
+    expect(decisionChannelOf({ origin: 'http://127.0.0.1:4782' }, undefined)).toBe('api');
   });
 });
 

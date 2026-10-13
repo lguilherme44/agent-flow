@@ -49,6 +49,8 @@ export interface Phrases {
     /** Appended to `taskFailed` when a failure has dependents; empty when it has none. */
     readonly waitingOn: (tasks: string) => string;
     readonly finalAcceptance: string;
+    /** `final_acceptance` after a review that concluded NOT DONE: what is missing, and the way out. */
+    readonly reviewNotDone: (unmet: string, runId: string) => string;
   };
 
 
@@ -135,6 +137,11 @@ export interface Phrases {
      * `path` is the dotted config path, typed verbatim; `trust.projectConfig` is the switch.
      */
     readonly projectLooseningIgnored: (path: string) => string;
+    /** A key of the project file nothing reads, and a command id under `commands:` (dogfood 09/10). */
+    readonly unknownProjectKey: (key: string) => string;
+    readonly unknownCommandKey: (key: string, id: string) => string;
+    /** A project turn ceiling above the global one, dropped whatever the trust. */
+    readonly projectMaxTurnsIgnored: (path: string, value: string) => string;
     /**
      * A `worktree.copy` pattern that names a `.env` file or matches one today (FR-018).
      * `pattern` is typed verbatim, exactly as the operator wrote it.
@@ -203,6 +210,14 @@ export interface Phrases {
     /** A write role's command grants (FR-021). `prefixes` is the lines, joined, verbatim. */
     readonly mayRunCommands: (prefixes: string) => string;
     readonly mayRunAnyCommand: string;
+    /** A `maxTurns` on a runner that enforces it; `scope` names a stage or the fallback. */
+    readonly maxTurnsCeiling: (maxTurns: number, scope?: string) => string;
+    /** A `maxTurns` whose serving runner does not enforce one. */
+    readonly maxTurnsNotEnforced: (maxTurns: number, runner: string, scope?: string) => string;
+    /** The scope of a stage override's ceiling. */
+    readonly maxTurnsScopeStage: (stage: string) => string;
+    /** The scope of the ceiling a fallback runner is handed. */
+    readonly maxTurnsScopeFallback: string;
     readonly declaredCapabilitiesCaveat: readonly string[];
     readonly installProbeHeading: string;
     readonly checkoutDirtyBeforeInstall: string;
@@ -314,6 +329,11 @@ export interface Phrases {
     readonly featureNeedsDescription: string;
     readonly invalidPlanResumeRequest: string;
     readonly invalidApproveRequest: string;
+    /**
+     * An API client moved the plan gate without `decidedBy`. Read by the AI that sent it, so
+     * it asks for the human and never tells the reader to decide.
+     */
+    readonly decidedByRequired: string;
     readonly invalidRejectRequest: string;
     readonly invalidRetryRequest: string;
     /** The answer route's body failed its schema: empty, or over the length bound (FR-007). */
@@ -356,6 +376,10 @@ export interface Phrases {
     readonly checkFsRetry: string;
     readonly pairingNotEnabled: string;
     readonly invalidPairRequest: string;
+    /** `POST /pairing/code` from anything but this machine. */
+    readonly pairingCodeLocalOnly: string;
+    /** `evidence` on a review from anything but this machine. */
+    readonly evidenceLocalOnly: string;
     readonly invalidPairingCode: string;
     readonly sessionLimitReached: string;
     readonly noSuchDeviceSession: string;
@@ -451,6 +475,7 @@ export interface Phrases {
     readonly beingRejected: string;
     readonly beingReviewed: string;
     readonly beingRevalidated: string;
+    readonly beingCompleted: string;
     /** Appended to a resume refusal when the lock names a holder; empty when it does not. */
     readonly heldByPidOn: (pid: string, hostname: string) => string;
 
@@ -482,6 +507,26 @@ export interface Phrases {
     readonly onlyBlockedCanBeAnswered: string;
     readonly answerNeedsText: string;
     readonly sayWhatTaskNeeds: string;
+    /** `review --e2e-observed` with nothing in it, or more than an answer may hold. */
+    readonly observationNeedsText: (max: number) => string;
+    /** An `--evidence` file refused: `reason` is `not_an_image`, `missing` or `too_large`. */
+    readonly evidenceRefused: (file: string, reason: string) => string;
+    readonly sayWhatYouObserved: string;
+    /** An observation with no observer, or a name past its bound. */
+    readonly observerNeedsName: (max: number) => string;
+    /** A plan-gate move with no named human (`--decided-by`, HTTP `decidedBy.by`). */
+    readonly decisionNeedsName: (max: number) => string;
+    /** A plan-gate move without the human's words (`--words`, HTTP `decidedBy.words`). */
+    readonly decisionNeedsWords: (max: number) => string;
+    /** What to do about either: ask the human, never fill it in. */
+    readonly askHumanForDecision: string;
+    /** `--e2e-head` names a build that is not the head under review. */
+    readonly e2eHeadMismatch: (given: string, current: string) => string;
+    /** `--e2e-head` on a run reviewed in place, where no commit names the tree. */
+    readonly e2eHeadWithoutCommit: (given: string) => string;
+    readonly askHumanWhichBuild: string;
+    /** An attestation on a run whose configuration runs no e2e: it would stand in for nothing. */
+    readonly noE2EToAttest: string;
 
     readonly runPausedAt: (runId: string, at: string) => string;
     readonly resumeIt: string;
@@ -525,6 +570,14 @@ export interface Phrases {
     readonly waitForBoundary: string;
 
     readonly finishedNothingToCancel: (runId: string, status: string) => string;
+    /** `complete` on a cancelled or failed run. */
+    readonly finishedCannotComplete: (runId: string, status: string) => string;
+    /** `complete` with no review concluded since the last task finished. */
+    readonly completeNeedsReview: (runId: string) => string;
+    readonly reviewBeforeCompleting: string;
+    /** `complete` while a review of the run is in flight. */
+    readonly completeWhileReviewing: (runId: string) => string;
+    readonly waitForReview: string;
 
     readonly revisionNeedsInstruction: string;
     readonly trivialNoRevision: string;
@@ -653,6 +706,8 @@ export interface Phrases {
 
     readonly planWaiting: string;
     readonly finalReviewWaiting: string;
+    /** The final review ran and the Definition of Done did not hold. */
+    readonly finalReviewNotDone: string;
     readonly runTheFinalReview: string;
     readonly nothingRunsUntilGate: string;
     readonly reviewThePlan: string;
@@ -733,6 +788,32 @@ export interface Phrases {
     readonly pairedAt: string;
     readonly lastSeenAt: string;
     readonly activeSessions: (count: number) => string;
+  };
+  /**
+   * `agent-flow timeline`: where a run's wall clock went (`core/run-timeline.ts`).
+   *
+   * The stage names and task ids in the table are identifiers and are printed as they
+   * are; these are the words around them.
+   */
+  readonly timeline: {
+    readonly heading: (runId: string) => string;
+    readonly noActiveRun: string;
+    readonly wall: string;
+    readonly model: string;
+    readonly validation: string;
+    readonly human: string;
+    readonly quota: string;
+    readonly rework: string;
+    readonly other: string;
+    readonly minutes: string;
+    readonly cost: string;
+    readonly byStage: string;
+    readonly stage: string;
+    readonly attempts: string;
+    readonly notReported: string;
+    readonly notABill: string;
+    readonly quotaNote: string;
+    readonly staleNote: string;
   };
 }
 

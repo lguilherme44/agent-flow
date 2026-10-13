@@ -15,6 +15,7 @@ import {
   type ActionOutcome,
 } from '../../src/app/run-actions.js';
 import { PlanSchema, type RunActor, type TaskProgress } from '../../src/contracts/index.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * P7.1 — answering what an agent-blocked task asked (FR-002, FR-003, FR-008).
@@ -104,7 +105,7 @@ async function project(options: { actor?: RunActor } = {}) {
   });
 
   // Approved, so the answer has a plan hash to be bound to (FR-004).
-  const approved = await approve(deps, run.runId);
+  const approved = await approve(deps, run.runId, { decidedBy: DECIDED });
   if (!approved.ok) throw new Error(`approve refused: ${approved.error.code}`);
 
   return { fs, clock, host, store, deps, runId: run.runId };

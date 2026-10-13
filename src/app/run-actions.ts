@@ -11,6 +11,12 @@ import {
   type WorkflowClass,
   type RunActor,
   type Amendment,
+  HUMAN_NAME_MAX_LENGTH,
+  HUMAN_WORDS_MAX_LENGTH,
+  DecisionChannelSchema,
+  readHumanDecision,
+  type DecisionChannel,
+  type GateDecision,
 } from '../contracts/index.js';
 import { PlanningRefusal, type PipelineOptions } from './planning-pipeline.js';
 import { StageFailure } from './stage-runner.js';
@@ -70,16 +76,24 @@ import {
   VERIFICATION_ORDER,
   type VerificationOutcome,
 } from './verification-commands.js';
+import { describeBaseline, judgeAgainstBase, type BaselineVerdict } from './baseline-verification.js';
+import { openCheckoutAt } from './read-only-workspace.js';
+import { grantableLines } from '../core/command-grants.js';
+import { checkEvidenceFiles, copyEvidence, evidenceStamp, listEvidence } from './run-evidence.js';
+import { runPaths } from './paths.js';
 import { prepareWorkspace, type PreparationOutcome } from './workspace-preparation.js';
 import { readProjectInstructions } from './project-instructions.js';
 import { isRunActive } from './init-project.js';
 import {
   E2E_STAGE,
+  E2EResponseSchema,
   FINAL_REVIEW_STAGE,
   ReviewResponseSchema,
   VERIFICATION_STAGE,
   authorsOf,
   buildReview,
+  normaliseE2EResponse,
+  notRunReason,
 } from './stages/final-review.js';
 import { runCorrectiveRound, type CorrectiveRound } from './corrective-round.js';
 import { ReviewStore } from './review-store.js';
@@ -95,14 +109,23 @@ import {
   type RequiredGate,
 } from '../core/required-gates.js';
 import { extractRequirementIds } from '../core/sdd-validator.js';
-import { isResumable } from '../core/run-projection.js';
+import { concludedReview, isResumable, reviewInProgress } from '../core/run-projection.js';
 import {
+  awaitsOnlyE2EObservation,
   checkDefinitionOfDone,
+  SHORT_HEAD_LENGTH,
   type DoneCheck,
+  type E2EObservation,
   type MechanicalVerification,
 } from '../core/definition-of-done.js';
 import { getCeremonyBudget, nextWorkflowClass } from '../core/adaptive-workflow.js';
-import { renderAmendmentsForReview, routeFindings } from '../core/amendments.js';
+import {
+  currentE2EObservation,
+  e2eHeadMatches,
+  observationOf,
+  renderAmendmentsForReview,
+  routeFindings,
+} from '../core/amendments.js';
 import { planningResume } from '../core/resume.js';
 import { renderReplanInput, sameReplanRequest, type ReplanInput } from '../core/replan-input.js';
 // The reason vocabulary is shared with the projection `status` reads it back through, so
@@ -188,6 +211,12 @@ export type ActionErrorCode =
   | 'run_cancelled'
   /** `resume` on a run nobody paused. Starting it is a different command. */
   | 'not_paused'
+  /**
+   * `complete` on a run no review has concluded on since its last task finished. A human may
+   * close a run the Definition of Done did not, but over a verdict on the record — never in
+   * its place.
+   */
+  | 'review_required'
   | 'invalid_input'
   | 'ceremony_budget_exceeded'
   /**
@@ -309,18 +338,75 @@ export type RunActionDeps = Omit<BuildContextOptions, 'onTaskStart' | 'onTaskFin
    * answering in a language somebody else's script will try to grep.
    */
   readonly say?: Phrases;
+  /**
+   * The channel the action came through — `cli` for the terminal, `deck` or `api` as the
+   * hub derives it from the request — recorded on every `operator_action`, so a human
+   * reading the run can tell an action an AI relayed from one a person clicked or typed.
+   * Optional because only the two adapters know it; both set it (`src/cli/approve.ts`,
+   * `depsFor` in `src/server/server.ts`), and `test/server/server.test.ts` holds the hub to it.
+   */
+  readonly channel?: DecisionChannel;
 };
 
 /**
  * Appends an operator_action audit event recording who took this action (FR-016).
+ *
+ * A plan-gate move also carries `decidedBy`: the named human, their words and the channel.
+ * On this event rather than a new one, because this is already the line that says "who
+ * moved the gate", every reader of human actions (the timeline among them) already counts
+ * it, and a second event per move would be two records of one decision to keep in step.
  */
 export async function recordActor(
   store: StateStore,
   runId: string,
   action: string,
-  actor: RunActor,
+  who: { readonly actor: RunActor; readonly channel?: DecisionChannel | undefined },
+  decidedBy?: GateDecision,
 ): Promise<void> {
-  await store.appendEvent(runId, 'operator_action', { action, actor });
+  const channel = decidedBy?.channel ?? who.channel;
+  await store.appendEvent(runId, 'operator_action', {
+    action,
+    actor: who.actor,
+    ...(channel === undefined ? {} : { channel }),
+    ...(decidedBy === undefined ? {} : { decidedBy }),
+  });
+}
+
+/**
+ * The plan-gate decision, trimmed — or the refusal naming the flag to fix.
+ *
+ * **Required by every gate move, and judged here rather than in each adapter.** The actor
+ * is a channel, and an AI at this terminal or on the loopback API is `keyboard` exactly as a
+ * person is; without a name and words a gate move records nothing that says a human made
+ * it. The CLI and the server both refuse earlier, in their own words; this is the copy no
+ * adapter can skip — including one written after them, which is why the parameter is
+ * required and not optional.
+ *
+ * Asked before the lease, as `review` asks about an observation: a refusal about what was
+ * typed writes nothing, not even an acquire/release pair.
+ */
+function readGateDecision(
+  decision: GateDecision,
+  say: Phrases,
+): { readonly ok: true; readonly value: GateDecision } | { readonly ok: false; readonly error: ActionError } {
+  const read = readHumanDecision(decision);
+  if (!read.ok) {
+    return {
+      ok: false,
+      error: {
+        code: 'invalid_input',
+        message:
+          read.field === 'by'
+            ? say.actions.decisionNeedsName(HUMAN_NAME_MAX_LENGTH)
+            : say.actions.decisionNeedsWords(HUMAN_WORDS_MAX_LENGTH),
+        action: say.actions.askHumanForDecision,
+      },
+    };
+  }
+  // The channel is the adapter's to derive and no person types it, so an unknown one is a
+  // defect in that adapter: thrown, not refused as though somebody could fix their input.
+  const channel = DecisionChannelSchema.parse(decision.channel);
+  return { ok: true, value: { ...read.value, channel } };
 }
 
 
@@ -513,6 +599,8 @@ function gerund(operation: LockOperation, say: Phrases): string {
       return say.actions.beingReviewed;
     case 'revalidate':
       return say.actions.beingRevalidated;
+    case 'complete':
+      return say.actions.beingCompleted;
   }
 }
 
@@ -645,11 +733,13 @@ export interface ApproveResult {
   readonly tasksReached?: number;
 }
 
-/** How a person asked to approve. Both absent is the plain gate. */
+/** How a person asked to approve. `force` and `attachFindings` both absent is the plain gate. */
 export interface ApproveOptions {
   readonly force?: boolean;
   /** Approve over a failed review with its findings handed to the tasks (FR-016). */
   readonly attachFindings?: boolean;
+  /** Who approved, their words, and the channel (see `readGateDecision`). */
+  readonly decidedBy: GateDecision;
 }
 
 /**
@@ -685,9 +775,12 @@ export interface ApproveOptions {
 export async function approve(
   deps: RunActionDeps,
   runId: string,
-  options: ApproveOptions = {},
+  given: ApproveOptions,
 ): Promise<ActionOutcome<ApproveResult>> {
   const say = deps.say ?? en;
+  const decision = readGateDecision(given.decidedBy, say);
+  if (!decision.ok) return failed(decision.error);
+  const options: ApproveOptions = { ...given, decidedBy: decision.value };
   const store = storeFor(deps);
 
   if (options.attachFindings === true) {
@@ -928,7 +1021,7 @@ async function grantApproval(
     });
   }
 
-  await recordActor(context.store, runId, 'approve', deps.actor);
+  await recordActor(context.store, runId, 'approve', deps, options.decidedBy);
 
   // A human acted, so the unattended streak is over (C-22, AR §6.2). Rounds already spent
   // stay spent; the count of calls made *with no intervening human action* is by definition
@@ -973,15 +1066,22 @@ export async function reject(
   deps: RunActionDeps,
   runId: string,
   reason: string | undefined,
+  /** Who rejected, their words, and the channel (see `readGateDecision`). */
+  decidedBy: GateDecision,
 ): Promise<ActionOutcome<{ readonly runId: string }>> {
+  const decision = readGateDecision(decidedBy, deps.say ?? en);
+  if (!decision.ok) return failed(decision.error);
   const store = storeFor(deps);
-  return withExecutionLock(deps, store, runId, 'reject', () => rejectPlan(deps, runId, reason));
+  return withExecutionLock(deps, store, runId, 'reject', () =>
+    rejectPlan(deps, runId, reason, decision.value),
+  );
 }
 
 async function rejectPlan(
   deps: RunActionDeps,
   runId: string,
   reason: string | undefined,
+  decidedBy: GateDecision,
 ): Promise<ActionOutcome<{ readonly runId: string }>> {
   const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
@@ -1016,7 +1116,7 @@ async function rejectPlan(
   await context.store.appendEvent(runId, 'run_rejected', {
     reason: reason ?? '(no reason given)',
   });
-  await recordActor(context.store, runId, 'reject', deps.actor);
+  await recordActor(context.store, runId, 'reject', deps, decidedBy);
 
   return done({ runId });
 }
@@ -1043,14 +1143,25 @@ export async function retryTask(
   deps: RunActionDeps,
   runId: string,
   taskId: string,
-  options: { force?: boolean; expectNoChange?: boolean } = {},
+  options: {
+    force?: boolean;
+    expectNoChange?: boolean;
+    /**
+     * Who chose the override (`force`, `expectNoChange`) and their words, with the channel —
+     * required by both adapters for an override, recorded on the `operator_action`.
+     */
+    decidedBy?: GateDecision;
+  } = {},
 ): Promise<ActionOutcome<RetryResult>> {
+  const decision =
+    options.decidedBy === undefined ? undefined : readGateDecision(options.decidedBy, deps.say ?? en);
+  if (decision !== undefined && !decision.ok) return failed(decision.error);
   // Locked too, and briefly. Requeuing a task while the scheduler is executing it
   // would have the two fighting over the same entry in `state.json` — the retry
   // setting it back to `queued` under an executor that is mid-flight.
   const store = storeFor(deps);
   return withExecutionLock(deps, store, runId, 'retry', () =>
-    requeue(deps, runId, taskId, options),
+    requeue(deps, runId, taskId, { ...options, decidedBy: decision?.value }),
   );
 }
 
@@ -1058,7 +1169,7 @@ async function requeue(
   deps: RunActionDeps,
   runId: string,
   taskId: string,
-  options: { force?: boolean; expectNoChange?: boolean },
+  options: { force?: boolean; expectNoChange?: boolean; decidedBy?: GateDecision | undefined },
 ): Promise<ActionOutcome<RetryResult>> {
   const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
@@ -1149,6 +1260,7 @@ async function requeue(
     forced: options.force === true,
     declaredAt,
     action: 'retryTask',
+    decidedBy: options.decidedBy,
   });
 
   return done({ runId, taskId, attempts: entry.attempts, forced: options.force === true });
@@ -1176,6 +1288,8 @@ async function writeRequeue(
     readonly answered?: true;
     /** The `operator_action` this requeue is recorded under. */
     readonly action: string;
+    /** The human decision behind it — an answer's name and words — when there is one. */
+    readonly decidedBy?: GateDecision | undefined;
   },
 ): Promise<void> {
   const { declaredAt } = options;
@@ -1221,7 +1335,7 @@ async function writeRequeue(
   // stay spent; the count of calls made *with no intervening human action* is by definition
   // broken by this one.
   await clearAutonomy(context.store, runId);
-  await recordActor(context.store, runId, options.action, deps.actor);
+  await recordActor(context.store, runId, options.action, deps, options.decidedBy);
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1421,12 @@ export async function answerTask(
   runId: string,
   taskId: string,
   text: string,
+  /**
+   * Who answered and their words, with the channel — what the hub requires of an API client
+   * and fills for the Deck. Optional here because the terminal's `answer` takes none; when
+   * given it is judged like a gate decision and recorded on the `operator_action`.
+   */
+  decidedBy?: GateDecision,
 ): Promise<ActionOutcome<AnswerResult>> {
   const say = deps.say ?? en;
   const answer = text.trim();
@@ -1317,13 +1437,15 @@ export async function answerTask(
       action: say.actions.sayWhatTaskNeeds,
     });
   }
+  const decision = decidedBy === undefined ? undefined : readGateDecision(decidedBy, say);
+  if (decision !== undefined && !decision.ok) return failed(decision.error);
 
   const store = storeFor(deps);
   const unanswerable = refuseUnanswerable(await loadRun(store, runId), runId, taskId, say);
   if (unanswerable !== undefined) return failed(unanswerable);
 
   return withExecutionLock(deps, store, runId, 'retry', () =>
-    recordAnswer(deps, runId, taskId, answer),
+    recordAnswer(deps, runId, taskId, answer, decision?.value),
   );
 }
 
@@ -1332,6 +1454,7 @@ async function recordAnswer(
   runId: string,
   taskId: string,
   answer: string,
+  decidedBy: GateDecision | undefined,
 ): Promise<ActionOutcome<AnswerResult>> {
   const say = deps.say ?? en;
   const context = await buildExecutionContext(deps);
@@ -1356,6 +1479,7 @@ async function recordAnswer(
     forced: false,
     answered: true,
     action: 'answer',
+    decidedBy,
   });
 
   return done({ runId, taskId, attempts: entry.attempts, amendmentId: amendment.id });
@@ -1447,7 +1571,7 @@ export async function revalidate(
     // for a retry. Recorded on both branches: a person who looked at a failing tree and
     // fixed part of it has intervened whether or not the fix was complete.
     await clearAutonomy(context.store, runId);
-    await recordActor(context.store, runId, 'revalidateTask', deps.actor);
+    await recordActor(context.store, runId, 'revalidateTask', deps);
 
     return done(outcome.value);
   });
@@ -1756,7 +1880,7 @@ async function execute(
   }
 
   if (options.recordAction !== false) {
-    await recordActor(context.store, runId, 'start', deps.actor);
+    await recordActor(context.store, runId, 'start', deps);
   }
 
   // A run that was asked for parallelism it did not get has to be able to say so
@@ -1931,7 +2055,7 @@ export async function pause(
   if (!alreadyPaused) {
     await store.updateRun(runId, (current) => ({ ...current, pauseRequestedAt: at }));
     await store.appendEvent(runId, 'run_paused', { at });
-    await recordActor(store, runId, 'pause', deps.actor);
+    await recordActor(store, runId, 'pause', deps);
   }
 
   // Read after the write, not before. A run that started executing between the two would
@@ -2012,7 +2136,7 @@ export async function resume(
 
   await store.updateRun(runId, (current) => ({ ...current, pauseRequestedAt: undefined }));
   await store.appendEvent(runId, 'run_resumed', { at: deps.clock.now() });
-  await recordActor(store, runId, 'resume', deps.actor);
+  await recordActor(store, runId, 'resume', deps);
 
   const started = await start(deps, runId, { recordAction: false });
   if (!started.ok) return started;
@@ -2057,9 +2181,17 @@ export interface CancelResult {
 export async function cancel(
   deps: RunActionDeps,
   runId: string,
+  /**
+   * Who cancelled and their words, with the channel. Required of an API client by the hub
+   * (cancel is irreversible) and filled for the Deck; the terminal's `cancel --yes` takes
+   * none. Recorded on the `operator_action` when given.
+   */
+  decidedBy?: GateDecision,
 ): Promise<ActionOutcome<CancelResult>> {
   const say = deps.say ?? en;
   const store = storeFor(deps);
+  const decision = decidedBy === undefined ? undefined : readGateDecision(decidedBy, say);
+  if (decision !== undefined && !decision.ok) return failed(decision.error);
 
   const state = await loadRun(store, runId);
   if (state === null) return failed(noSuchRun(runId, say));
@@ -2109,7 +2241,7 @@ export async function cancel(
       ? {}
       : { pid: held.holder.pid, hostname: held.holder.hostname }),
   });
-  await recordActor(store, runId, 'cancel', deps.actor);
+  await recordActor(store, runId, 'cancel', deps, decision?.value);
 
   return done(
     {
@@ -2127,10 +2259,108 @@ export async function cancel(
   );
 }
 
+export interface CompleteResult {
+  readonly runId: string;
+  /** True when the run was already completed. `complete` is idempotent, as `cancel` is. */
+  readonly alreadyCompleted: boolean;
+  /** The Definition of Done conditions the last review found unmet, which this decided over. */
+  readonly overrode: readonly string[];
+}
+
+/**
+ * Closes a run the Definition of Done did not — a person's decision, on the record (dogfood
+ * 09/10).
+ *
+ * **The run that needed it.** 75716 was delivered as a draft PR opened by hand, outside
+ * `forge`; its review ended NOT DONE because e2e could not reach the application, and nothing
+ * could close it. The status said "accept and merge" and there was no `accept`.
+ *
+ * Three rules, each a refusal:
+ *
+ *  - **Named, in their words.** The same `decidedBy` every gate move carries, judged here so
+ *    no adapter can skip it.
+ *  - **Over a verdict, never in its place.** A review must have concluded since the last task
+ *    finished, and what it found missing is copied into `run_completed_by_human` — so the
+ *    record says what was decided over, not just that somebody decided. Stopping a run that
+ *    was never reviewed is `cancel`.
+ *  - **Under the lease.** A `review` or `run` in flight would write the status after this.
+ */
+export async function complete(
+  deps: RunActionDeps,
+  runId: string,
+  decidedBy: GateDecision,
+  options: { readonly pr?: string } = {},
+): Promise<ActionOutcome<CompleteResult>> {
+  const say = deps.say ?? en;
+  const decision = readGateDecision(decidedBy, say);
+  if (!decision.ok) return failed(decision.error);
+
+  const store = storeFor(deps);
+  const state = await loadRun(store, runId);
+  if (state === null) return failed(noSuchRun(runId, say));
+  if (state.status === 'completed') return done({ runId, alreadyCompleted: true, overrode: [] });
+
+  return withExecutionLock<CompleteResult>(deps, store, runId, 'complete', async () => {
+    // Read again under the lease: what was true before it may not be now.
+    const current = await store.loadRun(runId);
+    if (current.status === 'completed') return done({ runId, alreadyCompleted: true, overrode: [] });
+    if (current.status === 'cancelled' || current.status === 'failed') {
+      return failed({
+        code: 'run_completed',
+        message: say.actions.finishedCannotComplete(runId, current.status),
+        action: say.actions.startNewRunFeature,
+        forcible: false,
+      });
+    }
+
+    const events = await store.readEvents(runId);
+    // Sequential mode reviews without the lease, so the lease alone does not keep a close out
+    // of a review in flight (adversarial review).
+    if (reviewInProgress(events)) {
+      return failed({
+        code: 'run_busy',
+        message: say.actions.completeWhileReviewing(runId),
+        action: say.actions.waitForReview,
+        forcible: false,
+      });
+    }
+    // The one verdict that still describes the work: same rule as the status screen.
+    const concluded = concludedReview(events, current.integrationHead);
+    const verdict = concluded === undefined ? undefined : { missing: concluded.unmet.map((c) => c.name) };
+    if (verdict === undefined) {
+      return failed({
+        code: 'review_required',
+        message: say.actions.completeNeedsReview(runId),
+        action: say.actions.reviewBeforeCompleting,
+        forcible: false,
+      });
+    }
+
+    const at = deps.clock.now();
+    const pr = options.pr?.trim();
+    await store.updateRun(runId, (latest) => ({ ...latest, status: 'completed' }));
+    await store.appendEvent(runId, 'run_completed_by_human', {
+      at,
+      overrode: verdict.missing,
+      ...(pr === undefined || pr === '' ? {} : { pr }),
+    });
+    await recordActor(store, runId, 'complete', deps, decision.value);
+
+    return done({ runId, alreadyCompleted: false, overrode: verdict.missing });
+  });
+}
+
 export async function revise(
   deps: RunActionDeps,
   runId: string,
   instruction: string,
+  /**
+   * The human authorising the revision, their words, and the channel (`readGateDecision`).
+   * Beside `instruction`, never folded into it: the instruction is what the planner is told
+   * to change, the words are who said so — and a revision's text is often the AI's rendering
+   * of what the human asked, which is exactly what the words exist to keep apart.
+   */
+  decidedBy: GateDecision,
   /**
    * Which stage the revision re-enters. `planning` by default, which is what this always
    * did — and what made a whole class of finding impossible to act on.
@@ -2170,6 +2400,8 @@ export async function revise(
       message: say.actions.revisionNeedsInstruction,
     });
   }
+  const decision = readGateDecision(decidedBy, say);
+  if (!decision.ok) return failed(decision.error);
 
   const store = storeFor(deps);
 
@@ -2185,7 +2417,7 @@ export async function revise(
   }
 
   return withExecutionLock(deps, store, runId, 'revise', () =>
-    replan(deps, runId, trimmed, from, mode),
+    replan(deps, runId, trimmed, decision.value, from, mode),
   );
 }
 
@@ -2223,6 +2455,7 @@ async function replan(
   deps: RunActionDeps,
   runId: string,
   trimmed: string,
+  decidedBy: GateDecision,
   from: RunStage = 'planning',
   mode: ReviseMode = 'revision',
 ): Promise<ActionOutcome<ReviseResult>> {
@@ -2321,7 +2554,7 @@ async function replan(
     findingsOmitted: replan.findingsOmitted,
   });
   await recordWithheldFindings(context.store, runId, replan);
-  await recordActor(context.store, runId, 'revise', deps.actor);
+  await recordActor(context.store, runId, 'revise', deps, decidedBy);
 
   const pipeline = buildPlanningPipeline(context);
 
@@ -2653,6 +2886,19 @@ function planningRefused(error: PlanningRefusal): ActionError {
 export interface ReviewOptions {
   /** Turn the findings into corrective tasks, and review the corrected plan. */
   readonly fix?: boolean;
+  /**
+   * A named person's own account of watching the change work on a target e2e cannot reach
+   * (`--e2e-observed` + `--observed-by`). Recorded as an `e2e_observation` amendment bound
+   * to the head under review, then judged by the Definition of Done like any other fact.
+   * `head` is the build they say they tested (`--e2e-head`); a mismatch is refused.
+   */
+  readonly e2eObservation?: {
+    readonly by: string;
+    readonly words: string;
+    readonly head?: string;
+    /** Images the human attaches (`--evidence`), copied into the run (dogfood 09/10). */
+    readonly evidence?: readonly string[];
+  };
   /** Progress, for an adapter that streams. Decides nothing. */
   readonly onVerificationStep?: (step: string, passed: boolean) => void;
   readonly onStage?: (stage: 'verification' | 'inspection' | 'e2e' | 'final-review') => void;
@@ -2677,12 +2923,25 @@ export interface ReviewOutcome {
   /** Why the commands did not run, when they did not. Names the install and its exit code. */
   readonly environmentFailure?: { readonly phase: string; readonly detail: string };
   readonly verificationReview: { verdict: 'PASS' | 'FAIL'; findings: ReviewResult['findings'] };
+  /** Present only when e2e ran (PASS or FAIL). A NOT_RUN is `e2eNotRun`, never a review. */
   readonly e2eReview?: ReviewResult;
+  /** Why e2e could not exercise the change. Blocks the Definition of Done; is not corrective work. */
+  readonly e2eNotRun?: { readonly reason: string };
+  /** The images the e2e agent saved for this review, relative to the run directory (dogfood 09/10). */
+  readonly e2eEvidence?: readonly string[];
   readonly finalReview: ReviewResult;
   readonly done: DoneCheck;
   readonly degradations: RunState['degradations'];
   /** Present only when `fix` was asked for and there was something to correct. */
   readonly corrective?: CorrectiveRound;
+  /**
+   * The run is done but for a person observing the change on the target (e2e NOT_RUN, no
+   * attestation for this tree). Set instead of running a corrective round under `--fix`:
+   * there is nothing a FIX task could do about a device agent-flow cannot reach.
+   */
+  readonly awaitingObservation?: true;
+  /** The attestation this review recorded, when `e2eObserved` was given. */
+  readonly observationRecorded?: { readonly amendmentId: string };
   /**
    * The one commit verification, the reviewer and the Definition of Done all
    * describe (§19.2). Absent in sequential mode, where the tree is the project
@@ -2714,13 +2973,60 @@ export async function review(
   options: ReviewOptions = {},
 ): Promise<ActionOutcome<ReviewOutcome>> {
   const say = deps.say ?? en;
+
+  // A refusal about what was typed, before anything about the run is read — the order
+  // `answer` keeps, for its reason (FR-001).
+  let judged = options;
+  if (options.e2eObservation !== undefined) {
+    // The one validator every named human decision goes through (`HumanDecision`).
+    const read = readHumanDecision(options.e2eObservation);
+    if (!read.ok) {
+      return failed({
+        code: 'invalid_input',
+        message:
+          read.field === 'by'
+            ? say.actions.observerNeedsName(HUMAN_NAME_MAX_LENGTH)
+            : say.actions.observationNeedsText(HUMAN_WORDS_MAX_LENGTH),
+        action: say.actions.sayWhatYouObserved,
+      });
+    }
+    const head = options.e2eObservation.head?.trim();
+    // Judged with the rest of what was typed, before the run is read: a file that is not an
+    // image, or is not there, refuses the observation whole.
+    const evidence = options.e2eObservation.evidence ?? [];
+    const checked = await checkEvidenceFiles(deps.fs, evidence);
+    if (!checked.ok) {
+      return failed({ code: 'invalid_input', message: say.actions.evidenceRefused(checked.file, checked.reason) });
+    }
+    judged = {
+      ...options,
+      e2eObservation: {
+        ...read.value,
+        ...(head === undefined ? {} : { head }),
+        ...(evidence.length === 0 ? {} : { evidence }),
+      },
+    };
+  }
+
   const store = storeFor(deps);
   const state = await loadRun(store, runId);
   if (state === null) return failed(noSuchRun(runId, say));
 
-  return state.isolationMode === 'worktree'
-    ? withExecutionLock(deps, store, runId, 'review', () => judgeRun(deps, runId, options))
-    : judgeRun(deps, runId, options);
+  // A review that throws after it started — a stage failing, a baseline checkout that would
+  // not open — says so on the run, or every screen reads "being reviewed" for good.
+  const judge = async (): Promise<ActionOutcome<ReviewOutcome>> => {
+    try {
+      return await judgeRun(deps, runId, judged);
+    } catch (error) {
+      await store
+        .appendEvent(runId, 'run_review_failed', {
+          reason: error instanceof Error ? error.message.slice(0, 500) : 'review failed',
+        })
+        .catch(() => undefined);
+      throw error;
+    }
+  };
+  return state.isolationMode === 'worktree' ? withExecutionLock(deps, store, runId, 'review', judge) : judge();
 }
 
 async function judgeRun(
@@ -2767,8 +3073,68 @@ async function judgeRun(
   // reviewer's diff and the Definition of Done all describe. A run reviewed
   // against a commit its own state does not name is a run whose green verdict
   // means nothing.
+  // An attestation stands in for an e2e result; on a project that runs no e2e it would
+  // stand in for nothing, and recording it would tell the person it mattered.
+  if (options.e2eObservation !== undefined && !context.config.global.roles.e2e.enabled) {
+    return failed({
+      code: 'invalid_input',
+      message: say.actions.noE2EToAttest,
+    });
+  }
+
   const tree = await openReviewTree(context, state, say);
   if (!tree.ok) return failed(tree.error);
+
+  // **Recorded before the stages, bound to the head they will read.** The attestation is
+  // about the code the person ran on the target, and the head is the only name that code
+  // has: a later review of a moved head finds this entry and does not count it. Recorded
+  // even if e2e then passes or fails — it is what a person said, and the record keeps it.
+  //
+  // **And refused when the person names another build.** The head at review time says what
+  // agent-flow is judging, not what was on the device; `--e2e-head` is how the two are
+  // compared, and an observation of other code is not recorded at all.
+  const observationGiven = options.e2eObservation;
+  const testedHead = observationGiven?.head;
+  if (testedHead !== undefined) {
+    const current = tree.value.integration?.head;
+    if (current === undefined) {
+      return failed({
+        code: 'invalid_input',
+        message: say.actions.e2eHeadWithoutCommit(testedHead),
+      });
+    }
+    if (!e2eHeadMatches(testedHead, current)) {
+      return failed({
+        code: 'invalid_input',
+        message: say.actions.e2eHeadMismatch(testedHead, current.slice(0, SHORT_HEAD_LENGTH)),
+        action: say.actions.askHumanWhichBuild,
+      });
+    }
+  }
+
+  const runDir = runPaths(context.projectDir, runId).dir;
+  // Copied before the observation is recorded, so the record never names a file the run lacks.
+  const observedEvidence =
+    observationGiven?.evidence === undefined || observationGiven.evidence.length === 0
+      ? []
+      : await copyEvidence(
+          context.fs,
+          runDir,
+          `evidence/observed/${evidenceStamp(context.clock.now())}`,
+          observationGiven.evidence,
+        );
+  const recordedObservation =
+    observationGiven === undefined
+      ? undefined
+      : await appendAmendment(deps, context, runId, {
+          kind: 'e2e_observation',
+          text: observationGiven.words,
+          observedBy: observationGiven.by,
+          ...(tree.value.integration === undefined
+            ? {}
+            : { integrationHead: tree.value.integration.head }),
+          ...(observedEvidence.length === 0 ? {} : { evidence: observedEvidence }),
+        });
 
   const git = new GitClient(context.git, tree.value.cwd);
   const changes =
@@ -2858,13 +3224,26 @@ async function judgeRun(
       })
     : { passed: false, results: [], skipped: [...VERIFICATION_ORDER] };
 
+  // A listed step that failed is asked of the base before it counts (dogfood 09/10).
+  const baseline = await baselineOf(context, runId, tree.value, verification, prepared.ok, commandTimeoutSeconds);
+  const failing = verification.results.filter((result) => result.exitCode !== 0);
+  const preExisting = failing.filter((result) => baseline.get(result.command)?.verdict === 'pre_existing');
+
   const mechanicalVerification: MechanicalVerification = !prepared.ok
     ? 'NOT_RUN'
-    : verification.passed
+    : verification.passed || (failing.length > 0 && preExisting.length === failing.length)
       ? 'PASS'
       : 'FAIL';
 
-  const commandResults = [summariseVerification(verification), failureDetail(verification)]
+  const baselineLines = failing.flatMap((result) => {
+    const verdict = baseline.get(result.command);
+    return verdict === undefined ? [] : [`- \`${result.command}\` ${describeBaseline(verdict)}`];
+  });
+  const commandResults = [
+    summariseVerification(verification),
+    baselineLines.length === 0 ? '' : `Compared with the base:\n${baselineLines.join('\n')}`,
+    failureDetail(verification),
+  ]
     .filter((part) => part.length > 0)
     .join('\n\n');
 
@@ -2898,9 +3277,15 @@ async function judgeRun(
   // ---- E2E: run agent-browser e2e tests when enabled
   const e2eConfig = context.config.global.roles.e2e;
   let e2eReview: ReviewResult | undefined;
+  let e2eNotRun: { reason: string } | undefined;
+  let e2eEvidence: string[] = [];
 
   if (e2eConfig.enabled) {
     options.onStage?.('e2e');
+    // A folder of this review's own in the run, outside the tree under test (dogfood 09/10):
+    // what the agent saved there is listed with its verdict, whatever the verdict.
+    const evidenceFolder = `evidence/e2e/${evidenceStamp(context.clock.now())}`;
+    await context.fs.mkdirp(`${runDir}/${evidenceFolder}`);
     const e2eResult = await context.stageRunner.run(
       E2E_STAGE,
       runId,
@@ -2908,32 +3293,53 @@ async function judgeRun(
         sdd: effectiveSdd,
         changedFiles,
         agentsMd: await readAgentsMd(context, tree.value.cwd),
+        evidenceDir: `${runDir}/${evidenceFolder}`,
       },
-      { workingDirectory: tree.value.cwd },
+      {
+        workingDirectory: tree.value.cwd,
+        // What the e2e agent needs to reach the application, and only it (dogfood 08/10).
+        commandGrants: grantableLines(e2eConfig.allowedCommands ?? []),
+      },
     );
-    const e2eResponse = ReviewResponseSchema.parse(e2eResult.data);
+    // Normalised before anything reads the verdict: a PASS that opens "NOT RUN" is not one.
+    const e2eResponse = normaliseE2EResponse(E2EResponseSchema.parse(e2eResult.data));
+    e2eEvidence = await listEvidence(context.fs, runDir, evidenceFolder);
+    const evidenceField = e2eEvidence.length === 0 ? {} : { evidence: e2eEvidence };
     const authors = authorsOf(await context.store.readEvents(runId));
     const independence = assessIndependence(
       authors,
       e2eResult.execution.runner,
       context.providerOf,
     );
-    e2eReview = buildReview(
-      e2eResponse,
-      {
-        runner: e2eResult.execution.runner,
-        ...(e2eResult.execution.model === undefined ? {} : { model: e2eResult.execution.model }),
-        reasoning: e2eResult.execution.reasoning,
-      },
-      independence,
-      tree.value.integration?.head,
-    );
+    const reviewer = {
+      runner: e2eResult.execution.runner,
+      ...(e2eResult.execution.model === undefined ? {} : { model: e2eResult.execution.model }),
+      reasoning: e2eResult.execution.reasoning,
+    };
 
-    await context.store.writeArtifact(
-      runId,
-      'e2e',
-      `${JSON.stringify(e2eReview, null, 2)}\n`,
-    );
+    if (e2eResponse.verdict === 'NOT_RUN') {
+      // Not a review of the code, so not a `ReviewResult` and never merged into the
+      // corrective round: a missing device is not work for the generator. Recorded as is,
+      // so a person reading the artifact sees NOT_RUN rather than a pass.
+      e2eNotRun = { reason: notRunReason(e2eResponse) };
+      await context.store.writeArtifact(
+        runId,
+        'e2e',
+        `${JSON.stringify({ ...e2eResponse, independence, reviewer, ...evidenceField }, null, 2)}\n`,
+      );
+    } else {
+      e2eReview = buildReview(
+        { ...e2eResponse, verdict: e2eResponse.verdict },
+        reviewer,
+        independence,
+        tree.value.integration?.head,
+      );
+      await context.store.writeArtifact(
+        runId,
+        'e2e',
+        `${JSON.stringify({ ...e2eReview, ...evidenceField }, null, 2)}\n`,
+      );
+    }
   }
 
   // ---- Final review: the implementation against the approved SDD.
@@ -3016,16 +3422,55 @@ async function judgeRun(
     buildValidationRegistry(context.config.project),
   );
 
+  // The attestation that speaks for this tree: the one just recorded, else one recorded
+  // earlier on this same integration head. In sequential mode only the former — no commit
+  // names the working tree, so an earlier one cannot be shown to describe it.
+  const observation: E2EObservation | undefined =
+    recordedObservation !== undefined
+      ? observationOf(recordedObservation)
+      : currentE2EObservation(state.amendments ?? [], tree.value.integration?.head);
+
+  const e2eInput =
+    e2eNotRun !== undefined
+      ? {
+          verdict: 'NOT_RUN' as const,
+          reason: e2eNotRun.reason,
+          ...(observation === undefined ? {} : { observation }),
+          ...(tree.value.integration === undefined ? {} : { head: tree.value.integration.head }),
+        }
+      : e2eReview !== undefined
+        ? { verdict: e2eReview.verdict }
+        : undefined;
+
   // ---- Definition of Done, evaluated as code (§42), over the same tree.
   const doneCheck = checkDefinitionOfDone({
     approved: state.approved,
     taskStates: state.tasks.map((task) => task.state),
     mechanicalVerification,
+    ...(preExisting.length > 0
+      ? { preExistingFailures: preExisting.map((result) => `\`${result.command}\` (exit ${String(result.exitCode)})`) }
+      : {}),
     finalReviewVerdict: finalReview.verdict,
     ...(openBlockingFindings.length > 0 ? { openBlockingFindings } : {}),
     ...(requiredGates.length > 0 ? { requiredGates } : {}),
+    ...(e2eInput === undefined ? {} : { e2e: e2eInput }),
   });
-  await recordActor(context.store, runId, 'review', deps.actor);
+  const awaitingObservation = awaitsOnlyE2EObservation(doneCheck, e2eInput);
+  // The verdict on the record, DONE or not (dogfood 09/10, run 75716): before this a NOT DONE
+  // review changed nothing on disk, and the run read as still being reviewed.
+  await context.store.appendEvent(runId, 'run_review_concluded', {
+    done: doneCheck.done,
+    unmet: doneCheck.conditions
+      .filter((condition) => !condition.met)
+      .map((condition) => ({
+        name: condition.name,
+        ...(condition.detail === undefined ? {} : { detail: condition.detail }),
+      })),
+    ...(tree.value.integration === undefined
+      ? {}
+      : { integrationHead: tree.value.integration.head }),
+  });
+  await recordActor(context.store, runId, 'review', deps);
 
   await context.store.updateRun(runId, (current) => ({
     ...current,
@@ -3067,8 +3512,12 @@ async function judgeRun(
               : 'PASS',
         };
 
+  // **Not when a person observing the change is all that is missing.** The round would
+  // turn the final review's medium findings on a PASS into FIX tasks, rewrite the plan and
+  // reopen approval — and the next review would still say NOT_RUN, because no task can put
+  // agent-flow in front of an iOS device. The outcome says what is missing instead.
   const corrective =
-    doneCheck.done || options.fix !== true
+    doneCheck.done || options.fix !== true || awaitingObservation
       ? undefined
       : await correctPlan(
           context,
@@ -3104,7 +3553,13 @@ async function judgeRun(
     done: doneCheck,
     degradations: finalState.degradations,
     ...(e2eReview === undefined ? {} : { e2eReview }),
+    ...(e2eNotRun === undefined ? {} : { e2eNotRun }),
+    ...(e2eEvidence.length === 0 ? {} : { e2eEvidence }),
     ...(corrective === undefined ? {} : { corrective }),
+    ...(awaitingObservation ? { awaitingObservation: true as const } : {}),
+    ...(recordedObservation === undefined
+      ? {}
+      : { observationRecorded: { amendmentId: recordedObservation.id } }),
     ...(tree.value.integration === undefined ? {} : { integration: tree.value.integration }),
   });
 }
@@ -3164,6 +3619,66 @@ async function openReviewTree(
       integration: { branch: opened.workspace.branch, head: opened.workspace.head },
     },
   };
+}
+
+/**
+ * What the base says about each failing step the project listed in `verification.baseline`,
+ * keyed by command line. Empty when nothing qualifies: the commands did not run, nothing
+ * failed, or the project listed no step — and then nothing is checked out.
+ */
+async function baselineOf(
+  context: ExecutionContext,
+  runId: string,
+  tree: { readonly cwd: string; readonly base: string },
+  verification: VerificationOutcome,
+  prepared: boolean,
+  timeoutSeconds: number,
+): Promise<Map<string, BaselineVerdict>> {
+  const byCommand = new Map<string, BaselineVerdict>();
+  const project = context.config.project;
+  const listed = project?.verification?.baseline ?? [];
+  if (!prepared || verification.passed || listed.length === 0 || project === undefined) return byCommand;
+
+  const failed = new Set(verification.results.filter((r) => r.exitCode !== 0).map((r) => r.command));
+  const steps = listed.flatMap((step) => {
+    const command = project.commands[step]?.trim();
+    return command !== undefined && failed.has(command) ? [{ step, command }] : [];
+  });
+  if (steps.length === 0) return byCommand;
+
+  const install = project.commands.install;
+  const verdicts = await judgeAgainstBase(
+    {
+      fs: context.fs,
+      processRunner: context.processRunner,
+      openCheckout: async (commit) => {
+        const opened = await openCheckoutAt(
+          { fs: context.fs, workspaces: context.workspaces, host: context.host },
+          { source: tree.cwd, commit, label: 'baseline' },
+        );
+        return opened.ok
+          ? { ok: true, cwd: opened.tree.cwd, release: () => opened.tree.release() }
+          : { ok: false, detail: opened.detail };
+      },
+      onRetained: async (detail) => {
+        await context.store.appendEvent(runId, 'read_only_workspace_retained', { stage: 'baseline', detail });
+      },
+      // The same sequence every worktree goes through, from the module allowed to run it.
+      prepare: async (cwd) => {
+        const prepared = await prepareWorkspace(
+          { workspaces: context.workspaces, processRunner: context.processRunner },
+          { path: cwd, ...(install === undefined ? {} : { install }), timeoutSeconds },
+        );
+        return prepared.ok ? { ok: true } : { ok: false, detail: prepared.failure.detail };
+      },
+    },
+    { base: tree.base, steps, timeoutSeconds, cachePath: runPaths(context.projectDir, runId).baseline },
+  );
+  for (const { step, command } of steps) {
+    const verdict = verdicts.get(step);
+    if (verdict !== undefined) byCommand.set(command, verdict);
+  }
+  return byCommand;
 }
 
 /** `AGENTS.md` of the tree under review, not of whatever the user has open. */

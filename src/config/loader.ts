@@ -4,6 +4,7 @@ import {
   EffectiveConfigSchema,
   GlobalConfigSchema,
   ProjectConfigSchema,
+  ProjectCommandsSchema,
   WorktreeSourceSchema,
   formatValidationError,
   type EffectiveConfig,
@@ -11,7 +12,7 @@ import {
 import type { FileSystem } from '../ports/index.js';
 import { samePath } from '../core/path-containment.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from './defaults.js';
-import { PROJECT_OVERRIDABLE_KEYS, resolveConfigSources, type IgnoredLoosening } from './resolver.js';
+import { PROJECT_OVERRIDABLE_KEYS, PROJECT_OWN_KEYS, resolveConfigSources, type IgnoredLoosening } from './resolver.js';
 import { decideProjectTrust } from './trust.js';
 
 /**
@@ -78,6 +79,8 @@ export interface LoadedConfigReport {
   readonly config: EffectiveConfig;
   /** What an untrusted project tried to loosen and was refused, for `doctor` (FR-026). */
   readonly ignoredLoosenings: readonly IgnoredLoosening[];
+  /** Keys of the project file the schema strips unread, dotted (`commands.lint_testes`), for `doctor`. */
+  readonly unknownKeys: readonly string[];
 }
 
 /**
@@ -144,5 +147,28 @@ export async function loadConfigWithReport(
     // from `commands` follow it too (SEC-001) instead of each consumer deciding again.
     config: EffectiveConfigSchema.parse({ global, project, projectTrusted }),
     ignoredLoosenings: resolved.ignoredLoosenings,
+    unknownKeys: projectRaw ? unknownProjectKeys(projectRaw) : [],
   };
+}
+
+/**
+ * Keys of the project file nothing reads, as dotted paths (dogfood 09/10).
+ *
+ * The schema strips an unknown key without a word, so `commands.lint_testes` vanished and the
+ * only sign was a plan that never used it. Reported, not refused: a file that loads today must
+ * keep loading. Two levels, which is where the mistakes were — the file's top level (a project
+ * key or a global key a project may override) and `commands:`, which holds the standard steps
+ * and nothing else.
+ */
+function unknownProjectKeys(raw: Record<string, unknown>): string[] {
+  // `trust` is not here on purpose: a project's own trust is never read (SEC-001), and a repo
+  // that wrote one should hear that it did nothing.
+  const known = new Set<string>([...PROJECT_OWN_KEYS, ...PROJECT_OVERRIDABLE_KEYS]);
+  const steps = new Set(Object.keys(ProjectCommandsSchema.shape));
+  const unknown = Object.keys(raw).filter((key) => !known.has(key));
+  const commands = raw['commands'];
+  if (typeof commands === 'object' && commands !== null && !Array.isArray(commands)) {
+    for (const key of Object.keys(commands)) if (!steps.has(key)) unknown.push(`commands.${key}`);
+  }
+  return unknown.sort();
 }

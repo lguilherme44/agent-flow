@@ -24,6 +24,9 @@ import {
 import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import { actionDeps } from '../../src/cli/approve.js';
 import { attributionOf, type RunActor } from '../../src/contracts/state.schema.js';
+import type { GateDecision } from '../../src/contracts/index.js';
+import { SECOND_PERSON_OBSERVING } from '../fakes/second-person.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 import { decideTaskRecovery } from '../../src/core/recovery-policy.js';
 import { ptBR } from '../../src/core/phrases/index.js';
 import { GlobalConfigSchema } from '../../src/contracts/index.js';
@@ -219,10 +222,10 @@ describe('a rejection racing a real in-flight operation', () => {
 
     // A genuine `revise`, stopped inside its planning pipeline. It is holding the lease
     // right now, in the same way `start` holds it while the scheduler runs.
-    const revising = revise(deps, runId, 'split TASK-001');
+    const revising = revise(deps, runId, 'split TASK-001', DECIDED);
     await runner.entered.promise;
 
-    const rejected = await reject(deps, runId, 'not what I asked for');
+    const rejected = await reject(deps, runId, 'not what I asked for', DECIDED);
 
     expect(refusal(rejected).code).toBe('run_busy');
     // The refusal names what is actually happening. Calling a revise a "run" to avoid
@@ -244,14 +247,14 @@ describe('a rejection racing a real in-flight operation', () => {
     const runner = new PausingProcessRunner();
     const { store, deps, runId } = await project({ runner });
 
-    const revising = revise(deps, runId, 'split TASK-001');
+    const revising = revise(deps, runId, 'split TASK-001', DECIDED);
     await runner.entered.promise;
 
     // `replan` clears the approval and then rewrites `plan.json` through the pipeline.
     // An approval racing that hashes whichever version happened to be on disk — the old
     // one, or a new one no human has read. The plan hash catches most of it and stops
     // catching it the moment somebody passes `--force`, which is safe by accident.
-    const approved = await approve(deps, runId, { force: true });
+    const approved = await approve(deps, runId, { decidedBy: DECIDED, force: true });
 
     expect(refusal(approved).code).toBe('run_busy');
     expect(refusal(approved).detail).toMatchObject({
@@ -268,12 +271,12 @@ describe('a rejection racing a real in-flight operation', () => {
     const runner = new PausingProcessRunner();
     const { fs, store, deps, runId } = await project({ runner });
 
-    const revising = revise(deps, runId, 'split TASK-001');
+    const revising = revise(deps, runId, 'split TASK-001', DECIDED);
     await runner.entered.promise;
     runner.release();
     await revising.catch(() => undefined);
 
-    const rejected = await reject(deps, runId, 'still not right');
+    const rejected = await reject(deps, runId, 'still not right', DECIDED);
 
     expect(rejected.ok).toBe(true);
     expect((await store.loadRun(runId)).status).toBe('plan_rejected');
@@ -292,7 +295,7 @@ describe('a rejection racing an execution in another process', () => {
     host.spawn(31_337);
     holdLock(fs, runId, { pid: 31_337, owner: 'cli', operation: 'run' });
 
-    const rejected = await reject(deps, runId, 'stop');
+    const rejected = await reject(deps, runId, 'stop', DECIDED);
 
     expect(refusal(rejected).code).toBe('run_busy');
     expect(refusal(rejected).detail).toMatchObject({
@@ -308,7 +311,7 @@ describe('a rejection racing an execution in another process', () => {
     host.spawn(31_337);
     holdLock(fs, runId, { pid: 31_337, owner: 'cli', operation: 'run' });
 
-    const approved = await approve(deps, runId);
+    const approved = await approve(deps, runId, { decidedBy: DECIDED });
 
     expect(refusal(approved).code).toBe('run_busy');
     const state = await store.loadRun(runId);
@@ -338,8 +341,8 @@ describe('a plan that was rejected', () => {
     // Approval first, then rejection: the ordering the lease permits, and the one that
     // used to leave a hole. `reject` writes `status` and nothing else, so every gate in
     // `execute` was still satisfied and the run executed a plan a person had refused.
-    expect((await approve(deps, runId)).ok).toBe(true);
-    expect((await reject(deps, runId, 'on reflection, no')).ok).toBe(true);
+    expect((await approve(deps, runId, { decidedBy: DECIDED })).ok).toBe(true);
+    expect((await reject(deps, runId, 'on reflection, no', DECIDED)).ok).toBe(true);
 
     const started = await start(deps, runId);
 
@@ -369,7 +372,7 @@ describe('a run executes in the mode it was born in (M2-03, I-13)', () => {
 
     flipWorktrees(world.fs, true);
 
-    const outcome = await approve(world.deps, world.runId);
+    const outcome = await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     // Approve succeeded: no worktree precondition was evaluated, because the run
     // is not in worktree mode. Had the gate read the configuration instead of
@@ -380,7 +383,7 @@ describe('a run executes in the mode it was born in (M2-03, I-13)', () => {
 
   it('stays sequential through start when the flag is switched on afterwards', async () => {
     const world = await project();
-    await approve(world.deps, world.runId);
+    await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     flipWorktrees(world.fs, true);
 
@@ -411,7 +414,7 @@ describe('a run executes in the mode it was born in (M2-03, I-13)', () => {
     }));
 
     const before = await isolated.loadRun(born.runId);
-    const outcome = await approve(world.deps, born.runId);
+    const outcome = await approve(world.deps, born.runId, { decidedBy: DECIDED });
 
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
@@ -838,6 +841,98 @@ describe('run refuses before it takes the lock (C-19)', () => {
   });
 });
 
+/**
+ * Who decided at the plan gate, in their words, and through which channel.
+ *
+ * The actor is a channel, and an AI driving the CLI or the local API is `keyboard` exactly
+ * as a person is — so a gate move recorded by actor alone can be made by the AI in the
+ * human's name without a trace. Every approve, reject and revise now carries the human's
+ * name and words, and the channel the adapter derived, on the `operator_action` it appends.
+ */
+describe('plan-gate decisions name who decided (decidedBy)', () => {
+  const LUIS: GateDecision = { by: '  Luis  ', words: '  Ship it as planned.  ', channel: 'api' };
+  const RECORDED = { by: 'Luis', words: 'Ship it as planned.', channel: 'api' };
+
+  async function operatorActions(world: Awaited<ReturnType<typeof project>>) {
+    return (await world.store.readEvents(world.runId)).filter((e) => e.type === 'operator_action');
+  }
+
+  it('approve records the decision, trimmed, beside the actor', async () => {
+    const world = await project();
+
+    expect((await approve(world.deps, world.runId, { decidedBy: LUIS })).ok).toBe(true);
+
+    const [op] = await operatorActions(world);
+    expect(op?.detail).toEqual({ action: 'approve', actor: { kind: 'keyboard' }, channel: RECORDED.channel, decidedBy: RECORDED });
+  });
+
+  it('reject records the decision', async () => {
+    const world = await project();
+
+    expect((await reject(world.deps, world.runId, 'not this', LUIS)).ok).toBe(true);
+
+    const [op] = await operatorActions(world);
+    expect(op?.detail).toEqual({ action: 'reject', actor: { kind: 'keyboard' }, channel: RECORDED.channel, decidedBy: RECORDED });
+  });
+
+  it('revise records the decision before replanning', async () => {
+    const world = await project();
+
+    await revise(world.deps, world.runId, 'split TASK-001', LUIS).catch(() => undefined);
+
+    const [op] = await operatorActions(world);
+    expect(op?.detail).toEqual({ action: 'revise', actor: { kind: 'keyboard' }, channel: RECORDED.channel, decidedBy: RECORDED });
+  });
+
+  it.each([
+    ['approve', (world: Awaited<ReturnType<typeof project>>, decision: GateDecision) =>
+      approve(world.deps, world.runId, { decidedBy: decision })],
+    ['reject', (world: Awaited<ReturnType<typeof project>>, decision: GateDecision) =>
+      reject(world.deps, world.runId, 'not this', decision)],
+    ['revise', (world: Awaited<ReturnType<typeof project>>, decision: GateDecision) =>
+      revise(world.deps, world.runId, 'split TASK-001', decision)],
+  ] as const)(
+    '%s refuses a decision with no name or no words, and writes nothing',
+    async (_name, act) => {
+      for (const [decision, flag] of [
+        [{ ...LUIS, by: '   ' }, '--decided-by'],
+        [{ ...LUIS, words: '' }, '--words'],
+      ] as const) {
+        const world = await project();
+        const before = await world.store.loadRun(world.runId);
+        const eventsBefore = await world.store.readEvents(world.runId);
+
+        const outcome = await act(world, decision);
+
+        expect(outcome.ok).toBe(false);
+        if (outcome.ok) return;
+        expect(outcome.error.code).toBe('invalid_input');
+        // The refusal names the flag to fix, and asks for the human rather than for a guess.
+        expect(outcome.error.message).toContain(flag);
+        expect(outcome.error.action).toMatch(/human/i);
+        expect(`${outcome.error.message} ${outcome.error.action ?? ''}`).not.toMatch(
+          SECOND_PERSON_OBSERVING,
+        );
+        // Refused before the lease: not even an acquire/release pair is written.
+        expect(await world.store.readEvents(world.runId)).toEqual(eventsBefore);
+        expect(await world.store.loadRun(world.runId)).toEqual(before);
+      }
+    },
+  );
+
+  it('keeps every gate refusal: a decision does not open an unreviewed plan', async () => {
+    const world = await project();
+    await world.fs.remove(`/repo/.agent-flow/runs/${world.runId}/reviews/plan-review.json`);
+
+    const outcome = await approve(world.deps, world.runId, { decidedBy: LUIS });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error.code).toBe('review_missing');
+    expect((await world.store.loadRun(world.runId)).approved).toBe(false);
+  });
+});
+
 describe('operator_action attribution (FR-016)', () => {
   it('approving from a paired device appends operator_action with detail.action === "approve" and detail.actor', async () => {
     const world = await project();
@@ -848,7 +943,7 @@ describe('operator_action attribution (FR-016)', () => {
     };
     const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
 
-    const outcome = await approve(deps, world.runId);
+    const outcome = await approve(deps, world.runId, { decidedBy: DECIDED });
     expect(outcome.ok).toBe(true);
 
     const events = await world.store.readEvents(world.runId);
@@ -857,6 +952,8 @@ describe('operator_action attribution (FR-016)', () => {
     expect(opEvents[0]!.detail).toEqual({
       action: 'approve',
       actor: deviceActor,
+      channel: DECIDED.channel,
+      decidedBy: DECIDED,
     });
   });
 
@@ -873,6 +970,8 @@ describe('operator_action attribution (FR-016)', () => {
     // actionDeps sets actor: { kind: 'keyboard' } and owner: 'cli'
     expect(baseCliDeps.actor).toEqual({ kind: 'keyboard' });
     expect(baseCliDeps.owner).toBe('cli');
+    // …and the channel every operator action records, beside the hub's `deck` and `api`.
+    expect(baseCliDeps.channel).toBe('cli');
 
     const cliDeps = fakeRunActionDeps({
       ...baseCliDeps,
@@ -882,7 +981,7 @@ describe('operator_action attribution (FR-016)', () => {
       processRunner: world.deps.processRunner,
     });
 
-    const outcome = await approve(cliDeps, world.runId);
+    const outcome = await approve(cliDeps, world.runId, { decidedBy: DECIDED });
     expect(outcome.ok).toBe(true);
 
     const events = await world.store.readEvents(world.runId);
@@ -891,6 +990,8 @@ describe('operator_action attribution (FR-016)', () => {
     expect(opEvents[0]!.detail).toEqual({
       action: 'approve',
       actor: { kind: 'keyboard' },
+      channel: 'cli',
+      decidedBy: DECIDED,
     });
   });
 
@@ -899,7 +1000,7 @@ describe('operator_action attribution (FR-016)', () => {
     const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-tab-1', label: 'Tablet' };
     const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
 
-    const outcome = await reject(deps, world.runId, 'not what was asked');
+    const outcome = await reject(deps, world.runId, 'not what was asked', DECIDED);
     expect(outcome.ok).toBe(true);
 
     const events = await world.store.readEvents(world.runId);
@@ -907,6 +1008,8 @@ describe('operator_action attribution (FR-016)', () => {
     expect(opEvent?.detail).toEqual({
       action: 'reject',
       actor: deviceActor,
+      channel: DECIDED.channel,
+      decidedBy: DECIDED,
     });
   });
 
@@ -915,19 +1018,21 @@ describe('operator_action attribution (FR-016)', () => {
     const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-tab-2', label: 'Tablet 2' };
     const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
 
-    await revise(deps, world.runId, 'split TASK-001').catch(() => undefined);
+    await revise(deps, world.runId, 'split TASK-001', DECIDED).catch(() => undefined);
 
     const events = await world.store.readEvents(world.runId);
     const opEvent = events.find((e) => e.type === 'operator_action');
     expect(opEvent?.detail).toEqual({
       action: 'revise',
       actor: deviceActor,
+      channel: DECIDED.channel,
+      decidedBy: DECIDED,
     });
   });
 
   it('start appends operator_action with its own action and caller actor', async () => {
     const world = await project();
-    await approve(world.deps, world.runId);
+    await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     const deviceActor: RunActor = { kind: 'device', deviceId: 'dev-laptop', label: 'Laptop' };
     const deps = fakeRunActionDeps({ ...world.deps, actor: deviceActor });
@@ -1044,6 +1149,19 @@ describe('operator_action attribution (FR-016)', () => {
     });
   });
 
+  it('records the channel the adapter set, and no name, on an action that is not a decision', async () => {
+    const world = await project();
+    const deps = fakeRunActionDeps({ ...world.deps, channel: 'cli' });
+
+    expect((await pause(deps, world.runId)).ok).toBe(true);
+
+    const events = await world.store.readEvents(world.runId);
+    const opEvent = events.find(
+      (e) => e.type === 'operator_action' && (e.detail as Record<string, unknown>)?.['action'] === 'pause',
+    );
+    expect(opEvent?.detail).toEqual({ action: 'pause', actor: { kind: 'keyboard' }, channel: 'cli' });
+  });
+
   it('resume appends operator_action with its own action and caller actor', async () => {
     const world = await project();
     await world.store.updateRun(world.runId, (state) => ({
@@ -1100,7 +1218,7 @@ describe('operator_action attribution (FR-016)', () => {
     // Invalidate planReview so approve fails without force
     await world.fs.remove(`/repo/.agent-flow/runs/${world.runId}/reviews/plan-review.json`);
 
-    const outcome = await approve(world.deps, world.runId, { force: false });
+    const outcome = await approve(world.deps, world.runId, { decidedBy: DECIDED, force: false });
     expect(outcome.ok).toBe(false);
 
     const events = await world.store.readEvents(world.runId);
@@ -1110,7 +1228,7 @@ describe('operator_action attribution (FR-016)', () => {
 
   it('run_approved persisted detail is still exactly {planHash, taskCount, forced, approvedAt} (FR-016)', async () => {
     const world = await project();
-    const outcome = await approve(world.deps, world.runId);
+    const outcome = await approve(world.deps, world.runId, { decidedBy: DECIDED });
     expect(outcome.ok).toBe(true);
 
     const events = await world.store.readEvents(world.runId);
@@ -1142,7 +1260,7 @@ describe('operator_action attribution (FR-016)', () => {
     world.host.spawn(31_337);
     holdLock(world.fs, world.runId, { pid: 31_337, owner: 'server', operation: 'revise' });
 
-    const outcome = await approve(world.deps, world.runId);
+    const outcome = await approve(world.deps, world.runId, { decidedBy: DECIDED });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.error.code).toBe('run_busy');

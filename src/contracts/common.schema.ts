@@ -145,6 +145,14 @@ export const FAILURE_CLASSES = [
   // §3.2 RUNNER — the agent was invoked and the process failed.
   'runner_execution_failed',
   'runner_timeout',
+  /**
+   * The agent reached the turn ceiling it was given (`maxTurns`) before it finished.
+   *
+   * The turn-count sibling of `runner_timeout`: a budget the operator set, spent. Refines
+   * `execution_failed` rather than adding a runner code, because that vocabulary is closed
+   * on purpose, and it is told apart by the structured `limitReached` the adapter reports.
+   */
+  'runner_max_turns_exceeded',
   'runner_quota_exhausted',
   'runner_permission_required',
   'malformed_runner_output',

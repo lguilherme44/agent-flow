@@ -384,7 +384,8 @@ describe('argv construction', () => {
 
     expect(proc.lastCall?.command).toBe('claude');
     expect(proc.lastCall?.args).toContain('-p');
-    expect(valueAfter(proc.lastCall?.args ?? [], '--output-format')).toBe('json');
+    // stream-json since dogfood 08/10: the Deck sees the agent work instead of a frozen screen.
+    expect(valueAfter(proc.lastCall?.args ?? [], '--output-format')).toBe('stream-json');
   });
 
   it('passes the prompt on stdin, never as a positional argument', async () => {
@@ -762,3 +763,190 @@ describe('the model answer is not read as a diagnosis', () => {
     if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
   });
 })
+
+describe('turn ceiling (maxTurns)', () => {
+  it('declares that it enforces one', () => {
+    expect(makeRunner().runner.capabilities().supportsMaxTurns).toBe(true);
+  });
+
+  it('passes --max-turns when the input carries a ceiling', async () => {
+    const { runner, proc } = makeRunner(
+      new FakeProcessRunner().always({ stdout: fixture('success-json.json') }),
+    );
+    await runner.run({ ...baseInput, maxTurns: 40 });
+    expect(valueAfter(proc.lastCall?.args ?? [], '--max-turns')).toBe('40');
+  });
+
+  it('omits the flag when there is no ceiling, exactly as before', async () => {
+    const { runner, proc } = makeRunner(
+      new FakeProcessRunner().always({ stdout: fixture('success-json.json') }),
+    );
+    await runner.run(baseInput);
+    expect(proc.lastCall?.args).not.toContain('--max-turns');
+  });
+
+  it('reports the measured error_max_turns envelope as a reached limit, not a parse error', async () => {
+    const { runner } = makeRunner(
+      new FakeProcessRunner().always({ exitCode: 1, stdout: fixture('error-max-turns.json') }),
+    );
+    const result = await runner.run({ ...baseInput, maxTurns: 1 });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errorCode).toBe('execution_failed');
+    expect(result.limitReached).toBe('max_turns');
+    expect(result.raw.split('\n')[0]).toBe(
+      'max_turns_exceeded: the agent reached its ceiling of 1 turns (maxTurns) before finishing.',
+    );
+    // Paid for, so still accounted.
+    expect(result.usage?.turns).toBe(2);
+  });
+
+  it('does not report a reached limit for any other failure', async () => {
+    const { runner } = makeRunner(
+      new FakeProcessRunner().always({ exitCode: 1, stdout: fixture('error-invalid-model.txt') }),
+    );
+    const result = await runner.run({ ...baseInput, maxTurns: 1 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.limitReached).toBeUndefined();
+  });
+});
+
+/**
+ * Dogfood 08/10 — "tela congelada": during implementation the Deck showed nothing, because
+ * `--output-format json` hands back one envelope when the process exits. `stream-json` emits
+ * every message as it happens; the shapes below are the ones claude 2.1 printed when probed
+ * (init, assistant with tool_use, assistant text, result with structured_output).
+ */
+describe('the stream, read as it happens (dogfood 08/10)', () => {
+  const ANSWER = { verdict: 'PASS', summary: 'ok', findings: [] };
+  const lines = [
+    { type: 'system', subtype: 'init', session_id: 's', tools: [] },
+    { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hmm' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/a.ts', old_string: 'x' } }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'npm test -- a' } }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Changed a.ts; the tests pass.' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'StructuredOutput', input: ANSWER }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+    {
+      type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(ANSWER), structured_output: ANSWER,
+      num_turns: 3, total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 20 },
+    },
+  ].map((line) => JSON.stringify(line));
+  const stream = `${lines.join('\n')}\n`;
+
+  it('asks the CLI for the stream', async () => {
+    const { runner, proc } = makeRunner(new FakeProcessRunner().always({ exitCode: 0, stdout: stream }));
+    await runner.run(baseInput);
+    const args = proc.calls[0]?.args ?? [];
+    expect(valueAfter(args, '--output-format')).toBe('stream-json');
+    expect(args).toContain('--verbose');
+  });
+
+  it('reports each tool call and each message as it arrives, and not its own answer tool', async () => {
+    const seen: unknown[] = [];
+    const proc = new FakeProcessRunner().always((options) => {
+      // Two chunks, split mid-line, as a pipe delivers them.
+      options.onStdout?.(stream.slice(0, 200));
+      options.onStdout?.(stream.slice(200));
+      return { exitCode: 0, stdout: stream };
+    });
+    const { runner } = makeRunner(proc);
+
+    const result = await runner.run({ ...baseInput, onActivity: (activity) => seen.push(activity) });
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([
+      { kind: 'tool', tool: 'Edit', target: 'src/a.ts' },
+      { kind: 'tool', tool: 'Bash', target: 'npm test -- a' },
+      { kind: 'text', text: 'Changed a.ts; the tests pass.' },
+    ]);
+  });
+
+  it('does not report a structured stage’s answer written as text (first real run, 13/10)', async () => {
+    const seen: unknown[] = [];
+    const answerAsText = [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/a.ts' } }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: '{"feature":"duration","tasks":[]}' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: '```json\n{"feature":"duration"}\n```' }] } },
+      lines.at(-1) === undefined ? {} : JSON.parse(lines.at(-1) as string),
+    ].map((line) => JSON.stringify(line)).join('\n');
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(`${answerAsText}\n`);
+      return { exitCode: 0, stdout: `${answerAsText}\n` };
+    });
+    const { runner } = makeRunner(proc);
+
+    await runner.run({ ...baseInput, outputSchema: { type: 'object' }, onActivity: (activity) => seen.push(activity) });
+
+    expect(seen).toEqual([{ kind: 'tool', tool: 'Read', target: 'src/a.ts' }]);
+  });
+
+  it('reads the answer, the usage and the turns from the result line', async () => {
+    const { runner } = makeRunner(new FakeProcessRunner().always({ exitCode: 0, stdout: stream }));
+
+    const result = await runner.run({ ...baseInput, outputSchema: { type: 'object' } });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.json).toEqual(ANSWER);
+    expect(result.usage?.outputTokens).toBe(20);
+  });
+
+  it('keeps the result line when the buffered output was truncated before it', async () => {
+    // The process buffer keeps the head and drops the rest past 8 MB; a long task's stream
+    // passes that, and the result line comes last. The stream reader holds it regardless.
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(stream);
+      return { exitCode: 0, stdout: `${stream.slice(0, 120)}\n… [truncated]`, truncated: true };
+    });
+    const { runner } = makeRunner(proc);
+
+    const result = await runner.run({ ...baseInput, outputSchema: { type: 'object' } });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.json).toEqual(ANSWER);
+  });
+});
+
+/**
+ * Adversarial review of the stream change: a CLI killed mid-task prints no `result` line, and
+ * the stream it did print is the agent's transcript — the content of every file it wrote or
+ * read. Under `--output-format json` a killed CLI printed nothing; that must stay the reach.
+ */
+describe('a stream that ends without its result line', () => {
+  const transcript = [
+    { type: 'system', subtype: 'init', session_id: 's' },
+    { type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: '.env', content: 'SECRET-FILE-CONTENT' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'READ-FILE-CONTENT' }] } },
+  ].map((line) => JSON.stringify(line)).join('\n');
+
+  it('keeps no message content in what a failure carries to logs and packets', async () => {
+    const { runner } = makeRunner(
+      new FakeProcessRunner().always({ exitCode: null, timedOut: true, stdout: `${transcript}\n` }),
+    );
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.raw).not.toContain('SECRET-FILE-CONTENT');
+    expect(result.raw).not.toContain('READ-FILE-CONTENT');
+    // What is not content stays, because it is diagnosis.
+    expect(result.raw).toContain('rate_limit_event');
+  });
+
+  it('reports what the stream showed once, not again when the agent has already stopped', async () => {
+    const seen: unknown[] = [];
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(`${transcript}\n`);
+      return { exitCode: null, timedOut: true, stdout: `${transcript}\n` };
+    });
+    const { runner } = makeRunner(proc);
+
+    await runner.run({ ...baseInput, onActivity: (activity) => seen.push(activity) });
+
+    expect(seen).toEqual([{ kind: 'tool', tool: 'Write', target: '.env' }]);
+  });
+});

@@ -66,6 +66,16 @@ export const ANSWER_WORDING: InstructionWording = {
 };
 
 /**
+ * `review --e2e-observed` reads what a person saw the change do on a target e2e could not
+ * reach. Their own words are the evidence, so they arrive the way an answer does: an
+ * argument, or `--e2e-observed-file` for anything a shell would mangle.
+ */
+export const OBSERVATION_WORDING: InstructionWording = {
+  noun: 'observation',
+  empty: 'The observation is empty; there is nothing to record as having been seen.',
+};
+
+/**
  * Exactly one source, or a refusal.
  *
  * Two sources refuse rather than resolving by precedence. Precedence would discard one of

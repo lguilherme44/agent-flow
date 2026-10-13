@@ -18,7 +18,7 @@ test.describe('execution', () => {
     const problems = recordConsole(page);
 
     await openDashboard(page, world);
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const start = page.getByRole('button', { name: 'Start run' });
     await expect(start).toBeVisible();
@@ -61,7 +61,7 @@ test.describe('retry', () => {
     // The failure is produced by the product: approve, run, and have the
     // implementation agent report FAILED. Nothing is written into `state.json` by
     // hand, so the state the browser retries from is one the scheduler produced.
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     const failed = await world.cli('booking-api', ['run'], { AF_FAKE_IMPL: 'failed' });
     expect(failed.code, 'the run was supposed to stop').not.toBe(0);
 

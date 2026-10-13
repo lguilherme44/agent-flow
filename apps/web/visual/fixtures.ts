@@ -412,6 +412,9 @@ const bucket = (count: number, durationMs: number, extra = {}) => ({
   failures: 0,
   fallbacks: 0,
   retries: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  usageReporting: 0,
   ...extra,
 });
 
@@ -436,6 +439,8 @@ export const TELEMETRY: TelemetryResponse = {
     },
     byRole: {},
     byStage: {},
+    byRoleModel: {},
+    byEffort: {},
     // No entry here reported turns or denials, so both are the "nobody said" shape.
     conduct: {
       turns: { total: 0, reporting: 0, of: 13 },

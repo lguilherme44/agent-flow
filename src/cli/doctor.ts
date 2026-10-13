@@ -61,7 +61,7 @@ export async function runDoctorCommand(
 
   try {
     // With the report, because `doctor` is where a refused project loosening is said (FR-027).
-    const { config, ignoredLoosenings } = await loadConfigWithReport({
+    const { config, ignoredLoosenings, unknownKeys } = await loadConfigWithReport({
       fs,
       globalConfigPath: globals.globalConfigPath,
       projectDir: globals.cwd,
@@ -79,6 +79,7 @@ export async function runDoctorCommand(
       host: new NodeHost(),
       config,
       ignoredLoosenings,
+      unknownKeys,
       say,
       projectDir: globals.cwd,
       promptsDir: resolvePromptsDir(),
@@ -373,6 +374,25 @@ export function renderCapabilityReport(
       lines.push(`    ${DASH} ${say.doctor.mayRunAnyCommand}`);
     } else if (grants !== undefined && grants.prefixes.length > 0) {
       lines.push(`    ${DASH} ${say.doctor.mayRunCommands(grants.prefixes.join(', '))}`);
+    }
+
+    // Each turn ceiling the role's work runs under — its own, a stage override's, the
+    // fallback's. A warning when the serving runner does not enforce it: the number is in the
+    // config, and on that runner it bounds nothing.
+    for (const ceiling of observation.turnCeilings ?? []) {
+      const scope =
+        ceiling.scope === 'stage'
+          ? say.doctor.maxTurnsScopeStage(ceiling.stage ?? '?')
+          : ceiling.scope === 'fallback'
+            ? ceiling.stage === undefined
+              ? say.doctor.maxTurnsScopeFallback
+              : `${say.doctor.maxTurnsScopeFallback}, ${say.doctor.maxTurnsScopeStage(ceiling.stage)}`
+            : undefined;
+      lines.push(
+        ceiling.enforced
+          ? `    ${DASH} ${say.doctor.maxTurnsCeiling(ceiling.maxTurns, scope)}`
+          : `    ${WARN} ${say.doctor.maxTurnsNotEnforced(ceiling.maxTurns, ceiling.runner, scope)}`,
+      );
     }
   }
 

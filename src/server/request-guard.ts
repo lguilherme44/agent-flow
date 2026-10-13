@@ -260,6 +260,28 @@ export function checkWrite(
 }
 
 /**
+ * Which channel an admitted write came through, for the record of a plan-gate decision.
+ *
+ * The two answers are {@link checkWrite}'s two ways in. A write carrying this server as its
+ * `Origin` is the Deck: a browser adds that header by itself and a page cannot set it. Any
+ * other admitted write got in on the client header alone — a script, a terminal, an AI —
+ * and is `api`, **whatever that header's value says**: the Deck sends `deck` there too, so
+ * the value is a label anyone can type, not evidence.
+ *
+ * Read from headers the guard already judged, never from the body. Not authentication: a
+ * non-browser client can forge an `Origin`, and is then read as the Deck. What it buys is
+ * that an honest API client — an AI following its guide — is recorded as one.
+ */
+export function decisionChannelOf(
+  headers: { readonly origin?: string; readonly client?: string },
+  host: string | undefined,
+): 'deck' | 'api' {
+  const origin = headers.origin?.trim();
+  if (origin === undefined || origin === '' || origin.toLowerCase() === 'null') return 'api';
+  return matchesHost(origin, host) ? 'deck' : 'api';
+}
+
+/**
  * Whether an `Origin` names the same authority as the request's `Host`.
  *
  * Both schemes are accepted because the authority is what carries the security here, and

@@ -90,7 +90,7 @@ test.describe('MVP 2, end to end', () => {
     expect(before.status).toBe('');
 
     await openDashboard(page, world);
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     // Requested 4, and the graph offers 3 — so the *effective* width is what the
     // wave has, and the page says the run was not reduced. On Overview as of M8.5.
@@ -252,7 +252,7 @@ test.describe('MVP 2, end to end', () => {
     });
 
     const before = await world.workingTree('booking-api');
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const coordinator: ChildProcess = world.spawnCli('booking-api', ['run']);
 
@@ -353,7 +353,7 @@ test.describe('MVP 2, end to end', () => {
       testCommand: 'node -e "process.exit(process.env.AF_GATE===undefined?1:0)"',
     });
 
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     // The first `run` spends the whole unattended budget, not one attempt. `recovery`
     // ships enabled and `retry.maxAttempts` is 2, so validation refuses attempt 1, the
@@ -439,7 +439,7 @@ test.describe('MVP 2, end to end', () => {
       branch: 'my-work',
     });
 
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     const ran = await world.cli('booking-api', ['run']);
     expect(ran.code, `the run failed: ${ran.stderr}`).toBe(0);
 

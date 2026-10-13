@@ -140,6 +140,15 @@ export interface RunProjection {
    * review it was already doing. Absent when false.
    */
   readonly reviewInProgress?: true;
+  /**
+   * What the last `review` concluded, while it still describes the work (no task finished
+   * after it) and the run is at `final_acceptance`. `missing` names the unmet Definition of
+   * Done conditions, in the record's English. Absent before any review concluded.
+   *
+   * Run 75716 sat at "APROVADO 8/8" for 23 hours after a NOT DONE review: the final reviewer
+   * had passed it and nothing on the run said the Definition of Done had not.
+   */
+  readonly lastReview?: { readonly done: boolean; readonly missing: readonly string[] };
   /** Present exactly when the status is `auto_recovery_exhausted` (C-22). */
   readonly escalation?: RuntimeEscalation;
 }

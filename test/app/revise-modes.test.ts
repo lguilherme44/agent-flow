@@ -12,6 +12,7 @@ import { revise } from '../../src/app/run-actions.js';
 import { PlanSchema, type RunEvent, type WorkflowClass } from '../../src/contracts/index.js';
 import { en, ptBR } from '../../src/core/phrases/index.js';
 import type { ProcessSpawnOptions } from '../../src/ports/index.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * `revise --decision` and `revise --escalate`, and the amendment plain `revise` now leaves
@@ -172,7 +173,7 @@ describe('plain revise records a revision amendment (FR-009)', () => {
       specified: true,
     });
 
-    const outcome = await revise(deps, runId, '  split TASK-001  ');
+    const outcome = await revise(deps, runId, '  split TASK-001  ', DECIDED);
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     const state = await store.loadRun(runId);
@@ -204,7 +205,7 @@ describe('plain revise records a revision amendment (FR-009)', () => {
     // revision is not on the record as a decision somebody made.
     const { store, deps, runId } = await approvedRun({ workflow: 'standard', revisionCount: 2 });
 
-    const outcome = await revise(deps, runId, 'split TASK-001');
+    const outcome = await revise(deps, runId, 'split TASK-001', DECIDED);
 
     expect(!outcome.ok && outcome.error.code).toBe('ceremony_budget_exceeded');
     expect((await store.loadRun(runId)).amendments).toBeUndefined();
@@ -222,7 +223,7 @@ describe('revise --decision (FR-013)', () => {
       specified: true,
     });
 
-    const outcome = await revise(deps, runId, 'use the v2 endpoint', 'planning', 'decision');
+    const outcome = await revise(deps, runId, 'use the v2 endpoint', DECIDED, 'planning', 'decision');
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     // The pipeline ran and wrote a plan: the planner was asked, with the decision in hand.
@@ -266,7 +267,7 @@ describe('revise --decision (FR-013)', () => {
       revisionCount: 0,
     });
 
-    const outcome = await revise(deps, runId, 'keep it to one file', 'planning', 'decision');
+    const outcome = await revise(deps, runId, 'keep it to one file', DECIDED, 'planning', 'decision');
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     const state = await store.loadRun(runId);
@@ -287,7 +288,7 @@ describe('revise --escalate (FR-014)', () => {
       revisionCount: 0,
     });
 
-    const outcome = await revise(deps, runId, 'this touches two modules', 'planning', 'escalation');
+    const outcome = await revise(deps, runId, 'this touches two modules', DECIDED, 'planning', 'escalation');
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     const state = await store.loadRun(runId);
@@ -334,7 +335,7 @@ describe('revise --escalate (FR-014)', () => {
       revisionCount: 1,
     });
 
-    const outcome = await revise(deps, runId, 'this needs a contract', 'planning', 'escalation');
+    const outcome = await revise(deps, runId, 'this needs a contract', DECIDED, 'planning', 'escalation');
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     const state = await store.loadRun(runId);
@@ -365,7 +366,7 @@ describe('revise --escalate (FR-014)', () => {
     });
     expect((await store.loadRun(runId)).workflow).toBeUndefined();
 
-    const outcome = await revise(deps, runId, 'this needs more scrutiny', 'planning', 'escalation');
+    const outcome = await revise(deps, runId, 'this needs more scrutiny', DECIDED, 'planning', 'escalation');
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     const state = await store.loadRun(runId);
@@ -407,7 +408,7 @@ describe('revise --escalate refuses with nothing written (FR-015)', () => {
       const stateBefore = await fs.readFile(statePath);
       const eventsBefore = await store.readEvents(runId);
 
-      const outcome = await revise(deps, runId, 'move up', 'planning', 'escalation');
+      const outcome = await revise(deps, runId, 'move up', DECIDED, 'planning', 'escalation');
 
       expect(outcome.ok).toBe(false);
       expect(!outcome.ok && outcome.error.code).toBe(code);
@@ -431,7 +432,7 @@ describe('revise --escalate refuses with nothing written (FR-015)', () => {
       implemented: true,
     });
 
-    const outcome = await revise(deps, runId, 'move up', 'planning', 'escalation');
+    const outcome = await revise(deps, runId, 'move up', DECIDED, 'planning', 'escalation');
 
     expect(!outcome.ok && outcome.error.message).toContain('TASK-001');
     expect(!outcome.ok && outcome.error.action).toContain('`agent-flow revise`');
@@ -442,7 +443,7 @@ describe('revise --escalate refuses with nothing written (FR-015)', () => {
     // through, so the refusal is about the task and not about the harness.
     const { store, deps, runId } = await approvedRun({ workflow: 'simple', revisionCount: 0 });
 
-    const outcome = await revise(deps, runId, 'move up', 'planning', 'escalation');
+    const outcome = await revise(deps, runId, 'move up', DECIDED, 'planning', 'escalation');
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     expect((await store.loadRun(runId)).workflow).toBe('standard');
@@ -467,7 +468,7 @@ describe('the origin a re-plan records (FR-014)', () => {
     it(`${name} records ${origin} with ${requested}`, async () => {
       const { store, deps, runId } = await approvedRun({ workflow, revisionCount: 0, specified: true });
 
-      const outcome = await revise(deps, runId, 'keep it to one module', 'planning', mode);
+      const outcome = await revise(deps, runId, 'keep it to one module', DECIDED, 'planning', mode);
 
       expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
       const detail = only(await store.readEvents(runId), 'workflow_classified');
@@ -491,7 +492,7 @@ describe('the ceiling refusal names the ways past it (FR-019)', () => {
   it('is the message plain revise refuses with at the ceiling', async () => {
     const { deps, runId } = await approvedRun({ workflow: 'standard', revisionCount: 2 });
 
-    const outcome = await revise(deps, runId, 'split TASK-001');
+    const outcome = await revise(deps, runId, 'split TASK-001', DECIDED);
 
     expect(!outcome.ok && outcome.error.message).toContain('agent-flow revise --decision');
   });

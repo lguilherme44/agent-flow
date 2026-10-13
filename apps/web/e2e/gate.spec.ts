@@ -56,7 +56,7 @@ test.describe('approval', () => {
 
   test('does not offer the gate again once it is open', async ({ page, makeWorld }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     await openDashboard(page, world);
 

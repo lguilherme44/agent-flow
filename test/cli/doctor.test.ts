@@ -135,7 +135,7 @@ describe('runDoctorCommand CLI surface (FR-023)', () => {
     const effectiveConfig: EffectiveConfig = {
       global: GlobalConfigSchema.parse(parseYaml(DEFAULT_GLOBAL_CONFIG_YAML)),
     };
-    vi.spyOn(configLoader, 'loadConfigWithReport').mockResolvedValue({ config: effectiveConfig, ignoredLoosenings: [] });
+    vi.spyOn(configLoader, 'loadConfigWithReport').mockResolvedValue({ config: effectiveConfig, ignoredLoosenings: [], unknownKeys: [] });
 
     const globals: GlobalOptions = {
       cwd: '/test',

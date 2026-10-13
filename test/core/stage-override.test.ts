@@ -72,3 +72,16 @@ describe('a stage may be routed away from the runner its role uses', () => {
     expect(roleConfigForStage(roles, 'architect', 'discovery').runner).toBe('claude');
   });
 });
+
+describe('a stage may set its own turn ceiling', () => {
+  it('overrides the role maxTurns for that stage only', () => {
+    const roles = config({ maxTurns: 60, stages: { discovery: { maxTurns: 20 } } });
+    expect(roleConfigForStage(roles, 'architect', 'discovery').maxTurns).toBe(20);
+    expect(roleConfigForStage(roles, 'architect', 'architecture-impact').maxTurns).toBe(60);
+  });
+
+  it('keeps the role ceiling when the override names only a runner', () => {
+    const roles = config({ maxTurns: 60, stages: { 'architecture-impact': { runner: 'local' } } });
+    expect(roleConfigForStage(roles, 'architect', 'architecture-impact').maxTurns).toBe(60);
+  });
+});

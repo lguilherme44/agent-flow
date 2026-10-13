@@ -122,6 +122,14 @@ export class FallbackRunner implements AgentRunner {
       ...input,
       reasoning: secondaryConfig.reasoning,
       timeoutSeconds: secondaryConfig.timeoutSeconds,
+      // The lower of its own ceiling and the one this invocation carried. `input.maxTurns` is
+      // the primary's ceiling for *this stage*, and a substitution may never spend more than
+      // the route it replaced: a fallback's role-level number must not lift a stage's lower
+      // one. With no ceiling of its own, the primary's carries over unchanged.
+      ...(() => {
+        const ceiling = lowerCeiling(secondaryConfig.maxTurns, input.maxTurns);
+        return ceiling === undefined ? {} : { maxTurns: ceiling };
+      })(),
       // Deleted rather than left in place: an absent model means "use whatever
       // this CLI is configured for", which is right, while the primary's model
       // name would be wrong.
@@ -148,4 +156,11 @@ export class FallbackRunner implements AgentRunner {
       },
     };
   }
+}
+
+/** The lower of two optional ceilings; absent only when both are. */
+function lowerCeiling(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return Math.min(a, b);
 }

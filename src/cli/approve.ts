@@ -9,6 +9,8 @@ import { StateStore } from '../app/state-store.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { nodeAdapters } from './adapters.js';
+import { nodeDecisionIO, readDecidedBy, type DecidedByFlags } from './decided-by.js';
+import type { InstructionIO } from './instruction-source.js';
 import type { GlobalOptions } from './index.js';
 
 /**
@@ -23,12 +25,21 @@ import type { GlobalOptions } from './index.js';
  * exit code.
  */
 export async function runApproveCommand(
-  options: { force?: boolean; attachFindings?: boolean },
+  options: { force?: boolean; attachFindings?: boolean } & DecidedByFlags,
   globals: GlobalOptions,
-  // The seam a test replaces. The default is what every real invocation uses.
+  // The seams a test replaces. The defaults are what every real invocation uses.
   depsFor: (globals: GlobalOptions) => RunActionDeps = actionDeps,
+  io: InstructionIO = nodeDecisionIO(),
 ): Promise<ExitCodeValue> {
   try {
+    // Before anything about the run is read: a gate move with no named human is refused
+    // whatever state the run is in.
+    const decided = await readDecidedBy(options, io);
+    if (!decided.ok) {
+      process.stderr.write(`${decided.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
     const deps = depsFor(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
@@ -42,6 +53,7 @@ export async function runApproveCommand(
     const outcome = await approve(deps, runId, {
       force: options.force === true,
       ...(options.attachFindings === true ? { attachFindings: true } : {}),
+      decidedBy: decided.decision,
     });
 
     // Printed either way, and before the decision: someone approving a degraded
@@ -86,20 +98,34 @@ export async function runApproveCommand(
   }
 }
 
+/** The seams a test replaces in `reject`. The defaults are what every real invocation uses. */
+export interface RejectCommandDeps {
+  readonly actionDeps: (globals: GlobalOptions) => RunActionDeps;
+  readonly io: InstructionIO;
+}
+
 /** `agent-flow reject` — closes a run without implementing it. */
 export async function runRejectCommand(
   reason: string | undefined,
+  options: DecidedByFlags,
   globals: GlobalOptions,
+  seams: RejectCommandDeps = { actionDeps, io: nodeDecisionIO() },
 ): Promise<ExitCodeValue> {
   try {
-    const deps = actionDeps(globals);
+    const decided = await readDecidedBy(options, seams.io);
+    if (!decided.ok) {
+      process.stderr.write(`${decided.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run to reject.\n');
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const outcome = await reject(deps, runId, reason);
+    const outcome = await reject(deps, runId, reason, decided.decision);
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
       return exitCodeFor(outcome.error);
@@ -174,6 +200,8 @@ export function actionDeps(globals: GlobalOptions): RunActionDeps {
     // refused by one can see whether the other is what has it.
     owner: 'cli',
     actor: { kind: 'keyboard' },
+    // Recorded on every operator action, beside the hub's `deck` and `api`.
+    channel: 'cli',
   };
 }
 

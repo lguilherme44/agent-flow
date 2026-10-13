@@ -2,6 +2,7 @@ import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import type { AgentRunInput, AgentRunUsage, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
 import { BaseRunner, type BaseRunnerOptions, type ErrorRule, type RunnerInvocation } from './base-runner.js';
+import { activityTarget, activityText, jsonLine, lineSplitter } from './stream-lines.js';
 
 const EFFORT: Readonly<Record<'low' | 'medium' | 'high', string>> = {
   low: 'low',
@@ -190,6 +191,8 @@ export class AgyRunner extends BaseRunner {
       supportsWorkingDirectory: true,
       // Structured output strategy is prompted because native json-schema enforcement in headless CLI mode requires manual permission configuration.
       structuredOutputStrategy: 'prompted',
+      // No turn-ceiling flag in this CLI's `--help` (only `--print-timeout`): not enforced.
+      supportsMaxTurns: false,
       // AD-32, and the measurement that motivated the whole capability. This runner was
       // non-interactive and still failed: `--mode accept-edits` grants file edits
       // without a prompt, and a command the local policy had not authorised was
@@ -351,8 +354,82 @@ export class AgyRunner extends BaseRunner {
     return Object.keys(measured).length === 0 ? undefined : measured;
   }
 
+  /**
+   * The stream, read as it arrives (dogfood 08/10: "tela congelada"). Measured on `agy 1.3.3`.
+   *
+   * `stream-json` prints one `step_update` per step — a tool call with `tool_name` and its
+   * `parameters`, a message as `text_delta` pieces — and ends with
+   * `{"event":"result","result":{…}}`, whose `result` is the very envelope `--output-format json`
+   * printed: `status`, `response`, `usage`, `num_turns`, and `structured_output` under
+   * `--json-schema`, all measured; an invalid `--model` came back as `status: "ERROR"` with its
+   * `error`, exactly as under `json`. So `finish` hands every parser below that object, and
+   * nothing after this changes. A 401 or 429 was not provoked: `status_code` is expected in the
+   * same object because it is the same object, not because it was seen.
+   */
+  protected override streamReader(input: AgentRunInput) {
+    let envelope: string | undefined;
+    const reported = new Set<number>();
+    const texts = new Map<number, string>();
+
+    const read = (line: string, report: boolean): void => {
+      const event = jsonLine(line);
+      if (event === undefined) return;
+      if (event['event'] === 'result') {
+        const result = event['result'];
+        if (typeof result === 'object' && result !== null) envelope = JSON.stringify(result);
+        return;
+      }
+      if (!report || event['event'] !== 'step_update' || input.onActivity === undefined) return;
+      const step = event['step_update'] as AgyStep | undefined;
+      if (typeof step?.step_index !== 'number') return;
+      const index = step.step_index;
+
+      if (step.step_type === 'tool') {
+        // Reported when it starts (`ACTIVE`), so the Deck shows it while it runs; a step
+        // first seen finished is reported then. Once either way.
+        if (reported.has(index)) return;
+        const tool = step.tool_name ?? step.tool_info?.name;
+        if (typeof tool !== 'string' || tool === '') return;
+        reported.add(index);
+        const target = targetOf(step.tool_info?.parameters);
+        input.onActivity({ kind: 'tool', tool, ...(target === undefined ? {} : { target: activityTarget(target) }) });
+        return;
+      }
+
+      if (step.step_type === 'agent_response') {
+        // A message arrives in pieces; it is reported whole, when its step is done.
+        const text = (texts.get(index) ?? '') + (typeof step.text_delta === 'string' ? step.text_delta : '');
+        if (step.state !== 'DONE') {
+          texts.set(index, text);
+          return;
+        }
+        texts.delete(index);
+        // The answer to a structured stage is the answer, not something the agent did.
+        if (text.trim() === '' || (input.outputSchema !== undefined && text.trim().startsWith('{'))) return;
+        input.onActivity({ kind: 'text', text: activityText(text) });
+      }
+    };
+    const lines = lineSplitter((line) => read(line, true));
+
+    return {
+      onStdout: lines.push,
+      finish: (result: ProcessResult): ProcessResult => {
+        lines.flush();
+        // A stream nobody fed through `onStdout` (a recorded fixture) still has its result
+        // line — searched for that alone, so nothing already reported arrives twice.
+        if (envelope === undefined) for (const line of result.stdout.split(/\r?\n/)) read(line, false);
+        if (envelope !== undefined) return { ...result, stdout: envelope, truncated: false };
+        // No result line: the CLI was killed mid-task, and its steps are the agent's work —
+        // the commands it ran, the files it read. None of the stream stays: under `json` such a
+        // run printed nothing, so an exit 0 reads as the empty answer it did before rather than
+        // as the `init` event, and a crash is diagnosed from stderr (adversarial review).
+        return { ...result, stdout: withoutEvents(result.stdout) };
+      },
+    };
+  }
+
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
-    const args = ['--output-format', 'json'];
+    const args = ['--output-format', 'stream-json'];
 
     if (this.dangerouslySkipPermissions) {
       args.push('--dangerously-skip-permissions');
@@ -481,6 +558,49 @@ export class AgyRunner extends BaseRunner {
       throw new Error('a structured response was requested but the output is not valid JSON');
     }
   }
+}
+
+/** One `step_update`, as `agy 1.3.3` printed it. */
+interface AgyStep {
+  step_index?: unknown;
+  state?: unknown;
+  step_type?: unknown;
+  tool_name?: unknown;
+  tool_info?: { name?: unknown; parameters?: unknown };
+  text_delta?: unknown;
+}
+
+/**
+ * What a tool call acted on: the first non-empty string parameter whose name says it is a path,
+ * a file, a command, a URL or a query. Only `view_file`'s `AbsolutePath` was measured, so the
+ * names are matched by kind rather than listed — a tool with none of them is reported bare.
+ */
+function targetOf(parameters: unknown): string | undefined {
+  if (typeof parameters !== 'object' || parameters === null) return undefined;
+  for (const [key, value] of Object.entries(parameters)) {
+    if (typeof value === 'string' && value.trim() !== '' && /path|file|command|url|query/i.test(key)) return value;
+  }
+  return undefined;
+}
+
+/** A stream with its event lines removed, and any JSON line nobody can read: it may be content. */
+function withoutEvents(stdout: string): string {
+  // One JSON document (a `json` envelope, pretty or not) is not a stream, and cutting it line
+  // by line would break it.
+  try {
+    JSON.parse(stdout.trim());
+    return stdout;
+  } catch {
+    // a stream, or text
+  }
+  return stdout
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (!line.trim().startsWith('{')) return true;
+      const event = jsonLine(line);
+      return event !== undefined && event['event'] === undefined;
+    })
+    .join('\n');
 }
 
 function diagnosisOf(result: ProcessResult, parsed: unknown): string {

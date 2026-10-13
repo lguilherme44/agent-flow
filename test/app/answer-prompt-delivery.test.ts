@@ -22,6 +22,7 @@ import {
   TaskSchema,
 } from '../../src/contracts/index.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * FR-004 — an answer reaches the attempt that needs it.
@@ -168,7 +169,7 @@ async function blockedRun() {
     owner: 'cli',
   });
 
-  const approved = await approve(deps, runId);
+  const approved = await approve(deps, runId, { decidedBy: DECIDED });
   if (!approved.ok) throw new Error(`approve refused: ${approved.error.code}`);
   await block(store, runId);
 

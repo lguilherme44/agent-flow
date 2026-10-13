@@ -716,15 +716,17 @@ describe('session guard server behaviors (TASK-003)', () => {
     const { deviceId, label } = JSON.parse(pairRes.body);
     const cookie = (pairRes.headers['set-cookie'] as string).split(';')[0]!;
 
-    // Approve run via HTTP with device session cookie
+    // Approve run via HTTP with device session cookie, from the Deck in the phone's browser:
+    // the body is the Deck's (`{ force }`, no decidedBy), and the Origin is this server.
     const approveRes = await server.app.inject({
       method: 'POST',
       url: `/api/v1/runs/${runId}/approve`,
       remoteAddress: '192.168.1.5',
       headers: {
         host: '192.168.1.9:4782',
+        origin: 'http://192.168.1.9:4782',
         cookie,
-        'x-agent-flow-client': '1',
+        'x-agent-flow-client': 'deck',
         'content-type': 'application/json',
       },
       payload: { force: true },
@@ -742,6 +744,10 @@ describe('session guard server behaviors (TASK-003)', () => {
         deviceId,
         label,
       },
+      // The Deck sends no name: the server fills it from the paired device's label, and the
+      // channel says it was a browser.
+      channel: 'deck',
+      decidedBy: { by: 'Paired Phone', words: 'approved in the Deck', channel: 'deck' },
     });
   });
 
@@ -765,7 +771,12 @@ describe('session guard server behaviors (TASK-003)', () => {
     const url = `/api/v1/runs/${runId}/tasks/TASK-001/answer`;
     // A body that claims to be the keyboard. Were it believed, a remote device could put its
     // answer in the name of whoever sits at the machine.
-    const payload = { text: 'use the v2 endpoint', actor: { kind: 'keyboard' } };
+    // A non-browser client, so it names the human, as every API answer must.
+    const payload = {
+      text: 'use the v2 endpoint',
+      actor: { kind: 'keyboard' },
+      decidedBy: { by: 'Luis', words: 'Use the v2 endpoint.' },
+    };
 
     // Unpaired: refused by the session stage before the handler, so nothing is recorded.
     const unpaired = await server.app.inject({
@@ -859,5 +870,94 @@ describe('the pairing refusal says which of the four it was (D22)', () => {
     const { pairing } = en;
     const sentences = [pairing.codeExpired, pairing.codeUsed, pairing.codeBurned, pairing.codeUnknown];
     expect(new Set(sentences).size).toBe(4);
+  });
+});
+
+/**
+ * Dogfood 08–09/10: a pairing code was single-use and printed only on the hub's console at
+ * start, so pairing a second device under autostart meant restarting the hub — which unpaired
+ * every device. And a wrong entry (a run id typed as the code) answered only "invalid pairing
+ * request", with no word on what was expected.
+ */
+describe('a new pairing code without a restart (dogfood 08–09/10)', () => {
+  const REMOTE = { host: '192.168.1.9:4782', 'content-type': 'application/json', 'x-agent-flow-client': '1' };
+  const LOCAL = { host: '127.0.0.1:4782', 'content-type': 'application/json', 'x-agent-flow-client': '1' };
+
+  it('issues a fresh code to the operator on this machine, and keeps every paired device', async () => {
+    const { server } = await serve({ remoteAccess: { admittedAddresses: ['192.168.1.9'] } });
+    const first = await server.app.inject({
+      method: 'POST', url: '/api/v1/pair', remoteAddress: '192.168.1.5', headers: REMOTE,
+      payload: { code: server.pairing!.code, label: 'Phone' },
+    });
+    expect(first.statusCode).toBe(200);
+    const cookie = (first.headers['set-cookie'] as string).split(';')[0]!;
+
+    const issued = await server.app.inject({
+      method: 'POST', url: '/api/v1/pairing/code', remoteAddress: '127.0.0.1', headers: LOCAL, payload: {},
+    });
+    expect(issued.statusCode).toBe(200);
+    const { code } = JSON.parse(issued.body) as { code: string };
+    expect(code).toMatch(/^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
+
+    // The device paired before the new code is still in: a restart would have dropped it.
+    const still = await server.app.inject({
+      method: 'GET', url: '/api/v1/sessions', remoteAddress: '192.168.1.5', headers: { host: '192.168.1.9:4782', cookie },
+    });
+    expect(still.statusCode).toBe(200);
+    expect((JSON.parse(still.body) as Array<{ label: string }>).map((s) => s.label)).toEqual(['Phone']);
+
+    // And the new code pairs the next device.
+    const second = await server.app.inject({
+      method: 'POST', url: '/api/v1/pair', remoteAddress: '192.168.1.6', headers: REMOTE,
+      payload: { code, label: 'Mac' },
+    });
+    expect(second.statusCode).toBe(200);
+  });
+
+  it('refuses a code to anything that is not this machine, paired device included', async () => {
+    const { server } = await serve({ remoteAccess: { admittedAddresses: ['192.168.1.9'] } });
+    const paired = await server.app.inject({
+      method: 'POST', url: '/api/v1/pair', remoteAddress: '192.168.1.5', headers: REMOTE,
+      payload: { code: server.pairing!.code, label: 'Phone' },
+    });
+    const cookie = (paired.headers['set-cookie'] as string).split(';')[0]!;
+
+    const refused = await server.app.inject({
+      method: 'POST', url: '/api/v1/pairing/code', remoteAddress: '192.168.1.5', headers: { ...REMOTE, cookie }, payload: {},
+    });
+    expect(refused.statusCode).toBe(403);
+  });
+
+  it('refuses evidence paths from a paired remote device: they would name files on the hub', async () => {
+    // Adversarial review: the hub reads the paths it is given, so from a phone they name the
+    // hub's own files. Only this machine attaches evidence.
+    const { server, runId } = await serve({ remoteAccess: { admittedAddresses: ['192.168.1.9'] } });
+    const paired = await server.app.inject({
+      method: 'POST', url: '/api/v1/pair', remoteAddress: '192.168.1.5', headers: REMOTE,
+      payload: { code: server.pairing!.code, label: 'Phone' },
+    });
+    const cookie = (paired.headers['set-cookie'] as string).split(';')[0]!;
+
+    const refused = await server.app.inject({
+      method: 'POST', url: `/api/v1/runs/${runId}/review`, remoteAddress: '192.168.1.5', headers: { ...REMOTE, cookie },
+      payload: { e2eObserved: 'vi funcionando', observedBy: 'Luis', evidence: ['/Users/x/shot.png'] },
+    });
+
+    expect(refused.statusCode).toBe(403);
+    expect((await server.app.inject({ method: 'GET', url: `/api/v1/runs/${runId}/job`, remoteAddress: '127.0.0.1' })).json()).toBeNull();
+  });
+
+  it('says what a code looks like and where it comes from, when the entry is not one', async () => {
+    const { server } = await serve({ remoteAccess: { admittedAddresses: ['192.168.1.9'] } });
+
+    const wrong = await server.app.inject({
+      method: 'POST', url: '/api/v1/pair', remoteAddress: '192.168.1.5', headers: REMOTE,
+      payload: { code: 'AF-2026-001', label: 'Phone' },
+    });
+
+    expect(wrong.statusCode).toBe(400);
+    const message = (JSON.parse(wrong.body) as { message: string }).message;
+    expect(message).toContain('xxxx-xxxx-xxxx');
+    expect(message).toContain('agent-flow pairing-code');
   });
 });

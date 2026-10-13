@@ -381,6 +381,8 @@ function composeWorkspace(segments: readonly string[]): PolicyResult<WorkspaceLo
 export const THROWAWAY_WORKSPACE_PREFIXES = [
   'doctor-install-probe-',
   'read-only-',
+  /** A run's base, checked out to judge a failing step against (`verification.baseline`). */
+  'baseline-',
 ] as const;
 
 /** Whether a top-level segment of the owned root is one of ours to discard. */

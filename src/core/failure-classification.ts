@@ -157,6 +157,19 @@ const DEFINITIONS: readonly FailureClassDefinition[] = [
     evidence: ['duration', 'configured timeout'],
   },
   {
+    // A spending limit the operator set, and unlike a timeout it is never retried on its
+    // own: a retry would spend the same N turns again. The work was attempted and paid for,
+    // so the attempt counts, and a person decides whether to raise the ceiling or split it.
+    failureClass: 'runner_max_turns_exceeded',
+    group: 'RUNNER',
+    refines: 'execution_failed',
+    disposition: 'requires_human',
+    authority: 'mechanical',
+    consumesAttempt: true,
+    evidence: ['configured maxTurns', 'turns used'],
+    humanAction: 'Raise maxTurns for the role, or split the task, then retry it',
+  },
+  {
     failureClass: 'runner_quota_exhausted',
     group: 'RUNNER',
     refines: 'quota_exceeded',
@@ -522,7 +535,18 @@ export interface RunnerFailureClassification {
 export function classifyRunnerFailure(input: {
   readonly errorCode: RunnerErrorCode;
   readonly redactedRaw?: string;
+  /**
+   * The ceiling the runner said it reached (`AgentRunFailure.limitReached`). Structured, so
+   * it decides without reading a word of the output.
+   */
+  readonly limitReached?: 'max_turns';
 }): RunnerFailureClassification {
+  // Before any text is read: the adapter stated it, and no signature can be surer than that.
+  // Only on the code it refines, so a stray flag cannot relabel a quota or a timeout.
+  if (input.limitReached === 'max_turns' && input.errorCode === 'execution_failed') {
+    return { failureClass: 'runner_max_turns_exceeded' };
+  }
+
   const candidates = classesRefining(input.errorCode);
   const fallback =
     defaultClassForRunnerError(input.errorCode) ??

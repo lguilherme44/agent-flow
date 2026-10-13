@@ -67,13 +67,15 @@ agent-flow doctor          # can this machine run it?
 
 agent-flow feature "Add recurring bookings"   # plans, reviews, stops at the gate
 agent-flow status          # read the SDD, the plan and the review
-agent-flow approve
+agent-flow approve --decided-by "<your name>" --words "<what you decided>"
 agent-flow run
 agent-flow review          # verification, final review, Definition of Done
 
 agent-flow ui              # Deck, the dashboard, on http://127.0.0.1:4782
 ```
 
+Every gate move (`approve`, `reject`, `revise`) records who decided and their words, and is
+refused without them; an AI driving agent-flow passes the human's, never its own.
 Long requests go in a file: `agent-flow feature --file request.md`. A full walkthrough with a
 four-task feature: [`docs/example-walkthrough.md`](docs/example-walkthrough.md).
 
@@ -89,6 +91,7 @@ four-task feature: [`docs/example-walkthrough.md`](docs/example-walkthrough.md).
 | `review` | Verification, final review and the Definition of Done |
 | `pause` · `resume` · `cancel` | Stop starting work · carry on · end the run, keeping every artifact |
 | `ui` · `projects` · `autostart` | Dashboard · the project hub · start the dashboard at logon |
+| `instructions` · `mcp` | The operator guides · the same operations as MCP tools for an AI ([`docs/mcp.md`](docs/mcp.md)) |
 | `clean` | Remove old runs and their worktrees; deletes branches only with `--branches` |
 
 ## Configuration
@@ -170,6 +173,7 @@ Details and stated limits: [`docs/security.md`](docs/security.md).
 | [`docs/platform-roadmap.md`](docs/platform-roadmap.md) · [`docs/platform-todo.md`](docs/platform-todo.md) | Where the product is going, and the queue (pt-BR) |
 | [`docs/roadmap.md`](docs/roadmap.md) | Milestones already built |
 | [`docs/web-ui.md`](docs/web-ui.md) | The dashboard and its HTTP API |
+| [`docs/mcp.md`](docs/mcp.md) | `agent-flow mcp`: the same operations as MCP tools, and the Claude Code setup |
 | [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | What each coding CLI actually does, measured |
 | [`docs/security.md`](docs/security.md) | The trust model and its limits |
 | [`docs/testing.md`](docs/testing.md) | Test lanes and what each one proves |

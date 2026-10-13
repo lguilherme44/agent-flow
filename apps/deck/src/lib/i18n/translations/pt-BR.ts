@@ -428,6 +428,13 @@ export const ptBR: Dictionary = {
 
   /** Para onde vai o tempo, numa janela limitada de runs recentes. Nunca dinheiro. */
   analytics: {
+    byRoleModel: 'Por papel × modelo',
+    byEffort: 'Por esforço',
+    quality: 'Código pelo modelo que o escreveu',
+    qualityHint: 'Cada tarefa conta para o modelo que a implementou; os achados são da primeira revisão de código.',
+    firstAttempt: (first: number, of: number) => `${String(first)}/${String(of)} na 1ª tentativa`,
+    reviewedTasks: (count: number) => `${String(count)} revisadas`,
+    noFindings: 'sem achados',
     aggregateVerb: 'somar',
     couldNotRead: 'Não foi possível ler as métricas.',
     title: 'Para onde vai o tempo',
@@ -676,8 +683,17 @@ export const ptBR: Dictionary = {
       escalation: 'escalonamento',
       forced_approval: 'aprovação forçada',
       attached_findings: 'achados anexados',
+      e2e_observation: 'e2e observado por uma pessoa',
     },
     keyboard: 'teclado',
+    gateDecision: {
+      label: 'Decisão no portão do plano',
+      approve: 'Aprovado',
+      reject: 'Rejeitado',
+      revise: 'Revisado',
+      by: (verb, by, channel) => `${verb} por ${by} via ${channel}`,
+      notInDeck: 'Não foi decidido no Deck: veio pela API ou pelo terminal, onde uma IA pode ter digitado o nome.',
+    },
 
     deliveryCouldNotRead: 'Não foi possível ler o registro de entrega desta run.',
     deliveryOptIn: 'A entrega é opcional, e cada escrita no remoto é opcional em separado.',
@@ -771,6 +787,7 @@ export const ptBR: Dictionary = {
 
   /** Quanto custou cada estágio, e do que o prompt era feito (AR-09). Nunca dinheiro. */
   telemetry: {
+    tokens: (input: number, output: number) => `${(input / 1000).toFixed(1)}k entrada · ${(output / 1000).toFixed(1)}k saída`,
     couldNotRead: 'Não foi possível ler a telemetria desta run.',
     nothingRunYet: 'Nada rodou ainda.',
     foldHint: 'A telemetria é uma leitura da trilha de auditoria: uma run que ainda não executou um estágio não tem o que somar.',
@@ -807,6 +824,31 @@ export const ptBR: Dictionary = {
     bypassed: (reason: string) => `ignorado: ${reason}`,
     noEstimate: 'observado, sem estimativa registrada',
     provenance: (provenance: string) => `procedência: ${provenance}`,
+  },
+
+  /** Para onde foi o tempo de relógio da run. O único bloco do Deck com dinheiro, e só o valor que os runners informaram. */
+  timeSpent: {
+    title: 'Para onde foi o tempo',
+    couldNotRead: 'Não foi possível ler para onde foi o tempo desta run.',
+    nothingYet: 'Nenhum tempo foi registrado para esta run ainda.',
+    wall: (duration: string) => `${duration} de relógio`,
+    bar: 'Tempo de relógio, por causa',
+    usd: (amount: string) => `US$ ${amount}`,
+    model: 'Modelo',
+    validation: 'Validação',
+    human: 'Esperando uma pessoa',
+    quota: 'Esperando a cota',
+    rework: 'Retrabalho',
+    other: 'Outros',
+    byStage: 'Por estágio',
+    stage: 'Estágio',
+    attempts: 'Tentativas',
+    minutes: 'Minutos',
+    cost: 'Custo (USD)',
+    notReported: 'não informado',
+    notABill: 'Os custos são o preço que os runners atribuíram às chamadas — não necessariamente a sua fatura.',
+    quotaNote: 'O tempo depois de uma falha de cota conta como cota até alguém reiniciar a run.',
+    staleNote: 'Esta run diz que está trabalhando, mas nada foi escrito além do orçamento do estágio: o estágio aberto só é contado até o último evento.',
   },
 
   /** O portão de aprovação: o que o servidor calculou, e as três coisas que uma pessoa pode fazer. */
@@ -1028,6 +1070,8 @@ export const ptBR: Dictionary = {
     discoveryCacheInvalidated: 'Cache de descoberta invalidado',
 
     stageStarted: (stage: string) => `${stage} começou`,
+    agentTool: (who: string, tool: string) => `${who}: ${tool}`,
+    agentSays: (who: string) => `${who}: diz`,
     stageAnswered: (stage: string) => `${stage} respondeu`,
     stageCompleted: (stage: string) => `${stage} concluído`,
     stageFailed: (stage: string) => `${stage} falhou`,

@@ -1,9 +1,10 @@
-import type { AgentRunInput, AgentRunUsage, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
+import type { AgentRunInput, AgentRunUsage, RunnerActivity, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult } from '../../ports/process-runner.js';
 import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import type { FileSystem } from '../../ports/file-system.js';
 import { join } from 'node:path';
 import { BaseRunner, type BaseRunnerOptions, type ErrorRule, type RunnerInvocation } from './base-runner.js';
+import { activityTarget, activityText, jsonLine, lineSplitter } from './stream-lines.js';
 
 /**
  * Logical reasoning level → the value Claude Code accepts.
@@ -379,12 +380,14 @@ export class ClaudeCodeRunner extends BaseRunner {
    * The operator's args are read after the N4 screen — `extraArgs` is what the resolver let
    * through — so an untrusted project's own rules suppress nothing here either.
    */
-  private derivedRules(): string[] {
-    if (this.commandGrants.length === 0) return [];
+  private derivedRules(extra: readonly string[] = []): string[] {
+    // The runner's declared lines, then this invocation's own (`AgentRunInput.commandGrants`).
+    const lines = [...this.commandGrants, ...extra.filter((line) => !this.commandGrants.includes(line))];
+    if (lines.length === 0) return [];
 
     const tools: readonly CommandTool[] = this.platform === 'win32' ? [BASH, POWERSHELL] : [BASH];
     const operator = allowedRules(this.extraArgs);
-    return this.commandGrants.flatMap((line) =>
+    return lines.flatMap((line) =>
       tools
         .filter((tool) => !operator.some((rule) => covers(rule, tool, line)))
         .map((tool) => `${tool}${line}:*)`),
@@ -413,6 +416,10 @@ export class ClaudeCodeRunner extends BaseRunner {
       // `--json-schema` is enforced by the runtime, not merely requested in the
       // prompt: the response carries a parsed `structured_output` field.
       structuredOutputStrategy: 'native',
+      // `--max-turns <n>`. Hidden from `claude --help` on 2.1.281 and still accepted: measured
+      // with `--max-turns 1` on a prompt that needed a tool call, exit 1 and an envelope with
+      // `subtype: "error_max_turns"` — see docs/runner-capabilities.md.
+      supportsMaxTurns: true,
       // AD-32. Declared from what the CLI documents and what the probe exercised, not
       // from a run that happened to work: `--permission-mode acceptEdits` is what the
       // adapter passes for a write stage, and it is what makes `fileEdit` true.
@@ -623,13 +630,57 @@ export class ClaudeCodeRunner extends BaseRunner {
     ];
   }
 
+  /**
+   * The stream, read line by line as it arrives (dogfood 08/10: "tela congelada").
+   *
+   * `--output-format json` printed one envelope at exit, so nothing of a task reached the Deck
+   * until it ended. `stream-json` prints every message; each tool call and each message is
+   * reported through `onActivity`, and the `result` line — the same object the json envelope
+   * was, measured on 2.1 with `structured_output`, usage and turns — is kept here rather than
+   * read from the buffered stdout, which keeps the head and drops the end past its limit.
+   * `finish` hands every parser below that one line, so nothing after this changes.
+   */
+  protected override streamReader(input: AgentRunInput) {
+    let resultLine: string | undefined;
+    const read = (line: string, report: boolean): void => {
+      const event = jsonLine(line);
+      if (event === undefined) return;
+      const typed = event as { type?: unknown; message?: { content?: unknown } };
+      if (typed.type === 'result') resultLine = line.trim();
+      if (report && typed.type === 'assistant' && input.onActivity !== undefined) {
+        for (const activity of activitiesOf(typed.message?.content, input.outputSchema !== undefined)) input.onActivity(activity);
+      }
+    };
+    const lines = lineSplitter((line) => read(line, true));
+
+    return {
+      onStdout: lines.push,
+      finish: (result: ProcessResult): ProcessResult => {
+        lines.flush();
+        // A stream nobody fed through `onStdout` (a recorded fixture) still has its result line.
+        // Searched for that alone: what the stream already reported must not arrive twice,
+        // after the agent has stopped.
+        if (resultLine === undefined) for (const line of result.stdout.split(/\r?\n/)) read(line, false);
+        if (resultLine !== undefined) return { ...result, stdout: resultLine, truncated: false };
+        // No result line: the CLI was killed or crashed mid-task, and what it printed is the
+        // agent's transcript — every file it wrote or read (adversarial review). Under `json` a
+        // killed CLI printed nothing; so only what is not message content stays, as diagnosis.
+        return { ...result, stdout: withoutTranscript(result.stdout) };
+      },
+    };
+  }
+
   protected buildInvocation(input: AgentRunInput): RunnerInvocation {
-    const args = ['-p', '--output-format', 'json'];
+    // `--verbose` is what `-p` requires for `stream-json`.
+    const args = ['-p', '--output-format', 'stream-json', '--verbose'];
 
     // Omitted when unset so the CLI applies the user's own default (AD-13).
     if (input.model !== undefined) args.push('--model', input.model);
 
     args.push('--effort', EFFORT[input.reasoning]);
+
+    // Omitted when unset: no ceiling is today's behaviour, and the CLI has no default one.
+    if (input.maxTurns !== undefined) args.push('--max-turns', String(input.maxTurns));
 
     if (input.permissions === 'read-only') {
       args.push('--permission-mode', 'plan');
@@ -642,7 +693,7 @@ export class ClaudeCodeRunner extends BaseRunner {
       // with isolation off and no operator args there would otherwise be nothing to end it
       // but the tail of argv. The isolation args and the operator's `RunnerConfig.args` keep
       // their positions after this, and with them the last word (SEC-004).
-      const derived = this.derivedRules();
+      const derived = this.derivedRules(input.commandGrants);
       if (derived.length > 0) args.push('--allowedTools', ...derived);
       args.push('--permission-mode', 'acceptEdits');
     }
@@ -752,6 +803,15 @@ export class ClaudeCodeRunner extends BaseRunner {
     return envelope?.is_error === false && envelope.subtype === 'success' && result.exitCode === 0;
   }
 
+  /**
+   * `subtype: "error_max_turns"`, measured on 2.1.281 with `is_error: true`, exit 1, no
+   * `result`, `terminal_reason: "max_turns"` and `errors: ["Reached maximum number of turns
+   * (1)"]`. The subtype is the structured signal and the only one read.
+   */
+  protected override turnLimitReached(_result: ProcessResult, parsed: unknown): boolean {
+    return asEnvelope(parsed)?.subtype === 'error_max_turns';
+  }
+
   protected errorRules(): readonly ErrorRule[] {
     return [
       {
@@ -827,4 +887,60 @@ function diagnosisOf(result: ProcessResult, parsed: unknown): string {
   const envelope = asEnvelope(parsed);
   const message = envelope?.is_error === true ? (envelope.result ?? '') : '';
   return `${String(message)} ${result.stderr}`;
+}
+
+/**
+ * The tool calls and messages in one assistant message, as activity. `StructuredOutput` is the
+ * CLI handing back the answer itself, not something the agent did, so it is left out; thinking
+ * is the model's own and stays private.
+ */
+function activitiesOf(content: unknown, structured: boolean): RunnerActivity[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((item: unknown): RunnerActivity[] => {
+    if (typeof item !== 'object' || item === null) return [];
+    const block = item as { type?: unknown; name?: unknown; input?: unknown; text?: unknown };
+    if (block.type === 'tool_use' && typeof block.name === 'string' && block.name !== 'StructuredOutput') {
+      const input = (typeof block.input === 'object' && block.input !== null ? block.input : {}) as Record<string, unknown>;
+      const target = [input['file_path'], input['command'], input['path'], input['pattern'], input['url']].find(
+        (value): value is string => typeof value === 'string' && value.trim() !== '',
+      );
+      return [{ kind: 'tool', tool: block.name, ...(target === undefined ? {} : { target: activityTarget(target) }) }];
+    }
+    if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+      // The answer of a structured stage, written as text beside the tool (first real run, 13/10:
+      // the planning stage's whole plan reached the Feed as "the agent says"), is not activity.
+      if (structured && /^(```(json)?\s*)?\{/.test(block.text.trim())) return [];
+      return [{ kind: 'text', text: activityText(block.text) }];
+    }
+    return [];
+  });
+}
+
+/**
+ * A stream with its message lines removed — `assistant` and `user` carry tool inputs, tool
+ * results and the model's text. What stays (init, rate-limit events, a plain error line) is what
+ * a failure is diagnosed from. A JSON line nobody can read is dropped too: it may be content.
+ */
+function withoutTranscript(stdout: string): string {
+  // One JSON document (a `json` envelope, pretty or not) is not a stream: the guards after
+  // `finish` already read it, and cutting it line by line would break it.
+  try {
+    JSON.parse(stdout.trim());
+    return stdout;
+  } catch {
+    // a stream, or text
+  }
+  return stdout
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{')) return true;
+      try {
+        const type = (JSON.parse(trimmed) as { type?: unknown }).type;
+        return type !== 'assistant' && type !== 'user';
+      } catch {
+        return false;
+      }
+    })
+    .join('\n');
 }

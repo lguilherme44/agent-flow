@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { ReasoningLevel } from '../../src/contracts/index.js';
 import { renderCapabilityReport, renderVerdict } from '../../src/cli/doctor.js';
-import { rolesThatCannotRun, type CapabilityObservation } from '../../src/app/diagnostics.js';
+import { observeCapabilities, rolesThatCannotRun, type CapabilityObservation } from '../../src/app/diagnostics.js';
+import type { RoleRoute } from '../../src/app/role-routes.js';
+import { GlobalConfigSchema } from '../../src/contracts/index.js';
 
 /** The mark the report uses for something that cannot work, as opposed to a warning. */
 const CROSS_MARK = '✗';
@@ -284,5 +286,161 @@ describe('the verdict says what it means (§95)', () => {
 
     const clean = renderVerdict({ status: 'OK', notes: [] });
     expect(clean).toBe('OK');
+  });
+});
+
+describe("a role's turn ceiling (maxTurns)", () => {
+  const route = (maxTurns: number | undefined): RoleRoute => ({
+    role: 'architect',
+    prompts: ['discovery'],
+    requirements: { readOnly: true },
+    configured: {
+      runner: 'claude',
+      reasoning: 'high',
+      timeoutSeconds: 900,
+      ...(maxTurns === undefined ? {} : { maxTurns }),
+    },
+    resolved: { runner: 'claude', reasoning: 'high', reasoningClamped: false, structuredOutput: 'prompted' },
+  });
+  const observed = (maxTurns: number | undefined, supportsMaxTurns: boolean | undefined) =>
+    observeCapabilities([route(maxTurns)], {
+      claude: { ...CAPS, ...(supportsMaxTurns === undefined ? {} : { supportsMaxTurns }) },
+    });
+
+  it('prints the ceiling under the role when its runner enforces it', () => {
+    const lines = renderCapabilityReport(observed(40, true));
+    const role = lines.findIndex((line) => line.includes('architect'));
+    const ceiling = lines.findIndex((line) => line.includes('max turns: 40'));
+
+    expect(role).toBeGreaterThanOrEqual(0);
+    expect(ceiling).toBeGreaterThan(role);
+    expect(lines.join('\n')).not.toContain('does not enforce');
+  });
+
+  it('warns when the runner does not enforce one, and when it never said', () => {
+    for (const supports of [false, undefined]) {
+      const text = renderCapabilityReport(observed(40, supports)).join('\n');
+      expect(text, String(supports)).toContain('⚠ maxTurns is 40, but runner "claude" does not enforce a turn ceiling');
+      expect(text, String(supports)).not.toContain('max turns: 40');
+    }
+  });
+
+  it('says nothing about turns when the role sets no ceiling', () => {
+    const [only] = observed(undefined, true);
+    expect(only).not.toHaveProperty('turnCeilings');
+    expect(renderCapabilityReport([only as CapabilityObservation]).join('\n')).not.toMatch(/max ?turns/i);
+  });
+});
+
+describe('turn ceilings beyond the role line: stages and the fallback', () => {
+  const ENFORCES = { ...CAPS, supportsMaxTurns: true };
+  const IGNORES = { ...CAPS, supportsMaxTurns: false };
+  const caps = { claude: ENFORCES, local: IGNORES, codex: IGNORES };
+
+  const config = (architect: Record<string, unknown>, fallback: Record<string, unknown> = {}) =>
+    GlobalConfigSchema.parse({
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      roles: {
+        architect: { runner: 'claude', effort: 'high', ...architect },
+        sdd: { runner: 'claude', effort: 'high' },
+        planner: { runner: 'claude', effort: 'high' },
+        planReviewer: { runner: 'claude', effort: 'high' },
+        executors: {
+          trivial: { runner: 'claude', effort: 'low' },
+          normal: { runner: 'claude', effort: 'high' },
+          complex: { runner: 'claude', effort: 'high' },
+        },
+        verification: { runner: 'claude', effort: 'medium' },
+        finalReviewer: { runner: 'claude', effort: 'high' },
+      },
+      fallback: { enabled: true, roles: fallback },
+    });
+
+  const route = (maxTurns: number | undefined, fallbackRunner?: string): RoleRoute => ({
+    role: 'architect',
+    prompts: ['discovery'],
+    requirements: { readOnly: true },
+    configured: { runner: 'claude', reasoning: 'high', timeoutSeconds: 900, ...(maxTurns === undefined ? {} : { maxTurns }) },
+    resolved: { runner: 'claude', reasoning: 'high', reasoningClamped: false, structuredOutput: 'prompted' },
+    ...(fallbackRunner === undefined
+      ? {}
+      : { fallback: { runner: fallbackRunner, reasoning: 'high', reasoningClamped: false, structuredOutput: 'prompted' } }),
+  });
+
+  it("prints a stage override's own ceiling", () => {
+    const text = renderCapabilityReport(
+      observeCapabilities([route(60)], caps, config({ maxTurns: 60, stages: { discovery: { maxTurns: 20 } } })),
+    ).join('\n');
+    expect(text).toContain('max turns: 60');
+    expect(text).toContain('max turns: 20 (stage discovery)');
+  });
+
+  it('warns when a stage is sent to a runner that does not enforce the ceiling', () => {
+    const text = renderCapabilityReport(
+      observeCapabilities([route(60)], caps, config({ maxTurns: 60, stages: { 'architecture-impact': { runner: 'local' } } })),
+    ).join('\n');
+    expect(text).toContain('max turns: 60');
+    expect(text).toContain('⚠ maxTurns is 60 (stage architecture-impact), but runner "local" does not enforce a turn ceiling');
+  });
+
+  it("warns when the primary's ceiling carries over to a fallback that ignores it", () => {
+    const text = renderCapabilityReport(
+      observeCapabilities([route(60, 'codex')], caps, config({ maxTurns: 60 }, { architect: { runner: 'codex', effort: 'high' } })),
+    ).join('\n');
+    expect(text).toContain('⚠ maxTurns is 60 (fallback), but runner "codex" does not enforce a turn ceiling');
+  });
+
+  it("prints the fallback's own ceiling when it declares one and its runner enforces it", () => {
+    const text = renderCapabilityReport(
+      observeCapabilities(
+        [route(60, 'claude')],
+        caps,
+        config({ maxTurns: 60 }, { architect: { runner: 'claude', effort: 'high', maxTurns: 15 } }),
+      ),
+    ).join('\n');
+    expect(text).toContain('max turns: 15 (fallback)');
+  });
+
+  it('adds nothing for a stage override that changes neither the ceiling nor the runner', () => {
+    const [only] = observeCapabilities([route(60)], caps, config({ maxTurns: 60, stages: { discovery: { effort: 'low' } } }));
+    expect((only as Extract<CapabilityObservation, { kind: 'resolved' }>).turnCeilings).toEqual([
+      { scope: 'role', runner: 'claude', maxTurns: 60, enforced: true },
+    ]);
+  });
+});
+
+describe("the fallback line shows the ceiling that carries over for each stage", () => {
+  const caps = { claude: { ...CAPS, supportsMaxTurns: true }, codex: { ...CAPS, supportsMaxTurns: true } };
+  const config = GlobalConfigSchema.parse({
+    runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+    roles: {
+      architect: { runner: 'claude', effort: 'high' },
+      sdd: { runner: 'claude', effort: 'high' },
+      planner: { runner: 'claude', effort: 'high' },
+      planReviewer: { runner: 'claude', effort: 'high' },
+      executors: {
+        trivial: { runner: 'claude', effort: 'low' },
+        normal: { runner: 'claude', effort: 'high', maxTurns: 60, stages: { implementation: { maxTurns: 30 } } },
+        complex: { runner: 'claude', effort: 'high' },
+      },
+      verification: { runner: 'claude', effort: 'medium' },
+      finalReviewer: { runner: 'claude', effort: 'high' },
+    },
+    fallback: { enabled: true, roles: { 'executor.normal': { runner: 'codex', effort: 'high', maxTurns: 45 } } },
+  });
+  const route: RoleRoute = {
+    role: 'executor.normal',
+    prompts: ['implementation'],
+    requirements: {},
+    configured: { runner: 'claude', reasoning: 'high', timeoutSeconds: 900, maxTurns: 60 },
+    resolved: { runner: 'claude', reasoning: 'high', reasoningClamped: false, structuredOutput: 'prompted' },
+    fallback: { runner: 'codex', reasoning: 'high', reasoningClamped: false, structuredOutput: 'prompted' },
+  };
+
+  it('prints min(fallback, primary) for the role and for the stage with a lower ceiling', () => {
+    const text = renderCapabilityReport(observeCapabilities([route], caps, config)).join('\n');
+    expect(text).toContain('max turns: 45 (fallback)');
+    expect(text).toContain('max turns: 30 (fallback, stage implementation)');
+    expect(text).not.toContain('max turns: 45 (fallback, stage implementation)');
   });
 });

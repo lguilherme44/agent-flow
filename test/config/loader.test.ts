@@ -483,3 +483,89 @@ describe('loadConfig run from the home directory', () => {
     expect(config.global.runners.claude?.enabled).toBe(true);
   });
 });
+
+describe('maxTurns through the loader', () => {
+  it('is absent from the shipped defaults, so nothing gains a ceiling on upgrade', async () => {
+    const config = await load(new InMemoryFileSystem());
+    expect(config.global.roles.architect.maxTurns).toBeUndefined();
+    expect(config.global.roles.executors.normal.maxTurns).toBeUndefined();
+  });
+
+  it('keeps the global ceiling when a project tries to raise it, and takes a lower one', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'roles:\n  architect:\n    maxTurns: 50\n');
+    fs.seed(
+      PROJECT_PATH,
+      'project:\n  name: demo\n  type: node\nroles:\n  architect:\n    maxTurns: 500\n  sdd:\n    maxTurns: 12\n',
+    );
+    const config = await load(fs);
+    expect(config.global.roles.architect.maxTurns).toBe(50);
+    expect(config.global.roles.sdd.maxTurns).toBe(12);
+  });
+});
+
+/**
+ * Dogfood 09/10: `lint_testes` under `commands:` was stripped by the schema and nobody said a
+ * word — the plan just never used it. The report names every key nothing reads.
+ */
+describe('keys nothing reads (dogfood 09/10)', () => {
+  const withReport = (fs: InMemoryFileSystem) =>
+    loadConfigWithReport({ fs, globalConfigPath: GLOBAL_PATH, projectDir: '/repo', platform: 'linux' });
+
+  it('names a command id under commands: and a misspelt top-level key', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(
+      PROJECT_PATH,
+      'project:\n  name: demo\n  type: node\ncommands:\n  lint: npm run lint\n  lint_testes: npm run lint:tests\nvalidationComands:\n  e2e: npm run e2e\n',
+    );
+
+    const { unknownKeys } = await withReport(fs);
+
+    expect(unknownKeys).toEqual(['commands.lint_testes', 'validationComands']);
+  });
+
+  it('names a `trust` in the project file: only the global file is read for it', async () => {
+    // Adversarial review: SEC-001 ignores a project's own trust, and the repo that wrote one
+    // got no word that it did nothing.
+    const fs = new InMemoryFileSystem();
+    fs.seed(PROJECT_PATH, 'project:\n  name: demo\n  type: node\ntrust:\n  projectConfig: [/repo]\n');
+
+    expect((await withReport(fs)).unknownKeys).toEqual(['trust']);
+  });
+
+  it('reports nothing for project keys and the global overrides a project may carry', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(
+      PROJECT_PATH,
+      'project:\n  name: demo\n  type: node\ncommands:\n  test: npm test\nvalidationCommands:\n  e2e: npm run e2e\n' +
+        'verification:\n  baseline: [lint]\nroles:\n  planner:\n    runner: claude\nlanguage: pt-BR\n',
+    );
+
+    expect((await withReport(fs)).unknownKeys).toEqual([]);
+  });
+});
+
+describe('roles.e2e.allowedCommands from a project file (dogfood 08/10)', () => {
+  const withReport = (fs: InMemoryFileSystem) =>
+    loadConfigWithReport({ fs, globalConfigPath: GLOBAL_PATH, projectDir: '/repo', platform: 'linux' });
+  const project =
+    'project:\n  name: demo\n  type: node\nroles:\n  e2e:\n    enabled: true\n    allowedCommands: [agent-browser]\n';
+
+  it('is a loosening: dropped and reported for an untrusted project', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(PROJECT_PATH, project);
+
+    const { config, ignoredLoosenings } = await withReport(fs);
+
+    expect(config.global.roles.e2e.allowedCommands).toBeUndefined();
+    expect(ignoredLoosenings.map(({ path }) => path.join('.'))).toContain('roles.e2e.allowedCommands');
+  });
+
+  it('applies for a trusted project', async () => {
+    const fs = new InMemoryFileSystem();
+    fs.seed(GLOBAL_PATH, 'trust:\n  projectConfig: [/repo]\n');
+    fs.seed(PROJECT_PATH, project);
+
+    expect((await withReport(fs)).config.global.roles.e2e.allowedCommands).toEqual(['agent-browser']);
+  });
+});

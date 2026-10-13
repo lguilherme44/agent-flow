@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { checkDefinitionOfDone } from '../../src/core/definition-of-done.js';
+import {
+  awaitsOnlyE2EObservation,
+  checkDefinitionOfDone,
+} from '../../src/core/definition-of-done.js';
+import { SECOND_PERSON_OBSERVING } from '../fakes/second-person.js';
 
 const done = {
   approved: true,
@@ -7,6 +11,156 @@ const done = {
   mechanicalVerification: 'PASS' as const,
   finalReviewVerdict: 'PASS' as const,
 };
+
+describe('the e2e condition: a check that did not run is not a pass', () => {
+  it('adds no condition when the run has no e2e stage', () => {
+    const result = checkDefinitionOfDone({ ...done, taskStates: [...done.taskStates] });
+    expect(result.conditions.map((c) => c.name)).not.toContain('e2e exercised the change and passed');
+  });
+
+  it('is not done when e2e could not run, and says what was missing', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'NOT_RUN', reason: 'the app only runs on an iOS device' },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.missing).toContain('e2e exercised the change and passed');
+    const condition = result.conditions.find((c) => c.name === 'e2e exercised the change and passed');
+    expect(condition?.detail).toContain('did not run');
+    expect(condition?.detail).toContain('the app only runs on an iOS device');
+  });
+
+  it('is not done when e2e failed, whatever the severity of its findings', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'FAIL' },
+    });
+    expect(result.done).toBe(false);
+    expect(result.missing).toContain('e2e exercised the change and passed');
+  });
+
+  it('is done when e2e ran and passed', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'PASS' },
+    });
+    expect(result.done).toBe(true);
+  });
+
+  it('tells the reader to ask the human, and how to record their name and words', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'NOT_RUN', reason: 'iOS only' },
+    });
+    const condition = result.conditions.find((c) => c.name === 'e2e exercised the change and passed');
+    expect(condition?.detail).toContain('--e2e-observed');
+    expect(condition?.detail).toContain('--observed-by');
+    expect(condition?.detail).toMatch(/\bhuman\b/);
+    expect(condition?.detail).not.toMatch(SECOND_PERSON_OBSERVING);
+  });
+
+  it('names the build the human must test: the head under review, short', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'NOT_RUN', reason: 'iOS only', head: 'abcdef0123456789abcdef0123456789abcdef01' },
+    });
+    const detail = result.conditions.find((c) => c.name === 'e2e exercised the change and passed')?.detail;
+    expect(detail).toContain('abcdef0');
+    expect(detail).toContain('--e2e-head abcdef0');
+    expect(detail).not.toContain('abcdef0123456789abcdef01');
+  });
+});
+
+/**
+ * The way out of a NOT_RUN e2e: a person observed the change on a target agent-flow cannot
+ * reach (an iOS device), and said so on the record. Without it `review` re-ran e2e, got
+ * NOT_RUN again, and the only escape was disabling e2e — which removed the evidence entirely.
+ */
+describe('a human attestation stands in for an e2e that could not run', () => {
+  const E2E = 'e2e exercised the change and passed';
+  const observation = {
+    by: 'Luis',
+    via: 'keyboard',
+    text: 'Tapped Buy on the iPhone 15; the cart header updated.',
+  };
+
+  it('meets the condition for a NOT_RUN, and says who observed what and through which channel', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'NOT_RUN', reason: 'iOS only', observation },
+    });
+
+    expect(result.done).toBe(true);
+    const condition = result.conditions.find((c) => c.name === E2E);
+    expect(condition?.met).toBe(true);
+    expect(condition?.detail).toBe(
+      'not run by agent-flow; observed by Luis (recorded via keyboard): "Tapped Buy on the iPhone 15; the cart header updated."',
+    );
+  });
+
+  it('omits the channel for an observation recorded before names were required', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'NOT_RUN', observation: { by: 'keyboard', text: 'Saw it.' } },
+    });
+    expect(result.conditions.find((c) => c.name === E2E)?.detail).toBe(
+      'not run by agent-flow; observed by keyboard: "Saw it."',
+    );
+  });
+
+  it('never overrides a FAIL: e2e saw the change failing', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'FAIL', observation },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.missing).toContain(E2E);
+    expect(result.conditions.find((c) => c.name === E2E)?.detail).not.toContain('observed by');
+  });
+
+  it('knows when an observation is the only thing missing, and when it is not', () => {
+    const notRun = { verdict: 'NOT_RUN' as const, reason: 'iOS only' };
+    const onlyE2E = checkDefinitionOfDone({ ...done, taskStates: [...done.taskStates], e2e: notRun });
+    expect(awaitsOnlyE2EObservation(onlyE2E, notRun)).toBe(true);
+
+    // Something a corrective task could fix is unmet too.
+    const alsoFailing = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      finalReviewVerdict: 'FAIL',
+      e2e: notRun,
+    });
+    expect(awaitsOnlyE2EObservation(alsoFailing, notRun)).toBe(false);
+
+    // A FAIL is a statement about the code, not a missing observer.
+    const failed = { verdict: 'FAIL' as const };
+    const e2eFailed = checkDefinitionOfDone({ ...done, taskStates: [...done.taskStates], e2e: failed });
+    expect(awaitsOnlyE2EObservation(e2eFailed, failed)).toBe(false);
+
+    const attested = { ...notRun, observation };
+    const met = checkDefinitionOfDone({ ...done, taskStates: [...done.taskStates], e2e: attested });
+    expect(awaitsOnlyE2EObservation(met, attested)).toBe(false);
+  });
+
+  it('leaves a PASS exactly as it was', () => {
+    const result = checkDefinitionOfDone({
+      ...done,
+      taskStates: [...done.taskStates],
+      e2e: { verdict: 'PASS', observation },
+    });
+    expect(result.conditions.find((c) => c.name === E2E)).toEqual({ name: E2E, met: true });
+  });
+});
 
 describe('checkDefinitionOfDone (§42)', () => {
   it('is done only when every condition holds', () => {

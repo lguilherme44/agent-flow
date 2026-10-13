@@ -276,7 +276,15 @@ export class NodeProcessRunner implements ProcessRunner {
 
       child.stdout?.setEncoding('utf8');
       child.stderr?.setEncoding('utf8');
-      child.stdout?.on('data', (chunk: string) => stdout.push(chunk));
+      child.stdout?.on('data', (chunk: string) => {
+        // A listener's failure is its own: it must never cost the child its output.
+        try {
+          options.onStdout?.(chunk);
+        } catch {
+          // ignored on purpose
+        }
+        stdout.push(chunk);
+      });
       child.stderr?.on('data', (chunk: string) => stderr.push(chunk));
 
       // ENOENT and friends. The Codex CLI fails exactly here when its native

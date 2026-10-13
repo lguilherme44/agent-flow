@@ -1,8 +1,9 @@
-import type { AgentRunInput, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
+import type { AgentRunInput, RunnerActivity, RunnerCapabilities, RunnerHealth } from '../../ports/agent-runner.js';
 import type { ProcessResult, ProcessRunner } from '../../ports/process-runner.js';
 import type { FileSystem } from '../../ports/file-system.js';
 import type { ReasoningLevel } from '../../contracts/common.schema.js';
 import { BaseRunner, type ErrorRule, type RunnerInvocation } from './base-runner.js';
+import { activityTarget, activityText, jsonLine, lineSplitter, stringField } from './stream-lines.js';
 
 /**
  * Logical reasoning level → the value Codex accepts.
@@ -60,9 +61,9 @@ export interface CodexRunnerOptions {
  *
  *  - The schema goes to disk (`--output-schema <FILE>`), hence the FileSystem
  *    dependency.
- *  - stdout is unusable as the answer — it interleaves hook output, colour
- *    codes and a token counter — so the response is read from the file written
- *    by `-o` instead of parsed out of the stream.
+ *  - stdout is not the answer — it is the `--json` event stream, read for live
+ *    activity and for the failure — so the response is read from the file
+ *    written by `-o` instead of parsed out of the stream.
  *
  * All per-run state travels in the invocation context rather than on the
  * instance, so two concurrent runs cannot overwrite each other's temp paths.
@@ -122,6 +123,8 @@ export class CodexRunner extends BaseRunner {
        * exactly the compensation `structuredOutputStrategy` exists to describe.
        */
       structuredOutputStrategy: 'prompted',
+      // `codex exec` exposes no turn ceiling, so `maxTurns` is not enforced.
+      supportsMaxTurns: false,
       // AD-32, from what the probe established. `-s workspace-write` is the sandbox the
       // adapter selects for a write stage, and it grants edits inside the working
       // directory without a confirmation prompt.
@@ -226,8 +229,9 @@ export class CodexRunner extends BaseRunner {
       args.push('--add-dir', path);
     }
 
-    // stdout carries hooks, colour and a token counter; -o gets the answer alone.
-    args.push('-o', outputPath);
+    // The answer comes from -o alone. stdout is the event stream (`--json`), read while the
+    // agent works and then reduced to the failure it reported; see streamReader().
+    args.push('--json', '-o', outputPath);
 
     const parts: string[] = [];
     if (input.systemPrompt !== undefined) parts.push(input.systemPrompt, '---');
@@ -253,6 +257,76 @@ export class CodexRunner extends BaseRunner {
       context: { outputPath } satisfies CodexContext,
       cleanup: async () => {
         await this.fs.remove(outputPath).catch(() => undefined);
+      },
+    };
+  }
+
+  /**
+   * The event stream of `exec --json`, read as it arrives (dogfood 08/10: "tela congelada").
+   *
+   * Measured on `codex-cli 0.162.0-alpha.17.2`: `thread.started`, `turn.started`, then
+   * `item.started` / `item.completed` around each item, then `turn.completed` with the usage —
+   * or, with no credential, a run of `error` events ending in
+   * `{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: …"}}`.
+   * Only `agent_message` items were captured live (the sandbox here refused every shell call);
+   * the other item types and their fields are the ones the binary itself names —
+   * `command_execution`, `file_change`, `mcp_tool_call`, `web_search` — and each is read
+   * defensively: a field that is not there is left out, never guessed.
+   *
+   * **`--json` empties stderr of the `ERROR:` lines the error rules read.** In text mode the
+   * failure was printed there; in this mode it is the `turn.failed` event and nothing else.
+   * So `finish` turns stdout into that one failure, as an `ERROR:` line, and drops the rest:
+   * the stream is the agent's work — command output, its messages — and the answer is read
+   * from `-o`, never from here.
+   */
+  protected override streamReader(input: AgentRunInput) {
+    const reported = new Set<string>();
+    let failure: string | undefined;
+    let lastError: string | undefined;
+
+    const read = (line: string, report: boolean): void => {
+      const event = jsonLine(line);
+      if (event === undefined) return;
+      const type = event['type'];
+      if (type === 'turn.failed') failure = stringField(event['error'], 'message') ?? failure;
+      // A retry is not a reason: `Reconnecting… n/5 (unexpected status 429 …)` is followed by
+      // either the verdict or a recovery, and a run that recovered and later died of something
+      // else must not be read as rate limited (adversarial review). So retries are skipped, and
+      // an error the turn then moved past — any later item, or the turn completing — is dropped.
+      if (type === 'error') {
+        const message = stringField(event, 'message');
+        if (message !== undefined && !/^\s*Reconnecting\b/i.test(message)) lastError = message;
+      }
+      if (type === 'turn.completed' || ((type === 'item.started' || type === 'item.completed') && stringField(event['item'], 'type') !== 'error')) {
+        lastError = undefined;
+      }
+      if (!report || input.onActivity === undefined) return;
+      if (type !== 'item.started' && type !== 'item.completed') return;
+      const item = event['item'];
+      const activity = activityOf(item, input.outputSchema !== undefined);
+      if (activity === undefined) return;
+      // An item opens and closes: reported at its first sight, once.
+      const id = stringField(item, 'id');
+      if (id !== undefined) {
+        if (reported.has(id)) return;
+        reported.add(id);
+      }
+      input.onActivity(activity);
+    };
+    const lines = lineSplitter((line) => read(line, true));
+
+    return {
+      onStdout: lines.push,
+      finish: (result: ProcessResult): ProcessResult => {
+        lines.flush();
+        // A stream nobody fed through `onStdout` (a recorded fixture) is searched for its
+        // failure alone, so nothing already reported arrives twice.
+        if (failure === undefined && lastError === undefined) {
+          for (const line of result.stdout.split(/\r?\n/)) read(line, false);
+        }
+        // `turn.failed` is the verdict. An `error` nothing came after is used only without one.
+        const reason = failure ?? lastError;
+        return { ...result, stdout: reason === undefined ? '' : `ERROR: ${reason}`, truncated: false };
       },
     };
   }
@@ -297,6 +371,11 @@ export class CodexRunner extends BaseRunner {
       { code: 'auth_required', when: (_result, parsed) => statusOf(parsed) === 401 },
       { code: 'auth_required', when: (_result, parsed) => statusOf(parsed) === 403 },
       { code: 'quota_exceeded', when: (_result, parsed) => statusOf(parsed) === 429 },
+      // The status inside the CLI's own failure line. 0.162 reports a missing credential as
+      // `unexpected status 401 Unauthorized: …` — measured in text mode and in `--json` alike —
+      // and no rule above or below read it, so a logged-out codex failed as `execution_failed`.
+      { code: 'auth_required', when: (result) => /unexpected status 40[13]\b/.test(errorLinesOf(result)) },
+      { code: 'quota_exceeded', when: (result) => /unexpected status 429\b/.test(errorLinesOf(result)) },
       // The two below read prose, and prose is the weakest evidence there is.
       // They are confined to lines the CLI marked as errors because codex's
       // stderr is the session transcript: it echoes the prompt verbatim, and
@@ -356,8 +435,49 @@ function stripFences(text: string): string {
  * wrote the prompt.
  */
 function errorLinesOf(result: ProcessResult): string {
-  return result.stderr
+  // stdout too: under `--json` the failure is a `turn.failed` event, which `streamReader`
+  // leaves there as the one `ERROR:` line the stream is reduced to.
+  return `${result.stderr}\n${result.stdout}`
     .split('\n')
     .filter((line) => line.includes('ERROR:'))
     .join('\n');
+}
+
+/**
+ * One item of the stream, as activity — or nothing. `reasoning` is the model's own and stays
+ * private, as Claude's thinking does; a `todo_list` and an `error` item are not things the agent
+ * did. Tools keep the CLI's own item names: an invented label would read as a measured one.
+ */
+function activityOf(item: unknown, structured: boolean): RunnerActivity | undefined {
+  const type = stringField(item, 'type');
+  switch (type) {
+    case 'command_execution': {
+      const command = stringField(item, 'command');
+      return { kind: 'tool', tool: type, ...(command?.trim() ? { target: activityTarget(command) } : {}) };
+    }
+    case 'file_change': {
+      const changes = (item as { changes?: unknown }).changes;
+      const paths = Array.isArray(changes)
+        ? changes.map((change) => stringField(change, 'path')).filter((path): path is string => path !== undefined)
+        : [];
+      return { kind: 'tool', tool: type, ...(paths.length === 0 ? {} : { target: activityTarget(paths.join(', ')) }) };
+    }
+    case 'mcp_tool_call': {
+      const server = stringField(item, 'server');
+      const tool = stringField(item, 'tool');
+      return { kind: 'tool', tool: server !== undefined && tool !== undefined ? `${server}/${tool}` : type };
+    }
+    case 'web_search': {
+      const query = stringField(item, 'query');
+      return { kind: 'tool', tool: type, ...(query?.trim() ? { target: activityTarget(query) } : {}) };
+    }
+    case 'agent_message': {
+      const text = stringField(item, 'text') ?? '';
+      // The answer to a structured stage is the answer, not something the agent did.
+      if (text.trim() === '' || (structured && text.trim().startsWith('{'))) return undefined;
+      return { kind: 'text', text: activityText(text) };
+    }
+    default:
+      return undefined;
+  }
 }

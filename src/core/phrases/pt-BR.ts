@@ -21,7 +21,13 @@ export const ptBR: Phrases = {
       `Conserte o que parou ${tasks}, e então rode \`agent-flow retry\` nela — ou ` +
       `\`agent-flow revalidate\` se você mesmo já consertou a worktree dela.${waiting}`,
     waitingOn: (tasks) => ` ${tasks} está esperando por ela.`,
-    finalAcceptance: 'Rode `agent-flow review`, e então aceite e faça o merge',
+    finalAcceptance: 'Rode `agent-flow review`; ele conclui a run quando a Definition of Done é atendida',
+    // As condições ficam em inglês: são o registro da run, não frase da tela (ver index.ts).
+    reviewNotDone: (unmet, runId) =>
+      `A última revisão terminou NOT DONE — ${unmet}. Corrija isso e rode ` +
+      '`agent-flow review` de novo; ou, se o humano aceita a entrega como está (um PR aberto ' +
+      `fora do agent-flow, por exemplo), peça o nome e as palavras exatas dele e rode \`agent-flow complete ${runId} ` +
+      '--decided-by "<nome>" --words "<palavras>"`',
   },
 
 
@@ -112,6 +118,15 @@ export const ptBR: Phrases = {
       'recusados, sem aprovação, numa sessão não-interativa. Conceda os binários que esses ' +
       `commands já nomeiam, ex.: runners.${runner}.args: ` +
       "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)'] — no Windows declare cada regra também para o PowerShell, ex. 'PowerShell(npm:*)': é por ele que o Claude Code roda comandos lá",
+    projectMaxTurnsIgnored: (path, value) =>
+      `a configuração do projeto define \`${path}\` como ${value}, e isso é ignorado: um projeto ` +
+      'pode baixar um teto de turnos, nunca subir, seja qual for a confiança. Para subir, mude o valor global',
+    unknownProjectKey: (key) =>
+      `config do projeto: '${key}' não é uma configuração que o agent-flow lê, então é ignorada — confira a grafia`,
+    unknownCommandKey: (key, id) =>
+      `config do projeto: '${key}' é ignorada — commands só tem install, lint, typecheck, test e build. ` +
+      `Declare em validationCommands (ids: letras minúsculas, dígitos, hífens) para um plano poder usar` +
+      (/^[a-z0-9][a-z0-9-]*$/.test(id) ? '' : `, por exemplo '${id.toLowerCase().replaceAll(/[^a-z0-9-]+/g, '-')}'`),
     projectLooseningIgnored: (path) =>
       `a configuração do projeto define \`${path}\`, e isso é ignorado: este projeto não é ` +
       'confiável, então a configuração dele só pode restringir as suas. Para que valha, ' +
@@ -216,6 +231,13 @@ export const ptBR: Phrases = {
       `"${runner}" não declara ${toolClass}, que os prompts deste papel precisam`,
     mayRunCommands: (prefixes) => `pode rodar: ${prefixes}`,
     mayRunAnyCommand: 'pode rodar qualquer comando',
+    maxTurnsCeiling: (maxTurns, scope) =>
+      `máximo de turnos: ${String(maxTurns)}${scope === undefined ? '' : ` (${scope})`}`,
+    maxTurnsNotEnforced: (maxTurns, runner, scope) =>
+      `maxTurns é ${String(maxTurns)}${scope === undefined ? '' : ` (${scope})`}, mas o runner "${runner}" ` +
+      'não aplica teto de turnos — não vai valer',
+    maxTurnsScopeStage: (stage) => `etapa ${stage}`,
+    maxTurnsScopeFallback: 'fallback',
     declaredCapabilitiesCaveat: [
       'Capacidades declaradas são lidas dos adapters, nunca inferidas de uma run que por',
       'acaso deu certo. Uma concessão ausente é um aviso: ela não impede a execução.',
@@ -293,6 +315,11 @@ export const ptBR: Phrases = {
     featureNeedsDescription: 'uma feature precisa de uma descrição',
     invalidPlanResumeRequest: 'requisição de retomada de plano inválida',
     invalidApproveRequest: 'requisição de aprovação inválida',
+    decidedByRequired:
+      'Esta ação precisa do nome e das palavras exatas da pessoa que a decidiu: decidedBy ' +
+      '{"by": "<nome dela>", "words": "<as palavras exatas dela>"} via HTTP, --decided-by e --words ' +
+      'na CLI. Peça os dois à pessoa e repasse como ela disse; uma IA não pode inventar nenhum dos dois. ' +
+      'A decisão fica registrada com o canal (api), onde a pessoa pode vê-la.',
     invalidRejectRequest: 'requisição de rejeição inválida',
     invalidRetryRequest: 'requisição de retry inválida',
     invalidAnswerRequest: 'uma resposta precisa de texto, com no máximo 4000 caracteres',
@@ -336,7 +363,12 @@ export const ptBR: Phrases = {
     configUnreadable: 'A configuração não pôde ser lida nem salva.',
     checkFsRetry: 'Confira o acesso ao sistema de arquivos e tente de novo.',
     pairingNotEnabled: 'o pareamento não está habilitado neste servidor',
-    invalidPairRequest: 'requisição de pareamento inválida',
+    invalidPairRequest:
+      'requisição de pareamento inválida: o código tem 12 caracteres como xxxx-xxxx-xxxx (não é o id ' +
+      'da run), aparece no hub quando ele sobe ou com `agent-flow pairing-code` na máquina dele; o nome do ' +
+      'aparelho tem até 40 caracteres simples, sem acento',
+    evidenceLocalOnly: 'arquivos de evidência só são anexados da máquina onde o hub roda (agent-flow review --evidence nela)',
+    pairingCodeLocalOnly: 'código de pareamento só é emitido para a máquina onde o hub roda: rode `agent-flow pairing-code` nela',
     invalidPairingCode: 'código de pareamento inválido',
     sessionLimitReached: 'o limite de 16 sessões ativas de dispositivos foi atingido',
     noSuchDeviceSession: 'sessão de dispositivo não encontrada',
@@ -427,6 +459,7 @@ export const ptBR: Phrases = {
     beingRejected: 'rejeitada',
     beingReviewed: 'revisada',
     beingRevalidated: 'revalidada na mão',
+    beingCompleted: 'concluída na mão',
     heldByPidOn: (pid, hostname) => ` (pid ${pid} em ${hostname})`,
 
     noPlanYetToApprove: (runId) => `${runId} ainda não tem plano, então não há o que aprovar.`,
@@ -468,6 +501,36 @@ export const ptBR: Phrases = {
       'uma dependência é liberada quando essa dependência termina.',
     answerNeedsText: 'Uma resposta precisa de algum texto.',
     sayWhatTaskNeeds: 'Escreva o que a tarefa bloqueada precisa saber para continuar.',
+    evidenceRefused: (file, reason) =>
+      `O arquivo de evidência ${file} foi recusado (${
+        reason === 'not_local'
+          ? 'não é caminho absoluto nesta máquina; caminho de rede ou relativo é recusado'
+          : reason === 'not_an_image'
+            ? 'não é imagem png, jpg, webp ou gif'
+            : reason === 'too_large'
+              ? 'maior que 20 MB'
+              : 'não encontrado'
+      }); nada foi registrado. Anexe só capturas de tela.`,
+    observationNeedsText: (max) =>
+      `Uma observação de e2e precisa de algum texto, com no máximo ${String(max)} caracteres.`,
+    sayWhatYouObserved:
+      'Registre as palavras da própria pessoa: o que ela fez no alvo e o que viu a mudança fazer.',
+    observerNeedsName: (max) =>
+      `Uma observação de e2e precisa do nome da pessoa que a fez (--observed-by, HTTP observedBy), com no máximo ${String(max)} caracteres.`,
+    decisionNeedsName: (max) =>
+      `Uma decisão humana precisa do nome da pessoa que a tomou (--decided-by na CLI, decidedBy.by via HTTP), com no máximo ${String(max)} caracteres.`,
+    decisionNeedsWords: (max) =>
+      `Uma decisão humana precisa das palavras da própria pessoa (--words na CLI, decidedBy.words via HTTP), com no máximo ${String(max)} caracteres.`,
+    askHumanForDecision:
+      'Peça à pessoa a decisão e o nome dela, e registre os dois exatamente como ela disse. Uma IA não pode inventar nenhum dos dois.',
+    e2eHeadMismatch: (given, current) =>
+      `O build que a pessoa testou (${given}) não é o commit em revisão (${current}). A observação dela é sobre outro código.`,
+    e2eHeadWithoutCommit: (given) =>
+      `Esta execução é revisada no próprio diretório, então nenhum commit nomeia a árvore e o build ${given} não pode ser conferido.`,
+    askHumanWhichBuild:
+      'Peça à pessoa que teste o commit em revisão e registre a observação dela de novo.',
+    noE2EToAttest:
+      'Este projeto não roda o estágio de e2e (roles.e2e.enabled é false), então não há resultado de e2e para uma observação substituir.',
 
     runPausedAt: (runId, at) => `${runId} foi pausada em ${at}.`,
     resumeIt: 'Retome com `agent-flow resume`.',
@@ -525,6 +588,14 @@ export const ptBR: Phrases = {
 
     finishedNothingToCancel: (runId, status) =>
       `${runId} terminou (${status}), então não há o que cancelar.`,
+    finishedCannotComplete: (runId, status) =>
+      `${runId} já terminou (${status}); uma run encerrada não pode ser concluída.`,
+    completeNeedsReview: (runId) =>
+      `Nenhuma revisão concluiu sobre o trabalho atual de ${runId}, então não há veredito sobre o qual concluí-la.`,
+    completeWhileReviewing: (runId) => `${runId} está sendo revisada agora; o veredito ainda não saiu.`,
+    waitForReview: 'Espere o `agent-flow review` terminar e conclua sobre o que ele apontar.',
+    reviewBeforeCompleting:
+      'Rode `agent-flow review` antes. Se terminar NOT DONE, o humano ainda pode concluir a run, por cima do que ela apontou como faltando.',
 
     revisionNeedsInstruction: 'Uma revisão precisa de uma instrução dizendo o que deve mudar.',
     trivialNoRevision:
@@ -654,6 +725,7 @@ export const ptBR: Phrases = {
 
     planWaiting: 'o plano está esperando uma decisão',
     finalReviewWaiting: 'todas as tarefas terminaram; falta a revisão final',
+    finalReviewNotDone: 'a revisão final rodou e a Definition of Done não foi atendida',
     runTheFinalReview: 'Rodar a revisão final',
     nothingRunsUntilGate: 'nada roda enquanto o portão não abrir',
     reviewThePlan: 'Revisar o plano',
@@ -738,5 +810,26 @@ export const ptBR: Phrases = {
     lastSeenAt: 'Visto pela última vez',
     activeSessions: (count) =>
       `${String(count)} ${count === 1 ? 'sessão ativa de dispositivo' : 'sessões ativas de dispositivos'}`,
+  },
+  timeline: {
+    heading: (runId) => `Para onde foi o tempo — ${runId}`,
+    noActiveRun: 'Nenhuma execução ativa. Indique uma: agent-flow timeline <runId>',
+    wall: 'Tempo total',
+    model: 'Modelo',
+    validation: 'Validação',
+    human: 'Esperando uma pessoa',
+    quota: 'Esperando a cota',
+    rework: 'Retrabalho',
+    other: 'Outros',
+    minutes: 'minutos',
+    cost: 'custo (USD)',
+    byStage: 'Por etapa',
+    stage: 'etapa',
+    attempts: 'tentativas',
+    notReported: 'não informado',
+    notABill: 'Os custos são o preço que os runners atribuíram às chamadas — não necessariamente a sua fatura.',
+    quotaNote: 'O tempo depois de uma falha de cota conta como cota até alguém reiniciar a execução.',
+    staleNote:
+      'Esta execução diz que está trabalhando, mas nada foi escrito além do orçamento da etapa: a etapa aberta só é contada até o último evento.',
   },
 };

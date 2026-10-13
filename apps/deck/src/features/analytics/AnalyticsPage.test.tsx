@@ -31,12 +31,15 @@ const ANALYTICS: AnalyticsView = {
     retries: 14,
     reasoningClamped: 3,
   },
-  byRunner: [{ key: 'agy', count: 260, durationMs: 7_200_000, failures: 9, fallbacks: 2, retries: 14 }],
+  byRunner: [{ key: 'agy', count: 260, durationMs: 7_200_000, failures: 9, fallbacks: 2, retries: 14, inputTokens: 0, outputTokens: 0, usageReporting: 0 }],
   byModel: [],
-  byRole: [{ key: 'architect', count: 50, durationMs: 3_000_000, failures: 0, fallbacks: 0, retries: 0 }],
+  byRole: [{ key: 'architect', count: 50, durationMs: 3_000_000, failures: 0, fallbacks: 0, retries: 0, inputTokens: 0, outputTokens: 0, usageReporting: 0 }],
+  byRoleModel: [],
+  byEffort: [],
+  quality: [],
   byStage: [
-    { key: 'discovery', count: 50, durationMs: 4_000_000, failures: 0, fallbacks: 0, retries: 0 },
-    { key: 'planning', count: 50, durationMs: 3_200_000, failures: 9, fallbacks: 2, retries: 14 },
+    { key: 'discovery', count: 50, durationMs: 4_000_000, failures: 0, fallbacks: 0, retries: 0, inputTokens: 0, outputTokens: 0, usageReporting: 0 },
+    { key: 'planning', count: 50, durationMs: 3_200_000, failures: 9, fallbacks: 2, retries: 14, inputTokens: 0, outputTokens: 0, usageReporting: 0 },
   ],
 };
 
@@ -72,7 +75,7 @@ describe('the analytics page', () => {
     // string a person copies into the Crew page stopped being copyable.
     serve({
       ...ANALYTICS,
-      byModel: [{ key: 'claude-opus-5-5', count: 2, durationMs: 1_000_000, failures: 0, fallbacks: 0, retries: 0 }],
+      byModel: [{ key: 'claude-opus-5-5', count: 2, durationMs: 1_000_000, failures: 0, fallbacks: 0, retries: 0, inputTokens: 0, outputTokens: 0, usageReporting: 0 }],
     });
     render(<AnalyticsPage />);
 
@@ -121,6 +124,51 @@ describe('the analytics page', () => {
         fetcher.mock.calls.some(([input]) => String(input).includes('projectId=flowcanvas')),
       ).toBe(true);
     });
+  });
+
+  // Dogfood 08/10 (Luis): which model to put in which role, decided with data.
+  it('shows what each role × model spent in tokens, and what each model’s code looked like', async () => {
+    serve({
+      ...ANALYTICS,
+      byRoleModel: [
+        {
+          key: 'executor.normal · claude-sonnet-5-5',
+          count: 4,
+          durationMs: 1_000_000,
+          failures: 0,
+          fallbacks: 0,
+          retries: 1,
+          inputTokens: 120_000,
+          outputTokens: 8_000,
+          usageReporting: 4,
+        },
+      ],
+      byEffort: [],
+      quality: [{ model: 'claude-sonnet-5-5', tasks: 4, firstAttempt: 3, reviewed: 4, findings: { high: 1, medium: 2 } }],
+    });
+    render(<AnalyticsPage />);
+
+    const roles = await screen.findByLabelText(t.analytics.byRoleModel);
+    expect(roles.textContent).toContain('executor.normal · claude-sonnet-5-5');
+    expect(roles.textContent).toContain(t.telemetry.tokens(120_000, 8_000));
+
+    const quality = screen.getByLabelText(t.analytics.quality);
+    expect(quality.textContent).toContain('claude-sonnet-5-5');
+    expect(quality.textContent).toContain(t.analytics.firstAttempt(3, 4));
+    expect(quality.textContent).toContain(`1 ${t.words.high}`);
+    expect(quality.textContent).toContain(`2 ${t.words.medium}`);
+  });
+
+  it('reads a hub that does not send the new sections yet', async () => {
+    // An older hub answers without them; the page must still draw what it has.
+    const legacy = Object.fromEntries(
+      Object.entries(ANALYTICS).filter(([key]) => !['byRoleModel', 'byEffort', 'quality'].includes(key)),
+    ) as unknown as AnalyticsView;
+    serve(legacy);
+    render(<AnalyticsPage />);
+
+    expect(await screen.findByLabelText(t.telemetry.byStage)).toBeInTheDocument();
+    expect(screen.queryByLabelText(t.analytics.quality)).toBeNull();
   });
 
   it('says nothing has run rather than drawing empty bars', async () => {

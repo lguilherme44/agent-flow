@@ -33,6 +33,7 @@ import {
   type InstructionIO,
 } from './instruction-source.js';
 import { actionDeps, currentRunId, exitCodeFor, render } from './approve.js';
+import { readDecidedBy, type DecidedByFlags } from './decided-by.js';
 import { nodeAdapters } from './adapters.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
@@ -329,7 +330,7 @@ export function writeStageProgress(stage: string, status: string, verbose: boole
  */
 const REVISABLE_STAGES = ['sdd', 'planning'] as const;
 
-export interface ReviseCommandFlags extends InstructionFlags {
+export interface ReviseCommandFlags extends InstructionFlags, DecidedByFlags {
   readonly from?: string;
   /** `--decision`: replan without spending a revision cycle (FR-013). */
   readonly decision?: boolean;
@@ -407,6 +408,16 @@ export async function runReviseCommand(
       return ExitCode.CONFIG_ERROR;
     }
 
+    // Who authorised the revision, before the run is read or an editor is opened: a gate
+    // move with no named human is refused whatever the run's state (`--decided-by`).
+    const decided = await readDecidedBy(flags, seams.io, {
+      stdinTaken: source.kind === 'stdin' || source.kind === 'editor',
+    });
+    if (!decided.ok) {
+      process.stderr.write(`${decided.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
     const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
@@ -424,7 +435,14 @@ export async function runReviseCommand(
     }
     const instruction = read.instruction;
 
-    const outcome = await seams.revise(deps, runId, instruction, from as RunStage, chosen.mode);
+    const outcome = await seams.revise(
+      deps,
+      runId,
+      instruction,
+      decided.decision,
+      from as RunStage,
+      chosen.mode,
+    );
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);

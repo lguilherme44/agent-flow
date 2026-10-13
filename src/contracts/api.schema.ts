@@ -5,6 +5,12 @@ import { ArtifactNameSchema, type ReasoningLevel } from './common.schema.js';
 import { LocaleSchema } from './locale.js';
 import type { Finding, FindingAdjudication } from './review.schema.js';
 import {
+  HumanNameSchema,
+  HumanWordsSchema,
+  type DecisionChannel,
+  type GateDecisionAction,
+} from './human-decision.schema.js';
+import {
   WorkflowClassSchema,
   PipelineStageSchema,
   RunStageSchema,
@@ -238,6 +244,20 @@ export const ConfigApplyRequestSchema = ConfigValidateRequestSchema.extend({
  * either. The browser's whole vocabulary is an id the server issued and a sentence
  * a person typed.
  */
+/**
+ * Who decided at the plan gate, and their words, as a client sends them (`decidedBy`).
+ *
+ * Optional in the shape and required by the handler of every non-browser client: an API
+ * caller is an AI or a script, and the name and the words are the only thing that says a
+ * person decided. The Deck may leave it out, and the server fills it from the session.
+ * There is no channel here — the server derives it from the request — and the bounds are
+ * `readHumanDecision`'s to judge, so a refusal can name the field that does not hold.
+ */
+export const DecidedByRequestSchema = z.object({
+  by: z.string().optional(),
+  words: z.string().optional(),
+});
+
 export const ApproveRequestSchema = z.object({
   /**
    * Overrides a refusal the server said was forcible, and only those.
@@ -251,15 +271,19 @@ export const ApproveRequestSchema = z.object({
    * one that passed.
    */
   force: z.boolean().default(false),
+  decidedBy: DecidedByRequestSchema.optional(),
 });
 
 export const RejectRequestSchema = z.object({
   reason: z.string().trim().min(1).max(2_000).optional(),
+  decidedBy: DecidedByRequestSchema.optional(),
 });
 
 export const ReviseRequestSchema = z.object({
   /** What should change. Free text a person wrote; never interpreted as a command. */
   instruction: z.string().trim().min(1).max(4_000),
+  /** The human authorising the revision, and their words; `instruction` stays the change. */
+  decidedBy: DecidedByRequestSchema.optional(),
 });
 
 export const StartRequestSchema = z.object({
@@ -279,6 +303,12 @@ export const RetryRequestSchema = z.object({
    * a net for half the people who need it.
    */
   expectNoChange: z.boolean().default(false),
+  /**
+   * Who chose the override, and their words. Required of an API client when `force` or
+   * `expectNoChange` is true — both overrule a gate — and filled from the session for the
+   * Deck. A plain retry carries none.
+   */
+  decidedBy: DecidedByRequestSchema.optional(),
 });
 
 /**
@@ -293,8 +323,30 @@ export const RetryRequestSchema = z.object({
  */
 export const AnswerRequestSchema = z.object({
   text: z.string().trim().min(1).max(4_000),
+  /**
+   * Who answered, and their words — required of an API client, filled from the session for
+   * the Deck, as the plan gate's is. The answer is a human decision: an AI relaying it has to
+   * say whose it is, and the `text` stays the answer itself.
+   */
+  decidedBy: DecidedByRequestSchema.optional(),
 });
 
+/**
+ * `cancel`, which had no body: irreversible, so a human decision with a name and words like
+ * the gate's. The Deck's `{}` still parses; the handler fills it from the session.
+ */
+export const CancelRequestSchema = z.object({
+  decidedBy: DecidedByRequestSchema.optional(),
+});
+
+/**
+ * `complete`: a person closing a run the Definition of Done did not (dogfood 09/10). A human
+ * decision like `cancel`; `pr` is where the delivery made outside `forge` is, when there is one.
+ */
+export const CompleteRequestSchema = z.object({
+  decidedBy: DecidedByRequestSchema.optional(),
+  pr: z.string().trim().min(1).max(2_000).optional(),
+});
 /**
  * `agent-flow review`, from the browser (Deck).
  *
@@ -306,7 +358,40 @@ export const AnswerRequestSchema = z.object({
 export const ReviewRequestSchema = z.object({
   /** Turn the findings into corrective tasks and review the corrected plan, as `--fix` does. */
   fix: z.boolean().default(false),
-});
+  /**
+   * What a person saw the change do on a target e2e cannot reach, as `--e2e-observed` says
+   * it. Same trust class and bound as an answer: quoted, never interpreted.
+   */
+  e2eObserved: HumanWordsSchema.optional(),
+  /**
+   * Who saw it, by name, as `--observed-by` says it — required with `e2eObserved`. The
+   * resolved actor is only the channel: loopback skips pairing and falls back to
+   * `keyboard`, which an AI on this machine is too.
+   */
+  observedBy: HumanNameSchema.optional(),
+  /** The build the person tested, as `--e2e-head`: a commit id or a prefix of 7+. */
+  e2eHead: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-fA-F]{7,40}$/)
+    .optional(),
+  /**
+   * Screenshots of what the person saw, as `--evidence`: paths on this machine, copied into the
+   * run (dogfood 09/10). Images only, judged by the use case before anything is recorded.
+   */
+  evidence: z.array(z.string().trim().min(1).max(4_096)).max(20).optional(),
+})
+  // A name with no observation, or an observation with no name, is refused here (400)
+  // rather than as a failed job: neither is a request the use case could act on.
+  .refine((body) => (body.e2eObserved === undefined) === (body.observedBy === undefined), {
+    message: 'e2eObserved and observedBy go together',
+  })
+  .refine((body) => body.e2eHead === undefined || body.e2eObserved !== undefined, {
+    message: 'e2eHead names the build an observation was made on',
+  })
+  .refine((body) => body.evidence === undefined || body.e2eObserved !== undefined, {
+    message: 'evidence is what an observation was made with',
+  });
 
 /**
  * `agent-flow feature "<description>"`, from the browser (Deck).
@@ -550,6 +635,43 @@ export interface RunDetailView extends RunSummaryView {
    * byte for byte what it was.
    */
   readonly amendments?: readonly AmendmentView[];
+  /**
+   * The latest approve, reject or revise, with who decided, their words and the channel.
+   *
+   * **Absent when the latest gate move recorded none** — every run that predates
+   * `decidedBy` — rather than reaching back to an older move that did: a stale name beside
+   * the current gate would be a decision attributed to the wrong move.
+   */
+  readonly gateDecision?: GateDecisionView;
+  /**
+   * Every operator action the run recorded, oldest first, with the channel it came through
+   * and — for a human decision — who decided and their words.
+   *
+   * **Absent, not empty, when there are none**, so the view of an untouched run is what it
+   * was. An action recorded before channels were (`channel` absent) is listed without one,
+   * never with a guess.
+   */
+  readonly operatorActions?: readonly OperatorActionView[];
+}
+
+/** One operator action, as a reader is shown it: "pause via deck", "answer by Luis via api". */
+export interface OperatorActionView {
+  readonly action: string;
+  readonly channel?: DecisionChannel;
+  /** A human decision's name and words; absent for retry, start, pause, resume, review. */
+  readonly by?: string;
+  readonly words?: string;
+  readonly at: string;
+}
+
+/** A plan-gate decision, as a reader is shown it: "decided by Luis via api: '…'". */
+export interface GateDecisionView {
+  readonly action: GateDecisionAction;
+  readonly by: string;
+  readonly words: string;
+  readonly channel: DecisionChannel;
+  /** When the move was recorded. */
+  readonly at: string;
 }
 
 /**
@@ -594,6 +716,10 @@ export interface AmendmentView {
   /** How many findings the review overruled or attached had. */
   readonly findingCount?: number;
   readonly findings?: readonly AttachedFindingView[];
+  /** Who observed an `e2e_observation`, by name; `actor` is only the channel it came through. */
+  readonly observedBy?: string;
+  /** The commit an `e2e_observation` holds for; it counts for no other. */
+  readonly integrationHead?: string;
 }
 
 export interface IntegrationConflictView {
@@ -1011,6 +1137,8 @@ export interface RoleRouteView {
     readonly model?: string;
     readonly reasoning: ReasoningLevel;
     readonly timeoutSeconds: number;
+    /** Absent when the role sets no turn ceiling. */
+    readonly maxTurns?: number;
   };
   readonly resolved?: RoutedAgentView;
   /** Present when the configured route cannot be resolved at all. */
@@ -1173,6 +1301,14 @@ export interface DoctorCapabilityView {
     readonly any: boolean;
     readonly prefixes: readonly string[];
   };
+  /** Each turn ceiling the role's work runs under, and whether its serving runner enforces it. */
+  readonly turnCeilings?: readonly {
+    readonly scope: 'role' | 'stage' | 'fallback';
+    readonly stage?: string;
+    readonly runner: string;
+    readonly maxTurns: number;
+    readonly enforced: boolean;
+  }[];
   /** `unresolvable` only. */
   readonly errorKind?: string;
   readonly reason?: string;
@@ -1330,6 +1466,19 @@ export interface MetricBucketView {
   readonly failures: number;
   readonly fallbacks: number;
   readonly retries: number;
+  /** The tokens the runners reported, over `usageReporting` of `count` entries (dogfood 08/10). */
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly usageReporting?: number;
+}
+
+/** What the code a model wrote looked like to its first review (dogfood 08/10). */
+export interface ModelQualityView {
+  readonly model: string;
+  readonly tasks: number;
+  readonly firstAttempt: number;
+  readonly reviewed: number;
+  readonly findings: Readonly<Record<string, number>>;
 }
 
 /** Context estimates observed from the run audit trail; never provider billing. */
@@ -1452,6 +1601,73 @@ export interface RunTelemetryView {
   readonly context?: ContextTelemetryView;
 }
 
+/**
+ * Where a run's wall clock went (`GET /runs/:runId/timeline`).
+ *
+ * `core/run-timeline.ts`'s `RunTimeline`, declared by shape for the reason
+ * {@link TelemetrySummaryView} is: `contracts` may not import `core`. The handler assigns the
+ * fold's result to this type, so a field that moves on either side is a compile error.
+ *
+ * The six `*Ms` totals partition `wallMs`; `stages` and `tasks` are raw sums that can exceed
+ * it under parallelism. Every cost field is the runners' own report and is absent, never
+ * zero, when none reported one.
+ */
+export type RunTimelineKindView = 'model' | 'validation' | 'human' | 'quota' | 'rework' | 'other';
+
+export interface RunTimelineSegmentView {
+  readonly kind: RunTimelineKindView;
+  readonly from: string;
+  readonly to: string;
+  /** An identifier — a stage, a task, the gate or action — never a sentence. */
+  readonly label: string;
+}
+
+export interface RunTimelineStageView {
+  readonly stage: string;
+  readonly attempts: number;
+  readonly modelMs: number;
+  readonly costUsd?: number;
+  readonly outputTokens?: number;
+}
+
+export interface RunTimelineTaskView {
+  readonly task: string;
+  readonly attempts: number;
+  readonly modelMs: number;
+  readonly costUsd?: number;
+  readonly validationMs: number;
+  readonly commands: readonly {
+    readonly command: string;
+    readonly durationMs: number;
+    readonly exitCode: number;
+  }[];
+}
+
+export interface RunTimelineView {
+  readonly startedAt?: string;
+  readonly endedAt?: string;
+  readonly wallMs: number;
+  readonly modelMs: number;
+  readonly validationMs: number;
+  readonly waitingForHumanMs: number;
+  readonly quotaWaitMs: number;
+  readonly reworkMs: number;
+  readonly otherMs: number;
+  readonly costUsd?: number;
+  readonly modelCostUsd?: number;
+  readonly reworkCostUsd?: number;
+  /** Some execution has no closing event. */
+  readonly inFlight: boolean;
+  /**
+   * The run says it is working and has been silent past its stage's budget: open executions
+   * were closed at the last event rather than run on to now. Absent otherwise.
+   */
+  readonly stale?: boolean;
+  readonly stages: readonly RunTimelineStageView[];
+  readonly tasks: readonly RunTimelineTaskView[];
+  readonly segments: readonly RunTimelineSegmentView[];
+}
+
 export interface AnalyticsView {
   readonly scope: {
     readonly projectIds: string[];
@@ -1478,6 +1694,11 @@ export interface AnalyticsView {
   readonly byModel: MetricBucketView[];
   readonly byRole: MetricBucketView[];
   readonly byStage: MetricBucketView[];
+  /** `<role> · <model>`: which model did which job, and what it spent (dogfood 08/10). */
+  readonly byRoleModel?: MetricBucketView[];
+  readonly byEffort?: MetricBucketView[];
+  /** By the model that wrote the code: first attempts and the first review's findings. */
+  readonly quality?: ModelQualityView[];
   /** Absent means context telemetry was not observed; it never means zero. */
   readonly context?: ContextTelemetryAnalyticsView;
 }
@@ -1543,6 +1764,11 @@ export interface ActionJobView {
   readonly finishedAt?: string;
   readonly summary?: string;
   readonly error?: ActionErrorView;
+  /**
+   * The human decision this job carries (a revise), as the hub recorded it — so a client
+   * can tell the decision was attributed without waiting for the job.
+   */
+  readonly decidedBy?: { readonly by: string; readonly words: string; readonly channel: DecisionChannel };
 }
 
 /**

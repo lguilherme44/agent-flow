@@ -13,12 +13,25 @@ import { existsSync } from 'node:fs';
  * (`dist/bin/`), and from a package root.
  */
 export function resolvePromptsDir(): string {
+  return resolveShippedDir('prompts');
+}
+
+/**
+ * Locates the shipped `guides/` directory — the operator guides `agent-flow instructions`
+ * prints. Same resolution as the prompts, for the same reason, so the two can never
+ * disagree about where the package is installed.
+ */
+export function resolveGuidesDir(): string {
+  return resolveShippedDir('guides');
+}
+
+function resolveShippedDir(name: string): string {
   const here = dirname(fileURLToPath(import.meta.url));
 
   const candidates = [
-    join(here, '../../prompts'), // src/app/ → package root
-    join(here, '../prompts'), // dist/bin/ → package root
-    join(here, 'prompts'),
+    join(here, '../..', name), // src/app/ → package root, and dist/bin/ → package root
+    join(here, '..', name),
+    join(here, name),
   ];
 
   for (const candidate of candidates) {
@@ -26,6 +39,6 @@ export function resolvePromptsDir(): string {
   }
 
   // Returned rather than thrown: the loader produces a better error, naming the
-  // prompt that could not be found alongside the directory it looked in.
+  // file that could not be found alongside the directory it looked in.
   return resolve(candidates[0] as string);
 }

@@ -17,6 +17,10 @@ import { ExitCode } from '../../src/cli/exit-codes.js';
 import type { GlobalOptions } from '../../src/cli/index.js';
 import { PlanSchema } from '../../src/contracts/index.js';
 
+/** Who decided, as the flags give it; required on every gate move. */
+const HUMAN = { decidedBy: 'Luis', words: 'Go ahead.' } as const;
+const DECISION = { by: 'Luis', words: 'Go ahead.', channel: 'cli' } as const;
+
 /**
  * P7.5 at the command line — `revise --decision`, `revise --escalate` and
  * `approve --attach-findings` (FR-013 … FR-016, FR-021).
@@ -172,13 +176,13 @@ describe('revise --decision and --escalate (FR-013, FR-014, FR-021)', () => {
     });
 
     const code = await runReviseCommand(
-      { argument: 'Keep the v1 endpoint.', decision: true },
+      { argument: 'Keep the v1 endpoint.', decision: true, ...HUMAN },
       globals,
       seams,
     );
 
     expect(code).toBe(ExitCode.OK);
-    expect(revise).toHaveBeenCalledWith(deps, runId, 'Keep the v1 endpoint.', 'planning', 'decision');
+    expect(revise).toHaveBeenCalledWith(deps, runId, 'Keep the v1 endpoint.', DECISION, 'planning', 'decision');
     expect(output.stdout()).toContain('Revision count unchanged: 2 of 2.');
   });
 
@@ -197,7 +201,7 @@ describe('revise --decision and --escalate (FR-013, FR-014, FR-021)', () => {
     });
 
     const code = await runReviseCommand(
-      { argument: 'This touches the public contract.', escalate: true },
+      { argument: 'This touches the public contract.', escalate: true, ...HUMAN },
       globals,
       seams,
     );
@@ -207,6 +211,7 @@ describe('revise --decision and --escalate (FR-013, FR-014, FR-021)', () => {
       deps,
       runId,
       'This touches the public contract.',
+      DECISION,
       'planning',
       'escalation',
     );
@@ -218,9 +223,9 @@ describe('revise --decision and --escalate (FR-013, FR-014, FR-021)', () => {
     const output = capture();
     const { seams, revise } = reviseSeams(deps, { runId, taskCount: 3, approvalCleared: false });
 
-    await runReviseCommand({ argument: 'Split TASK-002.' }, globals, seams);
+    await runReviseCommand({ argument: 'Split TASK-002.', ...HUMAN }, globals, seams);
 
-    expect(revise).toHaveBeenCalledWith(deps, runId, 'Split TASK-002.', 'planning', 'revision');
+    expect(revise).toHaveBeenCalledWith(deps, runId, 'Split TASK-002.', DECISION, 'planning', 'revision');
     // Positive control for the two above: the line comes from the mode, not from the command.
     expect(output.stdout()).not.toContain('Revision count unchanged');
     expect(output.stdout()).not.toContain('→');
@@ -232,7 +237,7 @@ describe('revise --decision and --escalate (FR-013, FR-014, FR-021)', () => {
     const { seams, revise } = reviseSeams(deps, { runId, taskCount: 3, approvalCleared: false });
 
     const code = await runReviseCommand(
-      { argument: 'Either.', decision: true, escalate: true },
+      { argument: 'Either.', decision: true, escalate: true, ...HUMAN },
       globals,
       seams,
     );
@@ -258,7 +263,7 @@ describe('approve --attach-findings (FR-016, FR-021)', () => {
     const { store, deps, runId } = await project('failed');
     const output = capture();
 
-    const code = await runApproveCommand({ attachFindings: true }, globals, () => deps);
+    const code = await runApproveCommand({ attachFindings: true, ...HUMAN }, globals, () => deps);
 
     expect(code).toBe(ExitCode.OK);
     // Three findings; finding 2 cites no task, so it reaches all three.
@@ -275,7 +280,7 @@ describe('approve --attach-findings (FR-016, FR-021)', () => {
     const before = await store.loadRun(runId);
     const output = capture();
 
-    const code = await runApproveCommand({ attachFindings: true }, globals, () => deps);
+    const code = await runApproveCommand({ attachFindings: true, ...HUMAN }, globals, () => deps);
 
     expect(code).toBe(ExitCode.GATE_NOT_SATISFIED);
     expect(output.stderr()).toContain('there is no failed review of this plan to hand over');
@@ -288,7 +293,7 @@ describe('approve --attach-findings (FR-016, FR-021)', () => {
     const { deps } = await project('passed');
     const output = capture();
 
-    const code = await runApproveCommand({}, globals, () => deps);
+    const code = await runApproveCommand({ ...HUMAN }, globals, () => deps);
 
     expect(code).toBe(ExitCode.OK);
     expect(output.stdout()).toContain('Approved');

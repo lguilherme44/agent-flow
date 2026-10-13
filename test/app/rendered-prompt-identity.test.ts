@@ -53,6 +53,10 @@ import { PlanReviewService } from '../../src/app/plan-review-service.js';
  * for a project with no declared command and no runner grant it renders as nothing. Their five
  * fixtures were captured from the templates before any of them was edited, through the real
  * `PlanningPipeline`, and are read here under the same rule: no update flag.
+ *
+ * **One deliberate edit since.** `planning.json` gained the `## Task budget` section, which
+ * every standard plan is now told. It was inserted into the captured string by hand, not
+ * re-rendered, so the fixture's diff is that section and nothing the edit could have hidden.
  */
 
 const REAL_PROMPTS = join(import.meta.dirname, '../../prompts');

@@ -70,13 +70,15 @@ agent-flow doctor          # esta máquina consegue rodar?
 
 agent-flow feature "Adicionar agendamentos recorrentes"   # planeja, revisa, para no portão
 agent-flow status          # leia o SDD, o plano e a revisão
-agent-flow approve
+agent-flow approve --decided-by "<seu nome>" --words "<o que você decidiu>"
 agent-flow run
 agent-flow review          # verificação, revisão final, Definição de Pronto
 
 agent-flow ui              # Deck, o dashboard, em http://127.0.0.1:4782
 ```
 
+Toda decisão no portão (`approve`, `reject`, `revise`) registra quem decidiu e as palavras
+dela, e é recusada sem elas; uma IA que opera o agent-flow passa as da pessoa, nunca as suas.
 Pedidos longos vão num arquivo: `agent-flow feature --file pedido.md`. Um passo a passo com uma
 feature de quatro tarefas: [`docs/example-walkthrough.md`](docs/example-walkthrough.md).
 
@@ -92,6 +94,7 @@ feature de quatro tarefas: [`docs/example-walkthrough.md`](docs/example-walkthro
 | `review` | Verificação, revisão final e Definição de Pronto |
 | `pause` · `resume` · `cancel` | Para de começar trabalho · continua · encerra a run, guardando todo artefato |
 | `ui` · `projects` · `autostart` | Dashboard · o hub de projetos · sobe o dashboard no login |
+| `instructions` · `mcp` | Os guias do operador · as mesmas operações como tools MCP para uma IA ([`docs/mcp.md`](docs/mcp.md)) |
 | `clean` | Remove runs antigas e seus worktrees; apaga branch só com `--branches` |
 
 ## Configuração
@@ -174,6 +177,7 @@ Detalhes e limites declarados: [`docs/security.md`](docs/security.md).
 | [`docs/platform-roadmap.md`](docs/platform-roadmap.md) · [`docs/platform-todo.md`](docs/platform-todo.md) | Para onde o produto vai, e a fila |
 | [`docs/roadmap.md`](docs/roadmap.md) | Marcos já construídos (em inglês) |
 | [`docs/web-ui.md`](docs/web-ui.md) | O dashboard e sua API HTTP (em inglês) |
+| [`docs/mcp.md`](docs/mcp.md) | `agent-flow mcp`: as mesmas operações como tools MCP, e a configuração no Claude Code (em inglês) |
 | [`docs/runner-capabilities.md`](docs/runner-capabilities.md) | O que cada CLI de código faz de verdade, medido (em inglês) |
 | [`docs/security.md`](docs/security.md) | O modelo de confiança e seus limites (em inglês) |
 | [`docs/testing.md`](docs/testing.md) | As camadas de teste e o que cada uma prova (em inglês) |

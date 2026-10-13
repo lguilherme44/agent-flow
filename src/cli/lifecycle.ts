@@ -1,8 +1,10 @@
-import { cancel, pause, resume } from '../app/run-actions.js';
+import { cancel, complete, pause, resume } from '../app/run-actions.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
 import { actionDeps, currentRunId, exitCodeFor, printWarnings, render } from './approve.js';
 import type { GlobalOptions } from './index.js';
+import { nodeDecisionIO, readDecidedBy, type DecidedByFlags } from './decided-by.js';
+import type { DecisionCommandDeps } from './run.js';
 
 /**
  * `agent-flow pause`, `resume` and `cancel` (PRI-14, PRI-15).
@@ -114,11 +116,12 @@ export async function runResumeCommand(globals: GlobalOptions): Promise<ExitCode
  * deliberate act.
  */
 export async function runCancelCommand(
-  options: { yes?: boolean },
+  options: { yes?: boolean } & DecidedByFlags,
   globals: GlobalOptions,
+  seams: DecisionCommandDeps = { io: nodeDecisionIO(), actionDeps },
 ): Promise<ExitCodeValue> {
   try {
-    const deps = actionDeps(globals);
+    const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run.\n');
@@ -136,7 +139,15 @@ export async function runCancelCommand(
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const outcome = await cancel(deps, runId);
+    // Irreversible, so a human decision: named, in their words, never filled in. Asked after
+    // `--yes`, which is the question a person without the flags needs to see first.
+    const decision = await readDecidedBy(options, seams.io);
+    if (!decision.ok) {
+      process.stderr.write(`${decision.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    const outcome = await cancel(deps, runId, decision.decision);
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);
       return exitCodeFor(outcome.error);
@@ -175,6 +186,62 @@ export async function runCancelCommand(
     );
 
     process.stdout.write(lines.join('\n'));
+    printWarnings(outcome);
+    return ExitCode.OK;
+  } catch (error) {
+    const rendered = renderError(error);
+    process.stderr.write(`${rendered.message}\n`);
+    return rendered.exitCode;
+  }
+}
+
+/**
+ * `agent-flow complete` — close a run the Definition of Done did not (dogfood 09/10).
+ *
+ * For a delivery made outside `forge` (a draft PR opened by hand) after a review that ended
+ * NOT DONE. A human decision: named, in their words, never filled in. The refusals — no
+ * concluded review, a run that ended, a run in flight — are the use case's.
+ */
+export async function runCompleteCommand(
+  options: { pr?: string } & DecidedByFlags,
+  globals: GlobalOptions,
+  seams: DecisionCommandDeps = { io: nodeDecisionIO(), actionDeps },
+): Promise<ExitCodeValue> {
+  try {
+    const decision = await readDecidedBy(options, seams.io);
+    if (!decision.ok) {
+      process.stderr.write(`${decision.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    const deps = seams.actionDeps(globals);
+    const runId = await currentRunId(deps);
+    if (runId === null) {
+      process.stderr.write('No active run.\n');
+      return ExitCode.GATE_NOT_SATISFIED;
+    }
+
+    const outcome = await complete(deps, runId, decision.decision, options.pr === undefined ? {} : { pr: options.pr });
+    if (!outcome.ok) {
+      process.stderr.write(`${render(outcome.error)}\n`);
+      return exitCodeFor(outcome.error);
+    }
+
+    if (outcome.value.alreadyCompleted) {
+      process.stdout.write(`${runId} was already completed.\n`);
+      return ExitCode.OK;
+    }
+
+    const overrode = outcome.value.overrode;
+    process.stdout.write(
+      [
+        `${runId} is completed, on ${decision.decision.by}'s decision.`,
+        ...(overrode.length === 0
+          ? []
+          : ['', 'Recorded over what the last review found missing:', ...overrode.map((name) => `  ✗ ${name}`)]),
+        '',
+      ].join('\n'),
+    );
     printWarnings(outcome);
     return ExitCode.OK;
   } catch (error) {

@@ -461,6 +461,64 @@ describe('runtime status overrides a persisted status that has moved on', () => 
     expect(reviewing([finished, started, at('task_finished', 9, { task: 'FIX-001' })])).toBeUndefined();
   });
 
+  /**
+   * Run 75716 (dogfood 09/10): `review` ran to the end, the Definition of Done said NOT DONE
+   * (e2e NOT_RUN), and the run read "being reviewed" / "accept and merge" for 23 hours — a
+   * command that does not exist, over a review nobody could see had ended.
+   */
+  describe('a review that concluded (dogfood 09/10, run 75716)', () => {
+    const at = (type: string, minute: number, detail: Record<string, unknown> = {}): RunEvent =>
+      RunEventSchema.parse({ at: `2026-10-09T21:${String(minute).padStart(2, '0')}:00.000Z`, type, detail });
+    const project = (events: RunEvent[]) => projectRun({
+      state: state({ stage: 'final-review', tasks: [task('TASK-001', 'completed')] }),
+      nodes: [{ id: 'TASK-001', dependencies: [] }],
+      events,
+    });
+    const notDone = at('run_review_concluded', 8, {
+      done: false,
+      unmet: [
+        { name: 'e2e exercised the change and passed', detail: 'e2e did not run, so nobody observed the change working' },
+      ],
+    });
+
+    it('is no longer in progress once it concluded', () => {
+      const events = [at('task_finished', 0), at('run_review_started', 1), at('stage_completed', 7, { stage: 'final-review' }), notDone];
+      expect(project(events).reviewInProgress).toBeUndefined();
+    });
+
+    it('names what is missing and the real way out, never a command that does not exist', () => {
+      const projection = project([at('task_finished', 0), at('run_review_started', 1), notDone]);
+
+      expect(projection.gate?.gate).toBe('final_acceptance');
+      expect(projection.lastReview).toEqual({ done: false, missing: ['e2e exercised the change and passed'] });
+      expect(projection.gate?.action).toContain('e2e exercised the change and passed');
+      expect(projection.gate?.action).toContain('agent-flow complete');
+      expect(projection.gate?.action).not.toMatch(/accept and merge/);
+    });
+
+    it('asks for the review, and nothing else, before one has concluded', () => {
+      const projection = project([at('task_finished', 0)]);
+
+      expect(projection.lastReview).toBeUndefined();
+      expect(projection.gate?.action).toContain('agent-flow review');
+      expect(projection.gate?.action).not.toMatch(/accept/);
+    });
+
+    it('ends the review when its e2e stage fails, or when review itself failed', () => {
+      // Adversarial review: only verification and final-review ended it, so an e2e timeout —
+      // or anything thrown after the start — left the run "being reviewed" for good.
+      const started = [at('task_finished', 0), at('run_review_started', 1)];
+      expect(project([...started, at('stage_failed', 4, { stage: 'e2e' })]).reviewInProgress).toBeUndefined();
+      expect(project([...started, at('run_review_failed', 4, { reason: 'boom' })]).reviewInProgress).toBeUndefined();
+      expect(project(started).reviewInProgress).toBe(true);
+    });
+
+    it('forgets a conclusion that new work has superseded', () => {
+      const projection = project([at('task_finished', 0), notDone, at('task_finished', 9, { task: 'FIX-001' })]);
+      expect(projection.lastReview).toBeUndefined();
+    });
+  });
+
   it('reports the agent-blocked gate distinctly from a review gate', () => {
     // Two very different reasons a task sits idle, and conflating them is what made
     // dependency-derived blocks unrecoverable in the first place.

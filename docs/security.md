@@ -190,9 +190,16 @@ useless to a page: this server sends no `Access-Control-Allow-Origin`, so the br
 withholds the body. Adding an origin check there would break nothing and prove nothing.
 
 ```bash
-curl -X POST -H 'x-agent-flow-client: 1' \
+curl -X POST -H 'x-agent-flow-client: 1' -H 'content-type: application/json' \
+  -d '{"decidedBy": {"by": "Luis", "words": "Approved as planned."}}' \
   http://127.0.0.1:4782/api/v1/runs/AF-2026-001/approve
 ```
+
+A plan-gate move (`approve`, `reject`, `revise`) from a client with no `Origin` must name
+the human and their words in `decidedBy`, or it is refused with `400`; the run records it
+with the channel `api`. A write carrying this server's `Origin` is the Deck, which may omit
+it. The channel is read from headers, so it is a record, not authentication: a client that
+forges an `Origin` is recorded as the Deck.
 
 ### DNS rebinding
 

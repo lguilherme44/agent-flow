@@ -216,7 +216,21 @@ describe('AmendmentSchema (FR-008)', () => {
       findingCount: 1,
       findings: [{ index: 0, finding, tasks: ['TASK-001', 'FIX-001'] }],
     },
+    e2e_observation: {
+      id: 'AMD-007',
+      kind: 'e2e_observation',
+      actor: device,
+      at: AT,
+      text: 'Opened the cart on the iPhone; the header shows the new total.',
+      integrationHead: 'c'.repeat(40),
+    },
   };
+
+  it('rejects an e2e observation bound to something that is not a commit', () => {
+    expect(
+      AmendmentSchema.safeParse({ ...valid.e2e_observation, integrationHead: 'HEAD' }).success,
+    ).toBe(false);
+  });
 
   it.each(Object.entries(valid))('accepts a valid %s amendment', (kind, entry) => {
     const parsed = AmendmentSchema.parse(entry);

@@ -85,6 +85,19 @@ export interface BaseRunnerOptions {
   readonly command?: string;
 }
 
+/**
+ * The first line of a failure that stopped at its turn ceiling.
+ *
+ * Names the ceiling when this invocation was given one; a ceiling the operator passed
+ * through `RunnerConfig.args` instead is not known here, and the line says so rather than
+ * inventing a number.
+ */
+export function turnLimitMessage(maxTurns: number | undefined): string {
+  return maxTurns === undefined
+    ? 'max_turns_exceeded: the agent reached its turn ceiling before finishing.'
+    : `max_turns_exceeded: the agent reached its ceiling of ${String(maxTurns)} turns (maxTurns) before finishing.`;
+}
+
 /** A declared MCP set. Mirrors `RunnerConfig.mcp`, which carries the reasoning. */
 export interface RunnerMcp {
   readonly config: string;
@@ -225,11 +238,37 @@ export abstract class BaseRunner implements AgentRunner {
     return false;
   }
 
+  /**
+   * Whether the CLI stopped because it reached the turn ceiling it was given.
+   *
+   * `false` here: only an adapter whose CLI enforces `maxTurns` — and so declares
+   * `supportsMaxTurns` — can recognise its own way of saying so. Read on the failure path
+   * only, after the error code is decided; it refines the failure, never decides it.
+   */
+  protected turnLimitReached(_result: ProcessResult, _parsed: unknown): boolean {
+    return false;
+  }
+
+  /**
+   * A reader for a CLI that reports while it runs (dogfood 08/10), or none.
+   *
+   * `onStdout` sees every chunk as it arrives; `finish` turns the process result into the one
+   * every parser below expects. Absent here: an adapter whose CLI prints one answer at exit
+   * has nothing to read early.
+   */
+  protected streamReader(
+    _input: AgentRunInput,
+  ): { readonly onStdout: (chunk: string) => void; readonly finish: (result: ProcessResult) => ProcessResult } | undefined {
+    return undefined;
+  }
+
   async run(input: AgentRunInput): Promise<AgentRunResult> {
     const invocation = await this.buildInvocation(input);
+    const reader = this.streamReader(input);
 
     try {
-      const result = await this.processRunner.run({
+      const spawned = await this.processRunner.run({
+        ...(reader === undefined ? {} : { onStdout: reader.onStdout }),
         command: invocation.command,
         // The adapter's argv, then the product's isolation policy, then the operator's.
         // Appended and never merged: the adapter owns the subcommand and its flags, and a
@@ -247,6 +286,7 @@ export abstract class BaseRunner implements AgentRunner {
         ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(invocation.stdin === undefined ? {} : { stdin: invocation.stdin }),
       });
+      const result = reader === undefined ? spawned : reader.finish(spawned);
 
       const envelope = this.parseEnvelope(result);
       const errorCode = this.normaliseError(result, envelope);
@@ -254,12 +294,20 @@ export abstract class BaseRunner implements AgentRunner {
       const usage = this.parseUsage(result, envelope);
 
       if (errorCode !== null) {
+        // Only on the code a turn limit refines: a quota or auth failure that happened to
+        // carry the same marker is still a quota or auth failure.
+        const turnLimit = errorCode === 'execution_failed' && this.turnLimitReached(result, envelope);
         return {
           ok: false,
           errorCode,
-          raw: this.rawMessage(result),
+          // A readable first line, because the CLI's own envelope may carry no message at
+          // all for this case — measured: no `result`, only `subtype` and `errors`.
+          raw: turnLimit
+            ? `${turnLimitMessage(input.maxTurns)}\n${this.rawMessage(result)}`
+            : this.rawMessage(result),
           durationMs: result.durationMs,
           ...(usage === undefined ? {} : { usage }),
+          ...(turnLimit ? { limitReached: 'max_turns' as const } : {}),
         };
       }
 

@@ -664,3 +664,23 @@ describe('permission readiness (AD-32, C-04)', () => {
     expect(() => resolveRole('executor.normal', config(), ungranted)).not.toThrow();
   });
 });
+
+describe('resolveFallback carries its own turn ceiling', () => {
+  const withFallback = (maxTurns?: number): GlobalConfig =>
+    config({
+      runners: { claude: { type: 'claude-code-cli' }, codex: { type: 'codex-cli' } },
+      fallback: {
+        enabled: true,
+        roles: { sdd: { runner: 'codex', effort: 'medium', ...(maxTurns === undefined ? {} : { maxTurns }) } },
+      },
+    });
+  const caps: RunnerCapabilitiesMap = { codex: fullCapabilities };
+
+  it('resolves the fallback maxTurns', () => {
+    expect(resolveFallback('sdd', withFallback(12), caps)?.maxTurns).toBe(12);
+  });
+
+  it('leaves it absent when the fallback declares none', () => {
+    expect(resolveFallback('sdd', withFallback(), caps)).not.toHaveProperty('maxTurns');
+  });
+});

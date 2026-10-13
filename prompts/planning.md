@@ -1,7 +1,7 @@
 ---
 permissions: read-only
 outputFormat: json
-requiredVars: [featureRequest, sdd, architectureImpact, projectConfig, validationCommands]
+requiredVars: [featureRequest, sdd, architectureImpact, projectConfig, validationCommands, workflowClass, maxTasks]
 ---
 ROLE: PLANNING_AGENT
 
@@ -148,6 +148,13 @@ model on trivia, understating them puts a weak model on something dangerous.
 If this is a revision addressing previous review findings, include `findingProposals` for each finding from the previous review:
 - `status`: `RESOLVED` (addressed by new or modified tasks), `SUPERSEDED` (no longer applicable), or `PROPOSE_ACCEPT_WITH_RATIONALE` (propose accepting as residual risk).
 - `rationale`: Clear explanation of the resolution.
+
+## Task budget
+
+This run is a `{{workflowClass}}` workflow. The plan may contain **at most {{maxTasks}}
+tasks**. A plan above the budget is rejected before anyone reads it. Merge what
+belongs together rather than padding the plan with record-keeping or verification
+tasks.
 
 ## Output
 

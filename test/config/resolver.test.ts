@@ -284,3 +284,175 @@ describe('the project config only tightens unless trusted (N4)', () => {
     expect(filtered).toEqual({ ...PROJECT_ID, runners: { claude: {} }, approval: {} });
   });
 });
+
+describe('a project may only lower maxTurns', () => {
+  const resolve = (global: Record<string, unknown>, project: Record<string, unknown>, projectTrusted = false) =>
+    resolveConfigSources({ defaults: {}, global, project, projectTrusted }).effectiveGlobal as {
+      roles?: Record<string, Record<string, unknown>>;
+      fallback?: { roles?: Record<string, Record<string, unknown>> };
+    };
+
+  it('lowers a global ceiling', () => {
+    const roles = resolve({ roles: { architect: { maxTurns: 50 } } }, { roles: { architect: { maxTurns: 20 } } }).roles;
+    expect(roles?.['architect']?.['maxTurns']).toBe(20);
+  });
+
+  it('never raises one, trusted or not', () => {
+    for (const trusted of [false, true]) {
+      const roles = resolve(
+        { roles: { architect: { maxTurns: 50 } } },
+        { roles: { architect: { maxTurns: 80, effort: 'low' } } },
+        trusted,
+      ).roles;
+      expect(roles?.['architect']?.['maxTurns'], String(trusted)).toBe(50);
+      // Only the raising value is dropped; the rest of the override still applies.
+      expect(roles?.['architect']?.['effort']).toBe('low');
+    }
+  });
+
+  it('sets one where the operator set none', () => {
+    const roles = resolve({ roles: { architect: { effort: 'high' } } }, { roles: { architect: { maxTurns: 30 } } }).roles;
+    expect(roles?.['architect']?.['maxTurns']).toBe(30);
+  });
+
+  it('applies to the nested executor tiers', () => {
+    const roles = resolve(
+      { roles: { executors: { normal: { maxTurns: 60 }, complex: { maxTurns: 90 } } } },
+      { roles: { executors: { normal: { maxTurns: 100 }, complex: { maxTurns: 45 } } } },
+    ).roles as Record<string, Record<string, Record<string, unknown>>> | undefined;
+    expect(roles?.['executors']?.['normal']?.['maxTurns']).toBe(60);
+    expect(roles?.['executors']?.['complex']?.['maxTurns']).toBe(45);
+  });
+
+  it('holds a stage override to the global stage value, else the global role value', () => {
+    const roles = resolve(
+      { roles: { architect: { maxTurns: 50, stages: { sdd: { maxTurns: 10 } } } } },
+      { roles: { architect: { stages: { sdd: { maxTurns: 15 }, discovery: { maxTurns: 70, runner: 'local' } } } } },
+    ).roles as Record<string, { stages?: Record<string, Record<string, unknown>> }> | undefined;
+    expect(roles?.['architect']?.stages?.['sdd']?.['maxTurns']).toBe(10);
+    expect(roles?.['architect']?.stages?.['discovery']?.['maxTurns']).toBeUndefined();
+    expect(roles?.['architect']?.stages?.['discovery']?.['runner']).toBe('local');
+  });
+
+  it('applies to fallback roles too', () => {
+    const fallback = resolve(
+      { fallback: { roles: { architect: { maxTurns: 30 } } } },
+      { fallback: { roles: { architect: { maxTurns: 99 } } } },
+    ).fallback;
+    expect(fallback?.roles?.['architect']?.['maxTurns']).toBe(30);
+  });
+
+  it('does not attribute a dropped value to the project', () => {
+    const resolved = resolveConfigSources({
+      defaults: {},
+      global: { roles: { architect: { maxTurns: 50 } } },
+      project: { roles: { architect: { maxTurns: 80 } } },
+    });
+    expect(resolved.originOf('roles.architect.maxTurns')).toBe('global');
+  });
+});
+
+describe('maxTurns raises are reported, and closed in args and fallbacks too', () => {
+  const resolved = (global: Record<string, unknown>, project: Record<string, unknown>, projectTrusted = false) =>
+    resolveConfigSources({ defaults: {}, global, project, projectTrusted });
+
+  it('reports each dropped ceiling with its path and value', () => {
+    const result = resolved(
+      { roles: { architect: { maxTurns: 50, stages: { sdd: { maxTurns: 10 } } } } },
+      { roles: { architect: { maxTurns: 80, stages: { sdd: { maxTurns: 15 } } } } },
+      true,
+    );
+    expect(result.ignoredLoosenings).toEqual([
+      { path: ['roles', 'architect', 'maxTurns'], kind: 'max_turns', value: 80 },
+      { path: ['roles', 'architect', 'stages', 'sdd', 'maxTurns'], kind: 'max_turns', value: 15 },
+    ]);
+  });
+
+  it('reports nothing for a ceiling that only lowers', () => {
+    const result = resolved({ roles: { architect: { maxTurns: 50 } } }, { roles: { architect: { maxTurns: 20 } } });
+    expect(result.ignoredLoosenings).toEqual([]);
+  });
+
+  // Measured on claude 2.1.281 with a prompt needing two Read calls: `--max-turns 1 --max-turns 5`
+  // finished with `subtype: "success"` after 3 turns, and `--max-turns 5 --max-turns 1` stopped
+  // with `error_max_turns`. The last flag wins, and `RunnerConfig.args` ride after the
+  // adapter's own — so a project arg would replace `roles.*.maxTurns`. Screened either way.
+  it('drops --max-turns from project runner args, in both spellings, trusted or not', () => {
+    for (const trusted of [false, true]) {
+      const result = resolved(
+        { runners: { claude: { type: 'claude-code-cli' } } },
+        { runners: { claude: { args: ['--max-turns', '9999', '--verbose', '--max-turns=500'] } } },
+        trusted,
+      );
+      const runners = result.effectiveGlobal['runners'] as Record<string, { args?: unknown[] }>;
+      expect(runners['claude']?.args, String(trusted)).toEqual(['--verbose']);
+      expect(result.ignoredLoosenings, String(trusted)).toEqual([
+        { path: ['runners', 'claude', 'args'], kind: 'max_turns', value: '9999, 500' },
+      ]);
+    }
+  });
+
+  it('leaves args without the flag exactly as written', () => {
+    const result = resolved({}, { runners: { claude: { args: ['--verbose'] } } }, true);
+    expect((result.effectiveGlobal['runners'] as Record<string, { args?: unknown[] }>)['claude']?.args).toEqual(['--verbose']);
+    expect(result.ignoredLoosenings).toEqual([]);
+  });
+
+  it('holds a fallback the operator never declared to the global primary ceiling', () => {
+    const result = resolved(
+      { roles: { architect: { maxTurns: 50 } } },
+      { fallback: { roles: { architect: { runner: 'local', maxTurns: 1000 } } } },
+    );
+    const effective = result.effectiveGlobal as {
+      roles: Record<string, { maxTurns?: number }>;
+      fallback: { roles: Record<string, { maxTurns?: number; runner?: string }> };
+    };
+    // The fallback declares none, so it runs with the primary's (FallbackRunner): 50.
+    expect(effective.fallback.roles['architect']?.maxTurns).toBeUndefined();
+    expect(effective.fallback.roles['architect']?.runner).toBe('local');
+    expect(effective.fallback.roles['architect']?.maxTurns ?? effective.roles['architect']?.maxTurns).toBe(50);
+    expect(result.ignoredLoosenings).toEqual([
+      { path: ['fallback', 'roles', 'architect', 'maxTurns'], kind: 'max_turns', value: 1000 },
+    ]);
+  });
+
+  it('holds a fallback stage override to the primary stage ceiling', () => {
+    const result = resolved(
+      { roles: { executors: { normal: { maxTurns: 60, stages: { implementation: { maxTurns: 30 } } } } } },
+      { fallback: { roles: { 'executor.normal': { stages: { implementation: { maxTurns: 45 } } } } } },
+    );
+    expect(result.ignoredLoosenings).toEqual([
+      {
+        path: ['fallback', 'roles', 'executor.normal', 'stages', 'implementation', 'maxTurns'],
+        kind: 'max_turns',
+        value: 45,
+      },
+    ]);
+  });
+});
+
+describe("a project fallback is held to the lowest ceiling of any stage its role serves", () => {
+  it('drops a fallback value above a primary stage ceiling, though below the primary role one', () => {
+    const result = resolveConfigSources({
+      defaults: {},
+      global: { roles: { executors: { normal: { maxTurns: 60, stages: { implementation: { maxTurns: 30 } } } } } },
+      project: { fallback: { roles: { 'executor.normal': { runner: 'codex', maxTurns: 45 } } } },
+    });
+    const fallback = (result.effectiveGlobal['fallback'] as { roles: Record<string, { maxTurns?: number }> }).roles;
+    expect(fallback['executor.normal']?.maxTurns).toBeUndefined();
+    expect(result.ignoredLoosenings).toEqual([
+      { path: ['fallback', 'roles', 'executor.normal', 'maxTurns'], kind: 'max_turns', value: 45 },
+    ]);
+  });
+
+  it('keeps one at or below every stage ceiling', () => {
+    const result = resolveConfigSources({
+      defaults: {},
+      global: { roles: { executors: { normal: { maxTurns: 60, stages: { implementation: { maxTurns: 30 } } } } } },
+      project: { fallback: { roles: { 'executor.normal': { runner: 'codex', maxTurns: 25 } } } },
+    });
+    const fallback = (result.effectiveGlobal['fallback'] as { roles: Record<string, { maxTurns?: number }> }).roles;
+    expect(fallback['executor.normal']?.maxTurns).toBe(25);
+    expect(result.ignoredLoosenings).toEqual([]);
+  });
+});

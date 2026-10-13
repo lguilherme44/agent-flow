@@ -3,6 +3,7 @@ import {
   FALLBACK_TRIGGERS,
   FallbackTriggerSchema,
   ReasoningLevelSchema,
+  ValidationIdSchema,
   WORKFLOW_ROLES,
   type WorkflowRole,
 } from './common.schema.js';
@@ -151,6 +152,7 @@ export const StageOverrideSchema = z.object({
   model: z.string().min(1).optional(),
   effort: ReasoningLevelSchema.optional(),
   timeoutSeconds: z.number().int().positive().optional(),
+  maxTurns: z.number().int().positive().optional(),
 });
 export type StageOverride = z.infer<typeof StageOverrideSchema>;
 
@@ -165,6 +167,15 @@ export const RoleConfigSchema = z.object({
   model: z.string().min(1).optional(),
   effort: ReasoningLevelSchema,
   timeoutSeconds: z.number().int().positive().default(DEFAULT_TIMEOUT_SECONDS),
+  /**
+   * A hard ceiling on agentic turns per invocation of this role.
+   *
+   * `timeoutSeconds` bounds how long a stage may run; nothing bounded how much it may do,
+   * so a discovery stage could make as many tool calls as its clock allowed. No default:
+   * absent means no ceiling, exactly as before. A project config may lower it and never
+   * raise it above the global value (`config/resolver.ts`, `tightenProjectMaxTurns`).
+   */
+  maxTurns: z.number().int().positive().optional(),
   /**
    * Per-stage overrides, for a role that serves stages with different needs.
    *
@@ -197,7 +208,14 @@ export const RolesConfigSchema = z.object({
     complex: RoleConfigSchema,
   }),
   verification: RoleConfigSchema,
-  e2e: RoleConfigSchema.default({
+  /**
+   * `allowedCommands`: the command prefixes the e2e agent may run, on top of the project's
+   * declared commands — `agent-browser`, `curl -s`, `npx playwright test` (dogfood 08/10: run
+   * 75716's e2e agent was denied curl, netstat and agent-browser, and returned NOT_RUN).
+   * Granted to the e2e invocation alone, by prefix, and only the lines a prefix cannot widen
+   * (no shell syntax, no wildcard). A project's own list counts only when it is trusted.
+   */
+  e2e: RoleConfigSchema.extend({ allowedCommands: z.array(z.string().min(1)).optional() }).default({
     enabled: false,
     runner: 'claude',
     effort: 'high',
@@ -670,6 +688,18 @@ export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
  */
 export type RecoveryConfig = GlobalConfig['recovery'];
 
+/**
+ * The standard steps, and nothing else. Any other key here is stripped by the schema, which is
+ * why the loader names it (`unknownKeys`): an extra command belongs in `validationCommands`.
+ */
+export const ProjectCommandsSchema = z.object({
+  install: z.string().optional(),
+  lint: z.string().optional(),
+  typecheck: z.string().optional(),
+  test: z.string().optional(),
+  build: z.string().optional(),
+});
+
 export const ProjectConfigSchema = z.object({
   project: z.object({
     name: z.string().min(1),
@@ -680,15 +710,7 @@ export const ProjectConfigSchema = z.object({
    * Validation commands run by the orchestrator, never by an agent (AD-10).
    * All optional: an unrecognised stack must still yield a usable config.
    */
-  commands: z
-    .object({
-      install: z.string().optional(),
-      lint: z.string().optional(),
-      typecheck: z.string().optional(),
-      test: z.string().optional(),
-      build: z.string().optional(),
-    })
-    .prefault({}),
+  commands: ProjectCommandsSchema.prefault({}),
 
   /**
    * Extra commands a task may reference by id, beyond the standard steps above.
@@ -703,8 +725,39 @@ export const ProjectConfigSchema = z.object({
    *   recurrence: npm test -- recurrence
    *   contract: npm run test:contract
    * ```
+   *
+   * **The key is held to the same shape a plan may cite.** A plan's `validation` entry is
+   * a `ValidationIdSchema` (lowercase, digits, dashes), so an id declared here with any
+   * other character, `test:frontend` being the natural mistake for an npm script, was
+   * accepted by the config, listed by `doctor` as runnable, and then impossible for the
+   * planner to reference. The planner's only way out was to ask the executor to run the
+   * command by hand, which is exactly the gate this registry exists to put under the
+   * orchestrator. Refusing the key at load time turns a silent detour into one message.
    */
-  validationCommands: z.record(z.string(), z.string().min(1)).prefault({}),
+  validationCommands: z.record(ValidationIdSchema, z.string().min(1)).prefault({}),
+  /**
+   * How `review` judges a failing `commands` step (dogfood 09/10).
+   *
+   * **Two levels, by design.** A task runs the ids its plan lists, and `validationCommands`
+   * may shadow a standard step there (`test: vitest --changed origin/main`, only what the
+   * diff touches); `review` always runs `commands`, the whole suite, once.
+   *
+   * `baseline` lists the steps judged against the run's base instead of against zero: when one
+   * fails, the same command runs on the base in a disposable checkout (install first). Failing
+   * there too, the failure is pre-existing — reported, not counted. Passing there, the run broke
+   * it. Run 75716 stayed NOT DONE on lint errors the base already had.
+   *
+   * By exit code, so a new error in a step that already failed passes unseen. For a finer
+   * comparison, make the step a command that does it (fails only on errors the base lacks).
+   * Absent by default: every step keeps the zero-errors rule. Optional rather than defaulted,
+   * because the project config is rendered into prompts and a default would change every
+   * prompt of every project that never set it (NFR-002).
+   */
+  verification: z
+    .object({
+      baseline: z.array(z.enum(['lint', 'typecheck', 'test', 'build'])).default([]),
+    })
+    .optional(),
   paths: z
     .object({
       source: z.array(z.string()).default([]),
@@ -754,6 +807,7 @@ export function roleConfigForStage(
     ...(override.model === undefined ? {} : { model: override.model }),
     ...(override.effort === undefined ? {} : { effort: override.effort }),
     ...(override.timeoutSeconds === undefined ? {} : { timeoutSeconds: override.timeoutSeconds }),
+    ...(override.maxTurns === undefined ? {} : { maxTurns: override.maxTurns }),
   };
 }
 

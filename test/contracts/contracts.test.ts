@@ -893,3 +893,30 @@ describe('a grounded plan request', () => {
     expect(PlanRequestSchema.parse({ description: 'fix it', grounded: true }).grounded).toBe(true);
   });
 });
+
+describe('RoleConfig.maxTurns', () => {
+  it('is absent by default, so no role has a ceiling it was not given', () => {
+    expect(RoleConfigSchema.parse({ runner: 'claude', effort: 'high' }).maxTurns).toBeUndefined();
+  });
+
+  it('accepts a positive integer on the role and on a stage override', () => {
+    const parsed = RoleConfigSchema.parse({
+      runner: 'claude',
+      effort: 'high',
+      maxTurns: 40,
+      stages: { discovery: { maxTurns: 25 } },
+    });
+    expect(parsed.maxTurns).toBe(40);
+    expect(parsed.stages['discovery']?.maxTurns).toBe(25);
+  });
+
+  it('rejects zero, negatives, fractions and strings', () => {
+    for (const maxTurns of [0, -1, 1.5, '10']) {
+      expect(RoleConfigSchema.safeParse({ runner: 'claude', effort: 'high', maxTurns }).success, String(maxTurns)).toBe(false);
+      expect(
+        RoleConfigSchema.safeParse({ runner: 'claude', effort: 'high', stages: { sdd: { maxTurns } } }).success,
+        String(maxTurns),
+      ).toBe(false);
+    }
+  });
+});

@@ -22,7 +22,7 @@ test.describe('Deck run control', () => {
   test('pauses a run, says so, and resumes it', async ({ page, makeWorld }, testInfo) => {
     const world = await makeWorld({ dashboard: 'deck' });
     const problems = recordConsole(page);
-    await world.cli(project, ['approve']);
+    await world.cli(project, ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     const runId = await world.runIdOf(project);
 
     await page.goto(`${world.url}/p/${project}/runs/${runId}`);

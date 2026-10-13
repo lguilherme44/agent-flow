@@ -73,7 +73,7 @@ test.describe('workspace isolation', () => {
     const settled = reads();
 
     // A real change in the other project, made by the other adapter.
-    const approved = await world.cli('booking-api', ['approve']);
+    const approved = await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     expect(approved.code).toBe(0);
 
     // Long enough for the watcher to notice and publish, and short enough to stay

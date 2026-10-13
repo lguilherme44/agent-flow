@@ -10,6 +10,13 @@ import type {
  * model identifiers beyond an opaque string the adapter passes through. Adding a
  * runner must never require changing this shape.
  */
+/** One thing an agent did, as its CLI reported it while running (`AgentRunInput.onActivity`). */
+export type RunnerActivity =
+  /** A tool call: its name, and the file or command it acted on when it named one. */
+  | { readonly kind: 'tool'; readonly tool: string; readonly target?: string }
+  /** A message the agent wrote between tool calls, shortened. */
+  | { readonly kind: 'text'; readonly text: string };
+
 export interface AgentRunInput {
   readonly prompt: string;
   readonly systemPrompt?: string;
@@ -38,6 +45,33 @@ export interface AgentRunInput {
   readonly outputSchema?: Record<string, unknown>;
 
   readonly timeoutSeconds: number;
+
+  /**
+   * A hard ceiling on agentic turns for this invocation (`roles.<role>.maxTurns`).
+   *
+   * A turn is one model response inside the CLI's own tool loop, so this bounds what one
+   * invocation can spend where `timeoutSeconds` bounds only how long it may take. Absent
+   * means no ceiling, which is what every run did before this field existed.
+   *
+   * An adapter that cannot enforce it must say so with `supportsMaxTurns: false` in its
+   * capabilities rather than accept the number and ignore it: `doctor` reads that flag to
+   * warn the operator that the ceiling they wrote does not apply to that runner.
+   */
+  readonly maxTurns?: number;
+
+  /**
+   * Command prefixes this invocation alone may run, on top of the runner's own grants — the
+   * e2e stage's `roles.e2e.allowedCommands` (dogfood 08/10). Already screened by
+   * `grantableLines`; a `write` invocation only. An adapter with no per-command grant ignores it.
+   */
+  readonly commandGrants?: readonly string[];
+
+  /**
+   * What the agent is doing, as it does it — a tool call and its target, a message (dogfood
+   * 08/10: the Deck showed nothing until a task ended). Raw: the caller redacts before keeping
+   * any of it. An adapter whose CLI reports nothing until it exits never calls it.
+   */
+  readonly onActivity?: (activity: RunnerActivity) => void;
 
   /** Extra directories the agent may read, beyond the working directory. */
   readonly additionalReadPaths?: readonly string[];
@@ -170,6 +204,15 @@ export interface AgentRunFailure {
    * under-reports exactly the runs an operator is trying to understand.
    */
   readonly usage?: AgentRunUsage;
+  /**
+   * Set when the runner stopped because it reached the ceiling it was given, and only then.
+   *
+   * `'max_turns'`: the invocation hit `AgentRunInput.maxTurns`. Structured rather than left
+   * in `raw`, because the core classifies on it (`runner_max_turns_exceeded`) and the core
+   * never reads message text for control flow. The `errorCode` stays `execution_failed`:
+   * the transport vocabulary is deliberately closed, and this is a refinement above it.
+   */
+  readonly limitReached?: 'max_turns';
 }
 
 export type AgentRunResult = AgentRunSuccess | AgentRunFailure;
@@ -192,6 +235,14 @@ export interface RunnerCapabilities {
    * for JSON and validate afterwards, with a bounded repair loop.
    */
   readonly structuredOutputStrategy: 'native' | 'prompted';
+  /**
+   * Whether the runner enforces `AgentRunInput.maxTurns`.
+   *
+   * Optional, and absent reads as `false`: a runner that never declared it cannot be
+   * assumed to stop at a ceiling it has never heard of. `doctor` warns when a role sets
+   * `maxTurns` on a runner that does not declare this.
+   */
+  readonly supportsMaxTurns?: boolean;
   /**
    * Tool classes the runner can exercise without an interactive confirmation (AD-32).
    *

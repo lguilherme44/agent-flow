@@ -14,6 +14,7 @@ import type {
   CleanView,
   DoctorView,
   RunTelemetryView,
+  RunTimelineView,
   ProjectCandidateView,
   ProjectRegisteredView,
   PipelineStage,
@@ -376,6 +377,8 @@ export const api = {
    * trail of a finished run does not change.
    */
   telemetry: (a: RunAddress) => getJson<RunTelemetryView>(`/runs/${a.runId}/telemetry`, scoped(a)),
+  /** Where the run's wall clock went, by cause (`core/run-timeline.ts`). */
+  timeline: (a: RunAddress) => getJson<RunTimelineView>(`/runs/${a.runId}/timeline`, scoped(a)),
   /** Aggregates over recent runs. No monetary figure appears, at any level.
    * That is a declared decision, not an omission. */
   analytics: (projectId?: string, limit?: number) =>
@@ -524,6 +527,7 @@ export const keys = {
   artifact: (a: RunAddress, name: string) => url(`/runs/${a.runId}/artifacts/${name}`, scoped(a)),
   job: (a: RunAddress) => url(`/runs/${a.runId}/job`, scoped(a)),
   telemetry: (a: RunAddress) => url(`/runs/${a.runId}/telemetry`, scoped(a)),
+  timeline: (a: RunAddress) => url(`/runs/${a.runId}/timeline`, scoped(a)),
   analytics: (projectId?: string, limit?: number) =>
     url('/analytics', {
       ...(projectId === undefined ? {} : { projectId }),

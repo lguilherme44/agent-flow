@@ -62,6 +62,22 @@ Where you cannot determine something, write "unknown" rather than guessing. A
 confident wrong statement here propagates into every later stage; an honest gap
 gets filled by whoever needs it.
 
+## Reading budget
+
+The map is the index; your reading is a sample of it, not a second index. Open at
+most **40 files** in total, and spend them where the map ranks highest within each
+area: manifests and entry points first, then the top-ranked module of each area,
+then one second example per convention you intend to state.
+
+Do not walk directories and do not search the whole tree for a pattern; that is
+re-doing what the map already did, and it is what makes this stage cost more than
+the plan it feeds. If you must search, search for one named symbol.
+
+When a section can be answered from files already open, answer it and move on.
+When the budget is spent and a section is still open, write "unknown" there and
+say which file would settle it, rather than opening more. Without a map the same
+budget applies; spend the first opens on manifests and entry points.
+
 ## Output
 
 Return **only** the markdown document below, with no preamble.

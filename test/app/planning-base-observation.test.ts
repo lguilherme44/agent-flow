@@ -20,6 +20,7 @@ import {
 import { planHash } from '../../src/app/approval.js';
 import { PlanSchema, type EffectiveConfig } from '../../src/contracts/index.js';
 import { makeTempRepoWithCommit, type TempRepo } from '../fixtures/temp-repo.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * §6.2's four moments, for a run that is **not** isolated.
@@ -194,7 +195,7 @@ describe('approve, in sequential mode (§6.2 moment 3)', () => {
     repo.commitAll('a commit after the run was created');
     repo.write('README.md', 'and dirty again\n');
 
-    const outcome = await approve(world.deps, world.runId);
+    const outcome = await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     expect(outcome.ok).toBe(true);
     const state = await world.store.loadRun(world.runId);
@@ -215,7 +216,7 @@ describe('approve, in sequential mode (§6.2 moment 3)', () => {
     const world = await sequentialProject();
     repo = world.temp;
 
-    const outcome = await approve(world.deps, world.runId);
+    const outcome = await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     expect(outcome.ok).toBe(true);
     const atApprove = (await observations(world.store, world.runId)).find(
@@ -231,7 +232,7 @@ describe('implementation start, in sequential mode (§6.2 moment 4)', () => {
   it('records the observation and is not refused by the planning-base gate', async () => {
     const world = await sequentialProject();
     repo = world.temp;
-    await approve(world.deps, world.runId);
+    await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     repo.write('README.md', 'edited after approval\n');
     repo.commitAll('the repository moved on after approval');
@@ -260,7 +261,7 @@ describe('implementation start, in sequential mode (§6.2 moment 4)', () => {
   it('creates no branch, ref or worktree while observing', async () => {
     const world = await sequentialProject();
     repo = world.temp;
-    await approve(world.deps, world.runId);
+    await approve(world.deps, world.runId, { decidedBy: DECIDED });
 
     const refsBefore = repo.userGit(['for-each-ref', '--format=%(refname)']).trim();
     const worktreesBefore = repo.userGit(['worktree', 'list', '--porcelain']).trim();
@@ -301,7 +302,7 @@ describe('what stays silent', () => {
 
     repo.write('README.md', 'dirty\n');
 
-    const outcome = await approve(world.deps, legacy.runId);
+    const outcome = await approve(world.deps, legacy.runId, { decidedBy: DECIDED });
 
     expect(outcome.ok).toBe(true);
     expect(await observations(world.store, legacy.runId)).toEqual([]);

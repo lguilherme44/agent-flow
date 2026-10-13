@@ -61,7 +61,7 @@ test.describe('failure states', () => {
 
     // Then the consequence. Planning never touches an executor, so the run reached
     // the gate normally; execution is where the missing binary is felt.
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     const executed = await world.cli('booking-api', ['run']);
     expect(executed.code).not.toBe(0);
 
@@ -114,7 +114,7 @@ test.describe('failure states', () => {
     // Rejected from the terminal while the browser is open, so the browser's next
     // click meets a refusal the workflow made rather than a stale screen.
     await openDashboard(page, world);
-    await world.cli('booking-api', ['reject', 'not this way']);
+    await world.cli('booking-api', ['reject', 'not this way', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     await expect(page.getByText('PLAN REJECTED').first()).toBeVisible({ timeout: 15_000 });
 
@@ -126,7 +126,10 @@ test.describe('failure states', () => {
     // which would make this test pass for a reason that has nothing to do with §95.
     const response = await page.request.post(
       `${world.url}/api/v1/runs/${runId}/approve?project=booking-api`,
-      { data: {}, headers: { 'x-agent-flow-client': 'e2e' } },
+      {
+        data: { decidedBy: { by: 'E2E operator', words: 'As the spec decides.' } },
+        headers: { 'x-agent-flow-client': 'e2e' },
+      },
     );
     expect(response.status()).toBe(409);
     const body = (await response.json()) as {

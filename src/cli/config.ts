@@ -37,8 +37,13 @@ export async function runConfigGetCommand(
     globalConfigPath: globals.globalConfigPath,
   });
 
-  const target = options.global ? loaded.global : loaded;
-  const val = getByPath(target, key);
+  // The effective configuration is `{ global, project }`, so `language` lived at
+  // `global.language` and a plain `config get language` said "not found" with the key set and
+  // in use (dogfood 08/10). The exact path first, then the project file, then the effective
+  // global, which already carries the project's overrides.
+  const val = options.global
+    ? getByPath(loaded.global, key)
+    : (getByPath(loaded, key) ?? getByPath(loaded.project, key) ?? getByPath(loaded.global, key));
 
   if (val === undefined) {
     process.stderr.write(`Key "${key}" not found in ${options.global ? 'global' : 'effective'} configuration.\n`);

@@ -3,7 +3,10 @@ import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeProcessRunner } from '../fakes/fake-process-runner.js';
 import { FakeHost } from '../fakes/fake-host.js';
-import { buildServer, type RunningServer } from '../../src/server/server.js';
+import { buildServer, reviewJobSummary, type RunningServer } from '../../src/server/server.js';
+import type { ReviewOutcome } from '../../src/app/run-actions.js';
+import { SECOND_PERSON_OBSERVING } from '../fakes/second-person.js';
+import { DECIDED_BY_BODY } from '../fakes/gate-decision.js';
 import { MAX_EVENT_LOG_LINES } from '../../src/server/run-reader.js';
 import { registryOf } from '../../src/server/project-registry.js';
 import { StateStore } from '../../src/app/state-store.js';
@@ -11,6 +14,7 @@ import { ContextTelemetryRecorder } from '../../src/app/context-telemetry-record
 import { PlanSchema, type TaskState } from '../../src/contracts/index.js';
 import { planHash } from '../../src/app/approval.js';
 import { attemptLogName, runPaths } from '../../src/app/paths.js';
+import { en } from '../../src/core/phrases/index.js';
 import type {
   ActionErrorView,
   ActionJobView,
@@ -28,6 +32,7 @@ import type {
   RunEventLogView,
   RunSummaryView,
   RunTelemetryView,
+  RunTimelineView,
   RunnerHealthView,
   RunnerModelsView,
   StageLogView,
@@ -662,6 +667,70 @@ describe('UI-04 — the run read API', () => {
 
     expect(health.find((entry) => entry.id === 'claude')?.unavailable).toBe('disabled');
     expect(health.find((entry) => entry.id === 'ghost')?.unavailable).toBe('undeclared');
+  });
+
+  it('serves where the run’s wall clock went, up to now while it waits at a gate', async () => {
+    const { server, store, run, clock } = await serve();
+    clock.advance(60_000);
+    await store.appendEvent(run.runId, 'stage_started', { stage: 'plan-review' });
+    const reviewStarted = clock.now();
+    clock.advance(120_000);
+    await store.appendEvent(run.runId, 'stage_completed', {
+      stage: 'plan-review',
+      startedAt: reviewStarted,
+      finishedAt: clock.now(),
+      repairs: 0,
+      usage: { costUsd: 0.5 },
+    });
+    // The fixture's run is waiting for approval: ten minutes of somebody reading the plan.
+    clock.advance(600_000);
+
+    const response = await server.app.inject(`/api/v1/runs/${run.runId}/timeline`);
+    const timeline = response.json<RunTimelineView>();
+
+    expect(response.statusCode).toBe(200);
+    expect(timeline.wallMs).toBe(780_000);
+    expect(timeline.modelMs).toBe(120_000);
+    expect(timeline.waitingForHumanMs).toBe(600_000);
+    expect(timeline.otherMs).toBe(60_000);
+    expect(timeline.costUsd).toBe(0.5);
+    expect(timeline.stages.find((stage) => stage.stage === 'plan-review')).toEqual({
+      stage: 'plan-review',
+      attempts: 1,
+      modelMs: 120_000,
+      costUsd: 0.5,
+    });
+    expect(timeline.segments.at(-1)).toMatchObject({ kind: 'human', label: 'approval' });
+  });
+
+  it('answers 404 for the timeline of a run that does not exist', async () => {
+    const { server } = await serve();
+
+    const response = await server.app.inject('/api/v1/runs/AF-2026-999/timeline');
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'not_found', message: en.server.noSuchRun });
+  });
+
+  it('cuts a silent run’s open stage at its last event, and says so, instead of billing it to now', async () => {
+    // A process that died mid-stage leaves `stage_started` and nothing after it. Without the
+    // liveness check that stage would be model time up to whenever somebody looked.
+    const { server, store, run, clock } = await serve();
+    clock.advance(60_000);
+    await store.updateRun(run.runId, (state) => ({ ...state, status: 'running', stage: 'sdd' }));
+    await store.appendEvent(run.runId, 'stage_started', { stage: 'sdd' });
+
+    clock.advance(60_000);
+    const live = (await server.app.inject(`/api/v1/runs/${run.runId}/timeline`)).json<RunTimelineView>();
+    expect(live.inFlight).toBe(true);
+    expect(live).not.toHaveProperty('stale');
+    expect(live.modelMs).toBe(60_000);
+
+    clock.advance(10 * 24 * 3_600_000);
+    const dead = (await server.app.inject(`/api/v1/runs/${run.runId}/timeline`)).json<RunTimelineView>();
+    expect(dead.stale).toBe(true);
+    expect(dead.modelMs).toBe(0);
+    expect(dead.wallMs).toBe(60_000);
   });
 
   it('serves telemetry derived from the run', async () => {
@@ -1561,7 +1630,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
 
       expect(response.statusCode).toBe(200);
@@ -1580,7 +1649,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
-        payload: { force: false, planHash: 'deadbeefdeadbeef' },
+        payload: { ...DECIDED_BY_BODY, force: false, planHash: 'deadbeefdeadbeef' },
       });
 
       const state = await store.loadRun(run.runId);
@@ -1595,7 +1664,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
 
       // 409: the request was well formed and the workflow said no.
@@ -1615,7 +1684,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
-        payload: { force: true },
+        payload: { ...DECIDED_BY_BODY, force: true },
       });
 
       expect(response.statusCode).toBe(200);
@@ -1636,7 +1705,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
 
       expect(response.body).not.toMatch(/at \w+ \(|node_modules|ZodError/);
@@ -1652,7 +1721,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
-        payload: { reason: 'the approach is wrong' },
+        payload: { ...DECIDED_BY_BODY, reason: 'the approach is wrong' },
       });
 
       expect(response.statusCode).toBe(200);
@@ -1668,13 +1737,13 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
       const second = await server.app.inject({
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
 
       expect(second.statusCode).toBe(409);
@@ -1690,13 +1759,585 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/reject`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
 
       // Nothing guarded the run's own status before, so this used to succeed and
       // record that a finished run's plan had been turned down.
       expect(response.statusCode).toBe(409);
       expect(response.json<ActionErrorView>().error).toBe('run_completed');
+    });
+  });
+
+  /**
+   * Who decided at the plan gate, over HTTP. The channel is the server's to derive: a write
+   * carrying this server as its Origin is the Deck, anything else that got past the guard is
+   * an API client — an AI or a script — and must say who decided, in their words.
+   */
+  describe('plan-gate decisions (decidedBy)', () => {
+    const DECK_HEADERS = {
+      host: '127.0.0.1:4782',
+      origin: 'http://127.0.0.1:4782',
+      'x-agent-flow-client': 'deck',
+    } as const;
+
+    async function decisionsOf(store: StateStore, runId: string) {
+      return (await store.readEvents(runId))
+        .filter((event) => event.type === 'operator_action')
+        .map((event) => event.detail['decidedBy']);
+    }
+
+    it.each([
+      ['approve', {}],
+      ['reject', { reason: 'not this' }],
+      ['revise', { instruction: 'split TASK-001' }],
+    ] as const)('refuses %s from an API client that names nobody, with a 400', async (action, body) => {
+      const { server, store, run } = await approvable();
+      const before = await store.loadRun(run.runId);
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/${action}`,
+        payload: body,
+      });
+
+      expect(response.statusCode).toBe(400);
+      const message = response.json<{ message: string }>().message;
+      expect(message).toContain('decidedBy');
+      // Read by the AI that sent it: it asks for the human, and never tells it to decide.
+      expect(message).toMatch(/human/i);
+      expect(message).not.toMatch(SECOND_PERSON_OBSERVING);
+      expect(await store.loadRun(run.runId)).toEqual(before);
+      expect(await decisionsOf(store, run.runId)).toEqual([]);
+    });
+
+    it('names the field that does not hold', async () => {
+      const { server, run } = await approvable();
+
+      for (const [decidedBy, field] of [
+        [{ by: '  ', words: 'Go.' }, 'decidedBy.by'],
+        [{ by: 'Luis' }, 'decidedBy.words'],
+      ] as const) {
+        const response = await server.app.inject({
+          method: 'POST',
+          headers: WRITE_HEADERS,
+          url: `/api/v1/runs/${run.runId}/approve`,
+          payload: { decidedBy },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json<{ message: string }>().message).toContain(field);
+      }
+    });
+
+    it('records an API client decision with the api channel', async () => {
+      const { server, store, run } = await approvable();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { decidedBy: { by: 'Luis', words: 'Approved, go.' } },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(await decisionsOf(store, run.runId)).toEqual([
+        { by: 'Luis', words: 'Approved, go.', channel: 'api' },
+      ]);
+    });
+
+    it('ignores a channel the body claims for itself', async () => {
+      const { server, store, run } = await approvable();
+
+      await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { decidedBy: { by: 'Luis', words: 'Go.', channel: 'deck' }, channel: 'deck' },
+      });
+
+      expect(await decisionsOf(store, run.runId)).toEqual([{ by: 'Luis', words: 'Go.', channel: 'api' }]);
+    });
+
+    it('keeps the Deck working unchanged: its own bodies, no name, filled from the session', async () => {
+      const { server, store, run } = await approvable();
+
+      // Exactly what `apps/deck/src/lib/api.ts` posts.
+      const approved = await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { force: false },
+      });
+      expect(approved.statusCode).toBe(200);
+
+      const revised = await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/revise`,
+        payload: { instruction: 'split TASK-001' },
+      });
+      expect(revised.statusCode).toBe(202);
+      await settleJob(server, revised.json<ActionJobView>().id);
+
+      const rejected = await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: {},
+      });
+      expect(rejected.statusCode).toBe(200);
+
+      // Loopback has no paired device, so the name is the fixed Deck label.
+      expect(await decisionsOf(store, run.runId)).toEqual([
+        { by: 'Deck', words: 'approved in the Deck', channel: 'deck' },
+        { by: 'Deck', words: 'revised in the Deck', channel: 'deck' },
+        { by: 'Deck', words: 'rejected in the Deck', channel: 'deck' },
+      ]);
+    });
+
+    it('records a name and words the Deck does send, with the deck channel', async () => {
+      const { server, store, run } = await approvable();
+
+      await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { decidedBy: { by: 'Luis', words: 'Fine by me.' } },
+      });
+
+      expect(await decisionsOf(store, run.runId)).toEqual([
+        { by: 'Luis', words: 'Fine by me.', channel: 'deck' },
+      ]);
+    });
+
+    it('shows the latest gate decision on the run, and nothing on a run with none', async () => {
+      const { server, run } = await approvable();
+
+      const untouched = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      expect('gateDecision' in untouched).toBe(false);
+
+      await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { decidedBy: { by: 'Luis', words: 'Approved, go.' } },
+      });
+      await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: { decidedBy: { by: 'Ana', words: 'No, wrong scope.' } },
+      });
+
+      const detail = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      expect(detail.gateDecision).toEqual({
+        action: 'reject',
+        by: 'Ana',
+        words: 'No, wrong scope.',
+        channel: 'api',
+        at: expect.any(String) as unknown as string,
+      });
+    });
+  });
+
+  /**
+   * Every human decision that reaches the hub over HTTP needs the human's name and words,
+   * enforced here so a client that skips the MCP tool (curl, a script) cannot skip it either.
+   * The plan gate was the first; a task answer and a cancel are the others. Every other
+   * operator action records only the channel it came through.
+   */
+  describe('human decisions beyond the gate, and the channel on every action', () => {
+    const DECK_HEADERS = {
+      host: '127.0.0.1:4782',
+      origin: 'http://127.0.0.1:4782',
+      'x-agent-flow-client': 'deck',
+    } as const;
+    const LUIS = { by: 'Luis', words: 'Use the v2 endpoint.' } as const;
+
+    async function actionsOf(store: StateStore, runId: string) {
+      return (await store.readEvents(runId))
+        .filter((event) => event.type === 'operator_action')
+        .map((event) => ({
+          action: event.detail['action'],
+          channel: event.detail['channel'],
+          decidedBy: event.detail['decidedBy'],
+        }));
+    }
+
+    async function blocked() {
+      const context = await serve();
+      await moveTask(context.store, context.run.runId, 'FIX-001', 'running');
+      await moveTask(context.store, context.run.runId, 'FIX-001', 'blocked', 1);
+      return context;
+    }
+
+    it('refuses an API answer that names nobody, with a 400, and writes nothing', async () => {
+      const { server, store, run } = await blocked();
+      const before = await store.loadRun(run.runId);
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
+        payload: { text: 'use the v2 endpoint' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json<{ message: string }>().message).toContain('decidedBy');
+      expect(await store.loadRun(run.runId)).toEqual(before);
+    });
+
+    it('records an API answer with who decided and the api channel, and returns it', async () => {
+      const { server, store, run } = await blocked();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
+        payload: { text: 'use the v2 endpoint', decidedBy: LUIS },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json<{ detail: Record<string, unknown> }>().detail['decidedBy']).toEqual({
+        ...LUIS,
+        channel: 'api',
+      });
+      expect(await actionsOf(store, run.runId)).toEqual([
+        { action: 'answer', channel: 'api', decidedBy: { ...LUIS, channel: 'api' } },
+      ]);
+    });
+
+    it('keeps the Deck answering unchanged: no name in its body, filled from the session', async () => {
+      const { server, store, run } = await blocked();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
+        payload: { text: 'use the v2 endpoint' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(await actionsOf(store, run.runId)).toEqual([
+        {
+          action: 'answer',
+          channel: 'deck',
+          decidedBy: { by: 'Deck', words: 'answered in the Deck', channel: 'deck' },
+        },
+      ]);
+    });
+
+    it('refuses an API cancel that names nobody, and leaves the run as it was', async () => {
+      const { server, store, run } = await serve();
+      const before = await store.loadRun(run.runId);
+
+      for (const payload of [{}, undefined]) {
+        const response = await server.app.inject({
+          method: 'POST',
+          headers: WRITE_HEADERS,
+          url: `/api/v1/runs/${run.runId}/cancel`,
+          ...(payload === undefined ? {} : { payload }),
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json<{ message: string }>().message).toContain('decidedBy');
+      }
+      expect(await store.loadRun(run.runId)).toEqual(before);
+    });
+
+    it('records an API cancel with who decided, and returns it', async () => {
+      const { server, store, run } = await serve();
+      const cancel = { by: 'Luis', words: 'Cancel it, wrong story.' };
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/cancel`,
+        payload: { decidedBy: cancel },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect((await store.loadRun(run.runId)).status).toBe('cancelled');
+      expect(response.json<{ detail: Record<string, unknown> }>().detail['decidedBy']).toEqual({
+        ...cancel,
+        channel: 'api',
+      });
+      expect(await actionsOf(store, run.runId)).toEqual([
+        { action: 'cancel', channel: 'api', decidedBy: { ...cancel, channel: 'api' } },
+      ]);
+    });
+
+    it('keeps the Deck cancelling with its own empty body', async () => {
+      const { server, store, run } = await serve();
+
+      // Exactly what `apps/deck/src/lib/api.ts` posts.
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/cancel`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(await actionsOf(store, run.runId)).toEqual([
+        {
+          action: 'cancel',
+          channel: 'deck',
+          decidedBy: { by: 'Deck', words: 'cancelled in the Deck', channel: 'deck' },
+        },
+      ]);
+    });
+
+    // Dogfood 09/10, run 75716: a run delivered outside `forge` whose review ended NOT DONE.
+    async function reviewedNotDone() {
+      const context = await serve();
+      await context.store.appendEvent(context.run.runId, 'run_review_concluded', {
+        done: false,
+        unmet: [{ name: 'e2e exercised the change and passed' }],
+      });
+      return context;
+    }
+
+    it('refuses an API complete that names nobody, and leaves the run as it was', async () => {
+      const { server, store, run } = await reviewedNotDone();
+      const before = await store.loadRun(run.runId);
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/complete`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json<{ message: string }>().message).toContain('decidedBy');
+      expect(await store.loadRun(run.runId)).toEqual(before);
+    });
+
+    it('records an API complete with who decided, the PR and what it overrode', async () => {
+      const { server, store, run } = await reviewedNotDone();
+      const decided = { by: 'Luis', words: 'Entregue no PR draft; vi funcionando.' };
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/complete`,
+        payload: { decidedBy: decided, pr: 'https://example.test/pr/1' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect((await store.loadRun(run.runId)).status).toBe('completed');
+      const detail = response.json<{ detail: Record<string, unknown> }>().detail;
+      expect(detail['decidedBy']).toEqual({ ...decided, channel: 'api' });
+      expect(detail['overrode']).toEqual(['e2e exercised the change and passed']);
+      expect(
+        (await store.readEvents(run.runId)).find((event) => event.type === 'run_completed_by_human')?.detail,
+      ).toMatchObject({ pr: 'https://example.test/pr/1' });
+      expect(await actionsOf(store, run.runId)).toEqual([
+        { action: 'complete', channel: 'api', decidedBy: { ...decided, channel: 'api' } },
+      ]);
+    });
+
+    it('answers 409 when no review has concluded on the run', async () => {
+      const { server, store, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/complete`,
+        payload: { decidedBy: LUIS },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json<{ error: string }>().error).toBe('review_required');
+      expect((await store.loadRun(run.runId)).status).not.toBe('completed');
+    });
+
+    it('returns the recorded decision from approve and reject, and from the revise job', async () => {
+      const { server, run } = await approvable();
+      const decided = { by: 'Luis', words: 'Approved, go.' };
+
+      const approved = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/approve`,
+        payload: { decidedBy: decided },
+      });
+      expect(approved.json<{ detail: Record<string, unknown> }>().detail['decidedBy']).toEqual({
+        ...decided,
+        channel: 'api',
+      });
+
+      const revised = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/revise`,
+        payload: { instruction: 'split TASK-001', decidedBy: decided },
+      });
+      expect(revised.statusCode).toBe(202);
+      expect(revised.json<ActionJobView>().decidedBy).toEqual({ ...decided, channel: 'api' });
+      await settleJob(server, revised.json<ActionJobView>().id);
+
+      const rejected = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/reject`,
+        payload: { decidedBy: decided },
+      });
+      expect(rejected.json<{ detail: Record<string, unknown> }>().detail['decidedBy']).toEqual({
+        ...decided,
+        channel: 'api',
+      });
+    });
+
+    it('records the channel, and no name, on retry, pause, resume and start', async () => {
+      const { server, store, run } = await approvable();
+      const post = (url: string, headers: Record<string, string>, payload: object = {}) =>
+        server.app.inject({ method: 'POST', headers, url: `/api/v1/runs/${run.runId}/${url}`, payload });
+
+      expect((await post('approve', WRITE_HEADERS, DECIDED_BY_BODY)).statusCode).toBe(200);
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'failed', 1);
+      expect((await post('tasks/FIX-001/retry', WRITE_HEADERS)).statusCode).toBe(200);
+      expect((await post('pause', DECK_HEADERS)).statusCode).toBe(200);
+      const resumed = await post('resume', WRITE_HEADERS);
+      expect(resumed.statusCode).toBe(202);
+      await settleJob(server, resumed.json<ActionJobView>().id);
+
+      // `start` on a second run, freshly approved: the first one's resume already ran it.
+      const fresh = await approvable();
+      const startPost = (url: string, headers: Record<string, string>, payload: object = {}) =>
+        fresh.server.app.inject({ method: 'POST', headers, url: `/api/v1/runs/${fresh.run.runId}/${url}`, payload });
+      await startPost('approve', WRITE_HEADERS, DECIDED_BY_BODY);
+      const started = await startPost('start', DECK_HEADERS);
+      expect(started.statusCode).toBe(202);
+      await settleJob(fresh.server, started.json<ActionJobView>().id);
+      expect((await actionsOf(fresh.store, fresh.run.runId)).slice(1, 2)).toEqual([
+        { action: 'start', channel: 'deck', decidedBy: undefined },
+      ]);
+
+      const recorded = (await actionsOf(store, run.runId)).slice(1);
+      expect(recorded.slice(0, 3)).toEqual([
+        { action: 'retryTask', channel: 'api', decidedBy: undefined },
+        { action: 'pause', channel: 'deck', decidedBy: undefined },
+        { action: 'resume', channel: 'api', decidedBy: undefined },
+      ]);
+      // Every action the hub recorded names the channel it came through.
+      for (const entry of recorded) expect(entry.channel, String(entry.action)).toMatch(/^(api|deck)$/);
+    });
+
+    it('refuses an API forced retry or a no-change declaration that names nobody; a plain one needs none', async () => {
+      const { server, store, run } = await serve();
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+      const retry = (payload: object) =>
+        server.app.inject({
+          method: 'POST',
+          headers: WRITE_HEADERS,
+          url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+          payload,
+        });
+
+      for (const payload of [{ force: true }, { expectNoChange: true, force: true }]) {
+        const response = await retry(payload);
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(response.json<{ message: string }>().message).toContain('decidedBy');
+      }
+      expect((await store.loadRun(run.runId)).tasks.find((task) => task.id === 'FIX-001')?.state).toBe('blocked');
+
+      const forced = await retry({ force: true, decidedBy: LUIS });
+      expect(forced.statusCode).toBe(200);
+      expect(forced.json<{ detail: Record<string, unknown> }>().detail['decidedBy']).toEqual({ ...LUIS, channel: 'api' });
+      expect(await actionsOf(store, run.runId)).toEqual([
+        { action: 'retryTask', channel: 'api', decidedBy: { ...LUIS, channel: 'api' } },
+      ]);
+    });
+
+    it('fills a forced retry from the Deck session, as it does a gate move', async () => {
+      const { server, store, run } = await serve();
+      await moveTask(store, run.runId, 'FIX-001', 'running');
+      await moveTask(store, run.runId, 'FIX-001', 'blocked', 1);
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: DECK_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`,
+        payload: { force: true },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(await actionsOf(store, run.runId)).toEqual([
+        {
+          action: 'retryTask',
+          channel: 'deck',
+          decidedBy: { by: 'Deck', words: 'retried over the gate in the Deck', channel: 'deck' },
+        },
+      ]);
+    });
+
+    it('echoes a cancel decision only when the cancel was recorded, not on a repeat', async () => {
+      const { server, store, run } = await serve();
+      const cancel = () =>
+        server.app.inject({
+          method: 'POST',
+          headers: WRITE_HEADERS,
+          url: `/api/v1/runs/${run.runId}/cancel`,
+          payload: { decidedBy: LUIS },
+        });
+
+      expect((await cancel()).json<{ detail: Record<string, unknown> }>().detail['decidedBy']).toBeDefined();
+      const again = (await cancel()).json<{ detail: Record<string, unknown> }>().detail;
+
+      expect(again['alreadyCancelled']).toBe(true);
+      expect('decidedBy' in again).toBe(false);
+      expect((await actionsOf(store, run.runId)).filter((entry) => entry.action === 'cancel')).toHaveLength(1);
+    });
+
+    it('says what a decision needs in words that fit any decision, and names the CLI flags too', async () => {
+      const { server, run } = await blocked();
+
+      const unnamed = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
+        payload: { text: 'x', decidedBy: { by: '  ', words: 'x' } },
+      });
+      const unnamedMessage = unnamed.json<{ message: string }>().message;
+      expect(unnamedMessage).toContain('decidedBy.by');
+      expect(unnamedMessage).not.toMatch(/plan-gate|plan gate/i);
+
+      const missing = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/cancel`,
+        payload: {},
+      });
+      const missingMessage = missing.json<{ message: string }>().message;
+      expect(missingMessage).toContain('decidedBy');
+      expect(missingMessage).toContain('--decided-by');
+      expect(missingMessage).toMatch(/human/i);
+      expect(missingMessage).not.toMatch(SECOND_PERSON_OBSERVING);
+    });
+
+    it('lists the operator actions on the run detail, and omits the key on a run with none', async () => {
+      const { server, run } = await blocked();
+
+      const untouched = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      expect('operatorActions' in untouched).toBe(false);
+
+      await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
+        payload: { text: 'use the v2 endpoint', decidedBy: LUIS },
+      });
+      await server.app.inject({ method: 'POST', headers: DECK_HEADERS, url: `/api/v1/runs/${run.runId}/pause`, payload: {} });
+
+      const detail = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      expect(detail.operatorActions).toEqual([
+        { action: 'answer', channel: 'api', by: 'Luis', words: 'Use the v2 endpoint.', at: expect.any(String) },
+        { action: 'pause', channel: 'deck', at: expect.any(String) },
+      ]);
     });
   });
 
@@ -1773,12 +2414,13 @@ describe('UI-27 — the write API', () => {
   });
 
   describe('answer (P7.1, FR-007)', () => {
+    // An API client, so every answer names the human (see the decidedBy block above).
     const answer = (server: RunningServer, runId: string, taskId: string, payload: unknown) =>
       server.app.inject({
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${runId}/tasks/${taskId}/answer`,
-        payload: payload as Record<string, unknown>,
+        payload: { ...DECIDED_BY_BODY, ...(payload as Record<string, unknown>) },
       });
 
     it('answers a BLOCKED task: 200, the task queued, and one answer amendment', async () => {
@@ -1793,7 +2435,12 @@ describe('UI-27 — the write API', () => {
       expect(response.json()).toEqual({
         runId: run.runId,
         warnings: [],
-        detail: { taskId: 'FIX-001', attempts: 1, amendmentId: 'AMD-001' },
+        detail: {
+          taskId: 'FIX-001',
+          attempts: 1,
+          amendmentId: 'AMD-001',
+          decidedBy: { ...DECIDED_BY_BODY.decidedBy, channel: 'api' },
+        },
       });
 
       const state = await store.loadRun(run.runId);
@@ -1885,7 +2532,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/tasks/FIX-001/answer`,
-        payload: { text: 'use the v2 endpoint' },
+        payload: { text: 'use the v2 endpoint', ...DECIDED_BY_BODY },
       });
 
       const after = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
@@ -1897,6 +2544,38 @@ describe('UI-27 — the write API', () => {
           at: expect.any(String) as string,
           text: 'use the v2 endpoint',
           task: 'FIX-001',
+        },
+      ]);
+    });
+
+    it('shows who observed an e2e change and on which commit', async () => {
+      const { server, store, run } = await serve();
+      const head = 'abcdef0123456789abcdef0123456789abcdef01';
+      await store.updateRun(run.runId, (current) => ({
+        ...current,
+        amendments: [
+          {
+            id: 'AMD-001',
+            kind: 'e2e_observation',
+            actor: { kind: 'keyboard' },
+            at: '2026-08-09T20:00:00.000Z',
+            text: 'Saw the header update on the iPhone.',
+            observedBy: 'Luis',
+            integrationHead: head,
+          },
+        ],
+      }));
+
+      const detail = (await server.app.inject(`/api/v1/runs/${run.runId}`)).json<RunDetailView>();
+      expect(detail.amendments).toEqual([
+        {
+          id: 'AMD-001',
+          kind: 'e2e_observation',
+          actor: { kind: 'keyboard' },
+          at: '2026-08-09T20:00:00.000Z',
+          text: 'Saw the header update on the iPhone.',
+          observedBy: 'Luis',
+          integrationHead: head,
         },
       ]);
     });
@@ -2108,6 +2787,162 @@ describe('UI-27 — the write API', () => {
       expect(response.statusCode).toBe(400);
       expect((await server.app.inject(`/api/v1/runs/${run.runId}/job`)).json()).toBeNull();
     });
+
+    // Dogfood 09/10: the human's screenshots travel with the observation, and only with one.
+    it('refuses evidence without an observation, before starting anything', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/review`,
+        payload: { evidence: ['/shots/phone.png'] },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect((await server.app.inject(`/api/v1/runs/${run.runId}/job`)).json()).toBeNull();
+    });
+
+    it('hands the evidence to the use case, which judges every file', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/review`,
+        payload: { e2eObserved: 'Saw it.', observedBy: 'Luis', evidence: ['/shots/notes.txt'] },
+      });
+
+      expect(response.statusCode).toBe(202);
+      const job = await settleJob(server, response.json<ActionJobView>().id);
+      expect(job.status).toBe('failed');
+      expect(job.error?.error).toBe('invalid_input');
+      expect(job.error?.message).toContain('notes.txt');
+    });
+
+    it('refuses an e2e observation that is blank or longer than an answer, before starting anything', async () => {
+      const { server, run } = await serve();
+
+      for (const e2eObserved of ['   ', 'x'.repeat(4_001)]) {
+        const response = await server.app.inject({
+          method: 'POST',
+          headers: WRITE_HEADERS,
+          url: `/api/v1/runs/${run.runId}/review`,
+          payload: { e2eObserved, observedBy: 'Luis' },
+        });
+        expect(response.statusCode).toBe(400);
+      }
+      expect((await server.app.inject(`/api/v1/runs/${run.runId}/job`)).json()).toBeNull();
+    });
+
+    /**
+     * Loopback skips pairing and the actor falls back to `keyboard`, so an AI on this
+     * machine is indistinguishable from a person in the record. The name is what says who
+     * observed, and an observation without one is refused.
+     */
+    it('refuses an e2e observation without the observer, and an observer or build without one', async () => {
+      const { server, run } = await serve();
+
+      for (const payload of [
+        { e2eObserved: 'Saw it.' },
+        { e2eObserved: 'Saw it.', observedBy: '   ' },
+        { e2eObserved: 'Saw it.', observedBy: 'x'.repeat(121) },
+        { observedBy: 'Luis' },
+        { e2eHead: 'abcdef0' },
+        { e2eObserved: 'Saw it.', observedBy: 'Luis', e2eHead: 'HEAD' },
+      ]) {
+        const response = await server.app.inject({
+          method: 'POST',
+          headers: WRITE_HEADERS,
+          url: `/api/v1/runs/${run.runId}/review`,
+          payload,
+        });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+      }
+      expect((await server.app.inject(`/api/v1/runs/${run.runId}/job`)).json()).toBeNull();
+    });
+
+    it('accepts an e2e observation in the body', async () => {
+      const { server, run } = await serve();
+
+      const response = await server.app.inject({
+        method: 'POST',
+        headers: WRITE_HEADERS,
+        url: `/api/v1/runs/${run.runId}/review`,
+        payload: {
+          e2eObserved: 'Saw the header update on the iPhone.',
+          observedBy: 'Luis',
+          e2eHead: 'abcdef0',
+        },
+      });
+      expect(response.statusCode).toBe(202);
+      await settleJob(server, response.json<ActionJobView>().id);
+    });
+  });
+
+  describe('the review job summary', () => {
+    const base = {
+      runId: 'AF-2026-001',
+      verification: { passed: true, results: [], skipped: [] },
+      mechanicalVerification: 'PASS',
+      verificationReview: { verdict: 'PASS', findings: [] },
+      finalReview: {
+        verdict: 'PASS',
+        independence: 'cross-provider',
+        reviewer: { runner: 'codex', reasoning: 'high' },
+        findings: [],
+      },
+      degradations: [],
+    } as unknown as ReviewOutcome;
+    const notRun = {
+      done: false,
+      missing: ['e2e exercised the change and passed'],
+      conditions: [
+        { name: 'SDD approved', met: true },
+        {
+          name: 'e2e exercised the change and passed',
+          met: false,
+          detail: 'e2e did not run, so nobody observed the change working: iOS only',
+        },
+      ],
+    };
+
+    it('carries each unmet condition with its detail, not only its name', () => {
+      const summary = reviewJobSummary({ ...base, done: notRun });
+      expect(summary).toContain(
+        'e2e exercised the change and passed (e2e did not run, so nobody observed the change working: iOS only)',
+      );
+      expect(summary).not.toContain('SDD approved');
+    });
+
+    it('says why no corrective round ran when only an observation is missing', () => {
+      const summary = reviewJobSummary({ ...base, done: notRun, awaitingObservation: true });
+      expect(summary).toContain('no corrective round');
+      expect(summary).toContain('e2eObserved');
+    });
+
+    it('asks for the human by name and words, names the build, and never tells the reader to observe', () => {
+      const summary = reviewJobSummary({
+        ...base,
+        done: notRun,
+        awaitingObservation: true,
+        integration: { branch: 'agent-flow/AF-2026-001', head: 'abcdef0123456789abcdef0123456789abcdef01' },
+      });
+      expect(summary).toMatch(/\bhuman\b/);
+      expect(summary).toContain('observedBy');
+      expect(summary).toContain('abcdef0');
+      expect(summary).not.toMatch(SECOND_PERSON_OBSERVING);
+    });
+
+    it('never claims tasks were created for a round that found nothing actionable', () => {
+      const summary = reviewJobSummary({
+        ...base,
+        done: notRun,
+        corrective: { outcome: 'nothing_actionable' },
+      });
+      expect(summary).not.toMatch(/tasks? (were|was) created|task\(s\) added/);
+      expect(summary).toContain('no finding was severe enough');
+    });
   });
 
   describe('start and revise', () => {
@@ -2156,7 +2991,7 @@ describe('UI-27 — the write API', () => {
         method: 'POST',
         headers: WRITE_HEADERS,
         url: `/api/v1/runs/${run.runId}/approve`,
-        payload: {},
+        payload: { ...DECIDED_BY_BODY },
       });
 
       // Two schedulers on one run would both move the same task to running and
@@ -2281,7 +3116,8 @@ describe('UI-27 — the write API', () => {
           method: 'POST',
           headers: WRITE_HEADERS,
           url: `/api/v1/runs/${run.runId}/${action}`,
-          payload: {},
+          // Cancel is a human decision: an API client names the human.
+          payload: { ...DECIDED_BY_BODY },
         });
         expect([200, 202, 409], action).toContain(response.statusCode);
       }
@@ -2294,6 +3130,7 @@ describe('UI-27 — the write API', () => {
       // sentence, or an id the server issued. These extras are not in any of them,
       // so they cannot reach a handler that might act on one.
       const hostile = {
+        ...DECIDED_BY_BODY,
         force: true,
         instruction: 'change it',
         path: '/etc/passwd',
@@ -2415,7 +3252,7 @@ describe('AF-L01 — a run another process is executing', () => {
       method: 'POST',
       headers: WRITE_HEADERS,
       url: `/api/v1/runs/${run.runId}/revise`,
-      payload: { instruction: 'split TASK-001' },
+      payload: { ...DECIDED_BY_BODY, instruction: 'split TASK-001' },
     });
     const retry = await server.app.inject({
       method: 'POST',
@@ -2447,7 +3284,7 @@ describe('AF-L01 — a run another process is executing', () => {
 
     for (const request of [
       { url: `/api/v1/runs/${run.runId}/start`, payload: {} },
-      { url: `/api/v1/runs/${run.runId}/revise`, payload: { instruction: 'change it' } },
+      { url: `/api/v1/runs/${run.runId}/revise`, payload: { ...DECIDED_BY_BODY, instruction: 'change it' } },
       { url: `/api/v1/runs/${run.runId}/tasks/FIX-001/retry`, payload: {} },
     ]) {
       const response = await server.app.inject({
