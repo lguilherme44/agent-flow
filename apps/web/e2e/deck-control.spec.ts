@@ -77,6 +77,9 @@ test.describe('Deck run control', () => {
     await page.goto(`${world.url}/p/${project}/runs/${runId}`);
     await expect(page.getByRole('heading', { name: runId })).toBeVisible();
 
+    // The run page opens on the Kanban; the event feed and the stage logs live in their own
+    // view since the run page was split into Kanban, Graph and Feed & Logs.
+    await page.getByRole('tab', { name: 'Feed & Logs' }).click();
     await page.getByRole('tab', { name: 'Stage output' }).click();
     await page.getByLabel('Stage log').selectOption('planning');
 
