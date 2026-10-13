@@ -80,11 +80,15 @@ describe('readRequestFileGuarded', () => {
     const big = await read(join(project, 'big.md'));
 
     expect(directory.ok).toBe(false);
+    // Opened and then refused by the open handle's own `stat`: named as a directory, not missing.
+    if (!directory.ok) expect(directory.message).toContain('not a regular file');
     expect(missing.ok).toBe(false);
     expect(big.ok).toBe(false);
     if (!big.ok) expect(big.message).toContain('32 KB');
-    // Positive control for the bound: exactly the limit is a request.
-    expect((await read(join(project, 'at-limit.md'))).ok).toBe(true);
+    // Positive control for the bound: exactly the limit is a request, read whole from the one
+    // open handle (CodeQL js/file-system-race).
+    const atLimit = await read(join(project, 'at-limit.md'));
+    expect(atLimit.ok && atLimit.text.length).toBe(REQUEST_FILE_MAX_BYTES);
   });
 
   it('judges where before what: a big file outside is refused as outside, its size unsaid', async () => {

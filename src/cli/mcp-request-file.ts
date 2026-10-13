@@ -1,4 +1,4 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { open, realpath, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { isAtOrUnderRoot } from '../core/path-containment.js';
 import type { RequestFileOutcome } from './mcp-server.js';
@@ -64,19 +64,35 @@ export async function readRequestFileGuarded(
     };
   }
 
-  const info = await stat(real);
-  if (!info.isFile()) {
-    return { ok: false, message: `Not sent: ${file} is not a regular file. Name the request file itself.` };
+  // Opened once, and everything after is asked of the open file (CodeQL js/file-system-race):
+  // a `stat` of the path and a later `readFile` of it could be two different files — a small
+  // one checked, a large one or a different one read.
+  let handle: FileHandle;
+  try {
+    handle = await open(real, 'r');
+  } catch {
+    return { ok: false, message: `Not sent: could not read ${file} (no such file).` };
   }
-  if (info.size > REQUEST_FILE_MAX_BYTES) {
-    return {
-      ok: false,
-      message:
-        `Not sent: ${file} is ${String(info.size)} bytes, over the 32 KB a request file may be. ` +
-        'Trim it to the story, its refinement and the link, or start the run from the CLI: ' +
-        '`agent-flow feature --file <path>`.',
-    };
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      return { ok: false, message: `Not sent: ${file} is not a regular file. Name the request file itself.` };
+    }
+    // One byte past the limit is read, so a file that grew after the `stat` is still refused.
+    const buffer = Buffer.alloc(REQUEST_FILE_MAX_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const size = Math.max(info.size, bytesRead);
+    if (size > REQUEST_FILE_MAX_BYTES) {
+      return {
+        ok: false,
+        message:
+          `Not sent: ${file} is ${String(size)} bytes, over the 32 KB a request file may be. ` +
+          'Trim it to the story, its refinement and the link, or start the run from the CLI: ' +
+          '`agent-flow feature --file <path>`.',
+      };
+    }
+    return { ok: true, text: buffer.subarray(0, bytesRead).toString('utf8') };
+  } finally {
+    await handle.close();
   }
-
-  return { ok: true, text: await readFile(real, 'utf8') };
 }
