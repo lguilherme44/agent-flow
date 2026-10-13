@@ -352,7 +352,7 @@ Five transitions, each one a call to the use case the CLI uses.
 
 | | | |
 |---|---|---|
-| **Approve** | `POST /runs/:id/approve` | Opens the gate for the plan on disk. |
+| **Approve** | `POST /runs/:id/approve` | Opens the gate for the plan on disk. Records who decided (`decidedBy`) and the channel; the Review tab shows it. |
 | **Reject** | `POST /runs/:id/reject` | Closes the run without implementing it. Artifacts stay. |
 | **Revise** | `POST /runs/:id/revise` → `202` | Re-plans with an instruction. Invalidates any approval first. |
 | **Start** | `POST /runs/:id/start` → `202` | Executes the approved plan. |
@@ -509,14 +509,22 @@ Write:
 ```
 POST /api/v1/projects                             { candidateId, force? } → 201   `init`, by an id the listing issued
 POST /api/v1/clean                       ?projectId  { keep?, force?, cache?, worktrees?, branches?, dryRun? }   `clean`; dryRun writes nothing
-POST /api/v1/runs/:runId/approve                  { force? }
-POST /api/v1/runs/:runId/reject                   { reason? }
-POST /api/v1/runs/:runId/revise                   { instruction }    → 202
+POST /api/v1/runs/:runId/approve                  { force?, decidedBy }            decidedBy = { by, words }
+POST /api/v1/runs/:runId/reject                   { reason?, decidedBy }          required without an Origin (400);
+POST /api/v1/runs/:runId/revise                   { instruction, decidedBy } → 202  the Deck may omit it
 POST /api/v1/runs/:runId/start                    { taskId? }        → 202
 POST /api/v1/runs/:runId/review                   { fix? }           → 202   verification, both reviewers, the Definition of Done
 POST /api/v1/runs                        ?projectId  { description, workflow?, skipReview?, noCache? } → 202   a new run, planned as a job
-POST /api/v1/runs/:runId/tasks/:taskId/retry      { force? }
+POST /api/v1/runs/:runId/tasks/:taskId/retry      { force?, expectNoChange?, decidedBy? }  decidedBy required with either override
+POST /api/v1/runs/:runId/tasks/:taskId/answer     { text, decidedBy }       decidedBy as approve's: a human decision
+POST /api/v1/runs/:runId/cancel                   { decidedBy }             irreversible: a human decision too
 ```
+
+Approve, reject, revise, answer, cancel and an overriding retry echo the recorded decision
+(`detail.decidedBy`, or `decidedBy` on revise's 202); a repeat cancel records and echoes
+nothing. The CLI asks the same of `answer`, `cancel` and `retry --force/--expect-no-change`:
+`--decided-by` (and `--words`; an answer's words default to the answer). Every operator action records the channel it came
+through (`cli`, `deck`, `api`); `GET /runs/:runId` lists them as `operatorActions`.
 
 Every route names a project by **id**. No request body carries a path, a shell command,
 a runner executable or a plan hash — and an architecture test reads the request

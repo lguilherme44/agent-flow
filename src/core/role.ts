@@ -127,6 +127,8 @@ export interface ResolvedAgentConfig {
   /** What the resolved (runner, model) pair declared. The third fact C-03 asks for. */
   readonly supportedReasoningLevels: readonly ReasoningLevel[];
   readonly timeoutSeconds: number;
+  /** The role's turn ceiling, when one is configured. Absent means none (`RoleConfig.maxTurns`). */
+  readonly maxTurns?: number;
   readonly structuredOutputStrategy: 'native' | 'prompted';
 }
 
@@ -354,6 +356,7 @@ export function resolveRole(
     requestedReasoning: roleConfig.effort,
     supportedReasoningLevels: runnerCapabilities.supportedReasoningLevels,
     timeoutSeconds: roleConfig.timeoutSeconds,
+    ...(roleConfig.maxTurns === undefined ? {} : { maxTurns: roleConfig.maxTurns }),
     structuredOutputStrategy: runnerCapabilities.structuredOutputStrategy,
   };
 }
@@ -421,6 +424,7 @@ export function resolveFallback(
     requestedReasoning: fallbackConfig.effort,
     supportedReasoningLevels: runnerCapabilities.supportedReasoningLevels,
     timeoutSeconds: fallbackConfig.timeoutSeconds,
+    ...(fallbackConfig.maxTurns === undefined ? {} : { maxTurns: fallbackConfig.maxTurns }),
     structuredOutputStrategy: runnerCapabilities.structuredOutputStrategy,
   };
 }

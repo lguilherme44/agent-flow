@@ -54,7 +54,7 @@ test.describe('an isolated run, from the browser', () => {
     const before = await world.workingTree('booking-api');
 
     await openDashboard(page, world);
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const start = page.getByRole('button', { name: 'Start run' });
     await expect(start).toBeVisible();
@@ -134,7 +134,7 @@ test.describe('an isolated run, from the browser', () => {
     // sleep.
     const world = await makeWorld({ worktrees: true, hold: true });
 
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     await openDashboard(page, world);
     await page.getByRole('button', { name: 'Start run' }).click();
 

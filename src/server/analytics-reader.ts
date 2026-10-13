@@ -7,7 +7,8 @@ import type {
 } from '../contracts/index.js';
 import { StateStore } from '../app/state-store.js';
 import { collectTelemetry } from '../app/telemetry.js';
-import { summariseTelemetry, type TelemetryBucket } from '../core/telemetry.js';
+import { summariseModelQuality, summariseTelemetry, type ReviewedTask, type TelemetryBucket } from '../core/telemetry.js';
+import { ReviewStore } from '../app/review-store.js';
 import { aggregateContextTelemetry, aggregateContextOutcomes } from '../core/context-telemetry.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
@@ -60,6 +61,7 @@ export class AnalyticsReader {
     const tasksByState: Record<string, number> = {};
     const runsByProject: AnalyticsView['runsByProject'] = [];
     const contextObservations: ContextTelemetryObservation[] = [];
+    const reviewed: ReviewedTask[] = [];
 
     let runsAvailable = 0;
     let runsConsidered = 0;
@@ -77,6 +79,7 @@ export class AnalyticsReader {
         fs: this.options.fs,
         projectDir: project.path,
       });
+      const reviewStore = new ReviewStore({ fs: this.options.fs, projectDir: project.path });
 
       // Newest first, so a bound drops the oldest history rather than an
       // arbitrary slice of it.
@@ -103,6 +106,15 @@ export class AnalyticsReader {
 
         for (const task of state.tasks) {
           tasksByState[task.state] = (tasksByState[task.state] ?? 0) + 1;
+        }
+
+        try {
+          // Each task's code reviews, for quality by the model that wrote it (dogfood 08/10).
+          for (const record of await reviewStore.readReviews(runId)) {
+            reviewed.push({ runId, taskId: record.taskId, round: record.round, findings: record.findings });
+          }
+        } catch {
+          // A run whose reviews will not read still counts for everything else.
         }
 
         try {
@@ -178,6 +190,9 @@ export class AnalyticsReader {
       byModel: buckets(summary.byModel),
       byRole: buckets(summary.byRole),
       byStage: buckets(summary.byStage),
+      byRoleModel: buckets(summary.byRoleModel),
+      byEffort: buckets(summary.byEffort),
+      quality: summariseModelQuality(entries, reviewed),
       ...(context === undefined ? {} : { context }),
     };
   }

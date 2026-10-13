@@ -91,6 +91,11 @@ export interface ProcessSpawnOptions {
   readonly signal?: AbortSignal;
   /** Fed to the child's stdin, then closed. */
   readonly stdin?: string;
+  /**
+   * Each stdout chunk as it arrives, before the buffer — which keeps the head and drops what
+   * passes `maxOutputBytes`. A reader that needs the end of a long stream reads it here.
+   */
+  readonly onStdout?: (chunk: string) => void;
   /** Beyond this, output is truncated and the result says so. */
   readonly maxOutputBytes?: number;
   /**

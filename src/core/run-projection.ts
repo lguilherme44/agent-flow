@@ -230,8 +230,24 @@ export function projectRun(input: ProjectionInput): RunProjection {
 
   const gate = projectGate(tasks, resumable, say);
   if (gate !== undefined) {
-    const reviewing = gate.gate === 'final_acceptance' && reviewInProgress(events);
-    return { ...base, status: 'blocked_on_human', gate, ...(reviewing ? { reviewInProgress: true as const } : {}) };
+    if (gate.gate !== 'final_acceptance') return { ...base, status: 'blocked_on_human', gate };
+
+    const reviewing = reviewInProgress(events);
+    const lastReview = reviewing ? undefined : concludedReview(events, state.integrationHead);
+    // The way out of a NOT DONE review, in place of a review the run already had (run 75716).
+    const finalGate =
+      lastReview === undefined || lastReview.done
+        ? gate
+        : { ...gate, action: say.gate.reviewNotDone(describeUnmet(lastReview.unmet), state.runId) };
+    return {
+      ...base,
+      status: 'blocked_on_human',
+      gate: finalGate,
+      ...(reviewing ? { reviewInProgress: true as const } : {}),
+      ...(lastReview === undefined
+        ? {}
+        : { lastReview: { done: lastReview.done, missing: lastReview.unmet.map((c) => c.name) } }),
+    };
   }
 
   // Read from the log, not from the field — see `currentStage`.
@@ -480,18 +496,71 @@ function projectReviewFreshness(input: ProjectionInput): RunProjection['reviewFr
  * review. A stage of the review failing ends it: that run needs a person again. Position
  * rather than timestamp, because events in one write can share a millisecond.
  */
-function reviewInProgress(events: readonly RunEvent[]): boolean {
+export function reviewInProgress(events: readonly RunEvent[]): boolean {
   let finished = -1;
   let started = -1;
-  let failed = -1;
+  let ended = -1;
   events.forEach((event, index) => {
     const stage = event.detail['stage'];
-    const reviewStage = stage === 'verification' || stage === 'final-review';
+    // Every stage `review` runs. `e2e` was missing, and an e2e timeout left the run "being
+    // reviewed" for good — the 75716 symptom by another road (adversarial review).
+    const reviewStage = stage === 'verification' || stage === 'e2e' || stage === 'final-review';
     if (event.type === 'task_finished') finished = index;
     if (event.type === 'run_review_started' || (event.type === 'stage_started' && reviewStage)) started = index;
-    if (event.type === 'stage_failed' && reviewStage) failed = index;
+    // A review ends when a stage of it fails or when it reaches its verdict. Only the first
+    // used to count, so a review that concluded NOT DONE read as running forever (run 75716).
+    if (
+      (event.type === 'stage_failed' && reviewStage) ||
+      event.type === 'run_review_concluded' ||
+      event.type === 'run_review_failed'
+    ) {
+      ended = index;
+    }
   });
-  return started > finished && started > failed;
+  return started > finished && started > ended;
+}
+
+/** The unmet conditions, each with its detail when it has one — in the record's English. */
+function describeUnmet(unmet: readonly UnmetCondition[]): string {
+  return unmet.map((c) => (c.detail === undefined ? c.name : `${c.name}: ${c.detail}`)).join('; ');
+}
+
+/** One unmet Definition of Done condition, as `run_review_concluded` records it. */
+export interface UnmetCondition {
+  readonly name: string;
+  readonly detail?: string;
+}
+
+/**
+ * What the last review concluded, when it still describes the work: recorded after the last
+ * task finished. New work (a corrective task) makes it history, and the gate asks for a new
+ * review again.
+ */
+export function concludedReview(
+  events: readonly RunEvent[],
+  integrationHead?: string,
+): { readonly done: boolean; readonly unmet: readonly UnmetCondition[] } | undefined {
+  const concluded = lastEventIndex(events, 'run_review_concluded');
+  if (concluded < 0) return undefined;
+  // Superseded by work after it: a task that finished, or one revalidated or integrated by
+  // hand, which moves the tree without a `task_finished` (adversarial review).
+  for (const type of ['task_finished', 'task_revalidated', 'task_integrated']) {
+    if (lastEventIndex(events, type) > concluded) return undefined;
+  }
+
+  const detail = events[concluded]?.detail ?? {};
+  // And by a head that is not the one it judged, when both are known.
+  const judged = detail['integrationHead'];
+  if (typeof judged === 'string' && integrationHead !== undefined && judged !== integrationHead) return undefined;
+  const unmet = Array.isArray(detail['unmet'])
+    ? (detail['unmet'] as unknown[]).flatMap((entry): UnmetCondition[] => {
+        if (typeof entry !== 'object' || entry === null) return [];
+        const { name, detail: why } = entry as { name?: unknown; detail?: unknown };
+        if (typeof name !== 'string') return [];
+        return [{ name, ...(typeof why === 'string' ? { detail: why } : {}) }];
+      })
+    : [];
+  return { done: detail['done'] === true, unmet };
 }
 
 /**

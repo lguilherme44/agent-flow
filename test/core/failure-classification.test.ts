@@ -214,6 +214,7 @@ describe('refinement lookups', () => {
     // The case AD-36 exists for: one transport failure, three different correct responses.
     expect([...classesRefining('execution_failed')].sort()).toEqual([
       'runner_execution_failed',
+      'runner_max_turns_exceeded',
       'runner_permission_required',
     ]);
   });
@@ -397,5 +398,31 @@ describe('classifying a runner failure from its raw output (AR-02, C-06)', () =>
 
     expect(result.failureClass).toBe('runner_permission_required');
     expect(result.deniedCommand).toBe('run_command');
+  });
+});
+
+describe('a runner that stopped at its turn ceiling', () => {
+  it('is classed runner_max_turns_exceeded from the structured flag, not from the text', () => {
+    expect(
+      classifyRunnerFailure({ errorCode: 'execution_failed', limitReached: 'max_turns' }).failureClass,
+    ).toBe('runner_max_turns_exceeded');
+    // The same words without the flag stay generic: the class is decided by the adapter.
+    expect(
+      classifyRunnerFailure({ errorCode: 'execution_failed', redactedRaw: 'max_turns_exceeded: …' })
+        .failureClass,
+    ).toBe('runner_execution_failed');
+  });
+
+  it('never relabels a code the limit does not refine', () => {
+    expect(
+      classifyRunnerFailure({ errorCode: 'quota_exceeded', limitReached: 'max_turns' }).failureClass,
+    ).toBe('runner_quota_exhausted');
+  });
+
+  it('stops for a person, since a retry would spend the same turns again, and spends the attempt', () => {
+    expect(dispositionOf('runner_max_turns_exceeded')).toBe('requires_human');
+    expect(failureClassDefinition('runner_max_turns_exceeded').humanAction).toMatch(/maxTurns/);
+    expect(consumesAttempt('runner_max_turns_exceeded')).toBe(true);
+    expect(refinedRunnerErrorCode('runner_max_turns_exceeded')).toBe('execution_failed');
   });
 });

@@ -25,6 +25,15 @@ export interface TelemetryBucket {
   readonly fallbacks: number;
   /** Invocations beyond the first, summed. */
   readonly retries: number;
+  /**
+   * The tokens the runners reported (dogfood 08/10), summed over the entries that reported
+   * them — `usageReporting` of `count`; zero when nobody did, so read them together. No cost:
+   * this module carries no monetary figure (see the file header), and the runner's own is an
+   * API-rate equivalent, not a bill. A run's reported cost stays in `agent-flow status`.
+   */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly usageReporting: number;
 }
 
 export interface TelemetrySummary {
@@ -40,6 +49,10 @@ export interface TelemetrySummary {
   readonly byModel: Record<string, TelemetryBucket>;
   readonly byRole: Record<string, TelemetryBucket>;
   readonly byStage: Record<string, TelemetryBucket>;
+  /** `<role> · <model>`: which model did which job (dogfood 08/10). Entries with no model are left out. */
+  readonly byRoleModel: Record<string, TelemetryBucket>;
+  /** By the effort the entry ran at. */
+  readonly byEffort: Record<string, TelemetryBucket>;
   /** Turns and permission denials, as the runners reported them (P1.2). */
   readonly conduct: RunConduct;
 }
@@ -106,6 +119,9 @@ const EMPTY: TelemetryBucket = {
   failures: 0,
   fallbacks: 0,
   retries: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  usageReporting: 0,
 };
 
 export function summariseTelemetry(entries: readonly TelemetryEntry[]): TelemetrySummary {
@@ -120,6 +136,11 @@ export function summariseTelemetry(entries: readonly TelemetryEntry[]): Telemetr
     byModel: groupBy(entries, (entry) => entry.model),
     byRole: groupBy(entries, (entry) => entry.role),
     byStage: groupBy(entries, (entry) => entry.stage),
+    byRoleModel: groupBy(entries, (entry) => {
+      const model = entry.model ?? entry.usage?.model;
+      return model === undefined ? undefined : `${entry.role} · ${model}`;
+    }),
+    byEffort: groupBy(entries, (entry) => entry.reasoning),
     conduct: summariseConduct(entries),
   };
 }
@@ -149,6 +170,9 @@ export function groupBy(
       failures: current.failures + (isFailure(entry) ? 1 : 0),
       fallbacks: current.fallbacks + (entry.fallback === undefined ? 0 : 1),
       retries: current.retries + (entry.attempts - 1),
+      inputTokens: current.inputTokens + (entry.usage?.inputTokens ?? 0),
+      outputTokens: current.outputTokens + (entry.usage?.outputTokens ?? 0),
+      usageReporting: current.usageReporting + (entry.usage === undefined ? 0 : 1),
     };
   }
 
@@ -265,4 +289,74 @@ const SPEND_FIELDS = [
 
 function reportsSpend(usage: RunUsage): boolean {
   return SPEND_FIELDS.some((field) => usage[field] !== undefined);
+}
+
+/** The part of a code review this reads: which task, which round, and how severe each finding was. */
+export interface ReviewedTask {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly round: number;
+  readonly findings: readonly { readonly severity: string }[];
+}
+
+/** What a model that wrote code delivered (dogfood 08/10). */
+export interface ModelQuality {
+  readonly model: string;
+  /** Tasks whose code it wrote, each counted once however many attempts it took. */
+  readonly tasks: number;
+  /** Of those, completed on the first attempt. */
+  readonly firstAttempt: number;
+  /** Of those, how many had a first code review — the denominator `findings` is read against. */
+  readonly reviewed: number;
+  /** The first review's findings, by severity. A re-review judges the fix, not the first code. */
+  readonly findings: Readonly<Record<string, number>>;
+}
+
+/**
+ * Quality by the model that wrote the code — what Luis asked to decide model changes with.
+ *
+ * A task is credited to the model of its last implementation entry (a fallback or a retry may
+ * have changed it); the configured model first, else the one the runner reported. Only the
+ * first round of code review counts: later rounds read the corrected tree. Sorted by model.
+ */
+export function summariseModelQuality(
+  entries: readonly TelemetryEntry[],
+  reviews: readonly ReviewedTask[],
+): ModelQuality[] {
+  const authorOf = new Map<string, { model: string; firstAttempt: boolean }>();
+  for (const entry of entries) {
+    if (entry.kind !== 'task' || entry.taskId === undefined) continue;
+    const model = entry.model ?? entry.usage?.model;
+    if (model === undefined) continue;
+    authorOf.set(`${entry.runId}/${entry.taskId}`, {
+      model,
+      firstAttempt: entry.status === 'completed' && entry.attempts === 1,
+    });
+  }
+
+  const byModel = new Map<string, { tasks: number; firstAttempt: number; reviewed: number; findings: Record<string, number> }>();
+  const of = (model: string) => {
+    const current = byModel.get(model) ?? { tasks: 0, firstAttempt: 0, reviewed: 0, findings: {} };
+    byModel.set(model, current);
+    return current;
+  };
+  for (const author of authorOf.values()) {
+    const bucket = of(author.model);
+    bucket.tasks += 1;
+    if (author.firstAttempt) bucket.firstAttempt += 1;
+  }
+  for (const review of reviews) {
+    if (review.round !== 1) continue;
+    const author = authorOf.get(`${review.runId}/${review.taskId}`);
+    if (author === undefined) continue;
+    const bucket = of(author.model);
+    bucket.reviewed += 1;
+    for (const finding of review.findings) {
+      bucket.findings[finding.severity] = (bucket.findings[finding.severity] ?? 0) + 1;
+    }
+  }
+
+  return [...byModel.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([model, bucket]) => ({ model, ...bucket }));
 }

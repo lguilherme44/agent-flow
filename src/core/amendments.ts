@@ -1,4 +1,5 @@
 import type { Amendment, AttachedFinding, Finding, RunActor } from '../contracts/index.js';
+import type { E2EObservation } from './definition-of-done.js';
 
 /**
  * Operator amendments, read into the two prompts that have to honour them (P7.1, P7.4, P7.5).
@@ -117,8 +118,14 @@ function renderFinding(finding: Finding): string[] {
  * Unfiltered by plan hash, unlike the task context: the final review judges the whole run,
  * and a decision that was retired from the prompts by a replan is still a decision the
  * code was built after.
+ *
+ * **Except an `e2e_observation`.** It is evidence about one build, not a decision the code
+ * was built after, and the Definition of Done already judges it against the head it names.
+ * Rendered here it reached the reviewer as an operator's word on the run — stale ones too,
+ * made on a head the code has since moved past.
  */
-export function renderAmendmentsForReview(amendments: readonly Amendment[]): string {
+export function renderAmendmentsForReview(all: readonly Amendment[]): string {
+  const amendments = all.filter((amendment) => amendment.kind !== 'e2e_observation');
   if (amendments.length === 0) return '';
 
   const lines = [
@@ -138,6 +145,61 @@ export function renderAmendmentsForReview(amendments: readonly Amendment[]): str
     for (const attached of amendment.findings ?? []) lines.push(findingSummary(attached));
   }
   return lines.join('\n');
+}
+
+/**
+ * The human attestation that speaks for the tree under review, if any.
+ *
+ * **Bound to a head, because an attestation is about code.** A person ran a build on a
+ * device and saw it work; once the integration head moves, the code under review is not
+ * the code they ran, and letting the old words stand would be the "degraded reads as
+ * passing" path the Definition of Done exists to close. The latest one wins, so a person
+ * who restates what they saw is not contradicted by their own earlier sentence.
+ *
+ * No head, no binding: sequential mode reviews a working tree no commit names, so nothing
+ * here can show an earlier observation describes it. The review that records one uses it
+ * directly instead.
+ */
+export function currentE2EObservation(
+  amendments: readonly Amendment[],
+  reviewedHead: string | undefined,
+): E2EObservation | undefined {
+  if (reviewedHead === undefined) return undefined;
+  const bound = amendments.filter(
+    (amendment) =>
+      amendment.kind === 'e2e_observation' &&
+      amendment.integrationHead === reviewedHead &&
+      amendment.text !== undefined,
+  );
+  const latest = bound[bound.length - 1];
+  return latest === undefined ? undefined : observationOf(latest);
+}
+
+/**
+ * Who observed what, in the words the Definition of Done prints: the observer by the name
+ * they gave, and the channel it came through beside it. An observation recorded before
+ * names were required has only the channel, and is named by it.
+ */
+export function observationOf(amendment: Amendment): E2EObservation {
+  const channel = actorName(amendment.actor);
+  return amendment.observedBy === undefined
+    ? { by: channel, text: amendment.text ?? '' }
+    : { by: amendment.observedBy, via: channel, text: amendment.text ?? '' };
+}
+
+/** A commit id or a prefix of one: lowercase or not, seven characters at least. */
+const HEAD_PREFIX = /^[0-9a-f]{7,40}$/i;
+
+/**
+ * Whether the build a person says they tested is the head under review.
+ *
+ * A prefix of seven or more is accepted because that is what a person reads off a build
+ * screen or `git log --oneline`; fewer is refused, because a short prefix can name more
+ * than one commit and the point is to know which one was on the device.
+ */
+export function e2eHeadMatches(given: string, reviewedHead: string): boolean {
+  const prefix = given.trim().toLowerCase();
+  return HEAD_PREFIX.test(prefix) && reviewedHead.toLowerCase().startsWith(prefix);
 }
 
 function actorName(actor: RunActor): string {

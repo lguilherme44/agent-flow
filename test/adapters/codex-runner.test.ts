@@ -506,3 +506,171 @@ describe('the prompt cannot decide how the run is classified', () => {
     if (!result.ok) expect(result.errorCode).toBe('execution_failed');
   });
 });
+
+/**
+ * Dogfood 08/10 — "tela congelada", for this runner too. `exec --json` prints the session as
+ * events. Measured on codex-cli 0.162.0-alpha.17.2: the thread and turn events, an
+ * `agent_message` item, `turn.completed` with the usage — and, with no credential, `error`
+ * events and a `turn.failed`. The other item shapes are the ones the binary names; their
+ * fields are read defensively.
+ */
+describe('the event stream (dogfood 08/10)', () => {
+  const event = (fields: Record<string, unknown>) => JSON.stringify(fields);
+  const lines = [
+    event({ type: 'thread.started', thread_id: 't' }),
+    event({ type: 'turn.started' }),
+    event({ type: 'item.completed', item: { id: 'item_0', type: 'reasoning', text: 'PRIVATE-THOUGHT' } }),
+    event({ type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'npm test', aggregated_output: '', status: 'in_progress' } }),
+    event({ type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: 'npm test', aggregated_output: 'COMMAND-OUTPUT', exit_code: 0, status: 'completed' } }),
+    event({ type: 'item.completed', item: { id: 'item_2', type: 'file_change', changes: [{ path: 'src/a.ts', kind: 'update' }], status: 'completed' } }),
+    event({ type: 'item.completed', item: { id: 'item_3', type: 'agent_message', text: 'Changed a.ts; the tests pass.' } }),
+    event({ type: 'turn.completed', usage: { input_tokens: 28393, cached_input_tokens: 24064, output_tokens: 62 } }),
+  ];
+  const stream = `${lines.join('\n')}\n`;
+
+  /** A codex that writes `answer` to its `-o` file and prints `stdout`, fed through the pipe. */
+  function streaming(answer: string, stdout: string, exitCode = 0) {
+    const proc = new FakeProcessRunner();
+    const made = makeRunner({ process: proc });
+    proc.always((spawn) => {
+      const path = spawn.args[spawn.args.indexOf('-o') + 1];
+      if (path && answer !== '') made.fs.seed(path, answer);
+      spawn.onStdout?.(stdout.slice(0, 150));
+      spawn.onStdout?.(stdout.slice(150));
+      return { exitCode, stdout };
+    });
+    return made;
+  }
+
+  it('asks the CLI for the event stream and still reads the answer from -o', async () => {
+    const { runner, proc } = streaming('ok', stream);
+
+    const result = await runner.run(baseInput);
+
+    expect(proc.lastCall?.args).toContain('--json');
+    expect(result.ok && result.text).toBe('ok');
+  });
+
+  it('reports each item once, as it starts, and keeps the reasoning private', async () => {
+    const seen: unknown[] = [];
+    const { runner } = streaming('ok', stream);
+
+    await runner.run({ ...baseInput, onActivity: (activity) => seen.push(activity) });
+
+    expect(seen).toEqual([
+      { kind: 'tool', tool: 'command_execution', target: 'npm test' },
+      { kind: 'tool', tool: 'file_change', target: 'src/a.ts' },
+      { kind: 'text', text: 'Changed a.ts; the tests pass.' },
+    ]);
+  });
+
+  it('does not report the answer of a structured stage as something the agent said', async () => {
+    const seen: unknown[] = [];
+    const answer = '{"verdict":"PASS"}';
+    const { runner } = streaming(answer, `${event({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: answer } })}\n`);
+
+    const result = await runner.run({ ...baseInput, outputSchema: { type: 'object' }, onActivity: (activity) => seen.push(activity) });
+
+    expect(result.ok && result.json).toEqual({ verdict: 'PASS' });
+    expect(seen).toEqual([]);
+  });
+
+  it('keeps none of the stream in what a failure carries to logs', async () => {
+    const { runner } = streaming('', `${lines.slice(0, 5).join('\n')}\n`, 1);
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.raw).not.toContain('COMMAND-OUTPUT');
+    expect(result.raw).not.toContain('PRIVATE-THOUGHT');
+  });
+
+  // Measured: with no credential, `--json` leaves stderr without one `ERROR:` line — the
+  // failure is the `turn.failed` event, after five reconnect errors.
+  const loggedOut = [
+    event({ type: 'thread.started', thread_id: 't' }),
+    event({ type: 'turn.started' }),
+    event({ type: 'error', message: 'Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses)' }),
+    event({ type: 'error', message: 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses' }),
+    event({ type: 'turn.failed', error: { message: 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses' } }),
+  ].join('\n');
+  const tracing =
+    'Reading prompt from stdin...\n2026-10-13T12:59:30.104360Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized';
+
+  it('reads a logged-out codex as auth_required from its turn.failed event', async () => {
+    const proc = new FakeProcessRunner();
+    const { runner } = makeRunner({ process: proc });
+    proc.always((spawn) => {
+      spawn.onStdout?.(`${loggedOut}\n`);
+      return { exitCode: 1, stdout: `${loggedOut}\n`, stderr: tracing };
+    });
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errorCode).toBe('auth_required');
+    expect(result.raw).toContain('unexpected status 401 Unauthorized');
+  });
+
+  it('reads the same failure in text mode, where it is an ERROR: line on stderr', async () => {
+    // Measured too, before `--json`: no rule read this line, so a logged-out codex failed as
+    // `execution_failed`.
+    const { runner } = makeRunner({
+      process: new FakeProcessRunner().always({
+        exitCode: 1,
+        stderr: 'ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header',
+      }),
+    });
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('auth_required');
+  });
+
+  it('does not read a retry the run recovered from as the reason it later failed', async () => {
+    // Adversarial review: a 429 retry, a recovery, then a crash with no turn.failed. Read as a
+    // quota failure, fallback would spend the other provider's quota on a limit nobody hit.
+    const recovered = [
+      event({ type: 'error', message: 'Reconnecting... 1/5 (unexpected status 429 Too Many Requests)' }),
+      event({ type: 'error', message: 'unexpected status 429 Too Many Requests' }),
+      event({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'Working on it.' } }),
+    ].join('\n');
+    const { runner } = makeRunner({
+      process: new FakeProcessRunner().always({ exitCode: 1, stdout: `${recovered}\n` }),
+    });
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('execution_failed');
+
+    // And a retry alone, with nothing after it, is still a retry and not the verdict.
+    const retrying = event({ type: 'error', message: 'Reconnecting... 1/5 (unexpected status 429 Too Many Requests)' });
+    const { runner: second } = makeRunner({
+      process: new FakeProcessRunner().always({ exitCode: 1, stdout: `${retrying}\n` }),
+    });
+    const retried = await second.run(baseInput);
+    if (!retried.ok) expect(retried.errorCode).toBe('execution_failed');
+    expect(retried.ok).toBe(false);
+  });
+
+  it('reads a usage limit from turn.failed, and not from a retry that came before it', async () => {
+    // Measured shape: a plain `error` right before `turn.failed`, not only retries.
+    const limited = [
+      event({ type: 'error', message: 'Reconnecting... 1/5 (unexpected status 401 Unauthorized)' }),
+      event({ type: 'error', message: 'unexpected status 401 Unauthorized' }),
+      event({ type: 'turn.failed', error: { message: 'You have hit your usage limit. Try again later.' } }),
+    ].join('\n');
+    const { runner } = makeRunner({
+      process: new FakeProcessRunner().always({ exitCode: 1, stdout: `${limited}\n` }),
+    });
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
+  });
+});

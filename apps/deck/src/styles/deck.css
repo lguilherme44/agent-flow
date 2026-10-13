@@ -1437,6 +1437,58 @@ html:has(.crew-actions) {
   background: var(--bg-1);
 }
 
+/* Where the time went: one stacked bar over the wall clock, a legend, the stages. */
+.time-spent__bar {
+  display: flex;
+  height: 14px;
+  border-radius: var(--r-1);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.time-spent__part {
+  background: var(--tone);
+  min-width: 2px;
+}
+.time-spent__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-5);
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-1);
+}
+.time-spent__legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.time-spent__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--tone);
+}
+.time-spent__value {
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+}
+.time-spent__stages {
+  margin-top: var(--s-4);
+  border-collapse: collapse;
+  font-size: var(--fs-1);
+}
+.time-spent__stages th,
+.time-spent__stages td {
+  padding: var(--s-1) var(--s-4) var(--s-1) 0;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.time-spent__stages td:not(:first-child) {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
 .analytics-controls {
   display: flex;
   flex-wrap: wrap;

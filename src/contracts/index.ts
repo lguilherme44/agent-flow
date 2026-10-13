@@ -9,6 +9,7 @@ export * from './collaboration.schema.js';
 export * from './team.schema.js';
 export * from './task.schema.js';
 export * from './plan.schema.js';
+export * from './human-decision.schema.js';
 export * from './state.schema.js';
 export * from './review.schema.js';
 export * from './forge.schema.js';

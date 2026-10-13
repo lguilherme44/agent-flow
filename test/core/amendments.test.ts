@@ -7,11 +7,15 @@ import {
   type Finding,
 } from '../../src/contracts/index.js';
 import {
+  currentE2EObservation,
+  e2eHeadMatches,
   renderAmendmentsForReview,
   renderTaskOperatorContext,
   routeFindings,
 } from '../../src/core/amendments.js';
 
+const HEAD = 'a'.repeat(40);
+const OLD_HEAD = 'b'.repeat(40);
 const HASH = 'plan-hash-current';
 const OTHER_HASH = 'plan-hash-previous';
 const AT = '2026-09-25T10:00:00.000Z';
@@ -257,6 +261,27 @@ describe('renderAmendmentsForReview (FR-011)', () => {
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   });
 
+  /**
+   * An observation is evidence about a build, not a decision the code was built after —
+   * and a stale one (an older head) would reach the reviewer as if it still held.
+   */
+  it('never renders an e2e observation into the final review', () => {
+    const observed = amendment({
+      id: 'AMD-002',
+      kind: 'e2e_observation',
+      text: 'Saw the header update on the iPhone.',
+      observedBy: 'Luis',
+      integrationHead: HEAD,
+    });
+    expect(renderAmendmentsForReview([observed])).toBe('');
+
+    const text = renderAmendmentsForReview([answer('AMD-001', 'Use v2.'), observed]);
+    expect(text).toContain('AMD-001');
+    expect(text).not.toContain('AMD-002');
+    expect(text).not.toContain('e2e_observation');
+    expect(text).not.toContain('Saw the header update');
+  });
+
   it('names a device by its id when it has no label', () => {
     const text = renderAmendmentsForReview([
       amendment({ id: 'AMD-001', kind: 'decision', actor: { kind: 'device', deviceId: 'device-7', label: '' } }),
@@ -264,5 +289,69 @@ describe('renderAmendmentsForReview (FR-011)', () => {
     expect(text).toContain('- Actor: device-7');
     expect(text).not.toContain('- Subject:');
     expect(text).not.toContain('- Text:');
+  });
+});
+
+/**
+ * Which recorded attestation speaks for the tree being reviewed. An attestation is about the
+ * code a person ran on the target; once the integration head moves, the code they observed
+ * is not the code under review, so it no longer counts.
+ */
+describe('currentE2EObservation', () => {
+  const observed = (id: string, text: string, integrationHead?: string, actor?: Amendment['actor']) =>
+    amendment({
+      id,
+      kind: 'e2e_observation',
+      text,
+      observedBy: 'Luis',
+      ...(integrationHead === undefined ? {} : { integrationHead }),
+      ...(actor === undefined ? {} : { actor }),
+    });
+
+  it('returns the latest observation made on the head under review: the observer, and the channel', () => {
+    const device = { kind: 'device' as const, deviceId: 'device-1', label: 'Office tablet' };
+    const result = currentE2EObservation(
+      [observed('AMD-001', 'first', HEAD), answer('AMD-002', 'x'), observed('AMD-003', 'second', HEAD, device)],
+      HEAD,
+    );
+    expect(result).toEqual({ by: 'Luis', via: 'Office tablet', text: 'second' });
+  });
+
+  it('names the channel as the observer for one recorded before names were required', () => {
+    const legacy = amendment({ id: 'AMD-001', kind: 'e2e_observation', text: 'old', integrationHead: HEAD });
+    expect(currentE2EObservation([legacy], HEAD)).toEqual({ by: 'keyboard', text: 'old' });
+  });
+
+  it('ignores an observation made on an older head: the code changed since', () => {
+    expect(currentE2EObservation([observed('AMD-001', 'old', OLD_HEAD)], HEAD)).toBeUndefined();
+  });
+
+  it('counts nothing when there is no head to bind to', () => {
+    // Sequential mode reviews the working tree, which no commit names; an observation
+    // recorded there cannot be shown to describe the tree a later review reads.
+    expect(currentE2EObservation([observed('AMD-001', 'unbound')], undefined)).toBeUndefined();
+  });
+
+  it('is never satisfied by another kind of amendment', () => {
+    expect(currentE2EObservation([answer('AMD-001', 'looks fine')], HEAD)).toBeUndefined();
+  });
+});
+
+/**
+ * The build the human says they tested, against the head under review. The binding used to
+ * be to whatever head the review ran on, which says nothing about what was on the device.
+ */
+describe('e2eHeadMatches', () => {
+  it('accepts the full head or a prefix of at least seven characters, in any case', () => {
+    expect(e2eHeadMatches(HEAD, HEAD)).toBe(true);
+    expect(e2eHeadMatches('aaaaaaa', HEAD)).toBe(true);
+    expect(e2eHeadMatches('AAAAAAAA', HEAD)).toBe(true);
+  });
+
+  it('refuses a prefix shorter than seven characters, another commit, or something not hex', () => {
+    expect(e2eHeadMatches('aaaaaa', HEAD)).toBe(false);
+    expect(e2eHeadMatches('bbbbbbb', HEAD)).toBe(false);
+    expect(e2eHeadMatches('HEAD~1x', HEAD)).toBe(false);
+    expect(e2eHeadMatches(`${HEAD}a`, HEAD)).toBe(false);
   });
 });

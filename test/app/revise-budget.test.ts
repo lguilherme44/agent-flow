@@ -11,6 +11,7 @@ import { planHash } from '../../src/app/approval.js';
 import { revise } from '../../src/app/run-actions.js';
 import { PlanSchema, type WorkflowClass } from '../../src/contracts/index.js';
 import type { ProcessSpawnOptions } from '../../src/ports/index.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * The ceremony budget of plain `revise`, as it stands before decisions and escalations
@@ -151,7 +152,7 @@ describe('plain revise refuses once the ceremony budget is spent (P7.5 baseline)
     it(`refuses a ${workflow} run at revisionCount ${String(revisionCount)} and changes nothing`, async () => {
       const { store, deps, runId, processRunner } = await approvedRun(workflow, revisionCount);
 
-      const outcome = await revise(deps, runId, 'split TASK-001');
+      const outcome = await revise(deps, runId, 'split TASK-001', DECIDED);
 
       expect(outcome.ok).toBe(false);
       expect(!outcome.ok && outcome.error.code).toBe('ceremony_budget_exceeded');
@@ -177,7 +178,7 @@ describe('plain revise refuses once the ceremony budget is spent (P7.5 baseline)
     // not run at all.
     const { store, deps, runId, processRunner } = await approvedRun('standard', 1);
 
-    const outcome = await revise(deps, runId, 'split TASK-001');
+    const outcome = await revise(deps, runId, 'split TASK-001', DECIDED);
 
     expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
     expect((await store.loadRun(runId)).revisionCount).toBe(2);

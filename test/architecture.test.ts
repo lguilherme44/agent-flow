@@ -3131,6 +3131,9 @@ describe('Context telemetry contract and projection boundary (M3-07)', () => {
     }
 
     expect(users.map((path) => path.replace(`${ROOT}/`, '')).sort()).toEqual([
+      // Where the wall clock went: a fold for the Deck and `agent-flow timeline`, never read
+      // by anything that decides.
+      'src/app/run-timeline.ts',
       // The AR-07 projection, and the two surfaces that ship it.
       'src/app/telemetry.ts',
       'src/cli/status.ts',

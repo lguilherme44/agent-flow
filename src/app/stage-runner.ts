@@ -13,6 +13,7 @@ import {
 } from '../contracts/index.js';
 import type { Locale } from '../contracts/locale.js';
 import type { AgentRunner, Clock, FileSystem, Host, RunProvenance } from '../ports/index.js';
+import type { RunnerActivity } from '../ports/agent-runner.js';
 import type { RunnerCapabilitiesMap } from '../core/role.js';
 import { resolveRole, type ResolvedAgentConfig } from '../core/role.js';
 import {
@@ -259,10 +260,34 @@ export interface StageRunnerOptions {
  * loop, persistence, logging and events. Adding a stage should mean writing a
  * prompt and a definition, never repeating infrastructure.
  */
+/** The most `agent_activity` events one agent call records; one more line says the rest were not. */
+export const MAX_ACTIVITY_EVENTS = 200;
+
+/**
+ * A tool target with the workspace's own path taken out (first real run, 13/10): every read in a
+ * worktree arrived as `<home>\.agent-flow\worktrees\read-only-sdd-pid-…\src\format.js`, and on a
+ * deep tree the 200-character cut fell on the file name — the one part a person reads. Matched
+ * with either separator and without case, because the agent and the CLI spell it either way.
+ */
+export function relativeToWorkspace(target: string, cwd: string): string {
+  const root = cwd.replaceAll('\\', '/').replace(/\/+$/, '');
+  if (root === '') return target;
+  const pattern = root
+    .split('/')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[\\\\/]');
+  // A path inside it loses the prefix; the workspace named on its own becomes `.`.
+  return target.replace(new RegExp(`${pattern}(?:([\\\\/])|(?=[\\s"']|$))`, 'gi'), (_match, separator?: string) =>
+    separator === undefined ? '.' : '',
+  );
+}
+
 /** Per-invocation overrides. Only the working directory so far. */
 export interface StageRunOptions {
   /** Absolute. Defaults to the project directory. */
   readonly workingDirectory?: string;
+  /** Command prefixes this stage alone may run (`AgentRunInput.commandGrants`). */
+  readonly commandGrants?: readonly string[];
   /**
    * Ends this stage's invocation, and its process tree, before its timeout (PRI-14).
    *
@@ -658,6 +683,9 @@ export class StageRunner {
       reasoningRequested: resolved.requestedReasoning,
       reasoningSupported: resolved.supportedReasoningLevels,
       reasoningClamped: resolved.reasoningClamped,
+      // The ceiling this invocation was given, beside the effort it was given. Absent when
+      // the role sets none, so a stage without one records the event it always recorded.
+      ...(resolved.maxTurns === undefined ? {} : { maxTurns: resolved.maxTurns }),
     });
 
     // **What this prompt is made of** (AR-09). A one-`grep` call in the evidence
@@ -769,19 +797,60 @@ export class StageRunner {
     while (repair < MAX_REPAIR_ATTEMPTS + 1) {
       repair += 1;
 
+      // What the agent does, on the run as it does it (dogfood 08/10: the Deck showed nothing
+      // until a task ended). Chained so the events keep their order, redacted on the way in —
+      // a command line can carry a token — and drained before the stage records its output.
+      let activityWrites: Promise<void> = Promise.resolve();
+      let activityCount = 0;
+      const activityContext = this.redactionContext(cwd);
+      const onActivity = (activity: RunnerActivity): void => {
+        // Bounded: every reader of the run walks `events.jsonl` whole, and a long task makes
+        // hundreds of tool calls (adversarial review). Past the ceiling, one line says so.
+        activityCount += 1;
+        if (activityCount > MAX_ACTIVITY_EVENTS + 1) return;
+        if (activityCount === MAX_ACTIVITY_EVENTS + 1) {
+          activity = { kind: 'text', text: `… more activity in this call, not recorded (ceiling ${String(MAX_ACTIVITY_EVENTS)})` };
+        }
+        const detail = {
+          stage: stage.name,
+          role: stage.role,
+          ...(options.task === undefined ? {} : { task: options.task }),
+          ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
+          ...(activity.kind === 'tool'
+            ? {
+                kind: 'tool',
+                tool: activity.tool,
+                ...(activity.target === undefined
+                  ? {}
+                  : { target: redactEvidence(relativeToWorkspace(activity.target, cwd), activityContext) }),
+              }
+            : { kind: 'text', text: redactEvidence(activity.text, activityContext) }),
+        };
+        activityWrites = activityWrites
+          .then(() => store.appendEvent(runId, 'agent_activity', detail))
+          // A lost activity line is a gap in a live view, never a reason to fail the stage.
+          .catch(() => undefined);
+      };
+
       const result = await runner.run({
+        onActivity,
         prompt: promptText,
         reasoning: resolved.reasoning,
         workingDirectory: cwd,
         permissions: prompt.meta.permissions,
         timeoutSeconds: resolved.timeoutSeconds,
+        ...(resolved.maxTurns === undefined ? {} : { maxTurns: resolved.maxTurns }),
         ...(languageInstruction === undefined ? {} : { systemPrompt: languageInstruction }),
         ...(resolved.model === undefined ? {} : { model: resolved.model }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.commandGrants === undefined || options.commandGrants.length === 0
+          ? {}
+          : { commandGrants: options.commandGrants }),
         ...(stage.outputSchema === undefined
           ? {}
           : { outputSchema: toJsonSchema(stage.outputSchema) }),
       });
+      await activityWrites;
 
       lastExecution = executionOf(result.provenance, resolved, result.usage);
 
@@ -799,6 +868,7 @@ export class StageRunner {
         const classification = classifyRunnerFailure({
           errorCode: result.errorCode,
           redactedRaw,
+          ...(result.limitReached === undefined ? {} : { limitReached: result.limitReached }),
         });
         const excerpt = redactAndTruncate(
           redactedRaw,
@@ -850,6 +920,7 @@ export class StageRunner {
           // way to tell a stage killed at its limit from one that crashed on contact.
           durationMs: budget.durationMs,
           timeoutSeconds: budget.timeoutSeconds,
+          ...(resolved.maxTurns === undefined ? {} : { maxTurns: resolved.maxTurns }),
           repairs: repair - 1,
           startedAt,
           finishedAt: clock.now(),

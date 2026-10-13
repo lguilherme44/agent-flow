@@ -247,3 +247,43 @@ describe('transparency to the core', () => {
     expect(secondary.lastCall?.permissions).toBe('write');
   });
 });
+
+describe('the turn ceiling on the replacement', () => {
+  it("uses the fallback's own ceiling when it declares one", async () => {
+    const primary = new FakeAgentRunner('claude');
+    const secondary = new FakeAgentRunner('codex');
+    const runner = new FallbackRunner({ primary, secondary, secondaryConfig: { ...secondaryConfig, maxTurns: 7 } });
+    primary.pushFailure('quota_exceeded');
+    secondary.pushText('done');
+
+    await runner.run({ ...input, maxTurns: 40 });
+
+    expect(secondary.lastCall?.maxTurns).toBe(7);
+  });
+
+  it("carries the primary's ceiling over when the fallback declares none", async () => {
+    const { runner, primary, secondary } = pair();
+    primary.pushFailure('quota_exceeded');
+    secondary.pushText('done');
+
+    await runner.run({ ...input, maxTurns: 40 });
+
+    expect(secondary.lastCall?.maxTurns).toBe(40);
+  });
+});
+
+describe("the fallback never exceeds the primary's ceiling for the stage", () => {
+  it("takes the stage's lower ceiling over the fallback's role-level one", async () => {
+    // Global executors.normal 60, stages.implementation 30, fallback 45: implementation's
+    // invocation carries 30, and the fallback must not run it at 45.
+    const primary = new FakeAgentRunner('claude');
+    const secondary = new FakeAgentRunner('codex');
+    const runner = new FallbackRunner({ primary, secondary, secondaryConfig: { ...secondaryConfig, maxTurns: 45 } });
+    primary.pushFailure('quota_exceeded');
+    secondary.pushText('done');
+
+    await runner.run({ ...input, maxTurns: 30 });
+
+    expect(secondary.lastCall?.maxTurns).toBe(30);
+  });
+});

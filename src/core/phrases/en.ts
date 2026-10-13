@@ -19,7 +19,14 @@ export const en: Phrases = {
       `Fix what stopped ${tasks}, then \`agent-flow retry\` it — or \`agent-flow revalidate\` ` +
       `it if you fixed its worktree yourself.${waiting}`,
     waitingOn: (tasks) => ` ${tasks} are waiting on it.`,
-    finalAcceptance: 'Run `agent-flow review`, then accept and merge',
+    // No "accept": there was never such a command, and run 75716 sat behind this sentence for
+    // 23 hours. `review` closes the run itself when the Definition of Done holds.
+    finalAcceptance: 'Run `agent-flow review`; it completes the run when the Definition of Done holds',
+    reviewNotDone: (unmet, runId) =>
+      `The last review ended NOT DONE — ${unmet}. Fix that and run ` +
+      '`agent-flow review` again; or, if the human accepts the delivery as it is (a PR opened ' +
+      `outside agent-flow, say), ask for their name and exact words and run \`agent-flow complete ${runId} ` +
+      '--decided-by "<their name>" --words "<their words>"`',
   },
 
 
@@ -108,6 +115,15 @@ export const en: Phrases = {
       'refused, unapproved, in a non-interactive session. Grant the binaries those ' +
       `commands already name, e.g. runners.${runner}.args: ` +
       "['--allowedTools', 'Bash(npm:*)', 'Bash(git status:*)'] — on Windows declare each rule for PowerShell too, e.g. 'PowerShell(npm:*)': Claude Code runs commands with that tool there",
+    projectMaxTurnsIgnored: (path, value) =>
+      `the project config sets \`${path}\` to ${value}, and it is ignored: a project may lower a ` +
+      'turn ceiling, never raise one, whatever its trust. Change the global value to raise it',
+    unknownProjectKey: (key) =>
+      `project config: '${key}' is not a setting agent-flow reads, so it is ignored — check the spelling`,
+    unknownCommandKey: (key, id) =>
+      `project config: '${key}' is ignored — commands holds only install, lint, typecheck, test and build. ` +
+      `Declare it under validationCommands (ids: lowercase letters, digits, dashes) for a plan to use it` +
+      (/^[a-z0-9][a-z0-9-]*$/.test(id) ? '' : `, e.g. '${id.toLowerCase().replaceAll(/[^a-z0-9-]+/g, '-')}'`),
     projectLooseningIgnored: (path) =>
       `the project config sets \`${path}\`, and it is ignored: this project is not trusted, ` +
       'so its config may only tighten your settings. To let it apply, add the project ' +
@@ -207,6 +223,13 @@ export const en: Phrases = {
       `"${runner}" does not declare ${toolClass}, which this role's prompts need`,
     mayRunCommands: (prefixes) => `may run: ${prefixes}`,
     mayRunAnyCommand: 'may run any command',
+    maxTurnsCeiling: (maxTurns, scope) =>
+      `max turns: ${String(maxTurns)}${scope === undefined ? '' : ` (${scope})`}`,
+    maxTurnsNotEnforced: (maxTurns, runner, scope) =>
+      `maxTurns is ${String(maxTurns)}${scope === undefined ? '' : ` (${scope})`}, but runner "${runner}" ` +
+      'does not enforce a turn ceiling — it will not apply',
+    maxTurnsScopeStage: (stage) => `stage ${stage}`,
+    maxTurnsScopeFallback: 'fallback',
     declaredCapabilitiesCaveat: [
       'Declared capabilities are read from the adapters, never inferred from a run that',
       'happened to succeed. A missing grant is a warning: it does not stop execution.',
@@ -284,6 +307,11 @@ export const en: Phrases = {
     featureNeedsDescription: 'a feature needs a description',
     invalidPlanResumeRequest: 'invalid plan resume request',
     invalidApproveRequest: 'invalid approve request',
+    decidedByRequired:
+      'This action needs the name and the exact words of the human who decided it: decidedBy ' +
+      '{"by": "<their name>", "words": "<their exact words>"} over HTTP, --decided-by and --words ' +
+      'on the CLI. Ask the human for both and pass them as given; an AI must not invent either. ' +
+      'The decision is recorded with its channel (api), where the human can see it.',
     invalidRejectRequest: 'invalid reject request',
     invalidRetryRequest: 'invalid retry request',
     invalidAnswerRequest: 'an answer needs text, at most 4000 characters',
@@ -326,7 +354,12 @@ export const en: Phrases = {
     configUnreadable: 'The configuration could not be read or saved.',
     checkFsRetry: 'Check filesystem access and retry.',
     pairingNotEnabled: 'pairing is not enabled on this server',
-    invalidPairRequest: 'invalid pairing request',
+    invalidPairRequest:
+      'invalid pairing request: the code is 12 characters like xxxx-xxxx-xxxx (not a run id), shown ' +
+      'on the hub when it starts or by `agent-flow pairing-code` on its machine; the device name is up to ' +
+      '40 plain characters, no accents',
+    evidenceLocalOnly: 'evidence files are attached only from the machine the hub runs on (agent-flow review --evidence there)',
+    pairingCodeLocalOnly: 'a pairing code is issued only to the machine the hub runs on: run `agent-flow pairing-code` there',
     invalidPairingCode: 'invalid pairing code',
     sessionLimitReached: 'the limit of 16 live device sessions has been reached',
     noSuchDeviceSession: 'no such device session',
@@ -414,6 +447,7 @@ export const en: Phrases = {
     beingRejected: 'rejected',
     beingReviewed: 'reviewed',
     beingRevalidated: 'revalidated by hand',
+    beingCompleted: 'completed by hand',
     heldByPidOn: (pid, hostname) => ` (pid ${pid} on ${hostname})`,
 
     noPlanYetToApprove: (runId) => `${runId} has no plan yet, so there is nothing to approve.`,
@@ -454,6 +488,36 @@ export const en: Phrases = {
       'dependency is released when that dependency completes.',
     answerNeedsText: 'An answer needs some text.',
     sayWhatTaskNeeds: 'Write what the blocked task needs to know to continue.',
+    evidenceRefused: (file, reason) =>
+      `The evidence file ${file} was refused (${
+        reason === 'not_local'
+          ? 'not an absolute path on this machine; network and relative paths are refused'
+          : reason === 'not_an_image'
+            ? 'not a png, jpg, webp or gif image'
+            : reason === 'too_large'
+              ? 'larger than 20 MB'
+              : 'not found'
+      }); nothing was recorded. Attach screenshots only.`,
+    observationNeedsText: (max) =>
+      `An e2e observation needs some text, at most ${String(max)} characters.`,
+    sayWhatYouObserved:
+      "Record the human's own words: what they did on the target and what they saw the change do.",
+    observerNeedsName: (max) =>
+      `An e2e observation needs the name of the human who made it (--observed-by, HTTP observedBy), at most ${String(max)} characters.`,
+    decisionNeedsName: (max) =>
+      `A human decision needs the name of the human who made it (--decided-by on the CLI, decidedBy.by over HTTP), at most ${String(max)} characters.`,
+    decisionNeedsWords: (max) =>
+      `A human decision needs that human's own words (--words on the CLI, decidedBy.words over HTTP), at most ${String(max)} characters.`,
+    askHumanForDecision:
+      'Ask the human for their decision and their name, and record both exactly as given. An AI must not invent either.',
+    e2eHeadMismatch: (given, current) =>
+      `The build the human tested (${given}) is not the commit under review (${current}). Their observation is about other code.`,
+    e2eHeadWithoutCommit: (given) =>
+      `This run is reviewed in place, so no commit names the tree and the build ${given} cannot be checked against it.`,
+    askHumanWhichBuild:
+      'Ask the human to test the commit under review, then record their observation again.',
+    noE2EToAttest:
+      'This project runs no e2e stage (roles.e2e.enabled is false), so there is no e2e result for an observation to stand in for.',
 
     runPausedAt: (runId, at) => `${runId} was paused at ${at}.`,
     resumeIt: 'Resume it with `agent-flow resume`.',
@@ -511,6 +575,14 @@ export const en: Phrases = {
 
     finishedNothingToCancel: (runId, status) =>
       `${runId} has finished (${status}), so there is nothing to cancel.`,
+    finishedCannotComplete: (runId, status) =>
+      `${runId} has ended (${status}); a run that ended cannot be completed.`,
+    completeNeedsReview: (runId) =>
+      `No review has concluded on ${runId}'s work as it stands, so there is no verdict to complete it over.`,
+    completeWhileReviewing: (runId) => `${runId} is being reviewed right now; its verdict is not in yet.`,
+    waitForReview: 'Wait for `agent-flow review` to finish, then complete over what it concludes.',
+    reviewBeforeCompleting:
+      'Run `agent-flow review` first. If it ends NOT DONE, the human can still complete the run, over what it found missing.',
 
     revisionNeedsInstruction: 'A revision needs an instruction saying what should change.',
     trivialNoRevision: 'TRIVIAL workflow does not support automated revision cycles (budget = 0).',
@@ -637,6 +709,7 @@ export const en: Phrases = {
 
     planWaiting: 'the plan is waiting for a decision',
     finalReviewWaiting: 'every task is done; the final review has not run',
+    finalReviewNotDone: 'the final review ran and the Definition of Done is not met',
     runTheFinalReview: 'Run the final review',
     nothingRunsUntilGate: 'nothing runs until the gate opens',
     reviewThePlan: 'Review the plan',
@@ -717,5 +790,26 @@ export const en: Phrases = {
     lastSeenAt: 'Last seen',
     activeSessions: (count) =>
       `${String(count)} active device session${count === 1 ? '' : 's'}`,
+  },
+  timeline: {
+    heading: (runId) => `Where the time went — ${runId}`,
+    noActiveRun: 'No active run. Name one: agent-flow timeline <runId>',
+    wall: 'Wall clock',
+    model: 'Model',
+    validation: 'Validation',
+    human: 'Waiting for a person',
+    quota: 'Waiting out a quota',
+    rework: 'Rework',
+    other: 'Other',
+    minutes: 'minutes',
+    cost: 'cost (USD)',
+    byStage: 'By stage',
+    stage: 'stage',
+    attempts: 'attempts',
+    notReported: 'not reported',
+    notABill: 'Costs are what the runners priced the calls at — not necessarily your bill.',
+    quotaNote: 'Time after a quota failure counts as quota until someone restarts the run.',
+    staleNote:
+      'This run says it is working, but nothing has been written past its stage budget: the open stage is counted only up to the last event.',
   },
 };

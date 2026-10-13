@@ -25,7 +25,7 @@ test.describe('revision', () => {
 
     // Approved first, so the invalidation has something to invalidate. The gate is
     // granted to one specific plan; a plan produced afterwards has not been through it.
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     await expect(page.getByRole('button', { name: 'Start run' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Revise' }).click();

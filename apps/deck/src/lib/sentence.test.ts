@@ -24,6 +24,17 @@ describe('describe', () => {
     expect(say(fallback, en).tone).toBe('warn');
   });
 
+  // Dogfood 08/10 — "tela congelada": what the agent does, while it does it.
+  it('says what the agent is doing, with the file or command and the task', () => {
+    const tool = { at, type: 'agent_activity', detail: { stage: 'implementation', task: 'TASK-002', kind: 'tool', tool: 'Edit', target: 'src/a.ts' } };
+    expect(say(tool, en)).toEqual({ title: 'TASK-002: Edit', detail: 'src/a.ts', tone: 'live' });
+    expect(say(tool, ptBR).title).toBe('TASK-002: Edit');
+
+    const message = { at, type: 'agent_activity', detail: { stage: 'sdd', kind: 'text', text: 'Reading the routes.' } };
+    expect(say(message, en)).toEqual({ title: 'sdd: says', detail: 'Reading the routes.', tone: 'live' });
+    expect(say(message, ptBR).title).toBe('sdd: diz');
+  });
+
   it('reads a failure’s first problem rather than its code', () => {
     expect(say({ at, type: 'stage_failed', detail: { stage: 'planning', problems: ['two tasks declare one file'] } }, en)).toMatchObject({
       title: 'planning failed',

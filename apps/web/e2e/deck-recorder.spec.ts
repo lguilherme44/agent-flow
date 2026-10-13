@@ -56,7 +56,7 @@ test.describe('Deck recorder, on a real run', () => {
     test.setTimeout(240_000);
     const world = await makeWorld({ dashboard: 'deck', worktrees: true, wavePlan: true, maxTasks: 2, hold: true });
     const problems = recordConsole(page);
-    await world.cli(project, ['approve']);
+    await world.cli(project, ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     // The coordinator is held by the test, not awaited: the agents park, so `run` will
     // not return until they are released.
@@ -101,7 +101,7 @@ test.describe('Deck recorder, on a real run', () => {
     test.setTimeout(240_000);
     const world = await makeWorld({ dashboard: 'deck' });
     const problems = recordConsole(page);
-    await world.cli(project, ['approve']);
+    await world.cli(project, ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     // A process that fails, every time. The exit code is not the point; the tape is.
     await world.cli(project, ['run'], { AF_FAKE_IMPL: 'failed' });
 

@@ -16,6 +16,7 @@ import { GlobalConfigSchema, ProjectConfigSchema } from '../../src/contracts/ind
 import { agentFlowPaths, runPaths } from '../../src/app/paths.js';
 import { computeFingerprint, writeFingerprint } from '../../src/app/discovery-cache.js';
 import type { ExecutorCommands } from '../../src/core/command-grants.js';
+import { getCeremonyBudget } from '../../src/core/adaptive-workflow.js';
 import { stringify as toYaml } from 'yaml';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1170,5 +1171,68 @@ describe('warming the repository map', () => {
 
     expect(warm.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(warm.elapsedMs)).toBe(true);
+  });
+});
+
+/**
+ * The planner is told the task budget before it plans, not only after it overshoots.
+ *
+ * Measured live: a `standard` planner, told nothing, wrote nine tasks against a budget of
+ * eight, the post-check refused the plan, and the run's single repair round went on that one
+ * task — about a dollar and eight minutes. The bound the check applies is the bound the
+ * prompt states, read from the same `getCeremonyBudget`, so the two cannot disagree.
+ */
+describe('the planning prompt states the ceremony budget', () => {
+  const plannerPrompts = (runner: FakeAgentRunner): string[] =>
+    runner.calls.map((call) => call.prompt).filter((prompt) => prompt.includes('ROLE: PLANNING_AGENT'));
+
+  for (const workflow of ['standard', 'high-risk'] as const) {
+    it(`tells a ${workflow} planner its class and its task limit`, async () => {
+      const { pipeline, run, runner } = await harness();
+      scriptHappyPath(runner);
+
+      await pipeline.run(run.runId, 'Add recurring bookings', { workflow });
+
+      const [prompt = ''] = plannerPrompts(runner);
+      const { maxTasks } = getCeremonyBudget(workflow);
+      expect(prompt).toContain(`This run is a \`${workflow}\` workflow.`);
+      expect(prompt).toMatch(new RegExp(`at most ${String(maxTasks)}\\s+tasks`));
+      expect(prompt).toContain('rejected before anyone reads it');
+      // Before the output instructions, and with no placeholder left unrendered.
+      expect(prompt.indexOf('## Task budget')).toBeLessThan(prompt.indexOf('## Output'));
+      expect(prompt).not.toMatch(/\{\{(workflowClass|maxTasks)\}\}/);
+    });
+  }
+
+  it('tells the planner the budget again in the repair round', async () => {
+    const { pipeline, run, runner, store } = await harness();
+    const contending = {
+      feature: 'recurring-bookings',
+      tasks: goodPlan.tasks.map((task) => ({ ...task, dependencies: [], files: { likely: ['src/shared.ts'] } })),
+    };
+    runner.pushText('# Architecture').pushText('# Impact').pushText(SDD_TEXT);
+    runner.pushJson(contending).pushJson(goodPlan).pushJson(PASSING_REVIEW);
+
+    await pipeline.run(run.runId, 'Add recurring bookings', { workflow: 'standard' });
+
+    const prompts = plannerPrompts(runner);
+    expect(prompts).toHaveLength(2);
+    expect((await store.readEvents(run.runId)).some((e) => e.type === 'planning_repair_requested')).toBe(true);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('This run is a `standard` workflow.');
+      expect(prompt).toMatch(/at most 8\s+tasks/);
+    }
+  });
+
+  it('the trivial and simple prompts, which render no budget variable, state the same limit', () => {
+    // Those classes plan from their own templates, which carry the number as text. Held to
+    // `getCeremonyBudget` so a budget change cannot leave a template promising the old one.
+    for (const [file, workflow] of [
+      ['planning-trivial.md', 'trivial'],
+      ['planning-simple.md', 'simple'],
+    ] as const) {
+      const text = readFileSync(join(REAL_PROMPTS, file), 'utf8');
+      expect(text, file).toContain(`Maximum task count: ${String(getCeremonyBudget(workflow).maxTasks)}`);
+    }
   });
 });

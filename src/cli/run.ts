@@ -21,6 +21,8 @@ import {
   type InstructionIO,
 } from './instruction-source.js';
 import type { GlobalOptions } from './index.js';
+import { nodeDecisionIO, readDecidedBy, type DecidedByFlags } from './decided-by.js';
+import type { GateDecision } from '../contracts/index.js';
 
 /**
  * `agent-flow run` — execute the approved plan.
@@ -125,11 +127,24 @@ export async function runRunCommand(
  */
 export async function runRetryCommand(
   taskId: string,
-  options: { force?: boolean; expectNoChange?: boolean },
+  options: { force?: boolean; expectNoChange?: boolean } & DecidedByFlags,
   globals: GlobalOptions,
+  seams: DecisionCommandDeps = { io: nodeDecisionIO(), actionDeps },
 ): Promise<ExitCodeValue> {
   try {
-    const deps = actionDeps(globals);
+    // `--force` and `--expect-no-change` each overrule a gate: a human decision, named like a
+    // gate move. Judged before anything about the run is read. A plain retry needs no name.
+    let decidedBy: GateDecision | undefined;
+    if (options.force === true || options.expectNoChange === true) {
+      const decision = await readDecidedBy(options, seams.io);
+      if (!decision.ok) {
+        process.stderr.write(`${decision.reason}\n`);
+        return ExitCode.CONFIG_ERROR;
+      }
+      decidedBy = decision.decision;
+    }
+
+    const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run.\n');
@@ -139,6 +154,7 @@ export async function runRetryCommand(
     const outcome = await retryTask(deps, runId, taskId, {
       force: options.force === true,
       expectNoChange: options.expectNoChange === true,
+      ...(decidedBy === undefined ? {} : { decidedBy }),
     });
 
     if (!outcome.ok) {
@@ -159,6 +175,12 @@ export async function runRetryCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+/** The seams of a command that records a human decision: the words' source, and the run. */
+export interface DecisionCommandDeps {
+  readonly io: InstructionIO;
+  readonly actionDeps: (globals: GlobalOptions) => RunActionDeps;
 }
 
 /** The seams a test replaces. The defaults are what every real invocation uses. */
@@ -182,7 +204,7 @@ export interface AnswerCommandDeps {
  */
 export async function runAnswerCommand(
   taskId: string,
-  flags: InstructionFlags,
+  flags: InstructionFlags & DecidedByFlags,
   globals: GlobalOptions,
   seams: AnswerCommandDeps = { io: nodeInstructionIO('answer'), actionDeps },
 ): Promise<ExitCodeValue> {
@@ -199,6 +221,20 @@ export async function runAnswerCommand(
       return ExitCode.CONFIG_ERROR;
     }
 
+    // The answer is the human's decision, so it names them, as a gate move does. Their words
+    // default to the answer itself — it is what they said — unless --words gives others.
+    const named = flags.decidedBy?.trim();
+    const decision =
+      named !== undefined && named !== '' && flags.words === undefined && flags.wordsFile === undefined
+        ? { ok: true as const, decision: { by: named, words: read.instruction, channel: 'cli' as const } }
+        : await readDecidedBy(flags, seams.io, {
+            stdinTaken: source.kind === 'stdin' || source.kind === 'editor',
+          });
+    if (!decision.ok) {
+      process.stderr.write(`${decision.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
     const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
@@ -206,7 +242,7 @@ export async function runAnswerCommand(
       return ExitCode.GATE_NOT_SATISFIED;
     }
 
-    const outcome = await answerTask(deps, runId, taskId, read.instruction);
+    const outcome = await answerTask(deps, runId, taskId, read.instruction, decision.decision);
 
     if (!outcome.ok) {
       process.stderr.write(`${render(outcome.error)}\n`);

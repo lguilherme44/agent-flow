@@ -195,6 +195,30 @@ rate table, no tokens-times-a-rate. What PRI-19 narrowed is the case where the p
 itself reported one. It is presented as that runner's figure and never as a bill — a
 subscriber pays a flat fee and `total_cost_usd` is an API-rate equivalent.
 
+## Turn ceiling (`maxTurns`)
+
+`roles.<role>.maxTurns` (and `stages.<stage>.maxTurns`) caps the agentic turns of one
+invocation. No default: absent means no ceiling. A project may lower it, never raise it above
+the global value. `doctor` prints the ceiling per role and warns when the runner does not
+enforce it (`supportsMaxTurns`).
+
+A fallback with no ceiling of its own runs under the primary's, and a project is held to that too.
+A project `--max-turns` in `runners.*.args` is dropped and reported: the last `--max-turns` wins
+(measured, 2.1.281), and `args` ride after the adapter's own flag.
+
+| Runner | `supportsMaxTurns` | How | When it is reached |
+|---|---|---|---|
+| `claude-code-cli` | ✅ | `--max-turns <n>` (accepted, though absent from `--help` on 2.1.281) | exit `1`, `is_error: true`, `subtype: "error_max_turns"`, no `result` → `execution_failed`, classed `runner_max_turns_exceeded` |
+| `agy-cli` | ❌ | no such flag in `--help` | — |
+| `codex-cli` | ❌ | no such flag in `codex exec --help` | — |
+| `openai-compatible` | ❌ | one request, no tool loop | — |
+
+A task that hits `maxTurns` is never retried automatically: it stops and waits for a person
+(`runner_max_turns_exceeded` is `requires_human`), because a retry would spend the same turns again.
+
+Measured on Claude Code 2.1.281 with `--max-turns 1` and a prompt that needed one tool call:
+fixture `claude/error-max-turns.json`.
+
 ---
 
 ## `openai-compatible`, against a real server
@@ -254,6 +278,7 @@ node --experimental-strip-types scripts/live-runner-probe.ts
 | Read-only mode | ✅ | `--permission-mode plan` → file creation did not happen (see below) |
 | Working directory | ⚠️ via spawn | No `--cwd` flag; the process inherits its cwd |
 | Model fallback | ✅ | `--fallback-model` (unused — agent-flow does its own, at role level) |
+| Turn ceiling | ✅ | `--max-turns <n>` → `subtype: "error_max_turns"` (2.1.281; the flag is not listed in `--help`) |
 
 ### Invocation shape used by the adapter
 
@@ -262,6 +287,7 @@ claude -p
        --output-format json
        [--model <model>]                # omitted when config sets none (AD-13)
        --effort <low|medium|high|xhigh|max>
+       [--max-turns <n>]                # only when the role sets maxTurns
        --permission-mode <plan|acceptEdits>
        [--disallowedTools <tool> ...]
        [--append-system-prompt <text>]
@@ -441,6 +467,7 @@ from a paired device shows the verb and the target, never the input.
 | `success-json.json` | **real** (ids scrubbed) |
 | `success-structured-output.json` | **real** (ids scrubbed) |
 | `error-invalid-model.txt` | **real** |
+| `error-max-turns.json` | **real** (2.1.281, ids scrubbed) |
 | `SYNTHETIC-error-auth.json` | ⚠️ **synthetic** |
 | `SYNTHETIC-error-quota.json` | ⚠️ **synthetic** |
 | `SYNTHETIC-permission-denial.json` | ⚠️ **synthetic**, built from the 2.1.280 key set and denial shape |

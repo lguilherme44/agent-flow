@@ -449,6 +449,13 @@ export const en = {
 
   /** Where the time goes, over a bounded window of recent runs. No money, ever. */
   analytics: {
+    byRoleModel: 'By role × model',
+    byEffort: 'By effort',
+    quality: 'Code by the model that wrote it',
+    qualityHint: 'Each task is credited to the model that implemented it; findings are from its first code review.',
+    firstAttempt: (first: number, of: number) => `${String(first)}/${String(of)} on the first attempt`,
+    reviewedTasks: (count: number) => `${String(count)} reviewed`,
+    noFindings: 'no findings',
     aggregateVerb: 'aggregate',
     couldNotRead: 'Analytics could not be read.',
     title: 'Where the time goes',
@@ -699,8 +706,18 @@ export const en = {
       escalation: 'escalation',
       forced_approval: 'forced approval',
       attached_findings: 'attached findings',
+      e2e_observation: 'e2e observed by a person',
     },
     keyboard: 'keyboard',
+    // Who moved the plan gate, their words, and the channel (`gateDecision`).
+    gateDecision: {
+      label: 'Plan-gate decision',
+      approve: 'Approved',
+      reject: 'Rejected',
+      revise: 'Revised',
+      by: (verb: string, by: string, channel: string) => `${verb} by ${by} via ${channel}`,
+      notInDeck: 'Not decided in the Deck: it came through the API or the terminal, where an AI may have typed the name.',
+    },
 
     deliveryCouldNotRead: 'The delivery record could not be read for this run.',
     deliveryOptIn: 'Delivery is opt-in, and every remote write is separately opt-in.',
@@ -794,6 +811,7 @@ export const en = {
 
   /** What each stage cost, and what its prompt was made of (AR-09). No money, ever. */
   telemetry: {
+    tokens: (input: number, output: number) => `${(input / 1000).toFixed(1)}k in · ${(output / 1000).toFixed(1)}k out`,
     couldNotRead: "This run's telemetry could not be read.",
     nothingRunYet: 'Nothing has run yet.',
     foldHint: 'Telemetry is a fold over the audit trail: a run that has not executed a stage yet has nothing to fold.',
@@ -830,6 +848,34 @@ export const en = {
     bypassed: (reason: string) => `bypassed: ${reason}`,
     noEstimate: 'observed, with no estimate recorded',
     provenance: (provenance: string) => `provenance: ${provenance}`,
+  },
+
+  /**
+   * Where the run's wall clock went (`/runs/:id/timeline`). The one block in the Deck that
+   * shows money, and only the runners' own reported figure, said to be no bill.
+   */
+  timeSpent: {
+    title: 'Where the time went',
+    couldNotRead: "Where this run's time went could not be read.",
+    nothingYet: 'No time has been recorded for this run yet.',
+    wall: (duration: string) => `${duration} of wall clock`,
+    bar: 'Wall clock, by cause',
+    usd: (amount: string) => `$${amount}`,
+    model: 'Model',
+    validation: 'Validation',
+    human: 'Waiting for a person',
+    quota: 'Waiting out a quota',
+    rework: 'Rework',
+    other: 'Other',
+    byStage: 'Per stage',
+    stage: 'Stage',
+    attempts: 'Attempts',
+    minutes: 'Minutes',
+    cost: 'Cost (USD)',
+    notReported: 'not reported',
+    notABill: 'Costs are what the runners priced the calls at — not necessarily your bill.',
+    quotaNote: 'Time after a quota failure counts as quota until someone restarts the run.',
+    staleNote: 'This run says it is working, but nothing has been written past its stage budget: the open stage is counted only up to the last event.',
   },
 
   /** The approval gate: what the server computed, and the three things a person can do. */
@@ -1059,6 +1105,8 @@ export const en = {
     discoveryCacheInvalidated: 'Discovery cache invalidated',
 
     stageStarted: (stage: string) => `${stage} started`,
+    agentTool: (who: string, tool: string) => `${who}: ${tool}`,
+    agentSays: (who: string) => `${who}: says`,
     stageAnswered: (stage: string) => `${stage} answered`,
     stageCompleted: (stage: string) => `${stage} completed`,
     stageFailed: (stage: string) => `${stage} failed`,

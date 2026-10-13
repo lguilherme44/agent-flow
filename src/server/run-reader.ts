@@ -2,7 +2,14 @@ import { projectRun } from '../core/run-projection.js';
 import type { Phrases } from '../core/phrases/index.js';
 import { recoveryCostAgainstBaseline } from '../core/prompt-budget.js';
 import {
+  GATE_DECISION_ACTIONS,
+  GateDecisionSchema,
+  DecisionChannelSchema,
+  HumanDecisionSchema,
+  type OperatorActionView,
   PlanSchema,
+  type GateDecisionAction,
+  type GateDecisionView,
   type Amendment,
   type AmendmentView,
   type ArtifactContentView,
@@ -19,6 +26,7 @@ import {
   type RunRefView,
   type RunStatus,
   type RunSummaryView,
+  type RunTimelineView,
   type RunState,
   type PipelineStage,
   type StageLogView,
@@ -37,6 +45,7 @@ import { describeIsolation } from '../app/run-git-identity.js';
 import { attemptLogName, runPaths, type ArtifactName } from '../app/paths.js';
 import { describeRunGraph, effectiveTaskStates, type GraphTask } from '../app/run-graph.js';
 import { buildStageTimeline } from '../core/stage-timeline.js';
+import { loadRunTimeline } from '../app/run-timeline.js';
 import { stripAnsi } from './ansi.js';
 import type { Clock, FileSystem } from '../ports/index.js';
 import type { RegisteredProject } from './project-registry.js';
@@ -164,7 +173,60 @@ function amendmentView(amendment: Amendment): AmendmentView {
             tasks: [...attached.tasks],
           })),
         }),
+    // Who saw an e2e change and on which commit: without these the view showed an
+    // observation by its channel alone, which is the one thing that cannot say a person saw it.
+    ...(amendment.observedBy === undefined ? {} : { observedBy: amendment.observedBy }),
+    ...(amendment.integrationHead === undefined
+      ? {}
+      : { integrationHead: amendment.integrationHead }),
   };
+}
+
+/**
+ * The latest plan-gate move, with who decided — or nothing.
+ *
+ * Read from the `operator_action` events, where approve, reject and revise record
+ * `decidedBy`. Only the *latest* gate move is asked: when it carries no decision (a run from
+ * before `decidedBy`), the answer is nothing, never an older move's name — that would put a
+ * person's name beside a gate they did not move. A detail that will not parse is treated
+ * the same way, because a half-read record is not evidence of who decided.
+ */
+export function latestGateDecision(events: readonly RunEvent[]): GateDecisionView | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== 'operator_action') continue;
+    const action = event.detail['action'];
+    if (!GATE_DECISION_ACTIONS.some((gate) => gate === action)) continue;
+    const decided = GateDecisionSchema.safeParse(event.detail['decidedBy']);
+    if (!decided.success) return undefined;
+    return { action: action as GateDecisionAction, ...decided.data, at: event.at };
+  }
+  return undefined;
+}
+
+/**
+ * Every `operator_action` the run recorded, oldest first, as a reader is shown it.
+ *
+ * Each field is read on its own and dropped when it does not parse, never guessed: an
+ * action recorded before channels were has no `channel`, and a `decidedBy` that will not
+ * parse contributes no name — a half-read record is not evidence of who decided.
+ */
+export function operatorActionsOf(events: readonly RunEvent[]): OperatorActionView[] {
+  const views: OperatorActionView[] = [];
+  for (const event of events) {
+    if (event.type !== 'operator_action') continue;
+    const action = event.detail['action'];
+    if (typeof action !== 'string') continue;
+    const channel = DecisionChannelSchema.safeParse(event.detail['channel']);
+    const decided = HumanDecisionSchema.safeParse(event.detail['decidedBy']);
+    views.push({
+      action,
+      ...(channel.success ? { channel: channel.data } : {}),
+      ...(decided.success ? { by: decided.data.by, words: decided.data.words } : {}),
+      at: event.at,
+    });
+  }
+  return views;
 }
 
 export class RunReader {
@@ -262,6 +324,9 @@ export class RunReader {
   ): Promise<RunDetailView | null> {
     const state = await this.loadState(project, runId);
     if (state === null) return null;
+    const events = await this.storeFor(project).readEventsBestEffort(state.runId);
+    const gateDecision = latestGateDecision(events);
+    const operatorActions = operatorActionsOf(events);
 
     return {
       ...(await this.summarise(project, state)),
@@ -279,6 +344,11 @@ export class RunReader {
       ...(state.amendments === undefined || state.amendments.length === 0
         ? {}
         : { amendments: state.amendments.map(amendmentView) }),
+      // Absent for every run whose last gate move predates `decidedBy`, so their view is
+      // exactly what it was.
+      ...(gateDecision === undefined ? {} : { gateDecision }),
+      // Absent rather than `[]` for a run nobody acted on, so its view is what it was.
+      ...(operatorActions.length === 0 ? {} : { operatorActions }),
     };
   }
 
@@ -528,6 +598,18 @@ export class RunReader {
 
     const events = await this.storeFor(project).readEvents(runId);
     return buildStageTimeline(events, state);
+  }
+
+  /**
+   * Where the run's wall clock went: model, validation, a person, a quota window, rework.
+   *
+   * The fold is core's and the reading is the app's loader, the same one `agent-flow
+   * timeline` uses, so the terminal and this endpoint cannot disagree about a minute.
+   */
+  async timeline(project: RegisteredProject, runId: string): Promise<RunTimelineView | null> {
+    return loadRunTimeline(this.storeFor(project), runId, this.options.clock.now(), () =>
+      this.configOf(project),
+    );
   }
 
   async tasks(project: RegisteredProject, runId: string): Promise<TaskSummaryView[] | null> {

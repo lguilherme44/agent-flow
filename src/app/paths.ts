@@ -60,6 +60,8 @@ export interface RunPaths {
   readonly verification: string;
   readonly e2e: string;
   readonly finalReview: string;
+  /** `baseline.json` — what the base said for each failing step, asked once per run. */
+  readonly baseline: string;
   readonly tasksDir: string;
   readonly logsDir: string;
   /**
@@ -143,6 +145,7 @@ export function runPaths(projectDir: string, runId: string): RunPaths {
     verification: `${reviewsDir}/verification.json`,
     e2e: `${reviewsDir}/e2e.json`,
     finalReview: `${reviewsDir}/final-review.json`,
+    baseline: `${dir}/baseline.json`,
     tasksDir,
     logsDir,
     collaborationDir,

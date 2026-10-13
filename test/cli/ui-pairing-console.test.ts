@@ -283,6 +283,15 @@ describe('the pairing console can mint a code (FR-030)', () => {
     expect(out).toMatch(/replaces any code printed before it/i);
   });
 
+  it('prints the code grouped as the banner does, whatever shape the store returns (dogfood 09/10)', () => {
+    // The store mints 12 bare hex characters; the banner grouped them and this line did not,
+    // so the code typed into the Deck did not look like the one on the start screen.
+    let out = '';
+    executePairingConsoleCommand('code', pairingDouble({ issueCode: () => 'ddddeeeeffff' }), (text) => (out += text));
+
+    expect(out).toContain('dddd-eeee-ffff');
+  });
+
   it('leaves live sessions alone — that is the whole difference from a restart', () => {
     const revoke = vi.fn();
     const pairing = pairingDouble({

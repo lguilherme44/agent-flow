@@ -133,6 +133,7 @@ const READS = [
   '/runs/{run}/collaboration?projectId=demo',
   '/runs/{run}/delivery?projectId=demo',
   '/runs/{run}/telemetry?projectId=demo',
+  '/runs/{run}/timeline?projectId=demo',
   '/runs/{run}/quality?projectId=demo',
   '/sessions',
 ];

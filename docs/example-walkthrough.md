@@ -243,9 +243,12 @@ Two schema rules that catch bad plans before any reviewer reads them:
 ## 5. Approve, and implement
 
 ```bash
-agent-flow approve       # bound to this plan's hash, not the next one's
+agent-flow approve --decided-by "Luis" --words "Approved as planned."   # bound to this plan's hash
 agent-flow run
 ```
+
+The name and the words are required on `approve`, `reject` and `revise`, and the run records
+them with the channel they came through (`cli`, `api` or `deck`).
 
 Revise the plan and the approval stops applying. That binding is the reason `approve`
 is not a flag on `run`.

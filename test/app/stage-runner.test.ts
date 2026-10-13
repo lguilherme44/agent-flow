@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { InMemoryFileSystem } from '../fakes/in-memory-file-system.js';
 import { FixedClock } from '../fakes/fixed-clock.js';
 import { FakeAgentRunner } from '../fakes/fake-agent-runner.js';
-import { StageRunner, StageFailure, type StageAdvisor } from '../../src/app/stage-runner.js';
+import { MAX_ACTIVITY_EVENTS, StageRunner, StageFailure, relativeToWorkspace, type StageAdvisor } from '../../src/app/stage-runner.js';
 import { StateStore } from '../../src/app/state-store.js';
 import { PromptLoader } from '../../src/app/prompt-loader.js';
 import { GlobalConfigSchema, RunUsageSchema } from '../../src/contracts/index.js';
@@ -1346,5 +1346,164 @@ describe('stage events carry turns and permission denials (FR-006)', () => {
 
     const failed = (await store.readEvents(run.runId)).find((event) => event.type === 'stage_failed');
     expect(usageOf(failed?.detail)).toEqual(USAGE);
+  });
+});
+
+describe('the role turn ceiling (maxTurns)', () => {
+  async function ceilingHarness(maxTurns: number | undefined, runner = new FakeAgentRunner('claude')) {
+    const fs = new InMemoryFileSystem();
+    const clock = new FixedClock();
+    fs.seed(
+      `${PROMPTS}/sdd.md`,
+      '---\nrole: sdd\npermissions: read-only\nrequiredVars: [featureRequest]\n---\nWrite an SDD for {{featureRequest}}.\n',
+    );
+    const store = new StateStore({ fs, clock, projectDir: PROJECT });
+    const run = await store.createRun('turn-ceiling');
+    const stageRunner = new StageRunner({
+      fs,
+      clock,
+      store,
+      config: {
+        ...config,
+        roles: {
+          ...config.roles,
+          sdd: { ...config.roles.sdd, ...(maxTurns === undefined ? {} : { maxTurns }) },
+        },
+      },
+      capabilities: CAPABILITIES,
+      promptLoader: new PromptLoader({ fs, promptsDir: PROMPTS }),
+      getRunner: () => runner,
+      projectDir: PROJECT,
+    });
+    return { store, run, runner, stageRunner };
+  }
+
+  it('hands the ceiling to the runner and records it on stage_started', async () => {
+    const { stageRunner, run, runner, store } = await ceilingHarness(25);
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    expect(runner.lastCall?.maxTurns).toBe(25);
+    const started = (await store.readEvents(run.runId)).find((event) => event.type === 'stage_started');
+    expect(started?.detail?.['maxTurns']).toBe(25);
+  });
+
+  it('passes and records nothing when the role sets no ceiling', async () => {
+    const { stageRunner, run, runner, store } = await ceilingHarness(undefined);
+    runner.pushText('# SDD');
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    expect(runner.lastCall?.maxTurns).toBeUndefined();
+    const started = (await store.readEvents(run.runId)).find((event) => event.type === 'stage_started');
+    expect(started?.detail).not.toHaveProperty('maxTurns');
+  });
+
+  it('classes a runner that hit the ceiling as runner_max_turns_exceeded, with the ceiling on the event', async () => {
+    const runner = new FakeAgentRunner('claude');
+    runner.push({
+      ok: false,
+      errorCode: 'execution_failed',
+      raw: 'max_turns_exceeded: the agent reached its ceiling of 3 turns (maxTurns) before finishing.',
+      durationMs: 1,
+      limitReached: 'max_turns',
+    });
+    const { stageRunner, run, store } = await ceilingHarness(3, runner);
+
+    const error = await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(StageFailure);
+    expect((error as StageFailure).failureClass).toBe('runner_max_turns_exceeded');
+    const failed = (await store.readEvents(run.runId)).find((event) => event.type === 'stage_failed');
+    expect(failed?.detail).toMatchObject({ failureClass: 'runner_max_turns_exceeded', maxTurns: 3 });
+  });
+});
+
+/**
+ * Dogfood 08/10 — "tela congelada": what the agent does reaches the run while it does it.
+ * Each activity the runner reports becomes an `agent_activity` event, which the Deck's feed
+ * already polls; a command line can carry a token, so it is redacted on the way in.
+ */
+describe('the agent’s activity, on the run as it happens (dogfood 08/10)', () => {
+  it('records each activity as an event, in order, with secrets redacted', async () => {
+    const { stageRunner, run, runner, store } = await harness();
+    runner.push((input) => {
+      input.onActivity?.({ kind: 'tool', tool: 'Edit', target: 'src/a.ts' });
+      input.onActivity?.({ kind: 'tool', tool: 'Bash', target: 'curl -H "Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789" x' });
+      input.onActivity?.({ kind: 'text', text: 'Changed a.ts.' });
+      return { ok: true, text: '# SDD', durationMs: 1 };
+    });
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    const activity = (await store.readEvents(run.runId)).filter((event) => event.type === 'agent_activity');
+    expect(activity.map((event) => event.detail['tool'] ?? event.detail['kind'])).toEqual(['Edit', 'Bash', 'text']);
+    expect(activity[0]?.detail).toMatchObject({ stage: 'sdd', kind: 'tool', tool: 'Edit', target: 'src/a.ts' });
+    expect(JSON.stringify(activity[1]?.detail)).not.toContain('sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789');
+    // Before the stage's own end, which is the point of having them.
+    const types = (await store.readEvents(run.runId)).map((event) => event.type);
+    expect(types.indexOf('agent_activity')).toBeLessThan(types.indexOf('stage_output_received'));
+  });
+
+  it('records a target inside the workspace relative to it', async () => {
+    const { stageRunner, run, runner, store } = await harness();
+    runner.push((input) => {
+      input.onActivity?.({ kind: 'tool', tool: 'Read', target: `${input.workingDirectory}/src/format.js` });
+      return { ok: true, text: '# SDD', durationMs: 1 };
+    });
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    const activity = (await store.readEvents(run.runId)).find((event) => event.type === 'agent_activity');
+    expect(activity?.detail).toMatchObject({ tool: 'Read', target: 'src/format.js' });
+  });
+});
+
+describe('a bounded live view (adversarial review)', () => {
+  it('records at most a ceiling of activity per call, and says when it stopped', async () => {
+    const { stageRunner, run, runner, store } = await harness();
+    runner.push((input) => {
+      for (let index = 0; index < 1_000; index += 1) {
+        input.onActivity?.({ kind: 'tool', tool: 'Read', target: `src/file-${String(index)}.ts` });
+      }
+      return { ok: true, text: '# SDD', durationMs: 1 };
+    });
+
+    await stageRunner.run(SDD_STAGE, run.runId, { featureRequest: 'x' });
+
+    const activity = (await store.readEvents(run.runId)).filter((event) => event.type === 'agent_activity');
+    expect(activity.length).toBe(MAX_ACTIVITY_EVENTS + 1);
+    expect(activity.at(-1)?.detail).toMatchObject({ kind: 'text', text: expect.stringContaining('not recorded') });
+  });
+});
+
+/**
+ * First real run (13/10): every read in a worktree reached the Feed with the worktree's whole
+ * path, and the 200-character cut fell on the file name on a deep tree.
+ */
+describe('relativeToWorkspace', () => {
+  const cwd = 'C:\\Users\\me\\.agent-flow\\worktrees\\read-only-sdd-pid-51336-3';
+
+  it('takes the workspace out of a path, in either separator and either case', () => {
+    expect(relativeToWorkspace(`${cwd}\\src\\format.js`, cwd)).toBe('src\\format.js');
+    expect(relativeToWorkspace('c:/users/me/.agent-flow/worktrees/read-only-sdd-pid-51336-3/test/a.js', cwd)).toBe('test/a.js');
+  });
+
+  it('takes it out of a command line wherever it appears', () => {
+    expect(relativeToWorkspace(`cat "${cwd}\\a.txt" && ls ${cwd}`, cwd)).toBe('cat "a.txt" && ls .');
+  });
+
+  it('leaves a sibling directory that merely starts the same alone', () => {
+    expect(relativeToWorkspace(`${cwd}-old\\a.txt`, cwd)).toBe(`${cwd}-old\\a.txt`);
+  });
+
+  it('leaves a target outside the workspace as it was', () => {
+    expect(relativeToWorkspace('npm test -- a', cwd)).toBe('npm test -- a');
+    expect(relativeToWorkspace('**/duration*', cwd)).toBe('**/duration*');
+  });
+
+  it('says "." for the workspace itself', () => {
+    expect(relativeToWorkspace(cwd, cwd)).toBe('.');
   });
 });

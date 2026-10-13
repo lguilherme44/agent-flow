@@ -46,7 +46,7 @@ test.describe('a parallel run, through the server', () => {
     expect(before.status).toBe('');
 
     await openDashboard(page, world);
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     // The run's own mode decides the width, and the page says so before anything
     // has finished — this is the read model and the scheduler agreeing. On Overview
@@ -161,7 +161,7 @@ test.describe('a parallel run, through the server', () => {
       branch: 'my-work',
     });
 
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     await world.writeFile('booking-api', 'package.json', '{ "name": "edited" }\n');
     await world.writeFile('booking-api', 'staged.txt', 'staged\n');
@@ -222,7 +222,7 @@ test.describe('a parallel run, through the server', () => {
       collidingTasks: true,
     });
 
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     const halted = await world.cli('booking-api', ['run']);
     expect(halted.code, 'an overlapping plan was allowed to finish').not.toBe(0);
 
@@ -282,7 +282,7 @@ test.describe('a parallel run, through the server', () => {
     expect((await world.stateOf('booking-api'))['isolationMode']).toBe('none');
 
     await openDashboard(page, world);
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
     await page.getByRole('button', { name: 'Start run' }).click();
 
     // One agent parked. The second cannot arrive until this one is released,

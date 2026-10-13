@@ -9,6 +9,7 @@ import {
   RunIdSchema,
 } from './common.schema.js';
 import { FindingSchema } from './review.schema.js';
+import { HumanNameSchema } from './human-decision.schema.js';
 import { TaskStateSchema } from './task.schema.js';
 
 /** Pipeline stages, in order. `stage` on a run points at the last one reached. */
@@ -294,6 +295,12 @@ export const AMENDMENT_KINDS = [
   'escalation',
   'forced_approval',
   'attached_findings',
+  /**
+   * A person observed the change working on a target the e2e agent cannot reach — an iOS
+   * device, a native WebView — and said so (`review --e2e-observed`). It stands in for an
+   * e2e `NOT_RUN`, never for a `FAIL`, and only for the integration head it names.
+   */
+  'e2e_observation',
 ] as const;
 export type AmendmentKind = (typeof AMENDMENT_KINDS)[number];
 
@@ -330,6 +337,22 @@ export const AmendmentSchema = z.object({
   fromWorkflow: WorkflowClassSchema.optional(),
   toWorkflow: WorkflowClassSchema.optional(),
   findings: z.array(AttachedFindingSchema).optional(),
+  /**
+   * The integration head an `e2e_observation` was made on. Absent in sequential mode, where
+   * no commit names the tree — and an observation without one never outlives its review.
+   */
+  integrationHead: CommitOidSchema.optional(),
+  /**
+   * Who observed an `e2e_observation`, as they named themselves (`HumanDecision.by`).
+   * `actor` beside it is only the channel, and an AI at this terminal is `keyboard` too.
+   * Optional so an observation recorded before names were required still parses.
+   */
+  observedBy: HumanNameSchema.optional(),
+  /**
+   * The images an `e2e_observation` came with (`--evidence`), copied into the run and named by
+   * their path relative to the run directory (dogfood 09/10).
+   */
+  evidence: z.array(z.string().min(1)).optional(),
 });
 export type Amendment = z.infer<typeof AmendmentSchema>;
 
@@ -541,6 +564,28 @@ export const STAGE_EVENT_TYPES = [
   'stage_skipped',
   /** `detail: {}`. `review` began, before workspace preparation and its commands. */
   'run_review_started',
+  /**
+   * `detail: { done, unmet: [{ name, detail? }], integrationHead? }`. `review` reached the
+   * Definition of Done, and this is what it said.
+   *
+   * **A NOT DONE review left no trace.** Run 75716 (dogfood 09/10) reviewed to the end, e2e
+   * came back NOT_RUN, the status was left as it was, and every screen read "being reviewed"
+   * and "accept and merge" for 23 hours. The verdict lived only in the exit code of a process
+   * that had already gone. Written for DONE too, so a reader never has to infer the outcome
+   * from which status did or did not change.
+   */
+  'run_review_concluded',
+  /**
+   * `detail: { reason }`. `review` threw after it started (a stage failing, a checkout that
+   * would not open), so it reached no verdict; the run is no longer being reviewed.
+   */
+  'run_review_failed',
+  /**
+   * `detail: { stage, role, task?, attempt?, kind: 'tool', tool, target? } | { …, kind: 'text', text }`.
+   * What the agent did, while the stage ran (dogfood 08/10: the Deck showed nothing until a
+   * task ended). Redacted; a text is shortened. Only from a runner that streams.
+   */
+  'agent_activity',
   'stage_context_measured',
   /**
    * `detail: { stage, role, durationMs, timeoutSeconds, share }`. A stage that nearly ran out.
@@ -688,6 +733,15 @@ export const LIFECYCLE_EVENT_TYPES = [
    * The holder is recorded when one was executing, and absent when nothing was.
    */
   'run_cancelled',
+  /**
+   * `detail: { at, overrode, pr? }`. A person closed a run the Definition of Done had not.
+   *
+   * `overrode` is what the last review said was missing, copied here so the record of the
+   * decision carries what it decided over; the name and the words are on the
+   * `operator_action` beside it. Delivery outside `forge` (a draft PR opened by hand) is the
+   * case it was written for, and `pr` is where that delivery is.
+   */
+  'run_completed_by_human',
 ] as const;
 
 export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];
@@ -703,7 +757,12 @@ export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];
  * isolationMode already carries.
  */
 export const OPERATOR_EVENT_TYPES = [
-  /** `detail: { action, actor }`. Who moved this run, and how they reached it. */
+  /**
+   * `detail: { action, actor, channel?, decidedBy? }`. Who moved this run, and how they
+   * reached it. `channel` is `cli`, `deck` or `api` (absent on events written before it was
+   * recorded). `decidedBy` — `{ by, words, channel }` — is there for a human decision: a gate
+   * move, an answer, a cancel, a retry that overrode a gate.
+   */
   'operator_action',
   /**
    * `detail: { task, attempt, passed, actor, validationIds }`. A person fixed the

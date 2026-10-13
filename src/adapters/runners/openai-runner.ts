@@ -142,6 +142,8 @@ export class OpenAiRunner implements AgentRunner {
       // requested in the prompt. Measured against llama.cpp: a schema with an enum and a
       // nested object array came back valid on the first response.
       structuredOutputStrategy: 'native',
+      // One request, no tool loop: there is no turn to count, and nothing here reads `maxTurns`.
+      supportsMaxTurns: false,
       // No tool definitions are sent, so no tool can be exercised. AD-32 answered from the
       // shape of the request rather than from optimism about the model.
       nonInteractiveToolGrants: { fileEdit: false, commandExecution: false },

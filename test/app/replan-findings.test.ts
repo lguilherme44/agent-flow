@@ -13,6 +13,7 @@ import { fakeRunActionDeps } from '../fakes/run-action-deps.js';
 import { FINDINGS_SECTION_BEGIN } from '../../src/core/replan-input.js';
 import { lastReplanReport } from '../../src/core/replan-report.js';
 import type { ProcessSpawnOptions } from '../../src/ports/index.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * D14 — the planning stage receives the findings of the last review.
@@ -262,7 +263,7 @@ describe('revise forwards the findings of a rejected plan review (D14)', () => {
   it('hands the planner every anchored finding', async () => {
     const { deps, runId, processRunner } = await rejectedRun();
 
-    const outcome = await revise(deps, runId, 'split TASK-002');
+    const outcome = await revise(deps, runId, 'split TASK-002', DECIDED);
     expect(outcome.ok).toBe(true);
 
     const prompt = plannerPrompt(processRunner);
@@ -281,7 +282,7 @@ describe('revise forwards the findings of a rejected plan review (D14)', () => {
 
   it('records how many findings the planner was given', async () => {
     const { store, deps, runId } = await rejectedRun();
-    await revise(deps, runId, 'split TASK-002');
+    await revise(deps, runId, 'split TASK-002', DECIDED);
 
     const requested = (await eventsOf(store, runId)).find((e) => e.type === 'revision_requested');
     expect(requested?.detail['findingsForwarded']).toBe(2);
@@ -317,7 +318,7 @@ describe('revise forwards the findings of a rejected plan review (D14)', () => {
     };
 
     const byDefault = await rejectedRun();
-    await revise(byDefault.deps, byDefault.runId, 'split TASK-002');
+    await revise(byDefault.deps, byDefault.runId, 'split TASK-002', DECIDED);
     const defaultStages = await stagesStartedAfter(
       byDefault.store,
       byDefault.runId,
@@ -329,7 +330,7 @@ describe('revise forwards the findings of a rejected plan review (D14)', () => {
     // POSITIVE CONTROL: hardcode `from: 'planning'` back into `replan` and this fails —
     // the sdd never starts, however the caller asks.
     const fromSdd = await rejectedRun();
-    await revise(fromSdd.deps, fromSdd.runId, 'the contract table is wrong', 'sdd');
+    await revise(fromSdd.deps, fromSdd.runId, 'the contract table is wrong', DECIDED, 'sdd');
     const sddStages = await stagesStartedAfter(fromSdd.store, fromSdd.runId, 'revision_requested');
     expect(sddStages).toContain('sdd');
     // And planning still runs after it: re-specifying without re-planning would leave the
@@ -342,7 +343,7 @@ describe('revise forwards the findings of a rejected plan review (D14)', () => {
     // planner told to fix it would be fixing something nobody refused.
     const { deps, runId, processRunner } = await rejectedRun({ review: PASSING_REVIEW });
 
-    await revise(deps, runId, 'split TASK-002');
+    await revise(deps, runId, 'split TASK-002', DECIDED);
 
     const prompt = plannerPrompt(processRunner);
     expect(prompt).toBeDefined();
@@ -423,7 +424,7 @@ describe('a review that no longer describes the plan is not quoted (D14)', () =>
     // `review_stale`; forwarding it is the same mistake pointed the other way.
     const { store, deps, runId, processRunner } = await rejectedRun({ planHash: 'deadbeef' });
 
-    const outcome = await revise(deps, runId, 'split TASK-002');
+    const outcome = await revise(deps, runId, 'split TASK-002', DECIDED);
     expect(outcome.ok).toBe(true);
 
     const prompt = plannerPrompt(processRunner);
@@ -470,7 +471,7 @@ describe('a guard that withholds findings says so on the run (D14)', () => {
   it('names stale_review when the review is bound to a different plan', async () => {
     const { store, deps, runId } = await rejectedRun({ planHash: 'deadbeef' });
 
-    await revise(deps, runId, 'split TASK-002');
+    await revise(deps, runId, 'split TASK-002', DECIDED);
 
     const withheld = await withheldEvent(store, runId);
     expect(withheld?.detail['reason']).toBe('stale_review');
@@ -514,11 +515,11 @@ describe('a guard that withholds findings says so on the run (D14)', () => {
     // A PASS review and a run with no review are not withholdings. An event here would
     // be noise about a non-event, and a log that cries wolf is one nobody reads.
     const passing = await rejectedRun({ review: PASSING_REVIEW });
-    await revise(passing.deps, passing.runId, 'split TASK-002');
+    await revise(passing.deps, passing.runId, 'split TASK-002', DECIDED);
     expect(await withheldEvent(passing.store, passing.runId)).toBeUndefined();
 
     const unreviewed = await rejectedRun({ review: null });
-    await revise(unreviewed.deps, unreviewed.runId, 'split TASK-002');
+    await revise(unreviewed.deps, unreviewed.runId, 'split TASK-002', DECIDED);
     expect(await withheldEvent(unreviewed.store, unreviewed.runId)).toBeUndefined();
   });
 });
@@ -531,7 +532,7 @@ describe('what the use case writes is what status reads back (D14)', () => {
 
   it('reads a revise that forwarded, which writes no replan_findings_forwarded event', async () => {
     const { store, deps, runId } = await rejectedRun();
-    await revise(deps, runId, 'split TASK-002');
+    await revise(deps, runId, 'split TASK-002', DECIDED);
 
     expect(lastReplanReport(await store.readEvents(runId))).toEqual({
       kind: 'forwarded',
@@ -551,7 +552,7 @@ describe('what the use case writes is what status reads back (D14)', () => {
 
   it('reads each withholding with the reason the use case wrote', async () => {
     const stale = await rejectedRun({ planHash: 'deadbeef' });
-    await revise(stale.deps, stale.runId, 'split TASK-002');
+    await revise(stale.deps, stale.runId, 'split TASK-002', DECIDED);
     expect(lastReplanReport(await stale.store.readEvents(stale.runId))).toEqual({
       kind: 'withheld',
       findings: 2,

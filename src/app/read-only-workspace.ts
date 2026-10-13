@@ -133,13 +133,113 @@ export interface ReadOnlyWorkspaceDeps {
  */
 let sequence = 0;
 
-function locationFor(label: string, pid: number): WorkspaceLocation {
+function locationFor(label: string, pid: number, prefix: string = THROWAWAY_PREFIX): WorkspaceLocation {
   sequence += 1;
   // A single flat segment under the owned root, for the reason `doctor`'s probe gives:
   // `git worktree remove` deletes the worktree directory and not its parent, so a nested
   // layout would leave an empty directory behind on every stage.
-  const segment = `${THROWAWAY_PREFIX}${slug(label)}-pid-${String(pid)}-${String(sequence)}`;
+  const segment = `${prefix}${slug(label)}-pid-${String(pid)}-${String(sequence)}`;
   return { segments: [segment], relativePath: segment };
+}
+
+/** `baseline-`, for a checkout of a run's base (`verification.baseline`). */
+const BASELINE_PREFIX = THROWAWAY_WORKSPACE_PREFIXES[2];
+
+/**
+ * Opens a disposable, clean checkout of `commit` — a run's base, to run a failing step on
+ * (`verification.baseline`, dogfood 09/10).
+ *
+ * The same kind of tree as a read-only twin, and the same lifecycle: cut under the owned
+ * root, forced away in `release`, never evidence. What differs is the content: no mirror of
+ * the source's dirt — the question is what the *base* says, and the base is a commit.
+ */
+export async function openCheckoutAt(
+  deps: Pick<ReadOnlyWorkspaceDeps, 'fs' | 'workspaces' | 'host'>,
+  options: { readonly source: string; readonly commit: string; readonly label: string },
+): Promise<ReadOnlyOutcome> {
+  const location = locationFor(options.label, deps.host.pid, BASELINE_PREFIX);
+  const added = await deps.workspaces.addWorktree({
+    cwd: options.source,
+    location,
+    base: options.commit,
+    reason: `agent-flow ${options.label}`,
+  });
+  if (!added.ok) return { ok: false, reason: 'no_worktree', detail: added.failure.message };
+  return { ok: true, tree: throwawayTree(deps, options.source, location, added.value) };
+}
+
+/**
+ * The promise to take a throwaway checkout away, shared by the twin and the base checkout so
+ * there is one removal and one set of lessons in it.
+ */
+function throwawayTree(
+  deps: Pick<ReadOnlyWorkspaceDeps, 'fs' | 'workspaces'>,
+  source: string,
+  location: WorkspaceLocation,
+  path: string,
+): ReadOnlyTree {
+  const { fs, workspaces } = deps;
+
+  const reclaim = async (): Promise<ReleaseOutcome> => {
+    // Unlocked first because it was created locked, and forced because the stage's whole
+    // purpose here is to be allowed to dirty this tree — Git refuses to reclaim a worktree
+    // holding a modified tracked file or an untracked non-ignored one, which is the state a
+    // contained stage *is expected* to leave behind. Nothing here is evidence: what the
+    // agent produced is its answer, which the stage has already persisted, and a failed
+    // attempt's worktree is retained precisely because it is evidence (§7.4). This one
+    // holds a copy of code that exists elsewhere.
+    await workspaces.unlockWorktree({ cwd: source, location });
+    const removed = await workspaces.removeWorktree({
+      cwd: source,
+      location,
+      force: true,
+    });
+
+    // **Git's answer is read, and that is the fix rather than a nicety.**
+    //
+    // `--force` does delete ignored files: measured directly, a worktree holding `dist/`
+    // and `node_modules/` came back empty and gone. So the three
+    // `doctor-install-probe-pid-*` directories found in the owned root, each holding only
+    // `node_modules`, are not files Git spared — they are removals that **failed**, from a
+    // caller that discarded the result. A cleanup nobody checks is a cleanup that leaks
+    // silently, and the only evidence is a folder somebody notices months later.
+    if (!removed.ok) {
+      // The filesystem as a last resort, and §20.2 is not violated by it: Git has either
+      // unregistered this worktree or refused to touch it, the path was composed by this
+      // process under Agent Flow's own root, and nothing in it is evidence.
+      if (await fs.exists(path)) await fs.remove(path);
+
+      return (await fs.exists(path))
+        ? { removed: false, detail: removed.failure.message }
+        : { removed: true };
+    }
+
+    // A directory Git reported removing and did not is the second half of the same
+    // defect, and it is cheap to check.
+    if (await fs.exists(path)) await fs.remove(path);
+
+    return (await fs.exists(path))
+      ? { removed: false, detail: `${path} is still on disk after Git removed it` }
+      : { removed: true };
+  };
+
+  return {
+    cwd: path,
+    release: async (): Promise<ReleaseOutcome> => {
+      try {
+        return await reclaim();
+      } catch (error) {
+        // The one `catch` that catches everything, and it is deliberate. Anything thrown
+        // from here lands in a `finally` around a stage that has already produced its
+        // answer, and losing that answer to a directory that would not go away is the
+        // trade this module refuses.
+        return {
+          removed: false,
+          detail: error instanceof Error ? error.message : 'the checkout could not be removed',
+        };
+      }
+    },
+  };
 }
 
 /** Stage names are ours and already tame; this is the guard, not the expectation. */
@@ -184,66 +284,7 @@ export async function openReadOnlyTree(
   });
   if (!added.ok) return { ok: false, reason: 'no_worktree', detail: added.failure.message };
 
-  const tree: ReadOnlyTree = {
-    cwd: added.value,
-    release: async (): Promise<ReleaseOutcome> => {
-      try {
-        return await reclaim();
-      } catch (error) {
-        // The one `catch` that catches everything, and it is deliberate. Anything thrown
-        // from here lands in a `finally` around a stage that has already produced its
-        // answer, and losing that answer to a directory that would not go away is the
-        // trade this module refuses.
-        return {
-          removed: false,
-          detail: error instanceof Error ? error.message : 'the checkout could not be removed',
-        };
-      }
-    },
-  };
-
-  const reclaim = async (): Promise<ReleaseOutcome> => {
-    // Unlocked first because it was created locked, and forced because the stage's whole
-    // purpose here is to be allowed to dirty this tree — Git refuses to reclaim a worktree
-    // holding a modified tracked file or an untracked non-ignored one, which is the state a
-    // contained stage *is expected* to leave behind. Nothing here is evidence: what the
-    // agent produced is its answer, which the stage has already persisted, and a failed
-    // attempt's worktree is retained precisely because it is evidence (§7.4). This one
-    // holds a copy of code that exists elsewhere.
-    await workspaces.unlockWorktree({ cwd: options.source, location });
-    const removed = await workspaces.removeWorktree({
-      cwd: options.source,
-      location,
-      force: true,
-    });
-
-    // **Git's answer is read, and that is the fix rather than a nicety.**
-    //
-    // `--force` does delete ignored files: measured directly, a worktree holding `dist/`
-    // and `node_modules/` came back empty and gone. So the three
-    // `doctor-install-probe-pid-*` directories found in the owned root, each holding only
-    // `node_modules`, are not files Git spared — they are removals that **failed**, from a
-    // caller that discarded the result. A cleanup nobody checks is a cleanup that leaks
-    // silently, and the only evidence is a folder somebody notices months later.
-    if (!removed.ok) {
-      // The filesystem as a last resort, and §20.2 is not violated by it: Git has either
-      // unregistered this worktree or refused to touch it, the path was composed by this
-      // process under Agent Flow's own root, and nothing in it is evidence.
-      if (await fs.exists(added.value)) await fs.remove(added.value);
-
-      return (await fs.exists(added.value))
-        ? { removed: false, detail: removed.failure.message }
-        : { removed: true };
-    }
-
-    // A directory Git reported removing and did not is the second half of the same
-    // defect, and it is cheap to check.
-    if (await fs.exists(added.value)) await fs.remove(added.value);
-
-    return (await fs.exists(added.value))
-      ? { removed: false, detail: `${added.value} is still on disk after Git removed it` }
-      : { removed: true };
-  };
+  const tree = throwawayTree(deps, options.source, location, added.value);
 
   try {
     await mirror({ fs, from: options.source, to: added.value, entries: status.value.entries });

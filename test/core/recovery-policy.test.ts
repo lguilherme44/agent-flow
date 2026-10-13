@@ -406,3 +406,13 @@ describe('the evidence line is the verdict, not the last line of the output (§9
     expect(escalationEvidence(failed(quiet))[0]).toContain('linking');
   });
 });
+
+describe('a task that hit its turn ceiling', () => {
+  it('stops for a person with budget to spare, and names maxTurns in the action', () => {
+    const decision = decide('runner_max_turns_exceeded', { attempts: 0, modelCalls: 0 });
+
+    expect(decision.mayProceedAutomatically).toBe(false);
+    expect(decision.step).toBeUndefined();
+    expect(decision.humanAction).toMatch(/maxTurns/);
+  });
+});

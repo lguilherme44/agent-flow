@@ -476,6 +476,12 @@ export class PlanningPipeline {
           projectConfig,
           validationCommands: this.renderValidationCommands(),
           executorCommands: this.renderExecutorCommands(),
+          // The same `budget` the check below applies. Told up front because the planner
+          // otherwise learns the bound only from a refusal, and the one repair round a plan
+          // gets was being spent on a ninth task: about a dollar and eight minutes, measured.
+          // The repair re-renders from these vars, so it is told the budget too.
+          workflowClass: workflow,
+          maxTasks: String(budget.maxTasks),
         },
         sddText: sdd,
         // **The bound the run already recorded, finally applied.**

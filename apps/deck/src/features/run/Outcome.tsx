@@ -126,9 +126,35 @@ export function Outcome({ address, tab, onTab, reviewFreshness }: {
 function ReviewTab({ address, reviewFreshness }: { readonly address: RunAddress; readonly reviewFreshness: string | undefined }) {
   return (
     <>
+      <GateDecisionLine address={address} />
       <Amendments address={address} />
       <ReviewBody address={address} reviewFreshness={reviewFreshness} />
     </>
+  );
+}
+
+/**
+ * Who moved the plan gate last, their words, and the channel — read-only.
+ *
+ * The name is free text anyone can type, so the channel is the part a person should look at:
+ * a decision that came through the API or the terminal is drawn in the warning tone, because
+ * that is where an AI can have typed the name. Nothing renders when the run's last gate move
+ * named nobody (runs from before `decidedBy`). Same cached run read as `Amendments`.
+ */
+function GateDecisionLine({ address }: { readonly address: RunAddress }) {
+  const t = useT();
+  const run = useResource<RunDetailView>(keys.run(address), () => api.run(address));
+  const decision = run.data?.gateDecision;
+  if (decision === undefined) return null;
+
+  const tone = decision.channel === 'deck' ? 'idle' : 'warn';
+  const copy = t.outcome.gateDecision;
+  return (
+    <p className="gate-decision" aria-label={copy.label} data-channel={decision.channel} data-tone={tone}>
+      <Chip tone={tone} title={decision.channel === 'deck' ? undefined : copy.notInDeck}>{decision.channel}</Chip>{' '}
+      {copy.by(copy[decision.action], decision.by, decision.channel)}: “{decision.words}”{' '}
+      <span className="faint">{formatStamp(Date.parse(decision.at), t.time)}</span>
+    </p>
   );
 }
 

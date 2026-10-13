@@ -48,6 +48,13 @@ const REQUIRED = [
   'prompts/implementation.md',
   'prompts/verification.md',
   'prompts/final-review.md',
+  // `agent-flow instructions` reads these at run time; a guide the registry names but the
+  // tarball lacks is a CONFIG_ERROR for the first AI that asks for it.
+  'guides/overview.md',
+  'guides/feature.md',
+  'guides/gate.md',
+  'guides/blocked.md',
+  'guides/recover.md',
 ];
 
 /**

@@ -263,7 +263,7 @@ class ConfigEditorModule implements ConfigEditor {
       const definition = configFieldAt(path, state.target.scope);
       if (definition === undefined) return [];
       const ownValue = valueAt(explicit, path);
-      const projectOwned = path[0] !== undefined && ['project', 'commands', 'validationCommands', 'paths', 'rules'].includes(String(path[0]));
+      const projectOwned = path[0] !== undefined && ['project', 'commands', 'validationCommands', 'verification', 'paths', 'rules'].includes(String(path[0]));
       const effectiveValue = projectOwned
         ? valueAt(normalized.projectSource ?? {}, path)
         : valueAt(normalized.effectiveGlobal, path);

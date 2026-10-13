@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach, afterAll } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NodeFileSystem } from '../../src/adapters/fs/node-file-system.js';
 import { NodeProcessRunner } from '../../src/adapters/process/node-process-runner.js';
@@ -374,6 +375,17 @@ describe('the Definition of Done requires every gate the plan lists (FR-026, FR-
     expect(printed).toContain('no command result');
     expect(printed).toContain('NOT DONE');
     expect(printed).not.toContain('FEATURE COMPLETE');
+
+    // Run 75716 (dogfood 09/10): a NOT DONE review left no trace on the run, so every
+    // screen kept reading "being reviewed" / "accept and merge". The verdict is recorded.
+    const concluded = (await current.store.readEvents(current.runId)).filter(
+      (event) => event.type === 'run_review_concluded',
+    );
+    expect(concluded).toHaveLength(1);
+    expect(concluded[0]?.detail).toMatchObject({
+      done: false,
+      unmet: [expect.objectContaining({ name: 'required gates ran and passed' })],
+    });
   });
 
   it('treats a result.json that will not parse as missing evidence, not as a review that crashes', async () => {
@@ -412,6 +424,12 @@ describe('the Definition of Done requires every gate the plan lists (FR-026, FR-
     const printed = renderOutcome(outcome.value);
     expect(printed).toContain('✓ required gates ran and passed');
     expect(printed).toContain('FEATURE COMPLETE');
+
+    const concluded = (await current.store.readEvents(current.runId)).filter(
+      (event) => event.type === 'run_review_concluded',
+    );
+    expect(concluded).toHaveLength(1);
+    expect(concluded[0]?.detail).toMatchObject({ done: true, unmet: [] });
   });
 });
 
@@ -608,5 +626,107 @@ describe('the verification workspace is prepared first (AR-04)', () => {
 
     expect(outcome.value.mechanicalVerification).toBe('PASS');
     expect(outcome.value.environmentFailure).toBeUndefined();
+  });
+});
+
+/**
+ * Dogfood 09/10 — "no regression against the base" instead of "zero errors".
+ *
+ * Run 75716 stayed NOT DONE because lint failed on errors already on the base branch. A step
+ * listed in `verification.baseline` that fails is run again on the run's base, in a
+ * disposable checkout: failing there too, it is pre-existing and does not hold the run; passing
+ * there, the run broke it. Steps not listed keep the zero-errors rule.
+ */
+describe('a failing step is judged against the base when the project asks (dogfood 09/10)', () => {
+  // Scripts outside the repository, so the base checkout runs the same file as the head.
+  const scripts = mkdtempSync(join(tmpdir(), 'af-baseline-'));
+  const alwaysFails = join(scripts, 'always-fails.js');
+  const failsWithOne = join(scripts, 'fails-with-one.js');
+  writeFileSync(alwaysFails, 'process.exit(1);\n');
+  writeFileSync(failsWithOne, "process.exit(require('node:fs').existsSync('one.txt') ? 1 : 0);\n");
+  afterAll(() => rmSync(scripts, { recursive: true, force: true }));
+
+  const configWith = (test: string, baseline: boolean) =>
+    'project:\n  name: demo\n  type: node\ncommands:\n' +
+    `  test: node "${test}"\n` +
+    (baseline ? 'verification:\n  baseline: [test]\n' : '');
+
+  it('does not hold the run for a failure the base has too, and says so', async () => {
+    const { current, deps, runner, integrationPath } = await reviewable();
+    run = current;
+    current.repo.write('.agent-flow/config.yaml', configWith(alwaysFails, true));
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.verification.passed).toBe(false);
+    expect(outcome.value.mechanicalVerification).toBe('PASS');
+    const condition = outcome.value.done.conditions.find((c) => c.name === 'lint, tests and build passing');
+    expect(condition?.met).toBe(true);
+    expect(condition?.detail).toContain('pre-existing');
+    // The base ran somewhere else: a disposable checkout, gone afterwards.
+    const elsewhere = runner.shellCwds.filter((cwd) => cwd !== integrationPath);
+    expect(elsewhere.length).toBeGreaterThan(0);
+    for (const cwd of elsewhere) expect(existsSync(cwd)).toBe(false);
+  });
+
+  it('holds the run when the base passes: the run broke it', async () => {
+    const { current, deps } = await reviewable();
+    run = current;
+    current.repo.write('.agent-flow/config.yaml', configWith(failsWithOne, true));
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.mechanicalVerification).toBe('FAIL');
+    expect(outcome.value.done.missing).toContain('lint, tests and build passing');
+  });
+
+  it('keeps zero errors for a step the project did not list, and never touches the base', async () => {
+    const { current, deps, runner, integrationPath } = await reviewable();
+    run = current;
+    current.repo.write('.agent-flow/config.yaml', configWith(alwaysFails, false));
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.mechanicalVerification).toBe('FAIL');
+    expect(new Set(runner.shellCwds)).toEqual(new Set([integrationPath]));
+  });
+
+  it('runs the whole `commands.test` in review, never the per-task `validationCommands.test`', async () => {
+    // The two levels, pinned: a task may run only what its diff touches through
+    // `validationCommands.test`; the review always runs the suite `commands` declares.
+    const { current, deps, runner } = await reviewable();
+    run = current;
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      'project:\n  name: demo\n  type: node\ncommands:\n  test: cat one.txt\n' +
+        `validationCommands:\n  test: node "${alwaysFails}"\n`,
+    );
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.mechanicalVerification).toBe('PASS');
+    expect(runner.shellCommands.some((line) => line.includes('always-fails'))).toBe(false);
+  });
+
+  it('asks the base once per run: a second review reuses the answer', async () => {
+    const { current, deps, runner, integrationPath } = await reviewable();
+    run = current;
+    current.repo.write('.agent-flow/config.yaml', configWith(alwaysFails, true));
+
+    await review(deps, current.runId);
+    const first = runner.shellCwds.filter((cwd) => cwd !== integrationPath).length;
+    await review(deps, current.runId);
+    const second = runner.shellCwds.filter((cwd) => cwd !== integrationPath).length;
+
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBe(first);
   });
 });

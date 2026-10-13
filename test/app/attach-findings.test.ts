@@ -22,6 +22,7 @@ import {
 } from '../../src/contracts/index.js';
 import { DEFAULT_GLOBAL_CONFIG_YAML } from '../../src/config/defaults.js';
 import { ptBR } from '../../src/core/phrases/index.js';
+import { DECIDED } from '../fakes/gate-decision.js';
 
 /**
  * FR-010, FR-016, FR-017, FR-018 — approving over a failed review, with its findings handed
@@ -229,7 +230,7 @@ describe('approve --attach-findings over a failed review (FR-016)', () => {
   it('approves as forced, and run_approved keeps exactly its four keys', async () => {
     const { store, deps, runId } = await world();
 
-    const approved = ok(await approve(deps, runId, { attachFindings: true }));
+    const approved = ok(await approve(deps, runId, { decidedBy: DECIDED, attachFindings: true }));
 
     expect(approved).toMatchObject({ forced: true, taskCount: 3, attachedFindings: 3, tasksReached: 3 });
     const state = await store.loadRun(runId);
@@ -247,7 +248,7 @@ describe('approve --attach-findings over a failed review (FR-016)', () => {
   it('records exactly one attached_findings amendment with every finding, its index and its tasks', async () => {
     const { store, deps, runId } = await world();
 
-    ok(await approve(deps, runId, { attachFindings: true }));
+    ok(await approve(deps, runId, { decidedBy: DECIDED, attachFindings: true }));
 
     const amendments = (await store.loadRun(runId)).amendments ?? [];
     // One amendment, and it is the attachment: the forced approval it implies is recorded as
@@ -278,7 +279,7 @@ describe('approve --attach-findings over a failed review (FR-016)', () => {
   it('says in the degradation that the findings were attached rather than resolved', async () => {
     const { store, deps, runId } = await world();
 
-    ok(await approve(deps, runId, { attachFindings: true }));
+    ok(await approve(deps, runId, { decidedBy: DECIDED, attachFindings: true }));
 
     const degradations = (await store.loadRun(runId)).degradations.filter(
       (degradation) => degradation.kind === 'forced_approval',
@@ -291,7 +292,7 @@ describe('approve --attach-findings over a failed review (FR-016)', () => {
   it('accepts a rejected run whose review also failed, because review_failed is checked first', async () => {
     const { store, deps, runId } = await world({ status: 'plan_rejected' });
 
-    const approved = ok(await approve(deps, runId, { attachFindings: true }));
+    const approved = ok(await approve(deps, runId, { decidedBy: DECIDED, attachFindings: true }));
 
     expect(approved.forced).toBe(true);
     expect((await store.loadRun(runId)).amendments?.map((amendment) => amendment.kind)).toEqual([
@@ -303,7 +304,7 @@ describe('approve --attach-findings over a failed review (FR-016)', () => {
 describe('the attached findings reach the tasks they route to (FR-018)', () => {
   it('gives each task the findings that cite it and the one that cites nobody', async () => {
     const run = await world();
-    ok(await approve(run.deps, run.runId, { attachFindings: true }));
+    ok(await approve(run.deps, run.runId, { decidedBy: DECIDED, attachFindings: true }));
 
     const expected: Record<(typeof TASK_IDS)[number], string[]> = {
       'TASK-001': ['marker-f0', 'marker-f2'],
@@ -324,7 +325,7 @@ describe('the attached findings reach the tasks they route to (FR-018)', () => {
 
   it('carries each finding whole: severity, type, requirement, file and suggested action', async () => {
     const run = await world();
-    ok(await approve(run.deps, run.runId, { attachFindings: true }));
+    ok(await approve(run.deps, run.runId, { decidedBy: DECIDED, attachFindings: true }));
 
     const first = await run.promptFor('TASK-001');
     expect(first).toContain('### high — requirement');
@@ -340,7 +341,7 @@ describe('the attached findings reach the tasks they route to (FR-018)', () => {
     // attaches nothing. If the findings above reached the prompts by any route other than
     // the attachment, they would be here too.
     const run = await world();
-    ok(await approve(run.deps, run.runId, { force: true }));
+    ok(await approve(run.deps, run.runId, { decidedBy: DECIDED, force: true }));
 
     for (const id of TASK_IDS) {
       const prompt = await run.promptFor(id);
@@ -364,7 +365,7 @@ describe('approve --attach-findings refuses with nothing written (FR-016)', () =
       const stateBefore = await fs.readFile(statePath);
       const eventsBefore = await store.readEvents(runId);
 
-      const outcome = await approve(deps, runId, { attachFindings: true });
+      const outcome = await approve(deps, runId, { decidedBy: DECIDED, attachFindings: true });
 
       expect(outcome.ok).toBe(false);
       if (outcome.ok) return;
@@ -379,11 +380,11 @@ describe('approve --attach-findings refuses with nothing written (FR-016)', () =
 
   it('names the state the gate actually found', async () => {
     const passed = await world({ review: 'passed' });
-    const refusedPassed = await approve(passed.deps, passed.runId, { attachFindings: true });
+    const refusedPassed = await approve(passed.deps, passed.runId, { decidedBy: DECIDED, attachFindings: true });
     expect(!refusedPassed.ok && refusedPassed.error.message).toContain('passed this plan');
 
     const stale = await world({ review: 'stale' });
-    const refusedStale = await approve(stale.deps, stale.runId, { attachFindings: true });
+    const refusedStale = await approve(stale.deps, stale.runId, { decidedBy: DECIDED, attachFindings: true });
     expect(!refusedStale.ok && refusedStale.error.message).toContain('a different version of this plan');
 
     // And in the caller's language, through the same phrase book.
@@ -391,7 +392,7 @@ describe('approve --attach-findings refuses with nothing written (FR-016)', () =
     const refusedMissing = await approve(
       { ...missing.deps, say: ptBR },
       missing.runId,
-      { attachFindings: true },
+      { decidedBy: DECIDED, attachFindings: true },
     );
     expect(!refusedMissing.ok && refusedMissing.error.message).toContain(ptBR.actions.planNotReviewed);
   });
@@ -401,7 +402,7 @@ describe('approve --attach-findings refuses with nothing written (FR-016)', () =
     const stateBefore = await fs.readFile(statePath);
     const eventsBefore = await store.readEvents(runId);
 
-    const outcome = await approve(deps, runId, { attachFindings: true, force: true });
+    const outcome = await approve(deps, runId, { decidedBy: DECIDED, attachFindings: true, force: true });
 
     expect(!outcome.ok && outcome.error.code).toBe('invalid_input');
     expect(await fs.readFile(statePath)).toBe(stateBefore);
@@ -413,7 +414,7 @@ describe('approve --force records the findings it overruled, and only those (FR-
   it('appends exactly one forced_approval amendment over review_failed', async () => {
     const { store, deps, runId } = await world();
 
-    const approved = ok(await approve(deps, runId, { force: true }));
+    const approved = ok(await approve(deps, runId, { decidedBy: DECIDED, force: true }));
 
     expect(approved.forced).toBe(true);
     expect(approved).not.toHaveProperty('attachedFindings');
@@ -436,7 +437,7 @@ describe('approve --force records the findings it overruled, and only those (FR-
   it('appends nothing over review_missing', async () => {
     const { store, deps, runId } = await world({ review: 'missing' });
 
-    const approved = ok(await approve(deps, runId, { force: true }));
+    const approved = ok(await approve(deps, runId, { decidedBy: DECIDED, force: true }));
 
     expect(approved.forced).toBe(true);
     expect((await store.loadRun(runId)).amendments).toBeUndefined();
@@ -448,7 +449,7 @@ describe('approve --force records the findings it overruled, and only those (FR-
   it('appends nothing on an approval that needed no force', async () => {
     const { store, deps, runId } = await world({ review: 'passed' });
 
-    ok(await approve(deps, runId, { force: true }));
+    ok(await approve(deps, runId, { decidedBy: DECIDED, force: true }));
 
     expect((await store.loadRun(runId)).amendments).toBeUndefined();
   });

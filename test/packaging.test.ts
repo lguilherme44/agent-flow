@@ -155,10 +155,19 @@ describe('the published package', () => {
     // no shim and is deprecated (DEP0190), and hand-writing the `cmd.exe` escaping is
     // what that CVE was. It costs four packages under 15 KB — `path-key`,
     // `shebang-command`, `which` — against the 50 MB this list turned away.
+    // **`@modelcontextprotocol/server` is the second.** `agent-flow mcp` (Etapa 1, Passo 3) is
+    // how a model drives the hub without a human typing commands, and the protocol's framing
+    // and schema negotiation are not something to hand-write. The v2 server package rather
+    // than the v1 `@modelcontextprotocol/sdk`, and the reason is measured: the SDK cost 68
+    // packages and 11.0 MB installed, most of it `express` and `hono` for HTTP transports
+    // `mcp` does not use (it serves stdio only); this costs 2 packages (`server` and `core`,
+    // whose only dependency is the `zod` already here) and 7.4 MB. Pinned exact, so an
+    // upgrade is a decision the in-memory tests in `test/cli/mcp*.test.ts` get to judge.
     const raw = readFileSync(join(ROOT, 'package.json'), 'utf8');
     const parsed = JSON.parse(raw) as { dependencies: Record<string, string> };
     expect(Object.keys(parsed.dependencies)).toEqual([
       '@fastify/static',
+      '@modelcontextprotocol/server',
       'commander',
       'cross-spawn',
       'fastify',

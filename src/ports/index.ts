@@ -51,3 +51,4 @@ export { REPOSITORY_CONTENT_ERROR_CODES } from './repository-content-source.js';
 export type { ContextTokenEstimator } from './context-token-estimator.js';
 export * from './forge.js';
 export type { CodeTagger, TaggableFile, TaggerHealth } from './code-tagger.js';
+export type { HubClient, HubMethod, HubRequest, HubResponse } from './hub-client.js';

@@ -910,7 +910,8 @@ export function executePairingConsoleCommand(
       // The outstanding code is replaced, not added to: single-use is a property of the
       // code, and two live codes would be two credentials for one decision. Live sessions
       // are untouched — that is the whole difference between this and a restart.
-      write(`Pairing code: ${pairing.issueCode()}\n`);
+      // Grouped as the banner prints it, so the code typed into the Deck looks like the one shown.
+      write(`Pairing code: ${formatPairingCode(pairing.issueCode())}\n`);
       write('Valid for 10 minutes, and it replaces any code printed before it.\n');
       return;
     }

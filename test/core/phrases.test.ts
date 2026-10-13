@@ -68,6 +68,7 @@ const IDENTICAL = [
   'config.fallback', // the setting is spelled `fallback` in the file too
   'config.runners',
   'config.workspace',
+  'doctor.maxTurnsScopeFallback', // the `fallback` route, named as the setting is
   'git.unborn', // Git's own word for a HEAD with no commit
   'server.wherePid',
 ];

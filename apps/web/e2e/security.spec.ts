@@ -27,7 +27,7 @@ test.describe('the request guard, over a real port', () => {
     makeWorld,
   }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const runId = await world.runIdOf('booking-api');
     const before = await world.stateOf('booking-api');
@@ -116,9 +116,18 @@ test.describe('the request guard, over a real port', () => {
     const world = await makeWorld();
     const runId = await world.runIdOf('booking-api');
 
+    // The header alone gets a script past the request guard. The body names the human, as
+    // every API gate move must (decidedBy) — without it the answer is the gate's 400, not
+    // the guard's 403, which is a different test.
     const response = await page.request.post(
       `${world.url}/api/v1/runs/${runId}/reject?project=booking-api`,
-      { data: { reason: 'from a script' }, headers: { [CLIENT_HEADER]: 'e2e' } },
+      {
+        data: {
+          reason: 'from a script',
+          decidedBy: { by: 'E2E operator', words: 'Reject it, from a script.' },
+        },
+        headers: { [CLIENT_HEADER]: 'e2e' },
+      },
     );
 
     expect(response.status()).toBe(200);

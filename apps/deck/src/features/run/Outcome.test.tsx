@@ -320,6 +320,55 @@ describe('the amendments a person recorded', () => {
   });
 });
 
+/**
+ * Who moved the plan gate, in their words, and through which channel (`gateDecision`).
+ *
+ * The guide tells the human they can see when a decision reached agent-flow through an AI's
+ * hands; this is where. A decision through the API or the terminal is drawn apart from one
+ * clicked in the Deck, because the name on it is only as good as whoever typed it.
+ */
+describe('the plan-gate decision', () => {
+  beforeEach(() => clearStore());
+  afterEach(() => vi.unstubAllGlobals());
+
+  const runWith = (gateDecision: unknown) => ({
+    runId: address.runId,
+    ...(gateDecision === undefined ? {} : { gateDecision }),
+  });
+
+  it('says who approved, through which channel, in their words, and marks the API', async () => {
+    stub({
+      run: runWith({ action: 'approve', by: 'Luis', words: 'Ship it as planned.', channel: 'api', at: '2026-10-07T12:00:00Z' }),
+    });
+    panel('review');
+
+    const line = await screen.findByLabelText(t.outcome.gateDecision.label);
+    expect(line).toHaveTextContent(t.outcome.gateDecision.by(t.outcome.gateDecision.approve, 'Luis', 'api'));
+    expect(line).toHaveTextContent('“Ship it as planned.”');
+    expect(line).toHaveAttribute('data-channel', 'api');
+    expect(line).toHaveAttribute('data-tone', 'warn');
+  });
+
+  it('draws a Deck decision in the quiet tone, and names a rejection as one', async () => {
+    stub({
+      run: runWith({ action: 'reject', by: 'Deck', words: 'rejected in the Deck', channel: 'deck', at: '2026-10-07T12:00:00Z' }),
+    });
+    panel('review');
+
+    const line = await screen.findByLabelText(t.outcome.gateDecision.label);
+    expect(line).toHaveTextContent(t.outcome.gateDecision.by(t.outcome.gateDecision.reject, 'Deck', 'deck'));
+    expect(line).toHaveAttribute('data-tone', 'idle');
+  });
+
+  it('renders nothing for a run whose last gate move named nobody', async () => {
+    stub({ run: runWith(undefined) });
+    panel('review');
+
+    expect(await screen.findByRole('button', { name: /TASK-004/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText(t.outcome.gateDecision.label)).not.toBeInTheDocument();
+  });
+});
+
 describe('where the run went', () => {
   beforeEach(() => {
     clearStore();

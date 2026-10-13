@@ -1,4 +1,5 @@
-import { WORKTREE_CONFIG_KEY } from '../contracts/config.schema.js';
+import { WORKTREE_CONFIG_KEY, roleConfigKeys } from '../contracts/config.schema.js';
+import { WORKFLOW_ROLES, type WorkflowRole } from '../contracts/common.schema.js';
 import { deepMerge } from './merger.js';
 
 export type ConfigRecord = Record<string, unknown>;
@@ -24,7 +25,7 @@ export const PROJECT_OVERRIDABLE_KEYS = [
 
 /** Settings that exist only in a project source. */
 export const PROJECT_OWN_KEYS = [
-  'project', 'commands', 'validationCommands', 'paths', 'rules',
+  'project', 'commands', 'validationCommands', 'verification', 'paths', 'rules',
   // How this repository's own commands are written — POSIX script or the host's shell.
   // It travels with the commands it describes, so it lives in the project source only.
   'commandShell',
@@ -45,19 +46,26 @@ export interface ResolveConfigSourcesInput {
   readonly projectTrusted?: boolean;
 }
 
-export type IgnoredLooseningKind = 'skip_permissions' | 'tool_grant_args' | 'mcp' | 'approval';
+export type IgnoredLooseningKind = 'skip_permissions' | 'tool_grant_args' | 'mcp' | 'approval' | 'max_turns';
 
-/** A value an untrusted project set that would have widened the operator's posture. */
+/**
+ * A value a project set that would have widened the operator's posture.
+ *
+ * The first four kinds are dropped only for an untrusted project. `max_turns` — a turn
+ * ceiling raised above the global one — is dropped whatever the trust.
+ */
 export interface IgnoredLoosening {
   readonly path: readonly string[];
   readonly kind: IgnoredLooseningKind;
+  /** What was dropped, when it is a value worth naming (`max_turns` only). */
+  readonly value?: string | number;
 }
 
 export interface ResolvedConfigSources {
   readonly effectiveGlobal: ConfigRecord;
   /** The project record the overlay was built from — filtered when the project is untrusted. */
   readonly project?: ConfigRecord;
-  /** Empty for a trusted project, and for one that loosened nothing. */
+  /** Empty for a project that loosened nothing; a trusted one can still raise a turn ceiling. */
   readonly ignoredLoosenings: readonly IgnoredLoosening[];
   originOf(path: string | readonly (string | number)[]): ConfigValueOrigin | undefined;
 }
@@ -72,7 +80,13 @@ export function resolveConfigSources(input: ResolveConfigSourcesInput): Resolved
   const screened: ScreenedProject = raw === undefined || input.projectTrusted === true
     ? { filtered: raw, ignored: [] }
     : filterProjectLoosenings(raw);
-  const project = screened.filtered;
+  // The turn ceiling is tightened whatever the trust: it bounds what a run may spend, and
+  // `trust.projectConfig` is about what an agent may *do*. Applied to the project record
+  // itself, like the screen above, so the overlay and `originOf` agree on what survived.
+  const tightened = screened.filtered === undefined
+    ? undefined
+    : tightenProjectMaxTurns(screened.filtered, deepMerge(input.defaults, global));
+  const project = tightened?.filtered;
   const allowedOverlay: ConfigRecord = {};
 
   if (project !== undefined) {
@@ -85,7 +99,7 @@ export function resolveConfigSources(input: ResolveConfigSourcesInput): Resolved
   return {
     effectiveGlobal,
     ...(project === undefined ? {} : { project }),
-    ignoredLoosenings: screened.ignored,
+    ignoredLoosenings: [...screened.ignored, ...(tightened?.ignored ?? [])],
     originOf(path) {
       const segments = normalizePath(path);
       const head = segments[0];
@@ -176,6 +190,16 @@ export function filterProjectLoosenings(project: ConfigRecord): ProjectScreening
     filtered['runners'] = kept;
   }
 
+  // A command list the e2e agent may run is a tool grant by another name (dogfood 08/10): an
+  // untrusted repository that could write one would grant its own agent `curl` and friends.
+  const roles = project['roles'];
+  if (isRecord(roles) && isRecord(roles['e2e']) && roles['e2e']['allowedCommands'] !== undefined) {
+    const e2e: ConfigRecord = { ...roles['e2e'] };
+    delete e2e['allowedCommands'];
+    filtered['roles'] = { ...roles, e2e };
+    ignored.push({ path: ['roles', 'e2e', 'allowedCommands'], kind: 'tool_grant_args' });
+  }
+
   const approval = project['approval'];
   if (isRecord(approval) && approval['requiredBeforeImplementation'] === false) {
     const copy: ConfigRecord = { ...approval };
@@ -185,6 +209,222 @@ export function filterProjectLoosenings(project: ConfigRecord): ProjectScreening
   }
 
   return { filtered, ignored };
+}
+
+/** Where a role config sits under `roles`, in the nested YAML shape. */
+const ROLE_CONFIG_PATHS: readonly (readonly string[])[] = [
+  ['architect'], ['sdd'], ['planner'], ['planReviewer'],
+  ['executors', 'trivial'], ['executors', 'normal'], ['executors', 'complex'],
+  ['verification'], ['e2e'], ['finalReviewer'],
+];
+
+/**
+ * The turn-ceiling flag, as a runner's `args` could carry it.
+ *
+ * Runner-agnostic for the reason `TOOL_GRANT_FLAGS` is. It matters because `RunnerConfig.args`
+ * ride *after* the adapter's own flag, and measured on claude 2.1.281 the last `--max-turns`
+ * wins — so a project arg would silently replace the ceiling `roles.*.maxTurns` set.
+ */
+const MAX_TURNS_FLAG = '--max-turns';
+
+/**
+ * The project record with every way of raising a global turn ceiling removed, and a list of
+ * what was (`kind: 'max_turns'`).
+ *
+ * A project may lower a role's ceiling, or set one where the operator set none; it may never
+ * lift one the operator set. Compared value by value against the effective global config
+ * (`defaults` + global file):
+ *
+ *   - each role, and each of its stage overrides (whose ceiling is the global stage's own
+ *     value, else the global role's),
+ *   - each `fallback.roles` entry, against the global fallback entry and then the global
+ *     *primary* role — the fallback runs with the primary's ceiling when it declares none,
+ *     so a fallback the operator never declared is held to the primary's number,
+ *   - every `--max-turns` in a runner's `args`, dropped whatever its value: the project's
+ *     ceiling belongs in `roles`, where it is compared, and not in argv, where it wins.
+ *
+ * A raising value is dropped rather than clamped, so what applies is exactly the global
+ * number. Applied whatever the trust: it bounds what a run may spend, and
+ * `trust.projectConfig` is about what an agent may do. Pure and non-mutating, for the same
+ * reason `filterProjectLoosenings` is.
+ */
+export function tightenProjectMaxTurns(project: ConfigRecord, global: ConfigRecord): ProjectScreening {
+  const ignored: IgnoredLoosening[] = [];
+  let result = project;
+
+  const roles = project['roles'];
+  if (isRecord(roles)) {
+    let nextRoles: ConfigRecord = roles;
+    for (const path of ROLE_CONFIG_PATHS) {
+      const projectRole = valueAt(roles, [...path]);
+      if (!isRecord(projectRole)) continue;
+      const tightened = tightenRole(projectRole, [valueAt(global, ['roles', ...path])], ['roles', ...path], ignored);
+      if (tightened !== projectRole) nextRoles = setAt(nextRoles, path, tightened);
+    }
+    if (nextRoles !== roles) result = { ...result, roles: nextRoles };
+  }
+
+  const fallback = project['fallback'];
+  const fallbackRoles = isRecord(fallback) ? fallback['roles'] : undefined;
+  if (isRecord(fallback) && isRecord(fallbackRoles)) {
+    let nextFallbackRoles: ConfigRecord = fallbackRoles;
+    for (const [name, projectRole] of Object.entries(fallbackRoles)) {
+      if (!isRecord(projectRole)) continue;
+      const globals = [valueAt(global, ['fallback', 'roles', name]), primaryRoleOf(global, name)];
+      const tightened = tightenRole(projectRole, globals, ['fallback', 'roles', name], ignored, lowestCeiling(globals));
+      if (tightened !== projectRole) nextFallbackRoles = { ...nextFallbackRoles, [name]: tightened };
+    }
+    if (nextFallbackRoles !== fallbackRoles) {
+      result = { ...result, fallback: { ...fallback, roles: nextFallbackRoles } };
+    }
+  }
+
+  const runners = result['runners'];
+  if (isRecord(runners)) {
+    let nextRunners: ConfigRecord = runners;
+    for (const [name, runner] of Object.entries(runners)) {
+      if (!isRecord(runner) || !Array.isArray(runner['args'])) continue;
+      const { args, dropped } = withoutMaxTurnsArgs(runner['args'] as readonly unknown[]);
+      if (dropped.length === 0) continue;
+      nextRunners = { ...nextRunners, [name]: { ...runner, args } };
+      ignored.push({ path: ['runners', name, 'args'], kind: 'max_turns', value: dropped.join(', ') });
+    }
+    if (nextRunners !== runners) result = { ...result, runners: nextRunners };
+  }
+
+  return { filtered: result, ignored };
+}
+
+/** The global primary role a `fallback.roles` key names, or nothing for an unknown key. */
+function primaryRoleOf(global: ConfigRecord, name: string): unknown {
+  if (!(WORKFLOW_ROLES as readonly string[]).includes(name)) return undefined;
+  return valueAt(global, [...roleConfigKeys(name as WorkflowRole)]);
+}
+
+/**
+ * `args` without any `--max-turns`, in its spaced or `--flag=value` spelling, and the values
+ * removed. The flag takes exactly one value, so the spaced form drops the next token too —
+ * unless that token is another option, which would mean the value was never there.
+ */
+function withoutMaxTurnsArgs(args: readonly unknown[]): { args: unknown[]; dropped: string[] } {
+  const kept: unknown[] = [];
+  const dropped: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (token === MAX_TURNS_FLAG) {
+      const next = args[index + 1];
+      if (typeof next === 'string' && !next.startsWith('-')) {
+        dropped.push(next);
+        index++;
+      } else {
+        dropped.push('');
+      }
+      continue;
+    }
+    if (typeof token === 'string' && token.startsWith(`${MAX_TURNS_FLAG}=`)) {
+      dropped.push(token.slice(MAX_TURNS_FLAG.length + 1));
+      continue;
+    }
+    kept.push(token);
+  }
+  return { args: kept, dropped };
+}
+
+/**
+ * One role's record, tightened against the global records that bound it, in precedence order.
+ *
+ * The role ceiling is the first `maxTurns` among them; a stage's is the first of each record's
+ * own stage value, then that record's role value — so for one record it is "global stage, else
+ * global role", and for a fallback it continues into the primary.
+ */
+function tightenRole(
+  projectRole: ConfigRecord,
+  globals: readonly unknown[],
+  path: readonly string[],
+  ignored: IgnoredLoosening[],
+  /**
+   * Overrides the role-level ceiling. A fallback's role-level `maxTurns` serves every stage
+   * the role does, so it is held to the lowest global ceiling that applies to any of them.
+   */
+  roleCeilingOverride?: number,
+): ConfigRecord {
+  const records = globals.filter(isRecord);
+  const roleCeiling = roleCeilingOverride ?? firstCeiling(records.map((record) => record['maxTurns']));
+  let result = projectRole;
+  if (raises(projectRole['maxTurns'], roleCeiling)) {
+    result = without(projectRole, 'maxTurns');
+    ignored.push({ path: [...path, 'maxTurns'], kind: 'max_turns', value: projectRole['maxTurns'] as number });
+  }
+
+  const stages = projectRole['stages'];
+  if (isRecord(stages)) {
+    let nextStages: ConfigRecord = stages;
+    for (const [stage, override] of Object.entries(stages)) {
+      if (!isRecord(override)) continue;
+      const stageCeiling = firstCeiling(
+        records.flatMap((record) => {
+          const globalStages = record['stages'];
+          const globalStage = isRecord(globalStages) ? globalStages[stage] : undefined;
+          return [isRecord(globalStage) ? globalStage['maxTurns'] : undefined, record['maxTurns']];
+        }),
+      );
+      if (raises(override['maxTurns'], stageCeiling)) {
+        nextStages = { ...nextStages, [stage]: without(override, 'maxTurns') };
+        ignored.push({
+          path: [...path, 'stages', stage, 'maxTurns'],
+          kind: 'max_turns',
+          value: override['maxTurns'] as number,
+        });
+      }
+    }
+    if (nextStages !== stages) result = { ...result, stages: nextStages };
+  }
+
+  return result;
+}
+
+/** The lowest `maxTurns` across these records and every one of their stage overrides. */
+function lowestCeiling(globals: readonly unknown[]): number | undefined {
+  const values = globals.filter(isRecord).flatMap((record) => {
+    const stages = record['stages'];
+    const stageValues = isRecord(stages)
+      ? Object.values(stages).map((stage) => (isRecord(stage) ? stage['maxTurns'] : undefined))
+      : [];
+    return [record['maxTurns'], ...stageValues];
+  });
+  const ceilings = values.map(ceilingOf).filter((value): value is number => value !== undefined);
+  return ceilings.length === 0 ? undefined : Math.min(...ceilings);
+}
+
+function firstCeiling(values: readonly unknown[]): number | undefined {
+  for (const value of values) {
+    const ceiling = ceilingOf(value);
+    if (ceiling !== undefined) return ceiling;
+  }
+  return undefined;
+}
+
+function ceilingOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** True only for a number above a ceiling that exists. Anything else is the schema's to judge. */
+function raises(value: unknown, ceiling: number | undefined): boolean {
+  return ceiling !== undefined && typeof value === 'number' && value > ceiling;
+}
+
+function without(source: ConfigRecord, key: string): ConfigRecord {
+  const copy: ConfigRecord = { ...source };
+  delete copy[key];
+  return copy;
+}
+
+function setAt(source: ConfigRecord, path: readonly string[], value: ConfigRecord): ConfigRecord {
+  const [head, ...rest] = path;
+  if (head === undefined) return value;
+  if (rest.length === 0) return { ...source, [head]: value };
+  const child = source[head];
+  return { ...source, [head]: setAt(isRecord(child) ? child : {}, rest, value) };
 }
 
 function isRecord(value: unknown): value is ConfigRecord {

@@ -18,7 +18,7 @@ test.describe('lifecycle', () => {
     makeWorld,
   }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     // One process asks.
     const paused = await world.cli('booking-api', ['pause']);
@@ -55,7 +55,7 @@ test.describe('lifecycle', () => {
     makeWorld,
   }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     await world.cli('booking-api', ['pause']);
     const first = ((await world.stateOf('booking-api')) as { pauseRequestedAt?: string })
@@ -73,7 +73,7 @@ test.describe('lifecycle', () => {
     // `resume` and `run` are not aliases. A command that silently did the other's job
     // would make "did my pause take effect" unanswerable.
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const outcome = await world.cli('booking-api', ['resume']);
 
@@ -83,7 +83,7 @@ test.describe('lifecycle', () => {
 
   test('cancel asks before it does something irreversible', async ({ makeWorld }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const asked = await world.cli('booking-api', ['cancel']);
 
@@ -98,7 +98,7 @@ test.describe('lifecycle', () => {
 
   test('cancel is terminal, keeps every artifact, and says so', async ({ makeWorld }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
     const runId = await world.runIdOf('booking-api');
     const planBefore = await world.readProjectFile(
@@ -107,7 +107,7 @@ test.describe('lifecycle', () => {
     );
     expect(planBefore, 'the fixture has no plan to keep').not.toBe('');
 
-    const cancelled = await world.cli('booking-api', ['cancel', '--yes']);
+    const cancelled = await world.cli('booking-api', ['cancel', '--yes', '--decided-by', 'E2E operator', '--words', 'Cancel this run.']);
     expect(cancelled.code, `cancel failed: ${cancelled.stderr}`).toBe(0);
     // An operator who is not told what survived will assume the opposite and redo work
     // that is still on disk.
@@ -130,12 +130,12 @@ test.describe('lifecycle', () => {
 
   test('cancel is idempotent', async ({ makeWorld }) => {
     const world = await makeWorld();
-    await world.cli('booking-api', ['approve']);
+    await world.cli('booking-api', ['approve', '--decided-by', 'E2E operator', '--words', 'As the spec decides.']);
 
-    await world.cli('booking-api', ['cancel', '--yes']);
+    await world.cli('booking-api', ['cancel', '--yes', '--decided-by', 'E2E operator', '--words', 'Cancel this run.']);
     const at = ((await world.stateOf('booking-api')) as { cancelledAt?: string }).cancelledAt;
 
-    const again = await world.cli('booking-api', ['cancel', '--yes']);
+    const again = await world.cli('booking-api', ['cancel', '--yes', '--decided-by', 'E2E operator', '--words', 'Cancel this run.']);
     expect(again.code).toBe(0);
 
     expect(((await world.stateOf('booking-api')) as { cancelledAt?: string }).cancelledAt).toBe(at);

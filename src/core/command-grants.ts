@@ -257,3 +257,17 @@ export function uncoveredCitations(citations: readonly string[], commands: reado
     (citation) => !covering.some((command) => citation === command || citation.startsWith(`${command} `)),
   );
 }
+
+/**
+ * The lines of an operator-written list that a prefix grant cannot widen, trimmed and once
+ * (`roles.e2e.allowedCommands`, dogfood 08/10). The same judgement as a declared command's,
+ * so a list cannot grant what a declared line could not.
+ */
+export function grantableLines(lines: readonly string[]): string[] {
+  const granted: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (exclusionOf('', line) === undefined && !granted.includes(line)) granted.push(line);
+  }
+  return granted;
+}

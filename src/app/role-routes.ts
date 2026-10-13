@@ -141,6 +141,8 @@ export interface RoleRoute {
     readonly model?: string;
     readonly reasoning: ReasoningLevel;
     readonly timeoutSeconds: number;
+    /** `maxTurns` as configured. Absent means the role has no turn ceiling. */
+    readonly maxTurns?: number;
   };
   /** Absent when the configuration cannot be resolved at all. */
   readonly resolved?: RoutedAgent;
@@ -175,6 +177,7 @@ export async function describeRoleRoutes(
         ...(roleConfig.model === undefined ? {} : { model: roleConfig.model }),
         reasoning: roleConfig.effort,
         timeoutSeconds: roleConfig.timeoutSeconds,
+        ...(roleConfig.maxTurns === undefined ? {} : { maxTurns: roleConfig.maxTurns }),
       },
       ...resolvePrimary(role, options, requirements),
       ...describeFallback(role, options, requirements),

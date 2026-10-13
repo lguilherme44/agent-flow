@@ -226,7 +226,7 @@ describe('AgyRunner argv construction', () => {
     expect(valueAfter(proc.lastCall?.args ?? [], '--effort')).toBe('low');
   });
 
-  it('runs non-interactively with json output format and workingDirectory in add-dir', async () => {
+  it('runs non-interactively with the stream output format and workingDirectory in add-dir', async () => {
     const { runner, proc } = makeRunner(
       new FakeProcessRunner().always({
         stdout: JSON.stringify({ status: 'SUCCESS', response: 'done' }),
@@ -237,7 +237,8 @@ describe('AgyRunner argv construction', () => {
 
     expect(proc.lastCall?.command).toBe('agy');
     expect(proc.lastCall?.args).not.toContain('-p');
-    expect(valueAfter(proc.lastCall?.args ?? [], '--output-format')).toBe('json');
+    // stream-json since dogfood 08/10; a plain envelope on stdout still reads as before.
+    expect(valueAfter(proc.lastCall?.args ?? [], '--output-format')).toBe('stream-json');
     expect(valueAfter(proc.lastCall?.args ?? [], '--add-dir')).toBe('/repo');
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -406,6 +407,180 @@ describe('AgyRunner dangerouslySkipPermissions', () => {
 
     await runner.run(baseInput);
     expect(proc.lastCall?.args).not.toContain('--dangerously-skip-permissions');
+  });
+});
+
+/**
+ * Dogfood 08/10 — "tela congelada", for this runner too. The lines below are the ones
+ * `agy 1.3.3 --output-format stream-json` printed when probed (paths shortened): a tool step
+ * opening and closing, a message in two pieces, and the `result` line, whose object is the
+ * envelope `--output-format json` printed.
+ */
+describe('AgyRunner stream (dogfood 08/10)', () => {
+  const ANSWER = { answer: '4' };
+  const step = (fields: Record<string, unknown>) =>
+    JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c', ...fields } });
+  const lines = [
+    JSON.stringify({ event: 'init', conversation_id: 'c', init: { cwd: '/repo', tools: ['view_file'] } }),
+    step({ step_index: 0, state: 'DONE', step_type: 'user_input' }),
+    step({ step_index: 1, state: 'DONE', step_type: 'agent_response', usage: { input_tokens: 1 } }),
+    step({ step_index: 2, state: 'ACTIVE', step_type: 'tool', tool_name: 'view_file', tool_info: { name: 'view_file', parameters: { AbsolutePath: '/repo/a.txt' } } }),
+    step({ step_index: 2, state: 'DONE', step_type: 'tool', tool_name: 'view_file', tool_info: { name: 'view_file', parameters: { AbsolutePath: '/repo/a.txt' }, output: '2 lines, 6 bytes' } }),
+    step({ step_index: 3, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'Read a.txt; ' }),
+    step({ step_index: 3, state: 'DONE', step_type: 'agent_response', text_delta: 'it says hello.\n' }),
+    JSON.stringify({
+      event: 'result',
+      result: {
+        conversation_id: 'c', status: 'SUCCESS', response: JSON.stringify(ANSWER), duration_seconds: 6.8, num_turns: 1,
+        structured_output: ANSWER, usage: { input_tokens: 25579, output_tokens: 117 },
+      },
+    }),
+  ];
+  const stream = `${lines.join('\n')}\n`;
+
+  it('reports each tool call once, as it starts, and each message whole', async () => {
+    const seen: unknown[] = [];
+    const proc = new FakeProcessRunner().always((options) => {
+      // Split mid-line, as a pipe delivers it.
+      options.onStdout?.(stream.slice(0, 300));
+      options.onStdout?.(stream.slice(300));
+      return { exitCode: 0, stdout: stream };
+    });
+    const { runner } = makeRunner(proc);
+
+    const result = await runner.run({ ...baseInput, onActivity: (activity) => seen.push(activity) });
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([
+      { kind: 'tool', tool: 'view_file', target: '/repo/a.txt' },
+      { kind: 'text', text: 'Read a.txt; it says hello.' },
+    ]);
+  });
+
+  it('reads the answer, the structured output and the usage from the result line', async () => {
+    const { runner } = makeRunner(new FakeProcessRunner().always({ exitCode: 0, stdout: stream }));
+
+    const result = await runner.run({ ...baseInput, outputSchema: { type: 'object' } });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.json).toEqual(ANSWER);
+    expect(result.usage?.inputTokens).toBe(25579);
+    expect(result.usage?.turns).toBe(1);
+  });
+
+  it('keeps the result line when the buffered output was truncated before it', async () => {
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(stream);
+      return { exitCode: 0, stdout: `${stream.slice(0, 120)}\n… [truncated]`, truncated: true };
+    });
+    const { runner } = makeRunner(proc);
+
+    const result = await runner.run({ ...baseInput, outputSchema: { type: 'object' } });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.json).toEqual(ANSWER);
+  });
+
+  it('does not report the answer of a structured stage as something the agent said', async () => {
+    const seen: unknown[] = [];
+    const answer = [
+      step({ step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: `${JSON.stringify(ANSWER)}\n` }),
+      lines.at(-1) ?? '',
+    ].join('\n');
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(answer);
+      return { exitCode: 0, stdout: answer };
+    });
+    const { runner } = makeRunner(proc);
+
+    await runner.run({ ...baseInput, outputSchema: { type: 'object' }, onActivity: (activity) => seen.push(activity) });
+
+    expect(seen).toEqual([]);
+  });
+
+  it('reads a failure from the result line, as the json envelope carried it', async () => {
+    // The shape was measured with an invalid `--model` (status ERROR, its `error`, exit 1); a
+    // 429 was not provoked, so `status_code` here is the json envelope's field in that shape.
+    const failed = JSON.stringify({
+      event: 'result',
+      result: { conversation_id: '', status: 'ERROR', response: '', error: 'too many requests', status_code: 429 },
+    });
+    const { runner } = makeRunner(new FakeProcessRunner().always({ exitCode: 1, stdout: `${failed}\n` }));
+
+    const result = await runner.run(baseInput);
+
+    expect(result.ok).toBe(false);
+    // `status_code` read from inside the result line, so the existing rule still fires.
+    if (!result.ok) expect(result.errorCode).toBe('quota_exceeded');
+  });
+
+  it('does not take the init event for the answer when a stream ends at exit 0 without its result', async () => {
+    const cut = `${lines.slice(0, 3).join('\n')}\n`;
+    const { runner } = makeRunner(new FakeProcessRunner().always({ exitCode: 0, stdout: cut }));
+
+    const result = await runner.run(baseInput);
+
+    // Under `json` the same run printed nothing and read as an empty answer; it still does.
+    expect(result.ok && result.text).toBe('');
+  });
+
+  it('reads an auto-denied command from the result line, as measured under --sandbox', async () => {
+    // agy 1.3.3, a read-only stage asked to run `echo hi > x.txt`: the step ends in ERROR, the
+    // result still says SUCCESS and carries `denied_actions`, stderr has the jetski line.
+    const seen: unknown[] = [];
+    const denied = [
+      step({ step_index: 2, state: 'ACTIVE', step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: 'echo hi > x.txt' } } }),
+      step({ step_index: 2, state: 'ERROR', step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: 'echo hi > x.txt' }, error: { type: 'TOOL_ERROR', message: 'permission check failed' } } }),
+      JSON.stringify({
+        event: 'result',
+        result: { conversation_id: 'c', status: 'SUCCESS', response: '', num_turns: 1, denied_actions: [{ action: 'command', display_name: 'RunCommand' }] },
+      }),
+    ].join('\n');
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(`${denied}\n`);
+      return {
+        exitCode: 0,
+        stdout: `${denied}\n`,
+        stderr: 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.',
+      };
+    });
+    const { runner } = makeRunner(proc);
+
+    const result = await runner.run({ ...baseInput, onActivity: (activity) => seen.push(activity) });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.raw).toContain('"denied_actions":[{"action":"command"');
+    expect(seen).toEqual([{ kind: 'tool', tool: 'run_command', target: 'echo hi > x.txt' }]);
+  });
+
+  it('keeps no step content in what a killed run carries to logs, and reports nothing twice', async () => {
+    const seen: unknown[] = [];
+    const killed = [
+      lines[0],
+      step({ step_index: 2, state: 'ACTIVE', step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: 'cat .env' } } }),
+      step({ step_index: 3, state: 'DONE', step_type: 'agent_response', text_delta: 'SECRET-FILE-CONTENT' }),
+    ].join('\n');
+    const proc = new FakeProcessRunner().always((options) => {
+      options.onStdout?.(`${killed}\n`);
+      return { exitCode: null, timedOut: true, stdout: `${killed}\n`, stderr: 'error: connection reset' };
+    });
+    const { runner } = makeRunner(proc);
+
+    const result = await runner.run({ ...baseInput, onActivity: (activity) => seen.push(activity) });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.raw).not.toContain('SECRET-FILE-CONTENT');
+    expect(result.raw).not.toContain('cat .env');
+    // Diagnosed from stderr, as under `json`: the init event is not the first thing a reader sees.
+    expect(result.raw).not.toContain('"event":"init"');
+    expect(result.raw).toContain('error: connection reset');
+    // Reported live, and not again when the stream was searched for its result line.
+    expect(seen).toEqual([
+      { kind: 'tool', tool: 'run_command', target: 'cat .env' },
+      { kind: 'text', text: 'SECRET-FILE-CONTENT' },
+    ]);
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TelemetryEntrySchema, type TelemetryEntry } from '../../src/contracts/index.js';
-import { durationBetween, groupBy, summariseConduct, summariseTelemetry } from '../../src/core/telemetry.js';
+import { durationBetween, groupBy, summariseConduct, summariseModelQuality, summariseTelemetry } from '../../src/core/telemetry.js';
 
 const entry = (overrides: Record<string, unknown> = {}): TelemetryEntry =>
   TelemetryEntrySchema.parse({
@@ -180,5 +180,60 @@ describe('durationBetween', () => {
 
   it('returns zero for something that is not a timestamp', () => {
     expect(durationBetween('not a date', '2026-08-10T20:00:00.000Z')).toBe(0);
+  });
+});
+
+/**
+ * Dogfood 08/10 — "medir a qualidade da entrega por modelo" (Luis): which model to put in which
+ * role is a decision to take with data. What a runner reported it spent, by role × model and
+ * by effort; and, for the models that wrote code, how often it passed first time and what the
+ * first code review found in it.
+ */
+describe('what each model spent and delivered (dogfood 08/10)', () => {
+  it('sums the tokens the runner reported, says how many reported, and carries no cost', () => {
+    const summary = summariseTelemetry([
+      entry({ usage: { model: 'a-model', inputTokens: 100, outputTokens: 40, costUsd: 0.5 } }),
+      entry({ usage: { model: 'a-model', inputTokens: 10, outputTokens: 4 } }),
+      entry(),
+    ]);
+
+    expect(summary.byModel['a-model']).toMatchObject({
+      inputTokens: 110,
+      outputTokens: 44,
+      usageReporting: 2,
+      count: 3,
+    });
+    expect(summary.byModel['a-model']).not.toHaveProperty('costUsd');
+  });
+
+  it('groups by role × model and by effort', () => {
+    const summary = summariseTelemetry([
+      entry({ role: 'planner', model: 'sonnet' }),
+      entry({ role: 'executor.complex', model: 'opus', reasoning: 'very_high' }),
+      entry({ role: 'executor.complex', model: 'opus', reasoning: 'very_high' }),
+    ]);
+
+    expect(Object.keys(summary.byRoleModel).sort()).toEqual(['executor.complex · opus', 'planner · sonnet']);
+    expect(summary.byRoleModel['executor.complex · opus']?.count).toBe(2);
+    expect(summary.byEffort['very_high']?.count).toBe(2);
+  });
+
+  it('credits each task’s first code review to the model that wrote the code', () => {
+    const task = (taskId: string, model: string, attempts: number, status = 'completed') =>
+      entry({ kind: 'task', stage: 'implementation', role: 'executor.normal', taskId, model, attempts, status });
+    const quality = summariseModelQuality(
+      [task('TASK-001', 'sonnet', 1), task('TASK-002', 'sonnet', 3), task('TASK-003', 'opus', 1), entry()],
+      [
+        { runId: 'AF-2026-001', taskId: 'TASK-001', round: 1, findings: [{ severity: 'high' }, { severity: 'low' }] },
+        // A re-review judges the fix, not what the model wrote first.
+        { runId: 'AF-2026-001', taskId: 'TASK-001', round: 2, findings: [{ severity: 'critical' }] },
+        { runId: 'AF-2026-001', taskId: 'TASK-003', round: 1, findings: [] },
+      ],
+    );
+
+    expect(quality).toEqual([
+      { model: 'opus', tasks: 1, firstAttempt: 1, reviewed: 1, findings: {} },
+      { model: 'sonnet', tasks: 2, firstAttempt: 1, reviewed: 1, findings: { high: 1, low: 1 } },
+    ]);
   });
 });

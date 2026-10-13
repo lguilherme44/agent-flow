@@ -139,6 +139,14 @@ export function describe(event: RunEvent, t: Dictionary): Sentence {
         detail: joined([text(d['role']), text(d['runner']), text(d['model']), text(d['reasoning'])]),
         tone: 'live',
       };
+    // What the agent is doing, while it does it (dogfood 08/10: the screen froze until a task
+    // ended). Named by its task, else by its stage; the file or command is the detail.
+    case 'agent_activity': {
+      const who = task ?? stage;
+      return text(d['kind']) === 'tool'
+        ? { title: e.agentTool(who, text(d['tool']) ?? '?'), detail: clip(text(d['target'])), tone: 'live' }
+        : { title: e.agentSays(who), detail: clip(text(d['text'])), tone: 'live' };
+    }
     case 'stage_output_received':
       return { title: e.stageAnswered(stage), detail: joined([text(d['runner']), text(d['model'])]), tone: 'live' };
     case 'stage_completed': {

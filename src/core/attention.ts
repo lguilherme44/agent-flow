@@ -205,14 +205,20 @@ function humanGateItems(input: AttentionInput): AttentionItem[] {
   }
 
   // The gate holds from the last task until the run completes, so it is also up while
-  // `review` runs and after a review that did not pass. Only the first is work for a person
-  // to start; the other two would ask for a review that is running or already read.
+  // `review` runs and after a review that did not pass. A running review is nobody's work.
+  // A review that ended NOT DONE is: it used to be hidden too — by a `reviewInProgress` that
+  // never ended — and run 75716 sat unnoticed for 23 hours that way (dogfood 09/10). It now
+  // says so, and `why` carries what is missing and the way out.
   if (runtime.gate?.gate === 'final_acceptance' && runtime.reviewInProgress !== true) {
     items.push(
       item({
         kind: 'final_review_required',
         runId,
-        what: say.attention.finalReviewWaiting,
+        // "Has not run" was false after a NOT DONE review, and the queue kept saying it (75716).
+        what:
+          runtime.lastReview?.done === false
+            ? say.attention.finalReviewNotDone
+            : say.attention.finalReviewWaiting,
         why: runtime.gate.action,
         since: lastEventAt(input.events, 'task_finished') ?? input.run.updatedAt,
         action: { kind: 'review', label: say.attention.runTheFinalReview, destructive: false },

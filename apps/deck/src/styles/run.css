@@ -1048,6 +1048,13 @@ input[type='checkbox'] {
   gap: var(--s-3);
   align-items: start;
 }
+/* Who moved the plan gate, read-only; the tone comes from [data-tone] in tokens.css. */
+.gate-decision {
+  margin: 0 0 var(--s-3);
+  font-size: var(--fs-2);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
 .run-review__finding p {
   margin: 0 0 var(--s-1);
   font-size: var(--fs-2);

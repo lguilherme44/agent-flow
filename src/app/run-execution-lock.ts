@@ -104,6 +104,11 @@ export const LOCK_OPERATIONS = [
    * race.
    */
   'revalidate',
+  /**
+   * A person closing a run the Definition of Done did not (dogfood 09/10). Held so a close
+   * cannot land in the middle of a `review` or a `run` that would write the status after it.
+   */
+  'complete',
 ] as const;
 export type LockOperation = (typeof LOCK_OPERATIONS)[number];
 

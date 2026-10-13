@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import {
   AnalyticsQuerySchema,
   AnswerRequestSchema,
+  CancelRequestSchema,
+  CompleteRequestSchema,
   ConfigApplyRequestSchema,
   ConfigEditorQuerySchema,
   CleanRequestSchema,
@@ -51,6 +53,11 @@ import {
   type RunnerView,
   type ServerEvent,
   type RunActor,
+  type GateDecision,
+  type HumanDecisionAction,
+  HUMAN_NAME_MAX_LENGTH,
+  HUMAN_WORDS_MAX_LENGTH,
+  readHumanDecision,
   LocaleQuerySchema,
   DEFAULT_LOCALE,
 } from '../contracts/index.js';
@@ -60,7 +67,7 @@ import {
   type DeviceSession,
   type RevokeSessionOutcome,
 } from '../app/device-sessions.js';
-import { checkSession, serializeSessionCookie } from './session-guard.js';
+import { checkSession, isPeerLoopback, serializeSessionCookie } from './session-guard.js';
 import { ConfigEditorTargetError, type ConfigEditOperation, type ConfigEditView, type ConfigTarget } from '../app/config-editor.js';
 import { ConfigSourceCodecError } from '../ports/config-source-codec.js';
 import { StateStore } from '../app/state-store.js';
@@ -74,6 +81,7 @@ import {
   answerTask,
   approve,
   cancel,
+  complete,
   createFeatureRun,
   describeApprovalGate,
   pause,
@@ -86,6 +94,7 @@ import {
   start,
   type ActionError,
   type ActionErrorCode,
+  type ReviewOutcome,
   type RunActionDeps,
 } from '../app/run-actions.js';
 import { loadConfig, loadConfigWithReport } from '../config/loader.js';
@@ -97,6 +106,7 @@ import { referencedRunners } from '../core/health.js';
 import { capabilitiesOf } from '../core/role.js';
 import { collectTelemetry } from '../app/telemetry.js';
 import { summariseTelemetry } from '../core/telemetry.js';
+import { SHORT_HEAD_LENGTH } from '../core/definition-of-done.js';
 import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import { RunReader } from './run-reader.js';
 import { CollaborationReader } from './collaboration-reader.js';
@@ -112,6 +122,7 @@ import {
   CLIENT_HEADER,
   checkHost,
   checkWrite,
+  decisionChannelOf,
   isWriteMethod,
 } from './request-guard.js';
 
@@ -463,6 +474,25 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     });
   });
 
+  /**
+   * A new pairing code, for the operator on this machine (dogfood 08–09/10).
+   *
+   * The console's `code` already did this without touching live sessions, but only when the
+   * hub had a terminal — and under autostart it never does, so pairing a second device meant
+   * restarting the hub and unpairing every device. Loopback only, judged from the socket
+   * (never a header): a paired device that could mint codes could pair whatever it liked.
+   */
+  app.post('/api/v1/pairing/code', (request, reply) => {
+    if (sessionStore === undefined) {
+      return reply.code(404).send({ error: 'not_found', message: say(request).pairingNotEnabled });
+    }
+    if (!isPeerLoopback(request.socket.remoteAddress, request.headers)) {
+      return reply.code(403).send({ error: 'forbidden', message: say(request).pairingCodeLocalOnly });
+    }
+    const code = sessionStore.issuePairingCode(options.processHost, options.clock).code.replace(/-/g, '');
+    return reply.code(200).send({ code: `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}` });
+  });
+
   app.get('/api/v1/sessions', (_request, reply) => {
     const now = options.clock ? Date.parse(options.clock.now()) : Date.now();
     const sessions = sessionStore !== undefined ? sessionStore.listSessions(now) : [];
@@ -645,6 +675,15 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const stages = await reader.stages(scope.project, scope.runId);
     return stages === null ? notFound(reply, say(request).noSuchRun) : stages;
+  });
+
+  /** Where the run's wall clock went (`core/run-timeline.ts` has the attribution rule). */
+  app.get('/api/v1/runs/:runId/timeline', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf, say(request));
+    if (scope === undefined) return undefined;
+
+    const timeline = await reader.timeline(scope.project, scope.runId);
+    return timeline === null ? notFound(reply, say(request).noSuchRun) : timeline;
   });
 
   /**
@@ -1079,7 +1118,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     // With the report, so the page names the project loosenings it refused (FR-027). Only
     // this route: every other load here wants the configuration and nothing else.
-    const { config, ignoredLoosenings } = await loadConfigWithReport({
+    const { config, ignoredLoosenings, unknownKeys } = await loadConfigWithReport({
       fs: options.fs,
       globalConfigPath: options.globalConfigPath,
       projectDir: project.path,
@@ -1097,6 +1136,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       host: options.processHost,
       config,
       ignoredLoosenings,
+      unknownKeys,
       projectDir: project.path,
       promptsDir: options.promptsDir,
       installProbe: query.data.install === true,
@@ -1322,6 +1362,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       session !== undefined
         ? { kind: 'device', deviceId: session.deviceId, label: session.label }
         : { kind: 'keyboard' };
+    const headers = (request as { headers?: Record<string, unknown> } | undefined)?.headers;
 
     return {
       fs: options.fs,
@@ -1335,10 +1376,60 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       // the server is what has the run.
       owner: 'server',
       actor,
+      // Every operator action records the channel it came through, derived from the
+      // request exactly as a gate decision's is — never read from the body.
+      ...(headers === undefined ? {} : { channel: channelOf(headers) }),
       // §93.1: the reader's language reaches the use case with the request, so a refusal
       // and the button that produced it are never in two languages.
       say,
     };
+  };
+
+  /**
+   * Who decided, for a human decision — an approve, reject, revise, answer or cancel — or the
+   * 400 to send.
+   *
+   * **The channel is derived here, never read from the body** (`decisionChannelOf`): the
+   * request schema has no field for it, so a client cannot say it is the Deck. An API client
+   * — an AI or a script — must send `decidedBy`, because the name and the words are the only
+   * thing that says a human decided. The Deck may omit it and keeps working unchanged: its
+   * buttons send no name, so the server fills one from the paired device's label (or the
+   * fixed `Deck` label on loopback, which has no session) and words that say what was
+   * clicked. Judged here as well as in the use case so revise, a job, refuses with a 400
+   * rather than a 202 whose job then fails.
+   */
+  const humanDecisionFor = (
+    request: { readonly headers: Record<string, unknown>; readonly query?: unknown },
+    given: { readonly by?: string; readonly words?: string } | undefined,
+    action: HumanDecisionAction,
+  ): { readonly ok: true; readonly value: GateDecision } | { readonly ok: false; readonly message: string } => {
+    const channel = channelOf(request.headers);
+
+    if (given === undefined) {
+      if (channel === 'api') return { ok: false, message: say(request).decidedByRequired };
+      const label = (request as { deviceSession?: DeviceSession }).deviceSession?.label.trim();
+      return {
+        ok: true,
+        value: {
+          by: label === undefined || label === '' ? DECK_DECIDER : label,
+          words: DECK_WORDS[action],
+          channel,
+        },
+      };
+    }
+
+    const read = readHumanDecision(given);
+    if (!read.ok) {
+      const actions = sayFor(request.query).actions;
+      return {
+        ok: false,
+        message:
+          read.field === 'by'
+            ? actions.decisionNeedsName(HUMAN_NAME_MAX_LENGTH)
+            : actions.decisionNeedsWords(HUMAN_WORDS_MAX_LENGTH),
+      };
+    }
+    return { ok: true, value: { ...read.value, channel } };
   };
 
   /** The lock, for the pre-flight read. Acquisition belongs to the use cases. */
@@ -1467,12 +1558,15 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const body = ApproveRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidApproveRequest);
+    const decision = humanDecisionFor(request, body.data.decidedBy, 'approve');
+    if (!decision.ok) return badRequest(reply, decision.message);
 
     // No hash crosses this boundary. The use case reads the plan on disk and
     // hashes it, so there is no version of this call that approves a plan the
     // person did not see (§90).
     const outcome = await approve(depsFor(scope.project, sayFor(request.query), request), scope.runId, {
       force: body.data.force,
+      decidedBy: decision.value,
     });
 
     if (!outcome.ok) return rejectAction(reply, outcome.error);
@@ -1480,6 +1574,9 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       planHash: outcome.value.planHash,
       taskCount: outcome.value.taskCount,
       forced: outcome.value.forced,
+      // Echoed so a client can tell the decision was attributed — a hub that predates
+      // `decidedBy` answers without it, and the MCP server says so rather than assuming.
+      decidedBy: decision.value,
     });
   });
 
@@ -1489,10 +1586,17 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const body = RejectRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidRejectRequest);
+    const decision = humanDecisionFor(request, body.data.decidedBy, 'reject');
+    if (!decision.ok) return badRequest(reply, decision.message);
 
-    const outcome = await reject(depsFor(scope.project, sayFor(request.query), request), scope.runId, body.data.reason);
+    const outcome = await reject(
+      depsFor(scope.project, sayFor(request.query), request),
+      scope.runId,
+      body.data.reason,
+      decision.value,
+    );
     if (!outcome.ok) return rejectAction(reply, outcome.error);
-    return actionResult(scope.runId, outcome.warnings);
+    return actionResult(scope.runId, outcome.warnings, { decidedBy: decision.value });
   });
 
   app.post('/api/v1/runs/:runId/tasks/:taskId/retry', async (request, reply) => {
@@ -1505,9 +1609,17 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const body = RetryRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidRetryRequest);
 
+    // `force` and `expectNoChange` each overrule a gate, so they are a human decision like a
+    // gate move: named by an API client, filled from the session for the Deck. A plain retry
+    // carries no name; its channel is recorded all the same.
+    const override = body.data.force || body.data.expectNoChange;
+    const decision = override ? humanDecisionFor(request, body.data.decidedBy, 'retry') : undefined;
+    if (decision !== undefined && !decision.ok) return badRequest(reply, decision.message);
+
     const outcome = await retryTask(depsFor(project, sayFor(request.query), request), params.data.runId, params.data.taskId, {
       force: body.data.force,
       expectNoChange: body.data.expectNoChange,
+      ...(decision === undefined ? {} : { decidedBy: decision.value }),
     });
 
     if (!outcome.ok) return rejectAction(reply, outcome.error);
@@ -1515,6 +1627,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       taskId: outcome.value.taskId,
       attempts: outcome.value.attempts,
       forced: outcome.value.forced,
+      ...(decision === undefined ? {} : { decidedBy: decision.value }),
     });
   });
 
@@ -1535,12 +1648,15 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const body = AnswerRequestSchema.safeParse(request.body ?? {});
     if (!body.success) return badRequest(reply, say(request).invalidAnswerRequest);
+    const decision = humanDecisionFor(request, body.data.decidedBy, 'answer');
+    if (!decision.ok) return badRequest(reply, decision.message);
 
     const outcome = await answerTask(
       depsFor(project, sayFor(request.query), request),
       params.data.runId,
       params.data.taskId,
       body.data.text,
+      decision.value,
     );
 
     if (!outcome.ok) return rejectAction(reply, outcome.error);
@@ -1548,6 +1664,7 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       taskId: outcome.value.taskId,
       attempts: outcome.value.attempts,
       amendmentId: outcome.value.amendmentId,
+      decidedBy: decision.value,
     });
   });
 
@@ -1631,7 +1748,18 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     const scope = resolveRun(request, reply, projectOf, say(request));
     if (scope === undefined) return undefined;
 
-    const outcome = await cancel(depsFor(scope.project, sayFor(request.query), request), scope.runId);
+    // Irreversible, so a human decision like the gate's: an API client names the human,
+    // the Deck's empty body is filled from the session.
+    const body = CancelRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, say(request).decidedByRequired);
+    const decision = humanDecisionFor(request, body.data.decidedBy, 'cancel');
+    if (!decision.ok) return badRequest(reply, decision.message);
+
+    const outcome = await cancel(
+      depsFor(scope.project, sayFor(request.query), request),
+      scope.runId,
+      decision.value,
+    );
     if (!outcome.ok) return rejectAction(reply, outcome.error);
 
     return actionResult(scope.runId, outcome.warnings, {
@@ -1639,6 +1767,36 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
       alreadyCancelled: outcome.value.alreadyCancelled,
       interrupted: [...outcome.value.interrupted],
       executing: outcome.value.executing,
+      // Only when this request's cancel was the one recorded: a repeat records nothing, and
+      // echoing a decision then would claim an attribution the run does not hold.
+      ...(outcome.value.alreadyCancelled ? {} : { decidedBy: decision.value }),
+    });
+  });
+
+  // A person closing a run the Definition of Done did not (dogfood 09/10, run 75716). Same
+  // shape as cancel: terminal, so a human decision; the rules are the use case's.
+  app.post('/api/v1/runs/:runId/complete', async (request, reply) => {
+    const scope = resolveRun(request, reply, projectOf, say(request));
+    if (scope === undefined) return undefined;
+
+    const body = CompleteRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) return badRequest(reply, say(request).decidedByRequired);
+    const decision = humanDecisionFor(request, body.data.decidedBy, 'complete');
+    if (!decision.ok) return badRequest(reply, decision.message);
+
+    const outcome = await complete(
+      depsFor(scope.project, sayFor(request.query), request),
+      scope.runId,
+      decision.value,
+      body.data.pr === undefined ? {} : { pr: body.data.pr },
+    );
+    if (!outcome.ok) return rejectAction(reply, outcome.error);
+
+    return actionResult(scope.runId, outcome.warnings, {
+      alreadyCompleted: outcome.value.alreadyCompleted,
+      overrode: [...outcome.value.overrode],
+      // As for cancel: echoed only when this request's decision is the one recorded.
+      ...(outcome.value.alreadyCompleted ? {} : { decidedBy: decision.value }),
     });
   });
 
@@ -1704,13 +1862,16 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
     if (!body.success) {
       return badRequest(reply, say(request).revisionNeedsInstruction);
     }
+    const decision = humanDecisionFor(request, body.data.decidedBy, 'revise');
+    if (!decision.ok) return badRequest(reply, decision.message);
 
     const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
     const instruction = body.data.instruction;
+    const decidedBy = decision.value;
 
-    return await startJob(reply, scope.project, 'revise', runId, say(request), async () => {
-      const outcome = await revise(deps, runId, instruction);
+    const view = await startJob(reply, scope.project, 'revise', runId, say(request), async () => {
+      const outcome = await revise(deps, runId, instruction, decidedBy);
       if (!outcome.ok) return { error: outcome.error };
 
       return {
@@ -1722,6 +1883,8 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
         ),
       };
     });
+    // The 202 carries the decision the job will record, as approve's 200 does.
+    return 'id' in view ? { ...view, decidedBy } : view;
   });
 
   /**
@@ -1742,20 +1905,31 @@ export async function buildServer(options: ServerOptions): Promise<RunningServer
 
     const deps = depsFor(scope.project, sayFor(request.query), request);
     const runId = scope.runId;
-    const fix = body.data.fix;
+    const { fix, e2eObserved, observedBy, e2eHead, evidence } = body.data;
+    // Evidence paths name files on the machine the hub runs on, so only that machine may send
+    // them: from a paired phone they would point the hub at its own files (adversarial review).
+    if (evidence !== undefined && !isPeerLoopback(request.socket.remoteAddress, request.headers)) {
+      return reply.code(403).send({ error: 'forbidden', message: say(request).evidenceLocalOnly });
+    }
 
     return await startJob(reply, scope.project, 'review', runId, say(request), async () => {
-      const outcome = await review(deps, runId, fix ? { fix: true } : {});
+      const outcome = await review(deps, runId, {
+        ...(fix ? { fix: true } : {}),
+        // The schema refuses one without the other, so both are here or neither is.
+        ...(e2eObserved === undefined || observedBy === undefined
+          ? {}
+          : {
+              e2eObservation: {
+                by: observedBy,
+                words: e2eObserved,
+                ...(e2eHead === undefined ? {} : { head: e2eHead }),
+                ...(evidence === undefined ? {} : { evidence }),
+              },
+            }),
+      });
       if (!outcome.ok) return { error: outcome.error };
 
-      const judged = outcome.value;
-      return {
-        summary: judged.done.done
-          ? 'Definition of Done satisfied; the run is complete.'
-          : `Not done: ${judged.done.missing.join('; ')}${
-              judged.corrective === undefined ? '' : ' — corrective tasks were created.'
-            }`,
-      };
+      return { summary: reviewJobSummary(outcome.value) };
     });
   });
 
@@ -2015,6 +2189,40 @@ function refuseGuard(
   done();
 }
 
+/**
+ * Who decided, for a Deck click on loopback, where no device is paired and so no label names
+ * the person. A fixed word, never a guess at the OS user: a name the server made up would
+ * look like one a human gave.
+ */
+const DECK_DECIDER = 'Deck';
+
+/**
+ * What a Deck click said, for its record. English, like every other sentence a run records:
+ * it is read back out of `events.jsonl`, not rendered through the reader's phrase book.
+ */
+const DECK_WORDS: Readonly<Record<HumanDecisionAction, string>> = {
+  approve: 'approved in the Deck',
+  reject: 'rejected in the Deck',
+  revise: 'revised in the Deck',
+  answer: 'answered in the Deck',
+  cancel: 'cancelled in the Deck',
+  retry: 'retried over the gate in the Deck',
+  complete: 'completed in the Deck',
+};
+
+/**
+ * The channel a write came through, from the headers the guard already judged
+ * (`decisionChannelOf`): `deck` for this server's own Origin, `api` for anything else.
+ */
+function channelOf(headers: Record<string, unknown>): 'deck' | 'api' {
+  const origin = headers['origin'];
+  const host = headers['host'];
+  return decisionChannelOf(
+    typeof origin === 'string' ? { origin } : {},
+    typeof host === 'string' ? host : undefined,
+  );
+}
+
 function badRequest(
   reply: { code(status: number): { send(body: unknown): unknown } },
   message: string,
@@ -2036,6 +2244,42 @@ function editorTarget(query: { scope: 'global' | 'project'; projectId?: string }
     scope: query.scope,
     ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
   };
+}
+
+/**
+ * The review job's one line, which is all an HTTP caller gets of the Definition of Done.
+ *
+ * It used to name only the unmet conditions — "Not done: e2e exercised the change and
+ * passed" — while the reason and the remedy lived in each condition's `detail`, which only
+ * the terminal printed. It also said "corrective tasks were created" for any round,
+ * including one that found nothing actionable or produced a plan that would not validate.
+ * Rendering only: every word here comes from the outcome the use case returned.
+ */
+export function reviewJobSummary(judged: ReviewOutcome): string {
+  if (judged.done.done) return 'Definition of Done satisfied; the run is complete.';
+
+  const unmet = judged.done.conditions
+    .filter((condition) => !condition.met)
+    .map((condition) =>
+      condition.detail === undefined ? condition.name : `${condition.name} (${condition.detail})`,
+    );
+  const round = judged.corrective;
+  // Addressed to whoever polls the job, usually an AI: it asks for the human, by name and
+  // in their words, and names the build they must test.
+  const short = judged.integration?.head.slice(0, SHORT_HEAD_LENGTH);
+  const after = judged.awaitingObservation
+    ? ' — no corrective round: only the human observing the change on the target can meet it. ' +
+      `Ask the human to exercise ${short === undefined ? 'the change' : `build ${short}`} on the ` +
+      'target, then review again with their words in e2eObserved and their name in observedBy' +
+      (short === undefined ? '.' : ` (and e2eHead: "${short}").`)
+    : round === undefined
+      ? ''
+      : round.outcome === 'applied'
+        ? ` — ${String(round.added.length)} corrective task(s) added; the corrected plan's review: ${round.review.verdict}.`
+        : round.outcome === 'invalid_plan'
+          ? ' — the corrective tasks would not form a valid plan, so nothing was written.'
+          : ' — no finding was severe enough to become a corrective task.';
+  return `Not done: ${unmet.join('; ')}${after}`;
 }
 
 function editorView(view: ConfigEditView) {

@@ -43,6 +43,7 @@ import {
   type WorkflowRole,
 } from '../contracts/index.js';
 import type { IgnoredLoosening } from '../config/resolver.js';
+import type { RunnerCapabilities } from '../ports/agent-runner.js';
 import type { FileSystem } from '../ports/file-system.js';
 import type { Host } from '../ports/host.js';
 import type { ProcessRunner } from '../ports/process-runner.js';
@@ -123,6 +124,14 @@ export type CapabilityObservation =
        * reported" is not "nothing", and rendering one as the other would be a false finding.
        */
       readonly commandGrants?: RunnerCommandGrants;
+      /**
+       * Every turn ceiling this role's work runs under, and whether the runner serving it
+       * enforces one (`supportsMaxTurns`): the role's own, each stage override that changes
+       * the ceiling or the runner, and the fallback's — which carries the primary's ceiling
+       * when it declares none. Absent when there is none; `enforced: false` is what `doctor`
+       * warns about, because the number is in the config and bounds nothing on that runner.
+       */
+      readonly turnCeilings?: readonly TurnCeiling[];
     }
   | {
       /**
@@ -146,6 +155,17 @@ export type CapabilityObservation =
       readonly errorKind: string;
       readonly reason: string;
     };
+
+/** One turn ceiling and the runner that has to enforce it. */
+export interface TurnCeiling {
+  /** `role` for the role's own, `stage` for a stage override, `fallback` for the fallback route. */
+  readonly scope: 'role' | 'stage' | 'fallback';
+  /** The stage, for `scope: 'stage'`. */
+  readonly stage?: string;
+  readonly runner: string;
+  readonly maxTurns: number;
+  readonly enforced: boolean;
+}
 
 /** A pipeline stage, the role that serves it, and the prompt it renders. */
 export interface StageRouting {
@@ -317,6 +337,8 @@ export interface DiagnoseOptions {
    * says what was dropped, and re-reading the files here would be a second resolver.
    */
   readonly ignoredLoosenings?: readonly IgnoredLoosening[];
+  /** Keys of the project file nothing reads, from `loadConfigWithReport` (dogfood 09/10). */
+  readonly unknownKeys?: readonly string[];
   readonly projectDir: string;
   readonly promptsDir: string;
   /** Reads an environment variable, for a runner configured with `apiKeyEnv`. */
@@ -433,7 +455,7 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     capabilities: registry.capabilities(),
     promptLoader: new PromptLoader({ fs, promptsDir }),
   });
-  const capabilities = observeCapabilities(routes, registry.capabilities());
+  const capabilities = observeCapabilities(routes, registry.capabilities(), config.global);
 
   // The capability report is by role, which is how configuration is written. These two are
   // by stage and by runner, which is how routing actually lands — the three views disagree
@@ -506,8 +528,20 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
   // the repository's opinion, and naming `trust.projectConfig` is the whole remediation.
   // Without it, a project whose `--allowedTools` grants stopped applying would find out from
   // an agent that returned BLOCKED on a denied command, with nothing pointing back here.
+  // A turn ceiling the project tried to raise has its own sentence: trust would not let it
+  // apply, so the trust remediation would send the operator the wrong way.
   const ignoredLoosenings = (options.ignoredLoosenings ?? []).map((loosening) =>
-    say.doctor.projectLooseningIgnored(loosening.path.join('.')),
+    loosening.kind === 'max_turns'
+      ? say.doctor.projectMaxTurnsIgnored(loosening.path.join('.'), String(loosening.value ?? ''))
+      : say.doctor.projectLooseningIgnored(loosening.path.join('.')),
+  );
+
+  // One note per project key the schema strips unread (dogfood 09/10): `lint_testes` under
+  // `commands:` vanished, and the only sign was a plan that never used it.
+  const unknownKeys = (options.unknownKeys ?? []).map((key) =>
+    key.startsWith('commands.')
+      ? say.doctor.unknownCommandKey(key, key.slice('commands.'.length))
+      : say.doctor.unknownProjectKey(key),
   );
 
   // Why the executor was granted none of the declared commands, when the reason is trust
@@ -548,6 +582,7 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
       ...untrustedCommands,
       ...excludedCommands,
       ...ignoredLoosenings,
+      ...unknownKeys,
       ...envExposure,
     ],
   };
@@ -607,6 +642,11 @@ function exclusionReason(reason: CommandGrantExclusionReason, say: Phrases): str
 export function observeCapabilities(
   routes: readonly RoleRoute[],
   capabilities: RunnerCapabilitiesMap,
+  /**
+   * The roles and fallbacks, for the stage and fallback ceilings. Optional: without it only
+   * the role's own ceiling is reported, which is what a caller holding just routes can know.
+   */
+  config?: Pick<GlobalConfig, 'roles' | 'fallback'>,
 ): CapabilityObservation[] {
   const observations: CapabilityObservation[] = [];
 
@@ -658,10 +698,75 @@ export function observeCapabilities(
         const grants = permissions === 'write' ? runnerCommandGrants(declared.nonInteractiveToolGrants) : undefined;
         return grants === undefined ? {} : { commandGrants: grants };
       })(),
+      ...(() => {
+        const ceilings = turnCeilingsOf(route, resolved.runner, declared, capabilities, config);
+        return ceilings.length === 0 ? {} : { turnCeilings: ceilings };
+      })(),
     });
   }
 
   return observations;
+}
+
+/**
+ * The ceilings a role's work runs under, each against the runner that must enforce it.
+ *
+ * The same resolution the runtime does: `roleConfigForStage` for a stage, and for the
+ * fallback its own `maxTurns`, else the primary's — `FallbackRunner` carries the primary's
+ * ceiling over when the fallback declares none.
+ */
+function turnCeilingsOf(
+  route: RoleRoute,
+  runner: string,
+  declared: RunnerCapabilities,
+  capabilities: RunnerCapabilitiesMap,
+  config: Pick<GlobalConfig, 'roles' | 'fallback'> | undefined,
+): TurnCeiling[] {
+  const enforcedBy = (id: string, model: string | undefined): boolean =>
+    capabilitiesOf(capabilities, id, model)?.supportsMaxTurns === true;
+  const ceilings: TurnCeiling[] = [];
+  const roleTurns = route.configured.maxTurns;
+
+  if (roleTurns !== undefined) {
+    ceilings.push({ scope: 'role', runner, maxTurns: roleTurns, enforced: declared.supportsMaxTurns === true });
+  }
+  if (config === undefined) return ceilings;
+
+  const roleConfig = roleConfigOf(config.roles, route.role);
+  for (const [stage, override] of Object.entries(roleConfig.stages)) {
+    // Only a stage that changes something a ceiling depends on; the rest repeat the role line.
+    if (override.maxTurns === undefined && override.runner === undefined && override.model === undefined) continue;
+    const effective = roleConfigForStage(config.roles, route.role, stage);
+    if (effective.maxTurns === undefined) continue;
+    ceilings.push({
+      scope: 'stage',
+      stage,
+      runner: effective.runner,
+      maxTurns: effective.maxTurns,
+      enforced: enforcedBy(effective.runner, effective.model),
+    });
+  }
+
+  // What `FallbackRunner` hands the fallback: the lower of its own ceiling and the primary's
+  // for that stage. One line for the role, and one per stage whose primary ceiling differs.
+  const fallback = route.fallback;
+  if (fallback !== undefined) {
+    const own = config.fallback.roles[route.role]?.maxTurns;
+    const enforced = enforcedBy(fallback.runner, fallback.model);
+    const roleLevel = lowerOf(own, roleTurns);
+    if (roleLevel !== undefined) {
+      ceilings.push({ scope: 'fallback', runner: fallback.runner, maxTurns: roleLevel, enforced });
+    }
+    for (const stage of Object.keys(roleConfig.stages)) {
+      const stageTurns = roleConfigForStage(config.roles, route.role, stage).maxTurns;
+      if (stageTurns === undefined || stageTurns === roleTurns) continue;
+      const carried = lowerOf(own, stageTurns);
+      if (carried === undefined || carried === roleLevel) continue;
+      ceilings.push({ scope: 'fallback', stage, runner: fallback.runner, maxTurns: carried, enforced });
+    }
+  }
+
+  return ceilings;
 }
 
 /**
@@ -1191,4 +1296,11 @@ function getRunnerAuthGuide(runnerId: string, say: Phrases): string | undefined 
     default:
       return undefined;
   }
+}
+
+/** The lower of two optional ceilings; absent only when both are. */
+function lowerOf(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return Math.min(a, b);
 }

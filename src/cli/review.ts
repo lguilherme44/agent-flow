@@ -1,9 +1,17 @@
+import { resolve as resolvePath } from 'node:path';
 import { ReviewResultSchema, type ReviewResult } from '../contracts/index.js';
-import { review, type ReviewOutcome } from '../app/run-actions.js';
+import { review, type ReviewOutcome, type RunActionDeps } from '../app/run-actions.js';
+import { nodeInstructionIO } from './feature.js';
+import {
+  OBSERVATION_WORDING,
+  readInstruction,
+  type InstructionIO,
+} from './instruction-source.js';
 import type { CorrectiveRound } from '../app/corrective-round.js';
-import type {
-  checkDefinitionOfDone,
-  MechanicalVerification,
+import {
+  SHORT_HEAD_LENGTH,
+  type checkDefinitionOfDone,
+  type MechanicalVerification,
 } from '../core/definition-of-done.js';
 import { ExitCode, type ExitCodeValue } from './exit-codes.js';
 import { renderError } from './render/errors.js';
@@ -27,12 +35,109 @@ import type { GlobalOptions } from './index.js';
  * and what is left here is what a CLI is for: turning an outcome into words and
  * an exit code.
  */
+export interface ReviewCommandOptions {
+  readonly fix?: boolean;
+  /** `--e2e-observed "<text>"`, or `-` to read stdin. */
+  readonly e2eObserved?: string;
+  /** `--e2e-observed-file <path>`, for an observation a shell argument would mangle. */
+  readonly e2eObservedFile?: string;
+  /** `--observed-by <name>`: the human who observed it. Required with an observation. */
+  readonly observedBy?: string;
+  /** `--e2e-head <sha>`: the build the human tested, checked against the head under review. */
+  readonly e2eHead?: string;
+  /** `--evidence <files...>`: images of what the human saw, copied into the run (dogfood 09/10). */
+  readonly evidence?: readonly string[];
+}
+
+type ObservationInput = {
+  readonly by: string;
+  readonly words: string;
+  readonly head?: string;
+  readonly evidence?: readonly string[];
+};
+
+/** The seams a test replaces. The defaults are what every real invocation uses. */
+export interface ReviewCommandDeps {
+  readonly io: InstructionIO;
+  readonly actionDeps: (globals: GlobalOptions) => RunActionDeps;
+}
+
+/**
+ * The observation — the human's words from exactly one of the two text flags, their name,
+ * and the build they tested — or none, when no observation flag was given. Read before
+ * anything about the run, as `answer` reads its text (FR-001).
+ *
+ * **A name is required.** The run records this terminal as `keyboard`, which an AI driving
+ * the CLI is too, so the name is the only thing that says a person saw it. The name's bound
+ * and the words' are the use case's to judge (`HumanDecision`); here only presence.
+ */
+export async function readObservation(
+  options: ReviewCommandOptions,
+  io: InstructionIO,
+): Promise<{ ok: true; observation?: ObservationInput } | { ok: false; reason: string }> {
+  const textGiven = options.e2eObserved !== undefined || options.e2eObservedFile !== undefined;
+  const evidenceGiven = (options.evidence ?? []).length > 0;
+  if (!textGiven && (options.observedBy !== undefined || options.e2eHead !== undefined || evidenceGiven)) {
+    return {
+      ok: false,
+      reason:
+        '--observed-by, --e2e-head and --evidence describe an observation: give it with --e2e-observed ' +
+        '"<their words>" or --e2e-observed-file <path>.',
+    };
+  }
+  if (textGiven && (options.observedBy === undefined || options.observedBy.trim() === '')) {
+    return {
+      ok: false,
+      reason:
+        'Name the human who observed it: --observed-by "<their name>". ' +
+        'agent-flow records this terminal as keyboard, so the name is what says a person saw it.',
+    };
+  }
+  if (options.e2eObserved !== undefined && options.e2eObservedFile !== undefined) {
+    return {
+      ok: false,
+      reason:
+        'Give the observation one way only: --e2e-observed "<text>" (or - for stdin), ' +
+        'or --e2e-observed-file <path>.',
+    };
+  }
+  const source =
+    options.e2eObservedFile !== undefined
+      ? { kind: 'file' as const, path: options.e2eObservedFile }
+      : options.e2eObserved === '-'
+        ? { kind: 'stdin' as const }
+        : options.e2eObserved !== undefined
+          ? { kind: 'argument' as const, instruction: options.e2eObserved }
+          : undefined;
+  if (source === undefined) return { ok: true };
+
+  const read = await readInstruction(source, io, OBSERVATION_WORDING);
+  if (!read.ok) return { ok: false, reason: read.reason };
+  const head = options.e2eHead?.trim();
+  return {
+    ok: true,
+    observation: {
+      by: (options.observedBy ?? '').trim(),
+      words: read.instruction,
+      ...(head === undefined ? {} : { head }),
+      ...(evidenceGiven ? { evidence: [...(options.evidence ?? [])] } : {}),
+    },
+  };
+}
+
 export async function runReviewCommand(
-  options: { fix?: boolean },
+  options: ReviewCommandOptions,
   globals: GlobalOptions,
+  seams: ReviewCommandDeps = { io: nodeInstructionIO('observation'), actionDeps },
 ): Promise<ExitCodeValue> {
   try {
-    const deps = actionDeps(globals);
+    const observation = await readObservation(options, seams.io);
+    if (!observation.ok) {
+      process.stderr.write(`${observation.reason}\n`);
+      return ExitCode.CONFIG_ERROR;
+    }
+
+    const deps = seams.actionDeps(globals);
     const runId = await currentRunId(deps);
     if (runId === null) {
       process.stderr.write('No active run.\n');
@@ -41,6 +146,17 @@ export async function runReviewCommand(
 
     const outcome = await review(deps, runId, {
       ...(options.fix === undefined ? {} : { fix: options.fix }),
+      ...(observation.observation === undefined
+        ? {}
+        : {
+            e2eObservation: {
+              ...observation.observation,
+              // Relative to where the command was typed, as a person reads a path they typed.
+              ...(observation.observation.evidence === undefined
+                ? {}
+                : { evidence: observation.observation.evidence.map((file) => resolvePath(globals.cwd, file)) }),
+            },
+          }),
       onStage: (stage) => {
         process.stdout.write(`${STAGE_HEADINGS[stage]}\n`);
       },
@@ -58,14 +174,24 @@ export async function runReviewCommand(
 
     process.stdout.write(`\n${renderOutcome(outcome.value)}\n`);
 
+    if (outcome.value.observationRecorded !== undefined) {
+      process.stdout.write(
+        `\nThe observation was recorded as ${outcome.value.observationRecorded.amendmentId}` +
+          (outcome.value.integration === undefined
+            ? ', for this review only (sequential mode names no commit).\n'
+            : `, for ${outcome.value.integration.head}.\n`),
+      );
+    }
+
     if (outcome.value.done.done) return ExitCode.OK;
 
-    if (outcome.value.corrective !== undefined) {
-      process.stdout.write(`\n${renderCorrectiveRound(outcome.value.corrective)}\n`);
-    } else if (options.fix === true) {
-      process.stderr.write(
-        '\nThis run has no architecture impact artifact, which the plan review needs.\n',
+    if (outcome.value.awaitingObservation === true) {
+      process.stdout.write(
+        `\n${awaitingObservationText(outcome.value.integration?.head)}\n` +
+          (options.fix === true ? '\n--fix ran no corrective round: no task can reach the target.\n' : ''),
       );
+    } else if (outcome.value.corrective !== undefined) {
+      process.stdout.write(`\n${renderCorrectiveRound(outcome.value.corrective)}\n`);
     }
 
     return ExitCode.GATE_NOT_SATISFIED;
@@ -74,6 +200,35 @@ export async function runReviewCommand(
     process.stderr.write(`${rendered.message}\n`);
     return rendered.exitCode;
   }
+}
+
+/**
+ * What review says when e2e NOT_RUN is all that is missing. A FIX task cannot reach a
+ * device; a person holding one can.
+ *
+ * **Addressed to the reader, who is usually an AI — so it asks for the human.** The first
+ * version said "exercise the change on the target yourself, then record what you saw",
+ * which told an AI to attest on its own observation. It names the build, so the human can
+ * confirm the one they test is the one under review.
+ */
+export function awaitingObservationText(head: string | undefined): string {
+  const short = head?.slice(0, SHORT_HEAD_LENGTH);
+  const headFlag = short === undefined ? '' : ` --e2e-head ${short}`;
+  return [
+    'Only the e2e observation is missing: agent-flow could not exercise the change on its',
+    'target, and reviewing again will not change that.',
+    '',
+    ...(short === undefined
+      ? [
+          'Ask the human to exercise the change on the target. No commit names this tree, so',
+          'their observation counts only for the review it is recorded with.',
+        ]
+      : [`Ask the human to exercise build ${short} on the target and confirm it is that build.`]),
+    'Then record their words and their name, quoted:',
+    '',
+    `  agent-flow review --e2e-observed "<their words>" --observed-by "<their name>"${headFlag}`,
+    `  agent-flow review --e2e-observed-file <path> --observed-by "<their name>"${headFlag}`,
+  ].join('\n');
 }
 
 const STAGE_HEADINGS = {
@@ -118,6 +273,13 @@ export function renderOutcome(outcome: ReviewOutcome): string {
       outcome.done,
     ),
   );
+
+  // What the e2e agent saved, where a person can open it (dogfood 09/10). Run-relative on
+  // disk, so the path printed is the one under the project the command ran in.
+  if (outcome.e2eEvidence !== undefined && outcome.e2eEvidence.length > 0) {
+    lines.push('', 'E2E screenshots:');
+    for (const path of outcome.e2eEvidence) lines.push(`  .agent-flow/runs/${outcome.runId}/${path}`);
+  }
 
   // §19.3: the product of an isolated run is a branch, and the last thing the
   // command prints has to say where the code is. The user's working tree was not

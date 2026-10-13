@@ -137,6 +137,10 @@ test.describe('Deck active crew configuration', () => {
     // `architect` routes to `claude`, so the ids offered are the ones that runner reports —
     // once, in one list: it used to be a text box and a select offering the same models.
     const model = page.getByLabel('roles.architect.model');
+    // The models are their own request ("costs a spawn"), so the field is a text box until
+    // they arrive. Read once they are drawn: reading at the heading raced the request and
+    // lost on CI once the page's first render grew.
+    await expect.poll(() => model.locator('option').count(), { timeout: 20_000 }).toBeGreaterThan(2);
     const offered = await model.locator('option').evaluateAll((options) =>
       options.map((option) => option.getAttribute('value')));
     // First the way back to inheriting, last the way out to type any other id.

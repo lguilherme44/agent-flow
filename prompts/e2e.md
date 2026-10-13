@@ -37,10 +37,9 @@ do not invent a start command, and never type a real person's credentials.
   credential, never put one in a finding, never pass one on a command line another process can read
   when a file or variable is available.
 - If the instructions do not say how to reach the application, or it does not answer, do not test
-  something else instead. That is a fact about the environment, not a defect of the change, and it
-  must not become corrective work: return `PASS` with a summary that starts with `NOT RUN:` and one
-  `info` finding of type `e2e_failure` saying exactly what was missing. Never a `PASS` whose summary
-  implies the behaviour was exercised.
+  something else instead. That is a fact about the environment, not a defect of the change: return
+  verdict `NOT_RUN` with one `info` finding of type `e2e_failure` saying exactly what was missing.
+  `NOT_RUN` keeps the run from completing until someone exercises the change — it is never a pass.
 
 ## Deterministic suite first, exploration second
 
@@ -82,13 +81,15 @@ accessibility tree with element references (`@e1`, `@e2`, …).
    placeholder; this does:
    `agent-browser eval "document.querySelector('flt-semantics-placeholder')?.click()"`
    then wait a second and snapshot again. After that, fill, click and read text work as on any page.
-6. **Evidence:** screenshots go under `${TMPDIR:-${TEMP:-/tmp}}`, never into the repository. Name the
-   file in the finding it supports.
+6. **Evidence:** save a PNG of each key state you checked — and of what stopped you, on a NOT_RUN —
+   into `{{evidenceDir}}`: `agent-browser screenshot "{{evidenceDir}}/01-<state>.png"`, numbered in the
+   order you saw them. That folder belongs to this run, outside the repository; the human reads the
+   images there. Never save one into the repository. Name the file in the finding it supports.
 7. **Close your session** when done: `agent-browser --session <name> close`.
 
 Native mobile apps (Android, iOS) cannot be driven by `agent-browser`. If the change can only be
-observed there, say so in the summary and return `PASS` with one `info` finding stating that the
-behaviour was not exercised end to end — never a `PASS` that implies it was.
+observed there, return `NOT_RUN` with one `info` finding naming the target (device, simulator,
+WebView inside the app) and the steps a person would take there to see it.
 
 ## What to check
 
@@ -102,7 +103,7 @@ behaviour was not exercised end to end — never a `PASS` that implies it was.
 Return ONLY a JSON object (no markdown code blocks, no explanatory text):
 
 {
-  "verdict": "PASS | FAIL",
+  "verdict": "PASS | FAIL | NOT_RUN",
   "summary": "What was run (suite tally, scenarios exercised, URL and session) and what was found.",
   "findings": [
     {
@@ -116,4 +117,6 @@ Return ONLY a JSON object (no markdown code blocks, no explanatory text):
 }
 
 A "FAIL" verdict MUST include at least one finding with severity "critical", "high", or "medium".
-If all e2e checks pass, return verdict "PASS" with an empty findings array (or only "info" findings).
+A "NOT_RUN" verdict MUST include one "info" finding saying what was missing.
+"PASS" only when you observed the behaviour working: an empty findings array (or only "info"
+findings). Something you could not observe is "NOT_RUN", never "PASS".

@@ -14,8 +14,10 @@ import {
   runConfigUnsetCommand,
 } from './config.js';
 import { runStatusCommand } from './status.js';
+import { runTimelineCommand } from './timeline.js';
 import { runMapCommand } from './map.js';
 import { runApproveCommand, runRejectCommand } from './approve.js';
+import type { DecidedByFlags } from './decided-by.js';
 import {
   runAnswerCommand,
   runRunCommand,
@@ -33,9 +35,13 @@ import {
 } from './ui.js';
 import { readVersion } from './version.js';
 import { rememberCurrentProject, runProjectsCommand } from './projects.js';
+import { runInstructionsCommand } from './instructions.js';
+import { DEFAULT_HUB_URL, HUB_URL_ENV, runMcpCommand, type McpCommandOptions } from './mcp.js';
+import { runPairingCodeCommand, type PairingCodeOptions } from './pairing-code.js';
 import { runAutostartCommand, type AutostartOptions } from './autostart.js';
 import {
   runCancelCommand,
+  runCompleteCommand,
   runPauseCommand,
   runResumeCommand,
 } from './lifecycle.js';
@@ -47,6 +53,21 @@ export interface GlobalOptions {
   readonly dryRun: boolean;
   readonly json: boolean;
   readonly strict: boolean;
+}
+
+/**
+ * The three flags every plan-gate move takes: who decided and their exact words. Required —
+ * the command refuses without them — and declared once so `approve`, `reject` and `revise`
+ * cannot describe them three ways.
+ */
+function withDecidedBy(
+  command: Command,
+  help: { readonly name?: string; readonly words?: string } = {},
+): Command {
+  return command
+    .option('--decided-by <name>', help.name ?? 'the human who decided, as they name themselves (required)')
+    .option('--words <text>', help.words ?? "the human's exact words deciding it (required; - for stdin)")
+    .option('--words-file <path>', 'read those words from a file');
 }
 
 function globalOptions(command: Command): GlobalOptions {
@@ -70,6 +91,29 @@ function globalOptions(command: Command): GlobalOptions {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  const { program, exitCode } = createProgram();
+
+  try {
+    await program.parseAsync(argv);
+    return exitCode();
+  } catch (error) {
+    // Commander throws for `--help` and `--version`; those are not failures.
+    if (isCommanderExit(error)) return (error as { exitCode?: number }).exitCode ?? ExitCode.OK;
+
+    const rendered = renderError(error);
+    process.stderr.write(`${rendered.message}\n`);
+    return rendered.exitCode;
+  }
+}
+
+/**
+ * The CLI's command tree, without running it.
+ *
+ * Separate from {@link main} so a test can ask which commands and flags are registered —
+ * `test/cli/instructions.test.ts` holds every `agent-flow <command>` the operator guides
+ * mention against this tree, so a guide cannot keep naming a command after it is renamed.
+ */
+export function createProgram(): { program: Command; exitCode: () => ExitCodeValue } {
   const program = new Command();
 
   program
@@ -200,6 +244,14 @@ export async function main(argv: string[]): Promise<number> {
     });
 
   program
+    .command('timeline')
+    .description('Show where a run’s wall clock went: model, validation, waiting, rework')
+    .argument('[runId]', 'the run to read (defaults to the current one)')
+    .action(async (runId: string | undefined, _options: unknown, command: Command) => {
+      exitCode = await runTimelineCommand(runId, globalOptions(command));
+    });
+
+  program
     .command('map')
     .description('Build the repository map discovery uses, and show what it cost')
     .option('--budget <tokens>', 'how many tokens the rendered map may occupy')
@@ -210,7 +262,7 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runMapCommand(options, globalOptions(command));
     });
 
-  program
+  const approveCommand = program
     .command('approve')
     .description('Approve the plan so implementation may begin')
     .option('--force', 'approve despite a failed or missing review (recorded on the run)')
@@ -219,20 +271,24 @@ export async function main(argv: string[]): Promise<number> {
     .option(
       '--attach-findings',
       'approve over a failed review, handing its findings to the tasks they cite (recorded on the run)',
-    )
-    .action(async (options: { force?: boolean; attachFindings?: boolean }, command: Command) => {
+    );
+  withDecidedBy(approveCommand).action(
+    async (options: { force?: boolean; attachFindings?: boolean } & DecidedByFlags, command: Command) => {
       exitCode = await runApproveCommand(options, globalOptions(command));
-    });
+    },
+  );
 
-  program
+  const rejectCommand = program
     .command('reject')
     .description('Close this run without implementing it')
-    .argument('[reason]', 'why the plan was rejected')
-    .action(async (reason: string | undefined, _options: unknown, command: Command) => {
-      exitCode = await runRejectCommand(reason, globalOptions(command));
-    });
+    .argument('[reason]', 'why the plan was rejected');
+  withDecidedBy(rejectCommand).action(
+    async (reason: string | undefined, options: DecidedByFlags, command: Command) => {
+      exitCode = await runRejectCommand(reason, options, globalOptions(command));
+    },
+  );
 
-  program
+  const reviseCommand = program
     .command('revise')
     .description('Re-plan with an extra instruction, invalidating any approval')
     // Optional, because the instruction may come from a file, stdin or an editor instead.
@@ -248,32 +304,35 @@ export async function main(argv: string[]): Promise<number> {
     // P7.5. A decision and "the plan is bad" used to cost the same cycle, and the first
     // attempt of this feature spent its whole budget on decisions.
     .option('--decision', 'the instruction is a decision: replan without spending a revision cycle')
-    .option('--escalate', 'replan at the next workflow class, under its budget')
-    .action(
-      async (
-        instruction: string | undefined,
-        options: {
-          file?: string;
-          edit?: boolean;
-          from?: string;
-          decision?: boolean;
-          escalate?: boolean;
+    .option('--escalate', 'replan at the next workflow class, under its budget');
+  withDecidedBy(reviseCommand).action(
+    async (
+      instruction: string | undefined,
+      options: {
+        file?: string;
+        edit?: boolean;
+        from?: string;
+        decision?: boolean;
+        escalate?: boolean;
+      } & DecidedByFlags,
+      command: Command,
+    ) => {
+      exitCode = await runReviseCommand(
+        {
+          argument: instruction,
+          file: options.file,
+          edit: options.edit,
+          from: options.from,
+          decision: options.decision,
+          escalate: options.escalate,
+          decidedBy: options.decidedBy,
+          words: options.words,
+          wordsFile: options.wordsFile,
         },
-        command: Command,
-      ) => {
-        exitCode = await runReviseCommand(
-          {
-            argument: instruction,
-            file: options.file,
-            edit: options.edit,
-            from: options.from,
-            decision: options.decision,
-            escalate: options.escalate,
-          },
-          globalOptions(command),
-        );
-      },
-    );
+        globalOptions(command),
+      );
+    },
+  );
 
   program
     .command('run')
@@ -290,7 +349,7 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runRunCommand({ taskId }, globalOptions(command));
     });
 
-  program
+  const retryCommand = program
     .command('retry')
     .description('Queue a task again after it failed')
     .argument('<taskId>', 'for example TASK-004')
@@ -298,16 +357,20 @@ export async function main(argv: string[]): Promise<number> {
     // PRI-20. The net for a plan that forgot `expectsNoChange`: a verification task with a
     // legitimately empty diff otherwise burns every attempt and ends in a run a person can
     // only cancel. Declared here rather than by editing the plan, which approval is bound to.
-    .option('--expect-no-change', 'this task is meant to change nothing; accept an empty diff')
-    .action(async (
-      taskId: string,
-      options: { force?: boolean; expectNoChange?: boolean },
-      command: Command,
-    ) => {
-      exitCode = await runRetryCommand(taskId, options, globalOptions(command));
-    });
+    .option('--expect-no-change', 'this task is meant to change nothing; accept an empty diff');
+  // Both overrides overrule a gate, so they name the human who chose them.
+  withDecidedBy(retryCommand, {
+    name: 'the human who chose --force or --expect-no-change (required with either)',
+    words: "their exact words (required with either; - for stdin)",
+  }).action(async (
+    taskId: string,
+    options: { force?: boolean; expectNoChange?: boolean } & DecidedByFlags,
+    command: Command,
+  ) => {
+    exitCode = await runRetryCommand(taskId, options, globalOptions(command));
+  });
 
-  program
+  const answerCommand = program
     .command('answer')
     // P7.1. Beside `retry` because it is the retry a BLOCKED task was waiting for: the same
     // requeue, carrying the text the next attempt needs, and no `--force`.
@@ -317,21 +380,32 @@ export async function main(argv: string[]): Promise<number> {
     // list does not survive being a shell argument.
     .argument('[text]', 'the answer, or - to read stdin')
     .option('--file <path>', 'read the answer from a file')
-    .option('--edit', 'write the answer in $EDITOR')
-    .action(
-      async (
-        taskId: string,
-        text: string | undefined,
-        options: { file?: string; edit?: boolean },
-        command: Command,
-      ) => {
-        exitCode = await runAnswerCommand(
-          taskId,
-          { argument: text, file: options.file, edit: options.edit },
-          globalOptions(command),
-        );
-      },
-    );
+    .option('--edit', 'write the answer in $EDITOR');
+  // The answer is the human's decision: it names them, and their words default to the answer.
+  withDecidedBy(answerCommand, {
+    name: 'the human whose answer this is (required)',
+    words: 'their exact words, when not the answer itself (- for stdin)',
+  }).action(
+    async (
+      taskId: string,
+      text: string | undefined,
+      options: { file?: string; edit?: boolean } & DecidedByFlags,
+      command: Command,
+    ) => {
+      exitCode = await runAnswerCommand(
+        taskId,
+        {
+          argument: text,
+          file: options.file,
+          edit: options.edit,
+          decidedBy: options.decidedBy,
+          words: options.words,
+          wordsFile: options.wordsFile,
+        },
+        globalOptions(command),
+      );
+    },
+  );
 
   program
     .command('revalidate')
@@ -357,21 +431,55 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runResumeCommand(globalOptions(command));
     });
 
-  program
+  const cancelCommand = program
     .command('cancel')
     .description('End the run and terminate its agents; keeps every artifact')
-    .option('--yes', 'confirm: cancelling is not reversible')
-    .action(async (options: { yes?: boolean }, command: Command) => {
-      exitCode = await runCancelCommand(options, globalOptions(command));
-    });
+    .option('--yes', 'confirm: cancelling is not reversible');
+  // Irreversible, so a human decision like a gate move: named, in their words.
+  withDecidedBy(cancelCommand).action(async (options: { yes?: boolean } & DecidedByFlags, command: Command) => {
+    exitCode = await runCancelCommand(options, globalOptions(command));
+  });
+
+  const completeCommand = program
+    .command('complete')
+    .description('Close a run whose last review ended NOT DONE, on the human\'s decision (e.g. delivered outside forge)')
+    .option('--pr <url>', 'where the delivery made outside agent-flow is');
+  // Terminal and over a Definition of Done that did not hold: named, in their words.
+  withDecidedBy(completeCommand).action(async (options: { pr?: string } & DecidedByFlags, command: Command) => {
+    exitCode = await runCompleteCommand(options, globalOptions(command));
+  });
 
   program
     .command('review')
     .description('Run validation, inspect the implementation and judge it against the SDD')
     .option('--fix', 'report the corrective tasks the findings would produce')
-    .action(async (options: { fix?: boolean }, command: Command) => {
-      exitCode = await runReviewCommand(options, globalOptions(command));
-    });
+    // The way out of an e2e NOT_RUN: a person saw the change work on a target agent-flow
+    // cannot reach, and says so on the record, bound to the head under review.
+    .option(
+      '--e2e-observed <text>',
+      "the human's own words: what they saw the change do on the target e2e could not reach (or - for stdin)",
+    )
+    .option('--e2e-observed-file <path>', 'read that observation from a file')
+    // Required with an observation: this terminal records as `keyboard`, which an AI
+    // driving the CLI is too, so the name is what says a person saw it.
+    .option('--observed-by <name>', 'the human who observed it (required with an observation)')
+    .option('--e2e-head <sha>', 'the build the human tested; refused unless it is the head under review')
+    .option('--evidence <files...>', 'screenshots of what the human saw, copied into the run (png, jpg, webp, gif)')
+    .action(
+      async (
+        options: {
+          fix?: boolean;
+          e2eObserved?: string;
+          e2eObservedFile?: string;
+          observedBy?: string;
+          e2eHead?: string;
+          evidence?: string[];
+        },
+        command: Command,
+      ) => {
+        exitCode = await runReviewCommand(options, globalOptions(command));
+      },
+    );
 
   program
     .command('forge')
@@ -406,6 +514,16 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runUiCommand(root, options, globalOptions(command));
     });
 
+  // A new code from the running hub, so a second device pairs without a restart that would
+  // unpair the first (dogfood 08–09/10). Its own command: `ui [root]` would read `code` as a root.
+  program
+    .command('pairing-code')
+    .description('Ask the running hub (started with --pair) for a new pairing code; paired devices stay paired')
+    .option('--hub <url>', `the hub to ask (default ${DEFAULT_HUB_URL}, or ${HUB_URL_ENV})`)
+    .action(async (options: PairingCodeOptions) => {
+      exitCode = await runPairingCodeCommand(options);
+    });
+
   program
     .command('projects')
     .description('List, add or remove directories in the project hub the dashboard shows')
@@ -437,11 +555,33 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runAutostartCommand(chosen, options, globalOptions(command));
     });
 
+  program
+    .command('instructions')
+    .description('Print the operator guide for a flow (overview, feature, gate, blocked, recover)')
+    .argument('[guide]', 'the guide to print (defaults to the overview)')
+    .option('--list', 'list the guides, one line each')
+    .action(async (guide: string | undefined, options: { list?: boolean }) => {
+      exitCode = await runInstructionsCommand(guide, options);
+    });
+
+  program
+    .command('mcp')
+    .description('Serve the agent-flow tools to an AI over MCP (stdio), as a client of the hub')
+    .option('--hub <url>', `the hub to relay to (default ${DEFAULT_HUB_URL}, or ${HUB_URL_ENV})`)
+    .option('--allow-remote-hub', 'accept a hub off this machine (it has no authentication)')
+    .action(async (options: McpCommandOptions) => {
+      exitCode = await runMcpCommand(options);
+    });
+
   // The project hub fills itself: every command that ran in a project adds it, so the
   // dashboard lists it from anywhere afterwards. `projects` is left out on purpose —
   // `projects remove .` run inside the project would otherwise be undone on its way out.
+  // `instructions` is left out because it only prints text: it is the first thing an AI
+  // runs, from whatever directory it is in, and a command that reads must not write.
+  // `mcp` for the same reason: an MCP client starts it in whatever directory a session
+  // opened, and it only relays to the hub.
   program.hook('postAction', async (_program, action) => {
-    if (action.name() === 'projects') return;
+    if (NOT_REMEMBERED.has(action.name())) return;
     await rememberCurrentProject(globalOptions(action));
   });
 
@@ -461,18 +601,11 @@ export async function main(argv: string[]): Promise<number> {
       exitCode = await runCleanCommand(options as never, globalOptions(command));
     });
 
-  try {
-    await program.parseAsync(argv);
-    return exitCode;
-  } catch (error) {
-    // Commander throws for `--help` and `--version`; those are not failures.
-    if (isCommanderExit(error)) return (error as { exitCode?: number }).exitCode ?? ExitCode.OK;
-
-    const rendered = renderError(error);
-    process.stderr.write(`${rendered.message}\n`);
-    return rendered.exitCode;
-  }
+  return { program, exitCode: () => exitCode };
 }
+
+/** Commands the hub's `postAction` must not record (see the hook in {@link createProgram}). */
+const NOT_REMEMBERED = new Set(['projects', 'instructions', 'mcp']);
 
 function isCommanderExit(error: unknown): boolean {
   return (

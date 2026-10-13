@@ -492,3 +492,44 @@ describe('the notes about worktree.copy patterns that expose a .env file (FR-018
     expect(ptBR.doctor.worktreeCopyExposesEnv('.env.test')).not.toBe(en.doctor.worktreeCopyExposesEnv('.env.test'));
   });
 });
+
+describe('the note for a turn ceiling a project tried to raise', () => {
+  it('names the path and the dropped value, and does not send the operator to trust', async () => {
+    const options = await createOptions();
+    for (const say of [en, ptBR]) {
+      const { notes } = await diagnose({
+        ...options,
+        say,
+        ignoredLoosenings: [{ path: ['roles', 'architect', 'maxTurns'], kind: 'max_turns', value: 500 }],
+      });
+      const note = notes.find((entry) => entry.includes('`roles.architect.maxTurns`'));
+      expect(note).toBeDefined();
+      expect(note).toContain('500');
+      expect(note).not.toContain('trust.projectConfig');
+    }
+  });
+});
+
+describe('the notes about project keys nothing reads (dogfood 09/10)', () => {
+  it('names each key, and sends a command id to validationCommands, in en and pt-BR', async () => {
+    for (const say of [en, ptBR]) {
+      const base = await createOptions();
+      const diagnosis = await diagnose({
+        ...base,
+        unknownKeys: ['commands.lint_testes', 'validationComands'],
+        say,
+      });
+
+      const command = diagnosis.notes.find((note) => note.includes('commands.lint_testes'));
+      expect(command, 'the command id').toBeDefined();
+      expect(command).toContain('validationCommands');
+      expect(diagnosis.notes.some((note) => note.includes('validationComands'))).toBe(true);
+    }
+  });
+
+  it('says nothing when every key is read', async () => {
+    const base = await createOptions();
+    const diagnosis = await diagnose({ ...base, unknownKeys: [] });
+    expect(diagnosis.notes.some((note) => note.includes('commands.'))).toBe(false);
+  });
+});

@@ -50,12 +50,16 @@ const TELEMETRY: RunTelemetryView = {
   },
 };
 
-function response(body: unknown): Promise<Response> {
-  return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }));
+function response(body: unknown, status = 200): Promise<Response> {
+  return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
 }
 
+// The tab also mounts the time breakdown, which reads its own endpoint and has its own
+// tests (`TimeSpent.test.tsx`); here it is answered with nothing so these stay about telemetry.
 const serve = (view: RunTelemetryView) => {
-  vi.stubGlobal('fetch', vi.fn(() => response(view)));
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) =>
+    String(input).includes('/timeline') ? response({}, 404) : response(view),
+  ));
 };
 
 describe('the run telemetry tab', () => {
