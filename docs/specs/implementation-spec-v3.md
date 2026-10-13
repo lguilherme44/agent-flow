@@ -9,7 +9,7 @@
 > [`mvp2-safe-parallel-execution.md`](mvp2-safe-parallel-execution.md), que **substitui
 > §19 e §47–§48 deste documento**: a colocação de worktrees sob `.agent-flow/worktrees/`
 > e um scheduler que os cria foram ambas rejeitadas com base em evidência empírica.
-> Veja também [`../roadmap.md`](../roadmap.md) para o estado por milestone.
+> O que vem a seguir está em [`../roadmap.md`](../roadmap.md).
 
 ## 1. Objetivo
 

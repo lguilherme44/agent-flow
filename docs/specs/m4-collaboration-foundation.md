@@ -652,4 +652,4 @@ M4 is done when all of the following hold, each with named evidence.
 - [`mvp2-safe-parallel-execution.md`](mvp2-safe-parallel-execution.md) — worktrees, receipts, integration
 - [`autonomous-execution-recovery.md`](autonomous-execution-recovery.md) — failure taxonomy, budgets, escalation
 - [`../security.md`](../security.md) — what the local server protects
-- [`../post-mvp3-backlog.md`](../post-mvp3-backlog.md) — the forge seam M7 will build on
+- [`m7-forge-github-delivery.md`](m7-forge-github-delivery.md) — the forge seam M7 built

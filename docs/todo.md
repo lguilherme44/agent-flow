@@ -1,997 +1,676 @@
 # TODO
 
-Fila executável do [`plan.md`](plan.md), em ordem. O porquê de cada item está lá; aqui é o
-que fazer e como saber que fechou.
+Fila executável do [`roadmap.md`](roadmap.md), em ondas. O porquê de cada
+frente está lá; aqui é o que fazer e como saber que fechou.
 
-A frente de plataforma — evals, sandbox nativo dos CLIs, teto de gasto, menor privilégio,
-entrada por work item — tem
-fila própria em [`platform-todo.md`](platform-todo.md), com o porquê em
-[`platform-roadmap.md`](platform-roadmap.md).
+**Definição de pronto, para todos:** teste cobrindo o
+comportamento · controle positivo (reverter o fix e ver o teste ficar vermelho, conferindo
+que a reversão foi aplicada de fato) · verificação rodando o comando de verdade e lendo a
+saída · suíte inteira verde. Itens de **F1b** somam: uma rodada registrada, com o custo dela.
 
-**Definição de pronto, para todos:** teste cobrindo o comportamento · controle positivo
-(reverter o fix e ver o teste ficar vermelho) · verificação rodando o comando de verdade e
-lendo a saída · suíte inteira verde.
+**Como marcar:** `[x]` e, no fim da linha do título, `— <commit>, <data>`. Item que uma
+medição derrubar também vira `[x]`, com **descartado —** e o motivo numa linha. Nada é
+apagado: o histórico de por que algo não foi feito vale tanto quanto o que foi.
 
----
+**Itens marcados "(dono)"** gastam dinheiro de modelo ou exigem acesso a código de terceiros;
+não são tarefas para um agente começar sozinho.
 
-## Silêncio
-
-- [x] **1.1 · `run` anuncia a task ao iniciar** — `src/cli/run.ts:41`
-      Extrair `writeStageProgress` de `src/cli/feature.ts` para um módulo compartilhado
-      (`src/cli/render/progress.ts`) e usar nos dois. `→` ao iniciar; em TTY a linha final
-      sobrescreve com `\r`, em log ficam as duas.
-      **Pronto quando:** `agent-flow task <id>` imprime a task antes de executá-la, sem
-      `--verbose`, e um log redirecionado tem uma linha por evento.
-
-- [x] **1.2 · `doctor` anuncia o probe de install** — `src/cli/doctor.ts:274`
-      `→ probing install (npm ci in a fresh checkout)…` antes, resultado depois.
-      **Pronto quando:** `agent-flow doctor` num projeto Node não fica mais de 5s sem saída.
-
-## Mensagens que afirmam o falso
-
-- [x] **2.1 · "Its findings are in `agent-flow status`"** — `src/cli/feature.ts:384`
-      Uma linha. Hoje diz "above" e não há nada acima.
-      **Pronto quando:** a mensagem nomeia um comando que existe e mostra os findings.
-
-- [x] **2.2 · `status` distingue review reprovado de falha técnica** — `src/cli/status.ts:400`
-      `PLAN_REJECTED_REVISABLE` → sugerir `revise`. Run encerrada após falha → sugerir
-      `--from <stage>`, e dizer que preserva os artefatos e não gasta ciclo de revisão.
-      **Pronto quando:** uma run morta por erro de runner não menciona review.
-
-- [x] **2.3 · `status` de run falhada oferece `--from`**
-- [ ] **`agent-flow retry-stage <stage>`** — não feito, e fica como candidato.
-      Simétrico ao `retry <taskId>` que já existe. Hoje tarefa se repete e stage de
-      planejamento não, embora o núcleo saiba fazer as duas. Não entrou porque `--from`
-      já resolve o caso que doía, e um segundo comando para a mesma coisa precisa de
-      motivo melhor que simetria.
-
-## Documentação que faz desistir de um caminho que funciona
-
-- [x] **4.1 · README: quatro adapters, não três** — `README.md:323`
-      A frase contradiz a tabela de `README.md:503`, 180 linhas abaixo. Trocar por algo como
-      *"Three drive a coding CLI; a fourth serves an OpenAI-compatible endpoint for the
-      stages that need no filesystem."*
-
-- [x] **4.3 · São três prompts com `workingDirectory`, não dois** — `openai-runner.ts:27`
-      `discovery`, `implementation` e **`code-review`**. Corrigir o comentário e, de
-      preferência, derivar a lista do frontmatter.
-      **Pronto quando:** existe um teste que falha se um prompt novo declarar
-      `workingDirectory: true` sem a documentação acompanhar.
-
-## Vocabulário
-
-- [x] **3.1 · `plan_rejected_by_checks`** — `src/core/failure-classification.ts:185`
-      Separar de `malformed_runner_output`: parseou, validou o schema, reprovou numa regra de
-      plano. É o único caso em que `revise` é a ferramenta certa.
-      **Pronto quando:** um plano válido reprovado por regra não é mais descrito como saída
-      malformada.
-
-## Modelo local
-
-- [x] **4.2 · Timeouts que não assumem CLI de fronteira**
-      `DEFAULT_TIMEOUT_SECONDS = 900` (`config.schema.ts:16`) e `300` no `openai-runner.ts:36`.
-      Documentar `timeoutSeconds` por role; avaliar default maior quando o runner do role é
-      `openai-compatible`.
-
-- [x] **4.4 · `contextWindow` opcional em `RunnerConfig`**
-      `stage_context_measured` já mede os bytes de cada stage. Falta o teto para comparar e
-      avisar antes de o servidor recusar.
-      **Pronto quando:** uma stage que se aproxima do teto declarado gera um aviso, não uma
-      falha no meio do trabalho.
-
-- [x] **4.5 · `args: string[]` em `RunnerConfig`**
-      Hoje apontar um CLI para outro endpoint exige um wrapper de shell fora do controle de
-      versão. Anexar ao argv que o adapter monta.
-
-## Roteamento inspecionável
-
-- [x] **5.2 · `doctor` reporta por stage, não só por role**
-      Uma linha por stage, marcando as que estão num runner mais caro do que precisariam.
-
-- [x] **5.3 · `doctor` lista runner configurado e não roteado**
-      Hoje ele simplesmente não aparece — configurar não basta, é preciso apontar um role, e
-      nada diz isso.
-
-## Mecânicos e de maior risco (por último)
-
-- [x] **3.3 · Auditar os quatro módulos que leem `state.stage`**
-      `run-projection.ts` (7×), `stage-timeline.ts` (5×), `run-reader.ts` (2×),
-      `event-bridge.ts` (1×). Onde o log responde, derivar do log; manter o campo só como
-      fallback para a janela antes do primeiro evento.
-
-- [x] **3.2 · `stage_output_received` emitido** — `stage-runner.ts`
-      Aditivo: o evento novo é emitido quando o runner responde, e `stage_completed`
-      **continua como está**.
-- [ ] **3.2b · NÃO estreitar `stage_completed` para "aceito"** — decidido contra, com motivo.
-      Revisão do `agent-flow-redesign` mostrou que ele tem **sete** leitores e um não é
-      tela: `stageRunnersOf` (`plan-review-service.ts`) colhe `detail.runner` só de
-      `stage_completed`, e `correctivePlanAuthors` usa essa lista como o conjunto de quem
-      o review corretivo precisa ser **independente**. Estreitar faria um planning
-      rejeitado sair da lista — e o runner que escreveu o plano ficaria elegível para
-      revisá-lo, com o artefato afirmando independência que não existe. **Silenciosamente.**
-      Teste em `test/app/stage-event-vocabulary.test.ts` fixa isso.
-
-- [x] **5.1 · Override de runner por stage**
-      `roles.architect.stages.architecture-impact.runner`, ou separar `architect` em dois
-      roles. Maior mudança de contrato da lista.
+Cada item cabe numa run do próprio Agent Flow: o texto do item, mais o trecho da frente no
+roadmap, serve de pedido para `feature --file`.
 
 ---
 
-## Achados do dogfood de 10/09/2026 — `docs/specs/live-dogfood-remote-control.md`
+# Onda 1 — barato, já
 
-O agent-flow planejou uma feature para o agent-flow: pareamento de dispositivo para o Deck,
-em `high-risk`, `agy` planejando e `claude` revisando. A feature não saiu — a revisão entre
-provedores recusou o plano com 11 achados e a revisão seguinte morreu por um defeito que eu
-mesmo tinha introduzido uma hora antes. São quinze itens: **D1 a D13 do dogfood** (doze
-fechados, o D9 aberto porque não reproduz) e **D14/D15, achados na retomada de 10/09/2026**,
-quando o plano recusado voltou para uma segunda passada. Boa parte deles é o mesmo defeito
-de roupa diferente: **um resultado que foi calculado e depois jogado fora.**
+## F7 — O operador sozinho destrava a run
 
-- [x] **D18 · Quem julga tem 2400 s; quem escreve tem 900 s por esquecimento** — `.agent-flow/config.yaml`
-      Medido na primeira execução real do plano, em 11/09/2026. Os papéis de julgamento
-      receberam `timeoutSeconds: 2400` com a justificativa escrita ao lado; os executores
-      ficaram no default de 900 s porque ninguém olhou para eles.
+Pedido completo, com a evidência de cada item, em `~/.agent-flow/requests/operator-gaps.md`
+(fora do repositório). Estados antigos em disco continuam legíveis, e runs sem resposta nem
+emenda se comportam exatamente como hoje.
 
-      A TASK-004, `complex`, morreu em **15min01 — 901 s, o default no segundo** — e essa
-      morte **gastou uma das duas tentativas**. A segunda fez o trabalho em 23min54 e
-      reprovou por nove imports não usados. O tempo nunca foi a discordância; foi o relógio.
+**Entregue em `1841fc7` (26/09):** P7.1, P7.4 e P7.5 (run AF-2026-002). Ficaram dois achados
+baixos da revisão: a fila do dashboard clássico (`apps/web`) passa a dizer "Answer TASK-NNN" sem
+ter formulário de resposta; e as frases `fixSddOrForce` e `readWhatAsked` ficaram sem uso. O P7.3
+terá run própria.
 
-      Durações observadas por task neste repositório: TASK-001 22min25, TASK-003 21min55,
-      TASK-004 23min54. **900 s era menos da metade do típico.**
+- [x] **P7.1 · Responder uma tarefa BLOCKED** — `1841fc7`, 26/09 — `src/app/run-actions.ts:915`, `src/core/phrases/en.ts:440`
+      `agent-flow answer <task> "<texto>" | --file <arquivo>` e o mesmo no Deck. A resposta fica
+      na tarefa, entra no prompt do próximo attempt, e a tarefa respondida volta à fila **sem
+      `--force`**. A frase que hoje manda "responder" passa a nomear o comando que existe.
+      **Pronto quando:** uma tarefa bloqueada é respondida e reexecutada sem `revise` nem
+      `--force`, e o prompt do attempt seguinte contém a resposta (teste).
 
-      Vale registrar o que ficou certo: essa foi uma falha *honesta* — `errorCode: timeout`,
-      `failureClass: runner_timeout`. Antes do [[D16]] o agy teria batido no teto próprio de
-      300 s e devolvido `SUCCESS` com enfeite. A correção do D16 é o que transformou isso
-      em algo diagnosticável.
+- [x] **P7.2 · O executor roda os comandos declarados** — `0eab98d`, 26/09 — `src/adapters/runners/claude-code-runner.ts:146-231`, prompts de planejamento
+      Os comandos de `commands`/`validationCommands` viram regras de `--allowedTools`
+      automaticamente, nos dois shells no Windows, sem abrir nada além do declarado. O
+      planejador e o revisor recebem a lista do que o executor pode rodar; medição que ele não
+      pode fazer vira **verificação do operador**, não tarefa.
+      **Pronto quando:** teste de argv com e sem regras manuais (sem duplicar); um plano que pede
+      ao executor um comando não declarado é recusado pela checagem ou convertido em verificação.
 
-      Corrigido: `complex` 2400 s, `normal` 1800 s, `trivial` 900 s, com a medição escrita
-      no comentário.
+- [ ] **P7.3 · `revise` preserva o concluído** — `src/app/run-actions.ts` (revise), scheduler
+      Tarefas concluídas mantêm id e estado por padrão; reabrir exige pedido explícito. A tarefa
+      BLOCKED cuja decisão entrou no plano novo volta à fila depois do `approve`.
+      **Pronto quando:** teste com três concluídas e uma bloqueada: depois de `revise` + `approve`,
+      as três continuam concluídas e a quarta roda com o plano novo.
 
-- [x] **D19 · Não existe "eu já consertei, só valida de novo"** — `src/cli/index.ts` + `src/app/run-actions.ts`
-      A TASK-004 parou com `recovery_exhausted` e a evidência inteira era:
+- [x] **P7.4 · Decisões do operador como emendas registradas** — `1841fc7`, 26/09 — `src/contracts/state.schema.ts`, artefato ao lado do SDD
+      Resposta a BLOCKED, `revise` e aprovação por cima de achado viram emendas: quem (identidade
+      do P2.5), quando, sobre qual tarefa ou achado, e o texto. Visíveis no Deck; lidas pela
+      revisão final.
+      **Pronto quando:** cada um dos três tipos gera uma emenda (teste), e o prompt da revisão
+      final as inclui.
 
-      ```
-      npm run lint → exit 1: 9:30  error  'RunActionDeps' is defined but never used
-      ```
+- [x] **P7.5 · O orçamento separa replanejamento de decisão** — `1841fc7`, 26/09 — `src/app/run-actions.ts:1772`, `src/core/adaptive-workflow.ts:99-134`
+      Resposta a BLOCKED e ajuste pedido pelo operador não gastam ciclo de revisão por qualidade.
+      No teto, dois caminhos explícitos e registrados: elevar a classe, ou aprovar **anexando os
+      achados abertos às tarefas afetadas** (que chegam aos executores).
+      **Pronto quando:** teste do teto nos dois caminhos; os achados anexados aparecem no prompt
+      das tarefas afetadas.
 
-      Nove imports não usados, em nove arquivos de teste — o executor moveu os pontos de
-      construção para `fakeRunActionDeps` e deixou o tipo para trás. `typecheck` limpo,
-      **3972 testes passando**, a substância das quatro tasks de pé.
+- [x] **P7.6 · Classificação sem palavra solta** — `0eab98d`, 26/09 — `src/core/adaptive-workflow.ts:30-64,143`
+      Menção negada ou incidental não eleva a classe; o motivo mostra o trecho que pesou; o
+      operador corrige a classe (para cima ou para baixo) pela CLI e pelo Deck, e a correção fica
+      registrada.
+      **Pronto quando:** "não trafega token nem dado de sessão" não vira HIGH-RISK (teste), um
+      pedido de migration de verdade continua virando, e a correção manual aparece no estado.
 
-      O produto diz *"Review the attempt evidence, then retry the task"*, e `retry` só sabe
-      **rodar o modelo de novo**. Para apagar nove linhas de import, isso é uma chamada de
-      ~20 minutos de um executor. `--expect-no-change` chega perto mas diz outra coisa:
-      *aceite um diff vazio*, não *revalide o que eu corrigi*.
+- [ ] **P7.7 · Uma run termina de verdade** — `src/app/run-actions.ts:2451-2464`, `src/core/attention.ts:207-221`, `src/core/run-projection.ts:407-413`
+      Hoje o único caminho para `completed` é `review` com a Definição de Pronto inteira
+      verde. Run entregue fora do Agent Flow (merge feito à mão, sem `review`), ou cuja revisão
+      final deu FAIL e a pessoa aceitou mesmo assim, fica no gate `final_acceptance` **para
+      sempre**, marcada "parado, esperando por você" no hub. Medido em 24/09: uma run 7/7 sem
+      `review` e uma 8/8 com revisão final FAIL e verificação PASS, as duas já entregues.
+      Entregar: `agent-flow close --reason <entregue-fora|aceito-com-achados|abandonado>`
+      (e o mesmo no Deck), registrado como emenda (P7.4), levando a run a um estado terminal
+      que diz o motivo; o hub separa "concluída" de "encerrada pelo operador".
+      **Pronto quando:** as duas situações medidas saem do "esperando por você" com um
+      comando, a emenda aparece no estado, e uma run que passou pelo `review` verde continua
+      terminando como hoje.
 
-      **Pronto quando:** existir um caminho que reexecuta só os comandos de validação sobre
-      a árvore como ela está — e que registre no log que a correção foi humana, porque um
-      task fechado por mão de gente não pode parecer um fechado pelo modelo.
+- [ ] **P7.8 · Lista do hub, fila e revisão em andamento concordam** — projeção do hub, `src/core/attention.ts:207-221`
+      Dois desencontros medidos em 24/09: (1) durante o `review`, a lista mostrou a run como
+      "parado, esperando por você" e o cabeçalho "0 em movimento"; (2) uma run com revisão final
+      FAIL aparece como "esperando por você" na lista, mas não gera item na fila "Precisa de
+      você" — a pessoa é chamada e não recebe ação nenhuma.
+      **Pronto quando:** revisão em andamento conta como "em movimento" (teste), e toda run que a
+      lista marca como esperando por alguém tem um item com ação na fila (teste).
 
-      Corrigido: `agent-flow revalidate <task>`, em `src/app/task-revalidation.ts`. Roda os
-      comandos de validação da própria task dentro da worktree da última tentativa, sem
-      spawnar modelo e sem resetar nada. O passe vira a tentativa *n+1* com `closedBy:
-      'human'` — recibo, marker e artefato pelo mesmo caminho de sempre, então o `run`
-      integra pelo Integrator como qualquer outra. A falha não gasta nada e não escreve
-      `attempt-<n>.json`: ninguém executou trabalho, e o caminho continua aberto para o
-      próximo conserto. O `retry.maxAttempts` fica intacto porque `attemptsBeforeHumanRetry`
-      anda junto com `attempts` — o que aquele orçamento limita é a sequência *sem ninguém
-      olhando*, e esta é o oposto disso.
+- [x] **P7.9 · "Completo" não sai com gate exigido sem rodar** — `0eab98d`, 26/09 — `src/core/definition-of-done.ts:55-80`, `src/app/read-only-workspace.ts:24-31`, `src/app/run-actions.ts:2451-2464`
+      Na AF-2026-001 o SDD exigia `typecheck:deck` e `test:deck` (NFR-005/NFR-007) e a run saiu
+      "FEATURE COMPLETE" sem eles terem rodado em lugar nenhum: a verificação mecânica só roda o
+      que está em `commands`, e os revisores trabalham num checkout descartável que **não leva
+      `node_modules`** por desenho — leram o código e registraram "não pude rodar" como achado
+      baixo. Três correções:
+      1. a Definição de Pronto conhece os gates que o SDD exige; gate exigido e não executado é
+         `NOT_RUN`, e `NOT_RUN` não é pronto;
+      2. "não pude rodar X" num revisor vira achado **bloqueante** quando X é exigido, não baixo;
+      3. o planejador só pode exigir gates que existem como nome de validação (liga com A-05), e
+         a ausência é recusada na checagem do plano, antes do gate humano.
+      **Pronto quando:** uma run fixture cujo SDD exige um gate não declarado não termina como
+      completa (teste), e a mensagem diz qual gate faltou e como declará-lo.
 
-      Quatro defeitos saíram da revisão adversarial, e o primeiro era o perigoso: uma task
-      **sem validação declarada** — que é o formato normal de uma task BLOCKED, e `blocked`
-      era um estado aceito — passava direto pelo `judgeValidation`, que responde `completed`
-      para zero comandos. Uma palavra digitada fechava a task com recibo, marker e
-      integração, sem rodar nada. Agora `nothing_to_revalidate` recusa antes do lock, e o
-      caso de uso recusa de novo por dentro. Os outros três: o `task_revalidated` de
-      **falha** também limpava o `auto_recovery_exhausted` (agora só o `passed: true`
-      responde); o `closedBy` parava no contrato e nunca chegava à tela (agora o Inspector
-      do Deck marca "fechada por uma pessoa", nos dois idiomas); e o hand-off para o `run`
-      não tinha teste — agora tem um que roda Scheduler + Integrator + WorktreeRecovery com
-      git de verdade e um executor que *explode se for chamado*.
+## F0 — Legível e visível para quem opera
 
-- [x] **D17 · O D7 ficou aberto exatamente na superfície que importa** — `src/cli/feature.ts`
-      O `resumeHint` recebeu a classe do workflow como parâmetro **com default
-      `'standard'`** — e o único chamador que não tinha classe para dar é o `catch` do
-      `feature`, que é onde a frase é lida. Resultado: toda run que falhava imprimia a
-      resposta do `standard`.
+- [ ] **P0.1 · Runner e modelo na sidebar desde o início da tarefa** — `apps/deck/src/features/run/Inspector.tsx`, projeção da run no servidor
+      Hoje a sidebar de uma tarefa em andamento mostra "RUNNER –", "MODELO não registrado",
+      "RACIOCÍNIO –", embora o início da tarefa já esteja nos eventos (`task_started` traz o
+      papel; `stage_started` traz runner, modelo e raciocínio). Ler dali, não do resultado final.
+      **Pronto quando:** uma tarefa em execução mostra runner, modelo e raciocínio no Deck
+      (teste do Deck com uma run cujo único evento da tarefa é o de início).
 
-      Medido em 11/09/2026 na AF-2026-004, que é `high-risk`: o estágio `planning` falhou,
-      a mensagem disse *"Kept: discovery, architecture-impact, sdd"*, eu segui a retomada
-      que ela indicava, e o discovery rodou de novo por **13m07s de Opus** — a segunda vez
-      na mesma run.
+- [ ] **P0.2 · Separar o texto para humano do texto para agente** — `src/contracts/task.schema.ts`, schema das revisões, prompts de planejamento e revisão, Deck
+      Cada coisa que o Deck mostra ganha um resumo para gente: tarefa (`summary`: o que muda e por
+      que, uma ou duas frases, sem caminho de arquivo); achado de revisão (`headline` curto,
+      `impact` — o que quebra para quem —, e `fix`); resumo de revisão idem. O texto técnico
+      atual continua, para o agente, e o Deck o põe atrás de "ver detalhes técnicos". Gate
+      mecânico no schema: limite de tamanho, sem crase nem caminho no resumo.
+      **Pronto quando:** o Deck mostra o resumo por padrão e o detalhe ao expandir; o schema
+      recusa um resumo que viola o gate (teste); uma run antiga, sem os campos novos, continua
+      mostrando o texto de antes.
 
-      **É o D7 inteiro outra vez, um nível acima.** O fold estava certo, o `status` estava
-      certo, os testes estavam verdes — e todos passavam a classe, que é justamente o que o
-      chamador quebrado não conseguia fazer. Um default que acerta na maioria dos casos é
-      como a resposta do fold é descartada na borda.
+- [ ] **P0.3 · Uma regra de escrita compartilhada pelos prompts** — `prompts/`
+      Um trecho único, incluído em todo prompt que produz texto que uma pessoa lê: comece pelo
+      resultado; uma ideia por frase; resumo sem caminho de arquivo nem jargão do código; diga a
+      incerteza em vez de escondê-la; português quando `language` for `pt-BR`. Até a F1b existir,
+      a verificação é humana: três runs lidas antes e depois, registradas em `docs/engineering/`.
+      **Pronto quando:** o teste de requisitos de prompt prova que todo prompt voltado a humano
+      inclui o trecho, e o registro das três runs está escrito.
 
-      Corrigido: sem default. A classe é lida do estado que o pipeline escreveu (dentro de
-      um `try` que engole tudo — isso roda enquanto outro erro está sendo reportado, e não
-      pode substituir a falha que a pessoa precisa ver). Sem classe, a cláusula "Kept:"
-      simplesmente não sai: **não afirmar é melhor do que afirmar errado.** O teste novo
-      fixa o argumento ausente, não mais um presente.
+- [ ] **P0.4 · Passo a passo ao vivo na sidebar** — `src/adapters/runners/claude-code-runner.ts:418`, ponte de eventos do servidor, `apps/deck/src/features/run/`
+      Medido no Claude 2.1.280: `--output-format stream-json --verbose` emite ao vivo `tool_use`
+      (nome e entrada), `tool_result`, texto intermediário e o `result` final — o mesmo envelope
+      de hoje, então o parse final não muda de fonte. O runner repassa cada ação como evento; a
+      sidebar lista **verbo e alvo** ("leu `x.ts`", "rodou `npm test`", "editou `y.ts`"),
+      **nunca conteúdo** (o Deck pode estar na rede local com pareamento). codex: itens do
+      `exec --json`; agy: medir. A mesma trilha persistida é o P1.4.
+      **Pronto quando:** numa tarefa real em andamento, a sidebar mostra as últimas ações em até
+      poucos segundos; o resultado estruturado final é parseado igual a antes (teste com stream
+      real gravado); um segredo plantado numa entrada de ferramenta não aparece no Deck nem em
+      disco.
 
-- [x] **D16 · O `agy` desiste em 5 minutos e chama isso de sucesso** — `src/adapters/runners/agy-runner.ts`
-      `agy --help`: `--print-timeout  Timeout for print mode wait (default 5m0s)`. Ao
-      estourar, ele sai com **código 0**, `status: SUCCESS`, e um texto de enfeite no lugar
-      da resposta. O adaptador nunca passou a flag, então **todo estágio do agy tinha um
-      teto de 300 s que ninguém pediu** — e o `timeoutSeconds` do papel, 2400 s nos que
-      precisam, jamais disparava, porque o processo terminava bem.
+- [x] **P0.5 · Medir se o raciocínio pode ser exposto** — 992608e, 24/09
+      **Resultado:** não pode, no Claude 2.1.281 headless — `thinking` vazio com Sonnet 5 e Opus 5.5,
+      inclusive em `--include-partial-messages`; nenhuma configuração mudou isso. O P0.4 mostra
+      ações e o texto que o modelo escreve (ao vivo com `text_delta`), não o raciocínio.
+      No stream do Claude o bloco `thinking` veio vazio (só assinatura), medido uma vez com o
+      Sonnet 5. Repetir com o Opus e procurar uma configuração que exponha resumos de raciocínio
+      no modo headless; o codex entrega resumos no `exec --json`.
+      **Pronto quando:** o resultado, com versões e modelos, está em
+      [`runner-capabilities.md`](runner-capabilities.md), e o P0.4 mostra o raciocínio onde ele
+      existir.
 
-      Medido duas vezes neste repositório, nas duas cadeiras:
+- [ ] **P0.6 · Ver o navegador do e2e ao vivo** — `prompts/e2e.md:54-87`, estágio e2e, Deck
+      O `agent-browser` tem um dashboard local (`agent-browser dashboard start`, porta 4848) que
+      mostra o viewport ao vivo e o feed de comandos de **todas** as sessões. Hoje o Deck não
+      sabe qual é a sessão, porque o prompt manda o modelo escolher um nome. Passa a ser
+      determinístico:
+      1. o Agent Flow escolhe a sessão (`af-<run>-e2e`) e a injeta como `AGENT_BROWSER_SESSION`
+         no ambiente do runner — medir se chega aos comandos que o Claude roda (Bash e
+         PowerShell); o prompt continua pedindo `--session` como segunda linha;
+      2. antes do estágio, sobe o dashboard (idempotente) e grava um evento com sessão e URL;
+      3. o card e a sidebar do estágio e2e mostram "Ver navegador ao vivo", abrindo o dashboard
+         numa aba nova — iframe no Deck provavelmente é recusado, porque o dashboard rejeita
+         origem cruzada; medir antes de tentar;
+      4. cada cenário grava vídeo (`agent-browser record start <arquivo>.webm --contact-sheet`)
+         como artefato da run, que o Deck mostra depois e a revisão final pode citar.
+      O dashboard só escuta em loopback: num dispositivo pareado, o botão diz "só nesta
+      máquina". Expor pela rede exige origem HTTPS explícita e não é padrão. O executor precisa
+      de `Bash(agent-browser:*)` e `PowerShell(agent-browser:*)` liberados.
+      **Pronto quando:** durante um e2e real, o botão abre o dashboard já na sessão da run; o
+      vídeo de cada cenário aparece nos artefatos; sem `agent-browser` instalado, o estágio diz
+      isso em claro em vez de mostrar um botão morto.
 
-      | papel | duração | status | resposta |
-      |---|---|---|---|
-      | `planReviewer` | 289 s | SUCCESS | `""` |
-      | `planner` | 299,4 s | SUCCESS | `"Waiting for task completion.\n"` |
+## F1a — Trajetória e resultado em uso real
 
-      Controle: o mesmo `agy`, mesmas flags, prompt pequeno — 2,8 s, `structured_output`
-      válido. **Não era modelo sem ter o que dizer; era CLI que parou de esperar.**
+- [ ] **P1.1 · Confirmar o que o envelope de cada CLI entrega** — `src/adapters/runners/claude-code-runner.ts:418`, `agy-runner.ts:318`, `codex-runner.ts`
+      A documentação do Claude promete, no `--output-format json`, `num_turns`,
+      `permission_denials`, `duration_api_ms` e `modelUsage`. O `codex exec --json` emite
+      eventos (`turn.completed` com `usage`, `item.*` para comando, arquivo e chamada de MCP),
+      sem contador de negações documentado. O agy manda `num_turns`. Confirmar cada um rodando
+      o CLI com **os mesmos args** que o Agent Flow usa, numa tarefa que chame ferramentas e
+      provoque ao menos uma negação.
+      **Pronto quando:** a tabela está em [`runner-capabilities.md`](runner-capabilities.md)
+      com a versão de cada CLI, e há uma decisão escrita: o envelope basta, ou P1.4 é necessário.
 
-      **Custou mais do que o estágio.** A justificativa escrita no `.agent-flow/config.yaml`
-      — *"agy revisando um plano do Claude não produziu nada"* — virou a decisão de pôr o
-      `agy` planejando e o Claude revisando, que é o contrário do que o operador tinha
-      pedido. A comparação nunca foi justa: os papéis do Claude tinham 2400 s e o agy tinha
-      cinco minutos. **Uma decisão de roteamento tomada em cima de um artefato de medição.**
+- [x] **P1.2 · Ler turnos e negações que hoje são descartados** — `claude-code-runner.ts:36-45`, `src/ports/agent-runner.ts:96-112`, `agy-runner.ts:329-341` — e110140, 24/09
+      Feito pela run AF-2026-001 do próprio Agent Flow, com a remoção do `tool_input` dos textos
+      brutos de falha (SEC-002) e a aba Telemetria do Deck (field report de 24/09, no
+      histórico do git).
+      Declarar `num_turns` e `permission_denials` no tipo do envelope do Claude; campos
+      opcionais `turns` e `permissionDenials` (contagem e nomes de ferramenta) em
+      `AgentRunUsage`; o `num_turns` do agy deixa de cair; no codex, contar `turn.completed` se
+      o runner usar `--json`. Dado ausente é `undefined`, **nunca `0`**.
+      **Pronto quando:** `tasks/<id>/result.json` e `stage_completed` carregam os campos; a
+      projeção (`src/app/telemetry.ts:58`) os expõe; um runner que não reporta aparece como
+      "não reportado" no `status` e no Deck.
 
-      Corrigido: o adaptador manda `--print-timeout` derivado do `timeoutSeconds` do papel,
-      e **maior** que ele — com dois limites correndo, o que vale tem de ser o do
-      agent-flow, para que falta de tempo falhe como timeout honesto e não como saída
-      malformada. O roteamento voltou para Claude planejando e agy revisando, com o
-      comentário do config reescrito dizendo por que mudou.
+- [ ] **P1.3 · Resultado em uso real por run** — `src/core/outcomes.ts` (novo, puro), `src/cli/`
+      Gravar na criação da run o commit do Agent Flow e um hash da configuração efetiva, se
+      ainda não é gravado. Um comando `agent-flow outcomes [--since <data>]` lista, por run:
+      a saída virou merge (sim, não, pendente)? quantas linhas a pessoa mudou nos arquivos da
+      run até o merge? quantos achados de revisão foram descartados? quantas revisões e
+      retries? quanto custou? Merge por **squash** muda os hashes: a detecção compara conteúdo
+      (patch-id ou conteúdo dos arquivos), não ancestralidade. Antes de contar descartes,
+      medir onde a decisão do operador sobre cada achado já aparece (`revise`, `approve` com
+      achado aberto, `--force`); se não aparece, registrar.
+      **Pronto quando:** testes com um repo fixture cobrem merge normal, merge por squash e run
+      abandonada; o retrabalho é contado só nos arquivos da run; o comando imprime a tabela e
+      a agregação por commit do Agent Flow.
 
-- [x] **D14 · Um plano recusado é replanejado sem lembrar por quê** — `src/app/run-actions.ts` + `src/app/planning-pipeline.ts`
-      Medido em 10/09/2026 retomando a AF-2026-004. A revisão entre provedores escreveu
-      `reviews/plan-review.json` com nove achados, cada um ancorado em arquivo e linha —
-      e nem `revise` nem `feature --from` passam um único deles ao planejador. O
-      `replan` monta o prompt como `request + "Revision requested by the reviewer:" +
-      instrução`, e a instrução é o que a pessoa digitou. O arquivo com os achados está no
-      disco, ao lado, e ninguém o lê.
-      **Custou:** copiei os nove achados na mão para dentro da descrição para que a
-      passada seguinte não os perdesse. Sem isso, o ciclo de revisão do `high-risk` — três
-      ciclos, exatamente para convergir — replaneja contra a mesma lacuna e é recusado pelo
-      mesmo motivo.
-      **Pronto quando:** o estágio de planejamento recebe os achados da última revisão como
-      entrada, e um teste falha se um plano recusado for replanejado sem eles.
+- [ ] **P1.4 · Trilha por tool call** (não é mais condicional: é a mesma trilha do P0.4, persistida) — `claude-code-runner.ts:418`
+      `stream-json` gravando `logs/<nome>.trajectory.jsonl`, com o caminho declarado em
+      `src/app/paths.ts` (regra *"a path has one spelling"*, `test/architecture.test.ts:2127`).
+      Argumentos passam pela redação de evidência que já existe. Antes de inventar formato,
+      olhar o log do inspect_ai (deduplicado e compactado) e o histórico linear do
+      mini-swe-agent.
+      **Pronto quando:** o resultado estruturado final é parseado exatamente como antes
+      (teste com um envelope real gravado); a trilha lista ferramenta, status e duração; um
+      segredo plantado num argumento não aparece no arquivo.
 
-      Corrigido: `src/core/replan-input.ts` monta a entrada do planejador — pedido,
-      instrução humana (quando houver) e uma seção delimitada *"Findings from the previous
-      plan review"* com severidade, âncora `arquivo:linha` e texto de cada achado, limitada
-      a 12 achados e 400 caracteres por campo, dizendo quantos omitiu. Só entra quando o
-      veredito é `FAIL`: as observações de um `PASS` não são motivo para replanejar. O
-      `revise` e o `planFeature` leem `reviews/plan-review.json` pela store e passam o
-      resultado ao pipeline; o `revision_requested` ganhou `findingsForwarded` /
-      `findingsOmitted` e o `--from planning` emite `replan_findings_forwarded` (declarado
-      em `STAGE_EVENT_TYPES`). Dois guardas impedem citar uma revisão que já não fala do
-      plano em mãos: o `planHash` da revisão tem de existir e bater com o hash do plano em
-      disco — o mesmo que o `approval.ts` exige para aprovar (`review_unverifiable` /
-      `review_stale`) — e, no `--from planning`, a descrição redigitada tem de ser o
-      `request` guardado; pedido trocado invalida os achados como plano trocado invalida.
-      Só `--from planning`: `discovery`, `architecture-impact` e `sdd` rodam sobre o texto
-      antes de planejar, e não é com eles que os achados falam. Quando um guarda barra
-      achados que existem, a run registra `replan_findings_withheld { reason, findings }`
-      — `stale_review`, `unverifiable_review`, `request_changed` ou
-      `stage_before_planning` — porque guarda que ninguém enxerga é guarda que o operador
-      tem de adivinhar. Sem revisão, ou com revisão `PASS`, não escreve nada. O
-      `agent-flow status` mostra isso em uma linha dentro do bloco PLANNING, redigida por
-      `src/core/replan-report.ts` (que também lê o `findingsForwarded` do
-      `revision_requested`, senão o `revise` bem-sucedido não apareceria), e o `--json`
-      leva o mesmo objeto em `replan`. A seção é removida
-      do `request` antes de ser reescrita, senão a revisão três carregaria as duas
-      anteriores. Testes: `test/core/replan-input.test.ts` e
-      `test/app/replan-findings.test.ts` — este último cai em quatro asserções se o
-      encaminhamento for retirado.
+## F3a — Teto de gasto
 
-- [x] **D15 · `feature` só aceita a descrição como argumento de shell** — `src/cli/index.ts`
-      O `revise` aceita `--file`, `-` e `--edit`, e o comentário ao lado diz o porquê:
-      *"A multi-paragraph revision does not survive being a shell argument (AR-08)."* Vale
-      igual para a descrição de uma feature, e mais: a desta run tem 9 KB, com crases,
-      aspas e quebras de linha. O `feature` tem só `<description>` posicional.
-      **Custou:** tive de subir a run por um script Node com `spawn` e argv, porque montar
-      a linha de comando no shell mangla o texto — o mesmo defeito que o comentário do
-      `revise` já descreve.
-      **Pronto quando:** `feature` lê a descrição de `--file`, de `-` ou do `$EDITOR`,
-      pelo mesmo caminho que o `revise` já usa.
-      **Fechado em 18/09/2026.** `runFeatureFromSource` (`src/cli/feature.ts`) usa o mesmo
-      `chooseInstructionSource`/`readInstruction` do `revise`, com o substantivo trocado
-      (`DESCRIPTION_WORDING`) para a recusa não mandar quem digitou `feature` para a ajuda
-      do `revise`. `test/cli/feature-description-source.test.ts` fixa: cerca, apóstrofo e
-      parágrafos chegam byte a byte, e uma invocação recusada não alcança o comando.
+- [ ] **P3.1 · Teto de gasto por run, que pausa** — `src/core/telemetry.ts:136-177`, `src/contracts/state.schema.ts:601-616`
+      **Opt-in, desligado por padrão** (decisão de 24/09: quem usa assinatura não quer travar
+      por custo; sem teto, nada de aviso, flag ou degradação). Visível e editável no Deck — tela
+      Equipe com o estado "desligado" escrito, e a run mostrando "Teto: desligado" ou o gasto
+      contra o teto. `limits.maxCostUsd` e `limits.maxTokens` (global, sobrescrevível pelo
+      projeto e por `feature --max-cost`). Checado ao fim de cada estágio e de cada tarefa; se cruzou,
+      `run_paused` com motivo `budget` e entrada na fila "Precisa de você". Com
+      `pricedAny: false`, o teto em USD é declarado **inaplicável** no início da run.
+      **Pronto quando:** um runner roteirizado que reporta custo cruza o teto e a run pausa
+      antes da tarefa seguinte; `resume` com teto maior continua; um runner sem custo gera o
+      aviso.
+      **Tentado e adiado (24/09, run AF-2026-001):** duas revisões de plano reprovaram, sempre
+      na máquina de estados do teto. Achados que o próximo desenho tem de evitar por construção:
+      um teto por run (`--max-cost`) vencia a config para sempre, então subir o valor no Deck
+      não destravava a pausa; nada limpava o "atingido" depois de uma re-entrada em
+      planejamento ou revisão; uma revisão de tarefa parada pelo teto virava "revisor sem saída
+      válida" na trilha; e dividir o saldo pela onda criava pausa sem teto atingido. Desenho para
+      a próxima tentativa: **só config** (editável no Deck), sem override por run, qualquer
+      re-entrada limpa o "atingido", sem fatia por onda.
 
-- [x] **D1 · A porta ocupada responde com stack trace de Node** — `src/cli/ui.ts`
-      `Error: listen EADDRINUSE` mais quatro linhas de `node:internal`. O produto sabe que
-      a 4782 está tomada, que o dono é quase certamente outro `agent-flow ui`, e que
-      `--port` existe. **Custou:** a falha foi silenciosa, o servidor antigo continuou
-      respondendo servindo um workspace de `%TEMP%`, e a feature quase foi planejada contra
-      o repositório errado.
-      **Pronto quando:** a mensagem nomeia a porta, o provável dono e a saída, e um teste
-      falha se voltar a ser um `throw` cru.
+- [ ] **P3.2 · `--max-budget-usd` como segunda linha** — `claude-code-runner.ts:417-429`, `src/contracts/common.schema.ts:120-152`
+      Quando há teto, cada invocação do Claude recebe `--max-budget-usd` com o saldo restante
+      da run. Só a partir do Claude 2.1.217, decidido pela costura de capacidades
+      (`test/architecture.test.ts:3511`). O CLI **encerra** ao estourar (*"Budget limit
+      reached"*): isso vira a classe de falha `budget_exhausted`, dentro do vocabulário único
+      (`test/architecture.test.ts:3151`), e pausa a run em vez de gastar tentativa.
+      **Pronto quando:** teste de argv; uma saída real de estouro gravada é classificada como
+      `budget_exhausted` e não é retentada como falha de runner.
 
-- [x] **D2 · `cross_provider_required` recusa depois de criar a run** — `src/app/run-actions.ts`
-      `AF-2026-001` existe, sem plano, com 2,2 s de vida. A recusa em si é boa — rápida,
-      nomeia os dois papéis e o provedor, e diz o que mudar. O defeito é *quando* ela
-      dispara: os papéis configurados e a classe de workflow são ambos conhecidos no
-      `POST`, antes de qualquer coisa ser criada. Mesma forma do C-19 que o `start` já
-      corrigiu ("refused before the lock, not inside it") num caminho que não recebeu o
-      tratamento.
-      **Pronto quando:** a combinação impossível é recusada sem criar run, e um teste
-      afirma que o histórico não ganhou entrada.
-      **Retirado em 23/09/2026:** a recusa inteira saiu. Provedor único é escolha do usuário;
-      HIGH-RISK roda nele e a revisão registra `same-provider-fresh-context`. Quem quer
-      revisão entre provedores liga o segundo runner — não é o agent-flow que decide.
+## F4a — Sandbox nativo dos CLIs
 
-- [x] **D3 · O orçamento de cerimônia anuncia um limite de tarefas e não aplica** — `src/app/planning-pipeline.ts:346`
-      O maior dos cinco, porque a run declara o limite e então o ignora. O log de
-      `AF-2026-002` registra `budget.maxTasks: 8` em `workflow_classified`; o plano aceito
-      tem **12 tarefas**, o portão reporta `taskCount: 12`, e nada recusou, avisou ou
-      registrou degradação. `trivial` aplica 1 e `simple` aplica 3; `standard` e
-      `high-risk` passam `ceremonyProblems: () => []`.
-      **O custo não é teórico:** o terceiro achado da revisão foi uma tarefa com seis
-      responsabilidades independentes — que é o que um plano faz quando nada empurra de
-      volta no tamanho dele.
-      **Pronto quando:** um plano acima do limite é recusado como os outros dois já são, e
-      o planner é perguntado de novo com o problema anexado.
+- [ ] **P4.1 · Medir o sandbox do codex no Windows, no modo do Agent Flow** — `src/adapters/runners/codex-runner.ts:174-217`
+      Com `-s workspace-write` e `--ignore-user-config`, como o Agent Flow invoca: escrever
+      fora do worktree e acessar a rede — o que acontece? Depois, repetir passando o modo de
+      sandbox do Windows por `-c` (a chave `[windows] sandbox` do `config.toml` não é lida com
+      `--ignore-user-config`; confirmar o nome exato na referência de configuração).
+      **Pronto quando:** o resultado, com a versão do codex, está em
+      [`runner-capabilities.md`](runner-capabilities.md), com a decisão de qual modo usar.
 
-- [x] **D4 · `doctor` vaza uma worktree por invocação** — `src/app/diagnostics.ts`
-      Seis diretórios em `~/.agent-flow/worktrees/doctor-install-probe-pid-*` depois de
-      seis `doctor`, cada um com `node_modules` e nenhum registrado no Git. A sonda do §8.4
-      é ligada por padrão no terminal, então cinco `doctor` pagam cinco `npm ci` e guardam
-      cinco cópias.
-      **A causa não é o que parece.** Medido: `git worktree remove --force` **apaga**
-      arquivo ignorado. Então essas seis são remoções que *falharam* — e
-      `probeInstallCleanliness` descarta o `GitResult` de `removeWorktree`, então ninguém
-      foi avisado.
-      **Pronto quando:** a sonda lê a resposta do Git, e um teste falha se o resultado for
-      descartado.
+- [ ] **P4.2 · Medir o sandbox do Claude por `--settings`** — `claude-code-runner.ts:394-415`
+      No Linux, no macOS e no WSL2: `--settings '{"sandbox":{...}}'` junto com
+      `--setting-sources ''`. Escrever fora do worktree, acessar um domínio fora da allowlist,
+      e confirmar que os comandos liberados (`npm test`, por exemplo) continuam funcionando.
+      No Windows nativo não há sandbox do Claude: registrar isso, não contornar.
+      **Pronto quando:** números e decisão em `runner-capabilities.md`.
 
-- [x] **D5 · Nada recupera um diretório órfão sob a raiz própria** — `src/app/namespace-reclaim.ts`
-      É por isso que o D4 acumula em vez de se resolver. `agent-flow clean --worktrees
-      --dry-run` responde `Nothing to remove — 2 run(s), keeping 5.`: o escopo é *worktrees
-      retidas de runs removidas*, derivado de estado de run. Essas não pertencem a run
-      nenhuma — as da sonda são nomeadas por pid — e o Git já as desregistrou, então
-      `worktree prune` também não as vê. Nenhum comando do produto as recupera.
-      **Pronto quando:** `clean` nomeia e recupera um diretório sob a raiz própria que
-      nenhuma run reivindica, e o dry-run o mostra antes.
+- [ ] **P4.3 · Medir o `srt` com a toolchain real** — `src/ports/process-runner.ts:125-127`
+      [`anthropics/sandbox-runtime`](https://github.com/anthropics/sandbox-runtime) embrulhando
+      um comando de validação real (`npm test` num worktree) no Windows nativo (alfa) e no
+      Linux. Esperado no Windows: falhar com Node instalado por usuário (nvm), que a conta do
+      sandbox não alcança — medir, e medir com Node instalado para a máquina.
+      **Pronto quando:** o resultado e a decisão estão em `docs/engineering/`.
 
-- [x] **D8 · O timeout default por papel é um sorteio, e ninguém consegue ver isso** — `src/app/stage-runner.ts`
-      `DEFAULT_TIMEOUT_SECONDS = 900`. Medido duas vezes, no mesmo estágio, no mesmo
-      repositório, com o mesmo modelo: `AF-2026-003` fez o SDD em **15min03 e passou**;
-      `AF-2026-004` fez em **15min02 e estourou**. Não é margem de segurança — é a linha
-      exatamente onde o trabalho cai.
-      **O que isso custa:** o estágio morre com `runner_timeout` e `rawExcerpt: ""` — não há
-      saída para mostrar, porque não houve resposta. Discovery e impacto sobrevivem (os dois
-      honram o ponto de retomada), então são ~20 min de Opus preservados e ~15 min jogados
-      fora, por invocação, sem nada dizer que o limite estava perto.
-      **Fechado avisando, não elevando o default.** O `config.schema.ts` argumenta
-      deliberadamente que um CLI que travou de verdade deve ser cortado em quinze minutos e
-      não quarenta e cinco, e esse argumento continua de pé — contrariar decisão documentada
-      em silêncio é o que critiquei numa tarefa do plano. O defeito não era o número: era
-      que terminar a um segundo da morte e terminar em um minuto ficavam **idênticos** de
-      fora. Agora um estágio que consome 80% do próprio orçamento escreve
-      `stage_near_timeout { durationMs, timeoutSeconds, share }`. Os dois números já
-      existiam e nunca tinham sido comparados.
+- [ ] **P4.3b · Medir o ai-jail nas máquinas Linux e macOS**
+      [`akitaonrails/ai-jail`](https://github.com/akitaonrails/ai-jail) (GPL-3.0: invocar como
+      binário externo, nunca copiar código) embrulhando um runner e um comando de validação num
+      worktree: home privada, sem credencial do agente por padrão, rede desligada ou por
+      `--allow-host`. Não roda no Windows (só no WSL2).
+      **Pronto quando:** o resultado e a decisão estão em `docs/engineering/`, comparados com o
+      P4.2 e o P4.3.
 
-- [x] **D13 · Obedecer o produto invalida a run** — `src/app/workspace-preparation.ts` + `src/app/run-git-identity.ts`
-      Medido de ponta a ponta num projeto novo, em 10/09/2026. A sequência, cada passo
-      correto sozinho:
-      1. `run` recusa: *"the install command changed files that are tracked or not ignored:
-         package-lock.json"* — antes de gastar qualquer chamada de modelo, nomeando o
-         arquivo. Recusa exemplar.
-      2. Commito o lockfile, que é o que ela pede.
-      3. `run` recusa de novo: *"this run was planned against 2757f498 and HEAD is now
-         446ced23"*. O §6.2 está certo: uma run isolada não constrói sobre árvore que se
-         moveu.
-      **Obedecer o passo 1 causa o passo 3, e nada avisa.** O plano de US$ 0,44 é perdido.
-      **Pronto quando:** a recusa da preparação diz que commitar vai mover o HEAD e que o
-      plano terá de ser refeito — ou, melhor, o `init` recusa terminar com o lockfile
-      ausente em vez de avisar no rodapé de vinte linhas.
-
-- [x] **D12 · `run` manda começar uma run nova quando a resposta é `retry`** — `src/app/run-actions.ts`
-      `refuseUnrunnable` trata `review_required` e `blocked` e não trata `failed`: uma
-      tarefa falhada cai no ramo genérico *"Start a new run, or check `agent-flow status`"*.
-      O `status`, olhando o mesmo estado, diz a coisa certa: *"Fix what stopped TASK-001,
-      then `agent-flow retry` it."*
-      O produto sabe a resposta e uma das duas superfícies não a dá — e é a superfície que
-      a pessoa acabou de usar.
-      **Pronto quando:** `run` e `status` dão a mesma instrução para o mesmo estado, e um
-      teste falha se divergirem.
-
-- [x] **D11 · O `feature` imprime o caminho de um SDD que não existe** — `src/cli/feature.ts`
-      No workflow `simple` não há estágio de SDD — e a mensagem final imprime
-      `SDD  …/runs/AF-2026-001/sdd.md` mesmo assim. O arquivo não existe; `ls` no diretório
-      da run mostra `plan.json` e nenhum `sdd.md`. Quem seguir a linha abre um arquivo que
-      nunca foi escrito.
-      **Pronto quando:** a mensagem lista os artefatos que a run produziu, lidos do
-      diretório, e um teste roda os quatro workflows conferindo que cada caminho impresso
-      existe.
-
-- [x] **D10 · Uma entrada de telemetria que não valida some sem dizer nada** — `src/app/telemetry.ts:99`
-      `const parsed = TelemetryEntrySchema.safeParse(candidate); if (parsed.success)
-      entries.push(parsed.data);` — sem `else`. Uma entrada que não valida não é reportada,
-      não é contada, não vira evento: ela deixa de existir.
-      **Medido:** consertar o D6 fez `repairs` virar 0 numa primeira tentativa; o campo
-      `attempts` do schema é `min(1)`; o parse falhou; e a **página de telemetria inteira
-      ficou vazia**. Nenhuma mensagem, nenhum aviso, nenhum log. Cinco testes caíram e
-      nenhum deles dizia *por quê* — o diagnóstico exigiu ler o fold.
-      É a mesma família dos outros: um resultado calculado e jogado fora. E é a pior
-      variante, porque o descarte é de *evidência*.
-      **Pronto quando:** uma entrada recusada aparece em algum lugar — contada no relatório,
-      num evento, ou numa linha de log com o motivo do Zod — e um teste falha se voltar a
-      sumir em silêncio.
-
-- [x] **D6 · `repairs` reporta 1 quando não houve reparo nenhum** — `src/app/stage-runner.ts:626`
-      O contador é incrementado no **topo** do loop, então `repairs: 1` significa uma
-      tentativa e zero re-prompts. O docblock do campo diz que ele conta "how many times
-      the stage had to re-prompt for a well-formed answer" e insiste, em parágrafo próprio,
-      na distinção entre *repair* e *attempt* — enquanto reporta 1 para zero reparos.
-      **Custou:** eu li `repairs: 1` como "o loop de reparo disparou" e escrevi isso no
-      relatório de dogfood como um resultado positivo. Estava errado nas duas runs. O
-      leitor que ele enganou foi quem escreveu o campo de leitura dele.
-      **Pronto quando:** `repairs` é zero numa primeira tentativa bem-sucedida, e um teste
-      fixa os três valores (0 sem reparo, 1 com um, 2 com dois) contra
-      `MAX_REPAIR_ATTEMPTS`.
-
-- [x] **D7 · "The stages before X are kept" é falso para dois dos três** — `src/app/planning-pipeline.ts:301,315,328`
-      **Já estava fechado quando este item foi relido em 18/09/2026**, pelo primeiro dos dois
-      caminhos: a frase enumera. `resumeHint` (`src/cli/feature.ts`) renderiza o fold de
-      `core/resume.ts` — *Kept: …* e *Runs again: …* vêm de uma lista, não de prosa — e o
-      D17 tirou o default de classe que fazia a lista certa sair errada na superfície.
-      `test/cli/resume-hint.test.ts` fixa. O comportamento (os quatro estágios honrarem
-      `--from`) segue como estava; o que mudou é que a frase não mente mais sobre ele.
-      O `skipUntil` chega em exatamente dois estágios — `architecture-impact` e `sdd` — via
-      `stageOrExisting`. Os outros dois nunca o veem:
-
-      | estágio | honra `--from` | por quê |
-      |---|---|---|
-      | discovery | **não** em `high-risk` | `useDiscoveryCache = workflow === 'high-risk' ? false : …`, e o discovery não passa pelo `stageOrExisting` |
-      | architecture-impact | sim | `stageOrExisting` |
-      | sdd | sim | `stageOrExisting` |
-      | planning | **não** | chama `planUntilChecksPass` direto |
-
-      **Medido, não lido.** `AF-2026-004` estourou o tempo no SDD e foi retomada com
-      `--from sdd`; o log mostra `stage_started` para **discovery** sete segundos depois da
-      retomada. A ação da própria recusa promete o contrário: *"The stages before sdd are
-      kept."* Em `high-risk`, dos três estágios antes do SDD, um é preservado e um é
-      refeito ao custo cheio — 10min17 de Opus, ~US$ 3,68.
-      **Custou:** eu afirmei ao operador, duas vezes, que a retomada preservava o trabalho.
-      A segunda vez foi depois de ler o código, e ainda estava errada — porque eu li o
-      `stageOrExisting` e não o ramo do cache do discovery.
-      **Pronto quando:** a frase enumera o que de fato sobrevive, ou os quatro estágios
-      honram o ponto de retomada. E um teste falha se a frase e o comportamento voltarem a
-      discordar — a frase é gerada de uma lista, não escrita à mão.
+- [ ] **P4.4 · Ligar o sandbox que a medição aprovar** (depende de P4.1–P4.3b)
+      Um `execution.sandbox` por runner (`none` | `native`), aplicado às invocações do runner
+      **e** aos comandos de validação que o próprio Agent Flow roda, pela mesma porta
+      `ProcessRunner`. O `doctor` diz o sandbox **efetivamente** aplicado por runner e
+      plataforma — nunca anuncia sandbox onde ele não existe.
+      **Pronto quando:** numa plataforma suportada, uma escrita fora do worktree numa run real
+      falha e é classificada; numa plataforma sem suporte, o `doctor` diz "sem sandbox" em
+      claro (teste).
 
 ---
 
-- [x] **D9 · O gate pisca: `bornDirty` falha ~1 em 2 execuções da lane completa** — `test/fixtures/temp-repo.ts`
-      Medido em 10/09/2026 com a máquina ociosa: uma execução completa da lane de
-      subprocesso falhou em *"names the checkout phase when a fresh checkout is born
-      dirty"*; a execução seguinte, também completa, passou (2657 ms); e o arquivo passou
-      quatro vezes isolado. Não consegui capturar o texto da asserção — o reporter resumido
-      corta o corpo — então a causa segue desconhecida.
-      O fixture já foi diagnosticado duas vezes nesta base (a segunda vez corrigiu o
-      `git add -A` que reestagiava a normalização), e o `vitest.lanes.ts` escreve a frase
-      que torna isto grave: *"a timeout that reports contention teaches people to re-run
-      the suite until it is green"*. Um gate que pisca é um gate em que ninguém confia.
-      **Estado em 10/09/2026: 1 falha em 8 execuções**, e a causa segue desconhecida.
-      Depois da primeira falha: 4 execuções isoladas verdes e 3 em paralelo com as outras
-      suítes de Git real, todas verdes.
-      **E a razão de eu não saber a causa é minha, não do produto.** Escrevi aqui que o
-      reporter tinha cortado a asserção; não cortou — eu filtrei a saída com `rg | head` no
-      meu próprio comando e descartei o corpo da falha. O dado existia.
-      **Pronto quando:** a lane completa roda dez vezes seguidas verde, ou a causa está
-      nomeada e fixada. Guardar a saída inteira em arquivo, sem filtro, é o que falta —
-      `npx vitest run --config vitest.subprocess.config.ts > d9.log 2>&1`.
+# Onda 2
 
-      **Medido em 18/09/2026: dez execuções completas, dez verdes**, cada uma com a saída
-      inteira num arquivo próprio — 785 passando e 5 puladas nas dez, o mesmo conjunto
-      toda vez, e o teste que o item nomeia executando (conferido com `--reporter=verbose`,
-      não deduzido do silêncio do reporter resumido).
+## F1b — Corpus e evals offline
 
-      **O que isso prova, e o que não prova.** A 1 em 8 do texto acima daria 26% de chance
-      de dez verdes seguidas; dez verdes derrubam a taxa para abaixo do que dez execuções
-      conseguem enxergar, e não para zero. A causa nunca foi nomeada, então o item fecha
-      por medição e não por diagnóstico — e três coisas mudaram debaixo dele desde que foi
-      escrito: o `bornDirty` virou uma fixture só, sem processo (8.5); o `temp-repo` passou
-      a conferir com o Git como ele soletra o repositório antes de entregar qualquer
-      caminho; e o runner inteiro trocou de major. Se voltar a piscar, o log completo de
-      cada execução é o que faltava da última vez, e agora é o procedimento.
+- [ ] **P1.5 · Contrato do caso de eval** — `src/contracts/eval.schema.ts` (novo)
+      Copiar a estrutura do Harbor (instrução, config, ambiente, solução de referência,
+      testes) e a divisão do SWE-bench: `failToPass` (checagens que têm de virar) e
+      `passToPass` (checagens que não podem quebrar). Campos: `id`, `repo`, `baseRef`,
+      `request`, `failToPass`, `passToPass`, `reference` (ref do fix mergeado), `limits`
+      (custo máximo, caminhos proibidos), `expectedWorkflow` (opcional), `set`
+      (`regression` | `capability`). A raiz das suítes é configurável (padrão
+      `~/.agent-flow/evals/`), **fora** do repositório.
+      **Pronto quando:** o schema tem testes de aceitação e recusa, e existe um fixture
+      sintético (repo mínimo + dois casos) em `test/fixtures/eval/`.
+
+- [ ] **P1.6 · Executor `agent-flow eval run <suite> [--repeat N]`** — `src/cli/`, `src/app/eval/` (novos)
+      Para cada caso × N: clone descartável em `baseRef` → `createFeatureRun` →
+      `planFeature` → `approve` → `start` → `review` (`src/app/run-actions.ts:1929,1987,635,1086,2167`)
+      → checagens no ref final → registro em
+      `<evalHome>/results/<suite>/<timestamp>/<caso>-<n>.json`. Cada repetição tem **id
+      próprio** (o SWE-bench reaproveita resultado por `run_id`); cada registro carrega o commit
+      do Agent Flow, a configuração e o modelo por papel, como o benchmark do Aider.
+      A aprovação automática é o **único** bypass de gate do produto: só existe dentro de
+      `eval`, é registrada com um ator próprio (`RunActor` ganha `{ kind: 'eval' }`,
+      `src/contracts/state.schema.ts:646-654`), e `feature`/`approve` recusam esse ator.
+      **Pronto quando:** o CI roda a suíte sintética contra runner roteirizado e produz os
+      registros; um teste prova que `approve` fora de `eval` recusa o ator `eval`; os testes de
+      arquitetura seguem verdes, em especial *"a review proposes and a gate decides"*
+      (`test/architecture.test.ts:4046`).
+
+- [ ] **P1.7 · Métricas por caso** — `src/core/eval/metrics.ts` (novo, puro)
+      **Portão:** `failToPass` virou, `passToPass` continua verde, nenhuma ação proibida
+      (caminho fora do escopo, comando negado tentado repetidamente). **Diagnóstico, nunca
+      portão:** histograma de `failureClass` (`src/contracts/common.schema.ts:120-152`),
+      rounds de reparo, negações, turnos, veredito da revisão final, classe de workflow
+      atribuída vs esperada, custo, duração, chamadas de planejamento.
+      **Pronto quando:** função pura com testes sobre runs gravadas; métrica sem dado sai
+      como "não medido", não como zero.
+
+- [ ] **P1.8 · `agent-flow eval compare <a> <b>`** — `src/cli/`, `src/core/eval/`
+      Por caso: **pass@k** e **pass^k**, custo mediano, duração mediana; depois o agregado,
+      separado entre regressão e capacidade. Qualquer limiar de "inconclusivo" aparece no
+      relatório como heurística nossa, não como teste estatístico. Os casos que divergiram
+      entre `a` e `b` vêm com o caminho das transcrições, para serem lidas.
+      **Pronto quando:** teste com dois resultados sintéticos cobrindo melhora, piora e
+      divergência.
+
+- [ ] **P1.9 · Corpus inicial** (dono) — fora do repositório
+      Começar com 10 a 15 tarefas reais já resolvidas e mirar 20 a 50. Pelo menos: uma de cada
+      classe (trivial, simple, standard, high-risk); uma com base vermelha (o caso do D-12);
+      uma que já produziu planos divergentes (o caso do D-6); uma com port para outra branch.
+      Um caso que falha em todas as versões provavelmente está quebrado, não o agente.
+      **Pronto quando:** cada caso tem `failToPass` que **falha** na base e **passa** no fix de
+      referência, e `passToPass` verde nos dois — o controle positivo do próprio caso.
+
+- [ ] **P1.10 · Baseline** (dono) — custa dinheiro
+      `eval run --repeat 3` na versão atual, com o custo total anotado.
+      **Pronto quando:** o resultado está arquivado na raiz de evals e resumido em
+      `docs/engineering/`, sem nomes de projeto.
+
+- [ ] **P1.11 · Regra de regressão** — definição de pronto, no topo deste arquivo
+      Mudança em `prompts/`, `src/core/adaptive-workflow.ts` ou `src/app/planning-pipeline.ts`
+      anexa um `eval compare` contra a baseline. Para iterar o corpus, o ciclo
+      *sample-tune-sweep*. Primeiros usos: medir de novo o `--grounded` com N=3 e julgar o
+      P2.6 (EARS).
+      **Pronto quando:** a definição de pronto foi atualizada e o `--grounded` tem um número
+      com N=3.
+
+## F3b — MCP por ferramenta e por estágio
+
+- [x] **P3.3 · Medir o MCP global do agy** — 992608e, 24/09
+      **Resultado:** carrega. Um MCP-marcador registrado com `agy mcp add` apareceu no modo
+      só-leitura exato do adapter e o modelo tentou chamá-lo; só não rodou porque o headless não
+      pede permissão — com `dangerouslySkipPermissions` rodaria. O P3.6 passa a recusar MCP
+      declarado em papel servido pelo agy **e** a avisar que o agy herda os MCPs globais. — `src/adapters/runners/agy-runner.ts`
+      O codex já está resolvido: roda com `--ignore-user-config` (`codex-runner.ts:174-198`).
+      Falta o agy: com um MCP-marcador na configuração global, rodar no modo exato em que o
+      Agent Flow invoca e ver se o modelo enxerga a ferramenta. Não há documentação pública —
+      só medição.
+      **Pronto quando:** o resultado, com versão, está em
+      [`runner-capabilities.md`](runner-capabilities.md); se carrega, o item de isolamento
+      foi aberto aqui.
+
+- [ ] **P3.4 · MCP por ferramenta, pelos mecanismos nativos** — `src/contracts/config.schema.ts:109-126`, `claude-code-runner.ts:410-412`, `codex-runner.ts`
+      `servers` aceita `"nome"` (como hoje) ou `{ name, allow?: [tool], deny?: [tool] }`. No
+      Claude: `--allowedTools mcp__<name>__<tool>` e `--disallowedTools`, com o
+      `--strict-mcp-config` continuando **depois** da lista variádica, como terminador. No
+      codex, que hoje não recebe MCP nenhum: `-c mcp_servers.<id>...` com
+      `enabled_tools`/`disabled_tools`. Sem gateway.
+      **Pronto quando:** testes de argv nos dois runners; uma probe real com servidor-stub de
+      duas ferramentas mostra só a permitida respondendo; o `doctor` avisa quando um servidor
+      é concedido inteiro.
+
+- [ ] **P3.5 · MCP por estágio** — `StageOverrideSchema`, `src/contracts/config.schema.ts:149-181`
+      `mcp?` no override de estágio, para um estágio só-leitura de investigação ter o MCP de
+      consulta sem que a implementação o receba.
+      **Pronto quando:** um teste prova que a invocação de implementação não recebe o
+      servidor que a de impacto recebe.
+
+- [ ] **P3.6 · Recusar MCP declarado que o runner não aplica** — `src/app/diagnostics.ts`, preflight
+      Papel ou estágio com MCP declarado, resolvido para um runner que não aplica a
+      declaração (o agy até P3.3 dizer o contrário; o `openai-compatible`) → `doctor` e
+      preflight recusam, nomeando o papel e o runner.
+      **Pronto quando:** há teste, e o controle positivo (remover a checagem) o deixa vermelho.
+
+- [ ] **P3.7 · Regra da trifeta no preflight** (depende de P2.4) — `src/app/diagnostics.ts`, preflight
+      Em run com origem externa (work item), nenhum estágio pode ter ao mesmo tempo um MCP de
+      dado privado e uma ferramenta com saída de rede (`WebFetch`, `WebSearch`, `curl`
+      liberado). Anotações `readOnlyHint` só contam para servidores declarados como confiáveis.
+      **Pronto quando:** a combinação proibida é recusada com mensagem que diz qual perna
+      remover (teste), e uma run sem origem externa não muda.
 
 ---
 
-## Portabilidade, e um contrato que o código contradiz
+# Onda 3
 
-Levantado em 08/09/2026, numa revisão no Windows: 121 de 4500 testes vermelhos, nenhum
-deles defeito do produto. Fechado no mesmo dia, com medição contra `agy 1.1.27` no 6.1 e
-controle positivo no 6.2 e no 6.3.
+## F2 — Entrada por work item, identidade e critério testável
 
-- [x] **6.1 · `agy` roda read-only com o terminal aberto** — `src/adapters/runners/agy-runner.ts`
-      `6b47fe0` trocou `supportsReadOnly: false` → `true` e deixou a justificativa para
-      trás: 30 linhas de comentário concluindo o contrário, outro comentário afirmando que
-      o valor era `false`, e um teste assertando `true` sob a prosa *"the one that has no
-      such mode"*. A tabela daquele comentário, completada por medição:
+- [ ] **P2.1 · Porta `WorkItemSource`** — `src/ports/work-item-source.ts` (novo)
+      Só leitura: `getWorkItem(id)` → título, descrição, critério de aceite, links, nomes de
+      anexos, url. **Separada** do `ForgeProvider` de entrega (`src/ports/forge.ts:51-99`).
+      **Pronto quando:** porta e fake existem; o teste *"the forge is a destination, never an
+      authority"* (`test/architecture.test.ts:4788`) segue verde e ganha um caso: nada em
+      `src/app/` cria run a partir de `WorkItemSource`.
 
-      | invocação | responde inline | bloqueia escrita por shell | bloqueia escrita por editor |
-      |---|---|---|---|
-      | `--mode plan` | não — ponteiro para `~/.gemini/…/brain/` | — | — |
-      | `--mode accept-edits` (± `--sandbox`) | sim | não | não |
-      | sem `--mode` — o que o adapter mandava | sim | **não** — sobrescreveu `target.txt` | não |
-      | `--sandbox`, task read-only | **sim**, resposta completa | **sim** — `denied_actions: [command]` | não |
+- [ ] **P2.2 · Adaptador Azure Boards** — `src/adapters/work-items/azure-boards.ts` (novo)
+      REST do Azure DevOps. Credencial pelo mesmo caminho do forge GitHub do M7, nunca
+      gravada em state nem em events. Descrição em HTML convertida para texto.
+      **Pronto quando:** testes com respostas gravadas (sem rede) passam, e um work item real
+      foi lido de verdade.
 
-      A linha que faltava é a última, e ela desfaz meia conclusão: `--sandbox` **é**
-      contenção — do terminal, e só dele. Uma stage de discovery real (quatro arquivos,
-      estrutura resumida) respondeu inteira sob `--sandbox --disable-slash-commands`, sem
-      escrever nada. O que ele não impede é o modelo alcançar a ferramenta de edição, o
-      que foi medido acontecendo quando pedido.
+- [ ] **P2.3 · `agent-flow intake <id> --out <arquivo>`** — `src/cli/`
+      Escreve um rascunho de pedido com as seções: sintoma, evidência, critério de aceite, o
+      que não pode mudar, baseline, branches de port, clientes antigos/plataformas. Seção que
+      o item não trouxe vem marcada `PREENCHER`. O texto do work item entra **delimitado, como
+      dado citado**: é conteúdo externo.
+      **Pronto quando:** o comando gera o arquivo e **não** cria run; `feature --file` aceita o
+      arquivo; um item sem critério de aceite produz o `PREENCHER` (teste).
 
-      **Feito:** `isolationArgs` passa `--sandbox --disable-slash-commands` nas stages
-      read-only — antes passava `[]`, que é o vetor exato do finding #8 do dogfood
-      (`.atl/` e 56 KB dentro do repositório sob julgamento). O comentário de
-      `capabilities()` agora diz que `true` é uma decisão de roteamento e não uma garantia
-      de contenção, `runner-isolation.test.ts` fixa `readOnlyToo: true`, e um teste novo
-      falha se os dois flags pararem de ser mandados.
+- [ ] **P2.4 · Origem gravada na run** — `src/app/planning-pipeline.ts:282`, `src/contracts/state.schema.ts`
+      `feature` aceita a origem (`--source work-item:<provider>:<id>`, ou um cabeçalho do
+      rascunho); o state guarda `{ provider, id, url }`; a revisão final e a entrega citam.
+      **Pronto quando:** `status` e Deck mostram a origem, e uma run sem origem se comporta
+      como antes.
 
-      **Não voltar para `false`:** barra o runner de 6 dos 9 roles e quebra o operador com
-      um agente só, que é caso suportado por projeto.
+- [ ] **P2.5 · Aprovação com a identidade que já existe** — `src/app/run-actions.ts:284-291,748`, `src/contracts/state.schema.ts:646-654`
+      O ator `keyboard` ganha `name?` e `email?`, lidos de `git config user.name` e
+      `user.email` pelo `GitClient` (o único módulo que roda git,
+      `test/architecture.test.ts:1135`; o I-7 proíbe escrever na configuração, não ler), com
+      `config.operator.name` como sobrescrita. Dispositivo pareado continua com `label`.
+      **Pronto quando:** o `operator_action` de approve carrega o nome; o Deck mostra "aprovado
+      por"; um state antigo, sem nome, é lido sem erro.
 
-- [x] **6.1b · Contenção de verdade para read-only: uma árvore descartável** — `src/app/read-only-workspace.ts`
-      O resíduo medido do 6.1. Nenhum flag do `agy` impede a ferramenta de edição, então a
-      única contenção honesta é uma árvore que a stage pode estragar sem consequência.
+- [ ] **P2.6 · Critério de aceite em EARS no SDD** — `prompts/sdd.md`
+      Cada requisito funcional ganha critérios no formato `WHEN <evento> THE SYSTEM SHALL
+      <comportamento>`, sem traduzir os `FR-NNN`. É mudança de prompt: entra pela regra do
+      P1.11.
+      **Pronto quando:** o teste de requisitos de prompt cobre a instrução, e um `eval compare`
+      anexado não mostra regressão.
 
-      **Um gêmeo da árvore que a stage ia ler, não um checkout do HEAD** — e essa
-      distinção é o desenho inteiro. `git.useWorktrees` é `false` por padrão, então a
-      instalação padrão planeja contra uma árvore de trabalho que pode ter trabalho não
-      commitado (a deviation declarada do §6.2). Uma stage a quem mostrássemos o HEAD
-      descreveria um repositório que não existe. Então: corta no HEAD da *fonte* e espelha
-      os caminhos sujos dela — modificado e não rastreado copiados, apagado apagado, o
-      caminho antigo de um rename removido. Arquivo ignorado não atravessa, porque
-      `status --untracked-files=all` não o reporta — é o que mantém a cópia proporcional à
-      mudança e não ao repositório.
+- [ ] **P2.7 · Entrega no Azure Repos** (depois, e só se o time pedir)
+      O `ForgeProvider` deixa de ser GitHub-literal (`src/ports/forge.ts:52`) e ganha uma
+      fábrica no lugar de `src/app/forge-actions.ts:108`.
 
-      **A fonte é o diretório em que a stage ia rodar**, não o projeto: o diretório do
-      projeto para uma stage de planejamento, a worktree da tentativa para um code review,
-      a árvore de integração para a revisão final. Cortar o gêmeo *daquela* árvore é o que
-      mantém uma revisão lendo o código que ela revisa. Os comandos de validação continuam
-      onde sempre rodaram — `runCommands` não é stage.
+## F6 — Memória entre runs (depende da F3b)
 
-      **Cortada por invocação e destruída num `finally`.** Medido neste repositório, 1107
-      arquivos, Windows: ~3,4 s para abrir e ~0,6 s para soltar, **19,9 s para as cinco
-      stages read-only de uma fase de planejamento**. Um cache com chave de fingerprint
-      economizaria isso e, no dia em que a chave errasse, mostraria à stage o código da
-      fase anterior — um defeito que ninguém acha lendo a saída. E a chave sonhada não
-      existe: `status --porcelain` diz que um arquivo mudou, não *o que* mudou, então duas
-      árvores diferentes produzem a mesma chave.
+- [ ] **P6.1 · Medir o ai-memory neste ambiente**
+      [`akitaonrails/ai-memory`](https://github.com/akitaonrails/ai-memory) (MIT): servidor no
+      WSL2 ou em Docker (o Windows nativo é experimental), API HTTP e MCP, e o que ele guarda de
+      uma sessão. Confirmar que os hooks instalados no Claude Code **não** disparam dentro das
+      runs do Agent Flow (`--setting-sources ''`, `--safe-mode`) — é o que obriga a integração
+      explícita.
+      **Pronto quando:** as medições e a decisão estão em `docs/engineering/`.
 
-      **Falha para trás, e diz.** Sem HEAD, sem repositório, `worktree add` recusado — a
-      stage roda onde rodaria e a run registra `read_only_uncontained` (R-16). Uma defesa
-      que vira indisponibilidade é uma troca pior.
+- [ ] **P6.2 · Página de fim de run, determinística** — `src/app/` (novo), porta de memória em `src/ports/`
+      Ao fim de cada run, o Agent Flow grava uma página sem chamar LLM: o que foi pedido, a
+      origem, as classes de falha e o porquê, quais achados de revisão foram acatados ou
+      descartados, os comandos que não existiam, os testes instáveis. Atrás de uma porta, com o
+      ai-memory como primeiro adaptador; desligado por padrão.
+      **Pronto quando:** uma run fixture produz a página esperada (teste), e desligado nada é
+      gravado nem chamado.
 
-      **Pronto:** `test/app/read-only-containment.test.ts` dirige o `StageRunner` real com
-      um runner que escreve dois arquivos no cwd que recebeu — o comportamento que o 6.1
-      mediu — e o repositório sob julgamento fica byte a byte idêntico. O controle
-      positivo é a mesma stage com `permissions: write`, que continua escrevendo no
-      projeto; sem ele as outras asserções passariam também se o fake tivesse simplesmente
-      parado de escrever. `test/app/read-only-workspace.test.ts` cobre a fidelidade
-      (modificado, não rastreado, apagado), a remoção de uma árvore suja, e dois gêmeos
-      concorrentes.
+- [ ] **P6.3 · Planejamento lê um resumo limitado** (depende de P3.4 e P3.5)
+      Os estágios de planejamento recebem o MCP da memória com **só as ferramentas de leitura**,
+      e o resumo entra como fonte própria no orçamento de prompt (`src/core/prompt-budget.ts`).
+      **Pronto quando:** um teste prova que a implementação não recebe o servidor e que o
+      planejamento não recebe as ferramentas de escrita.
 
-      **Três guardas de arquitetura tiveram de ser editadas**, que era o propósito delas:
-      `addWorktree`, `removeWorktree` e `force: true` estavam presas a um módulo cada, com
-      um comentário mandando o próximo milestone vir se justificar. A justificativa é a
-      distinção do §7.4: a worktree de uma tentativa é a única cópia do que um agente
-      produziu, e esta contém uma cópia de código que existe em outro lugar.
+- [ ] **P6.4 · Medir o efeito** (dono) — pela F1b
+      `eval compare` do mesmo corpus com e sem o resumo de memória. Sem ganho medido, a memória
+      fica desligada.
+      **Pronto quando:** o comparativo está registrado.
 
-      **O que isto não é:** uma garantia de que o runner obedece. Continua sendo `--sandbox
-      --disable-slash-commands` para o terminal e um diretório descartável para o resto.
+---
 
-- [x] **6.2 · A suíte não passava no Windows, e nenhum CI via** — `.github/workflows/ci.yml`
-      Duas rodadas que não concordavam — 101 falhas em 16 arquivos (342s) e 121 em 23
-      (680s), a segunda com a máquina ocupada — porque parte do vermelho era **tempo**.
+# Condicional
 
-      **Duas causas-raiz mecânicas respondiam por 76 delas.** *Separador de path*: o gate
-      comparava `'src\app\scheduler.ts'` com `'src/app/scheduler.ts'`, e nenhuma das 59
-      falhas de `architecture.test.ts` era violação de arquitetura — era o guarda incapaz
-      de rodar. Fechado num ponto só (`repoPath`), com uma regra nova que falha se o
-      vocabulário voltar ao separador do host. *Backslash não escapado em código gerado*:
-      `run-execution-lock.race.test.ts` não compilava, e vitest reportava seus 8 testes
-      como `skipped` — a prova de exclusão mútua que o README anuncia não existia no
-      Windows, na forma que mais parece deliberada.
+## F4b — Container (só quando F5 for aprovada)
 
-      **Feito, por família:**
-      - separador de path — `repoPath` em `architecture.test.ts`, normalização de chave no
-        `InMemoryFileSystem`, e `flavour` propagado até o walk de `discoverProjects` (o
-        seam que `within` e `normalise` já tinham e que não chegava no meio)
-      - harness do lock — o root vai com `/`, e os 8 testes rodam
-      - `node-process-runner` — `taskkill /pid <pid> /T /F` no win32, que é o gancho que
-        `SUPPORTS_PROCESS_GROUPS` estava esperando desde o MVP; os testes de árvore
-        deixaram de depender de `/bin/sh` e de `/tmp`
-      - `git-client` — nome de arquivo com caractere de controle (ilegal no Win32) trocado
-        por não-ASCII, que Git escapa igual; caminho passado ao `sh` do textconv com `/`
-      - fixture — `core.autocrlf false` por repositório, para a máquina não decidir o que
-        o teste mede
+- [ ] **P4.5 · Medir container no Windows e no Linux**
+      Latência por invocação; autenticação dos CLIs dentro do container (montar credencial é
+      privilégio — medir o mínimo necessário); rede desligada vs allowlist; comparação com o
+      sandbox nativo de P4.4.
+      **Pronto quando:** os números e a decisão estão em `docs/engineering/`.
 
-      **Job `check-windows` no CI**, `windows-latest`, `timeout-minutes: 45`. O gate de
-      drift pegou o passo de setup e recusou — trabalho dele —, e pegar isso revelou uma
-      segunda cópia do contrato: `m8-acceptance.test.ts` tinha `npm ci` hardcoded num
-      regex em vez de ler `INFRASTRUCTURE`. Agora lê.
+- [ ] **P4.6 · `ContainerProcessRunner`** — `src/ports/process-runner.ts:125-127`
+      Adaptador da porta `ProcessRunner`: worktree montado, env pela mesma allowlist, rede
+      desligada por padrão. A regra de spawn único (`test/architecture.test.ts:1233,5029-5056`)
+      é **estendida de propósito**, não contornada.
+      **Pronto quando:** uma tarefa roda dentro do container com os mesmos gates, e uma
+      tentativa de acesso à rede falha e é classificada.
 
-- [x] **6.3 · O preparo do workspace desligado, e o evento mentindo** — `src/app/run-actions.ts`
-      O diff não commitado pulava `prepareWorkspace` fora de worktree, e estava **certo**:
-      `prepareWorkspace` abre com `assert clean`, e uma run sequencial revisa o checkout do
-      operador, que carrega a implementação como mudança não commitada — asserti-lo limpo
-      é recusar o trabalho que a review foi chamada para julgar. Toda run sequencial
-      terminaria em `workspace_preparation_failed`, verificação `NOT_RUN`, e um Definition
-      of Done inalcançável.
+---
 
-      O que estava errado era o registro: `workspace_prepared` com
-      `install: 'none configured'` para um projeto que configura `npm ci`. Agora o evento
-      diz qual dos dois caminhos rodou (`workspace: 'integration' | 'checkout'`), nomeia o
-      install configurado e declara `installRan: false`. Teste em
-      `review-run.integration.test.ts`, com controle positivo.
+# Avulsos
 
-- [ ] **6.4 · Não está no npm, e o uso diário é um checkout** — `package.json`
+- [x] **N1 · Medir se regras por diretório chegam ao executor** — 72bda11, 25/09
+      **Medido em 24/09 (Claude 2.1.281): não chegam.** Com `sub/CLAUDE.md` mandando terminar a
+      resposta com uma palavra-marcador, a leitura de `sub/data.txt` obedeceu sem flags (controle) e
+      **ignorou** com `--setting-sources '' --safe-mode`, as flags do adapter. Falta a injeção. — `src/app/project-instructions.ts:33-72`, `claude-code-runner.ts:394-395`
+      Num repo fixture com `sub/AGENTS.md` e `sub/CLAUDE.md` contendo uma instrução-marcador,
+      rodar o estágio de implementação sobre um arquivo em `sub/` com os args exatos
+      (`--setting-sources ''`). Se o marcador não chega: injetar as instruções aninhadas dos
+      diretórios em `files.likely` da tarefa, como fonte própria no orçamento de prompt
+      (`src/core/prompt-budget.ts`).
+      **Pronto quando:** a medição está registrada; se implementado, um teste mostra as
+      instruções aninhadas no prompt de uma tarefa que toca o diretório, e ausentes numa que
+      não toca.
+      **Feito.** Lido no código antes: implementação (`TaskExecutor.readAgentsMd`) e code review
+      (`ChangeReviewAdapter.agentsMd`) liam só o `AGENTS.md` da raiz; nenhum leitor via
+      `<dir>/AGENTS.md` ou `<dir>/CLAUDE.md`. Agora os dois prompts recebem um bloco
+      `## Directory instructions`, um `### <dir>/<arquivo>` por diretório ancestral das entradas de
+      `files.likely` (da raiz para baixo, a raiz nunca), anexado depois do template e medido como a
+      fonte `directoryInstructions`. Mesma regra da raiz (AGENTS.md, senão CLAUDE.md), 64 KiB por
+      arquivo, sem seguir symlink para fora da árvore, diretório ignorado pulado
+      (`git check-ignore --no-index`), e diretório ilegível pulado com aviso em
+      `stage_context_measured.detail.directoryInstructionsSkipped` — o leitor nunca lança. O code
+      review lê de `projectDir`, nunca da árvore revisada: uma tarefa não escreve as regras do
+      próprio revisor. Sem arquivo aninhado, os dois prompts são byte a byte os de antes.
+
+- [x] **N2 · Lista explícita de arquivos ignorados copiados para o worktree** — `src/app/task-workspaces.ts:128-208` — 72bda11, 25/09
+      `worktree.copy: [globs]`, vazio por padrão, aplicado logo depois do `git worktree add`.
+      O `doctor` avisa quando um padrão casa com `.env*`: o que é copiado fica legível pelo
+      modelo. O checkout descartável só-leitura só recebe o que também estiver declarado para
+      ele.
+      **Pronto quando:** teste com um arquivo ignorado declarado (aparece no worktree, nunca
+      entra em commit) e outro não declarado (não aparece).
+      **Feito.** Lido no código antes: `prepareIsolated` fazia `git worktree add` e seguia direto
+      para `prepareWorkspace`; nada copiava arquivo ignorado. Agora `worktree.copy` (global,
+      sobrescrevível pelo projeto, lista substituída inteira) usa a semântica de pathspec
+      `:(glob)` do Git: uma listagem `ls-files --others --ignored --exclude-standard` no checkout
+      do operador, cópia byte a byte, e a tentativa é recusada (`phase: 'checkout'`, detalhe sem
+      caminho) se a origem sai do repositório por symlink, se o destino já existe, ou se o destino
+      não sai ignorado no worktree — é isso que garante que nunca entra em commit. Padrão inválido
+      (`..`, absoluto, `\`, `.git`, `:` ou `-` no início) é `ConfigError` apontando o arquivo de
+      onde veio. O checkout só-leitura só recebe cópia com `worktree.copyToReadOnly: true`; falha
+      ali libera o checkout e degrada com `no_copy`. O `doctor` avisa quando o último segmento do
+      padrão, lido como texto, começa com `.env`, ou quando o padrão casa hoje com um arquivo
+      `.env*`. Sem a chave, nenhum comando Git a mais.
+
+- [ ] **N3 · Paralelismo visível e medido** — `src/contracts/config.schema.ts:240-253,383-400`, `src/core/concurrency.ts`, Deck
+      Hoje `git.useWorktrees: false` e `parallelism.maxTasks: 1` por padrão: tarefas prontas
+      esperam na fila. Mostrar no Deck o modo da run ("sequencial" ou "paralelo: N ao mesmo
+      tempo"), com o custo dito (um worktree e um install por tarefa). Depois, uma run medida:
+      a mesma run nos dois modos, comparando tempo total e conflitos na integração.
+      **Pronto quando:** o Deck mostra o modo e o limite da run, e a medição está em
+      `docs/engineering/` com a decisão sobre o padrão.
+
+- [x] **N4 · A config do projeto só aperta** — `src/config/resolver.ts:7-13` — 72bda11, 25/09
+      Um repositório pode hoje ligar `dangerouslySkipPermissions`, acrescentar `args` que
+      liberam ferramentas, apontar MCPs e desligar `approval.requiredBeforeImplementation`. Regra
+      nova, como no ai-jail: a config do projeto só restringe; liberar exige confiança declarada
+      na config global (lista de diretórios confiáveis). O `doctor` diz o que o projeto tentou
+      liberar e foi ignorado. Rever junto a config que o próprio repositório do Agent Flow
+      traz (agy em skip-permissions).
+      **Pronto quando:** num projeto não confiável, as quatro liberações são ignoradas e
+      relatadas (testes); num diretório confiável, valem; um projeto que só restringe não muda.
+      **Feito.** Lido no código antes: `resolveConfigSources` copiava cada chave de
+      `PROJECT_OVERRIDABLE_KEYS` inteira do projeto para o overlay, sem checagem nenhuma. Agora a
+      config global tem `trust.projectConfig` (diretórios absolutos; cada um confia nele e em tudo
+      abaixo), lida só do arquivo global — um projeto não se declara confiável. `decideProjectTrust`
+      compara os dois lados já resolvidos por `realPath`, sem diferenciar maiúsculas nem separador
+      no Windows, e não toca o disco quando a lista não existe. Num projeto não confiável o
+      resolver descarta, para todo runner que o projeto nomeia (inclusive um que só ele declara):
+      `dangerouslySkipPermissions: true`; a lista `args` **inteira** quando algum token é
+      `--allowedTools`, `--allowed-tools`, `--dangerously-skip-permissions` ou `--permission-mode`
+      (também na forma `--flag=valor`); qualquer `mcp`; e `approval.requiredBeforeImplementation:
+      false`. Vale o valor global ou o padrão, `originOf` nunca atribui o valor descartado ao
+      projeto, e cada descarte vai em `ignoredLoosenings` e numa nota do `doctor` que nomeia
+      `trust.projectConfig`. Escolher runner, modelo, esforço, papéis, paralelismo, retry,
+      fallback, idioma e `worktree` continua com o projeto. O agy em skip-permissions já tinha
+      saído da config deste repositório (desligado, sem `dangerouslySkipPermissions`); os grants
+      de `runners.claude.args` que ela traz agora só valem numa máquina cuja config global confia
+      no checkout, e o comentário da própria config diz isso.
+
+      **Riscos que ficam** (nenhum resolvido aqui; cada um é candidato a item próprio):
+      - **O worktree de integração não recebe `worktree.copy`.** Os comandos de validação final da
+        run (`integrator.ts`) rodam onde nenhum arquivo ignorado foi copiado: um teste que precisa
+        de `.env.test` passa na tarefa e falha na revisão da run. Fechar é pequeno (o mesmo helper
+        depois da criação do worktree de integração), mas encosta no caminho de revisão perto de
+        `run-actions.ts`, que a F7a é dona.
+      - **Os grants deste repositório somem sem confiança global.** A validação continua rodando
+        no orquestrador, mas os agentes pulam diagnósticos ou voltam BLOCKED num comando negado.
+        Mitigado pela nota do `doctor` e pelo comentário na config.
+      - **O princípio "só aperta" não está inteiro.** Fora das quatro liberações nomeadas, um
+        projeto não confiável ainda pode: declarar `worktree.copy`, que deixa os arquivos
+        ignorados do operador — `.env` inclusive — legíveis pelo modelo (o aviso do `doctor` é a
+        única guarda); definir `runners.<x>.command`; apontar `baseUrl` com `apiKeyEnv`; e passar
+        flags de outros CLIs, como as de sandbox do codex.
+      - **Descartar a lista `args` inteira** por causa de um token de grant descarta junto flags
+        inofensivas. Escolhido contra filtrar token a token, que deixaria os argumentos do
+        `--allowedTools` variádico soltos como posicionais.
+      - **Padrão largo em `worktree.copy`** (`**/*`) num repo Node lista `node_modules` e pode
+        bater no teto de saída do Git: a tentativa é recusada, alto, em toda tentativa, até o
+        padrão ser estreitado.
+      - **Sem teto total para as instruções aninhadas.** Só o limite de 64 KiB por arquivo; uma
+        tarefa que toca muitos diretórios fundos gera um prompt grande. A fonte
+        `directoryInstructions` no orçamento torna isso visível.
+      - **Instruções aninhadas em dobro** quando um runner Claude declara `mcp`: sem
+        `--safe-mode`, o CLI pode carregar o `CLAUDE.md` aninhado por conta própria, além da cópia
+        injetada. Não medido.
+      - **A afirmação mais fraca do desenho:** que `ls-files --others --ignored
+        --exclude-standard` com pathspecs `:(glob)` lista arquivo a arquivo dentro de diretórios
+        ignorados, com essa semântica, no Git for Windows. Vem da documentação do Git, não de
+        medição; os testes de subprocesso com repositório real são o que decide.
+
+- [ ] **N5 · Pendências das revisões da run dos avulsos (`72bda11`)**
+      Achados que a revisão do plano e a revisão final deixaram abertos, nenhum bloqueante:
+      1. **[médio]** Duas decisões da composição sem teste: `readOnlyCopy` só com
+         `worktree.copyToReadOnly: true` e `copy` não vazio, e `isIgnoredDirectory` passado ao
+         `ChangeReviewAdapter`. Nenhum teste via `buildExecutionContext` pega a remoção de qualquer
+         uma das duas.
+      2. **[médio]** No modo sequencial o revisor lê as regras aninhadas de `projectDir`, a árvore
+         que a tarefa acabou de editar: "a tarefa não escreve as regras do próprio revisor" só vale
+         em modo worktree. Documentar o limite ou ler do commit base.
+      3. **[médio]** A prova de "prompt byte a byte igual" compara dois caminhos que passam pelo
+         código novo; falta uma renderização capturada do `master` anterior.
+      4. **[baixo]** Cópia recusada (a checagem de ignorado falhou) deixa o arquivo não ignorado no
+         worktree retido: remover a cópia na recusa.
+      5. **[baixo]** `trust.projectConfig` aceita caminho relativo e o descarta calado: o schema
+         deveria recusar, ou o `doctor` nomear o que pulou.
+      6. **[baixo]** Duplicações: `MAX_INSTRUCTIONS_BYTES`/`bounded()` copiam o limite do
+         `readAgentsMd`; `resolveQuietly` e `isRecord` repetidos em três arquivos.
+      **Pronto quando:** cada item tem teste (ou decisão escrita) e controle positivo.
+
+---
+
+# Herdados da fila anterior
+
+A fila de 04/09 (legibilidade, modelo local e precisão de contrato) fechou 62 itens e saiu do
+repositório; o histórico dela está no git. Dois itens ficaram abertos e valem até hoje.
+
+- [ ] **`agent-flow retry-stage <stage>`** — candidato, não decidido.
+      Simétrico ao `retry <taskId>` que já existe: hoje uma tarefa se repete e um stage de
+      planejamento não, embora o núcleo saiba fazer as duas. Não entrou porque `--from` já
+      resolve o caso que doía, e um segundo comando para a mesma coisa precisa de motivo
+      melhor que simetria.
+- [ ] **Não está no npm, e o uso diário é um checkout** — `package.json`
       Sem pacote publicado e sem release: instalar é clonar e `npm run build` a cada
-      `git pull`. `README.md:88` e `README.md:342` já dizem isso — o item é decidir entre
-      publicar e documentar o checkout como o caminho suportado.
+      `git pull`. O item é decidir entre publicar e documentar o checkout como o caminho
+      suportado.
       **Pronto quando:** existe `npm i -g agent-flow`, ou uma seção de instalação que não
       pressupõe o checkout de desenvolvimento.
 
 ---
 
-## O Deck como superfície única
+# F5 — Fora de escopo
 
-Levantado em 09/09/2026. O uso pretendido é `agent-flow ui`, Deck, e **nada de CLI** — o
-que muda a ordem da lista acima, porque a lacuna não é de núcleo: o servidor expõe 45
-rotas e o Deck consumia 28. A frente tem duas camadas, e vale distinguir: **7.1 a 7.4** são
-telas para respostas que o servidor já dá; **7.5 a 7.7** precisam de rota nova antes de
-qualquer tela.
-
-- [x] **7.1 · O fim da run não estava no Deck** — `apps/deck/src/features/run/Outcome.tsx`
-      O que o review achou, para onde a run foi e o que ela escreveu — `/review`,
-      `/delivery`, `/artifacts` — eram alcançáveis só pelo `--classic`. Um painel novo com
-      três abas embaixo do recorder: threads e findings com severidade, lifecycle,
-      independência (§19) e a árvore revisada contra a integrada (§4); gates com
-      `not_run` que nunca é verde (I-24); branch, PR e os checks do forge; e os sete
-      artefatos lidos **como texto**, nunca como markup. `unsatisfiedGates` chega
-      respondido — o painel não recalcula `required && status !== 'passed'`.
-      Dez testes lendo o DOM, com controle positivo em três deles.
-
-- [x] **7.2 · `AttentionFocus` não era lido por ninguém** — `RunPage.tsx`
-      A projeção emite um `focus` por item desde o M8 e o Deck ignorava o campo inteiro:
-      toda linha que não *agia* selecionava uma task e parava, então "Review the findings"
-      e "os checks do remoto ficaram vermelhos" caíam no mesmo painel, e nenhum dos dois
-      tinha a resposta. É a mesma forma exata do `?panel=` do dashboard antigo, que passou
-      dois milestones sem leitor. **Um campo que ninguém lê não quebra compilador nem
-      asserção.**
-
-- [x] **7.3 · Uma segunda lista de artefatos, na rota** — `api.schema.ts`
-      `ArtifactParamsSchema` tinha uma cópia à mão de `ARTIFACT_NAMES`. As duas
-      concordavam só porque ninguém tinha acrescentado artefato desde então: o próximo
-      parsearia em todo o produto e seria recusado por essa rota só, como
-      `unknown artifact` — um 400 culpando o chamador pela omissão do servidor, na única
-      superfície que não tem outro jeito de ler o que a run escreveu. Teste com controle
-      positivo em `contracts.test.ts`.
-
-- [x] **7.4 · Telemetria e analytics em tela — no Deck** — aba `Telemetry`, `/analytics`
-      Duas telas: a telemetria da run entrou como quarta aba do painel de desfecho (é onde
-      as outras respostas de fim de run já vivem), e `/analytics` é a agregação sobre as
-      runs recentes.
-      **Um achado no caminho.** O dashboard antigo declarava a resposta de
-      `/runs/:id/telemetry` à mão — e **perdeu o `context`** ao fazer isso. A telemetria de
-      contexto do AR-09 é justamente a metade que responde "por que essa stage custou
-      tanto": servida, e sem leitor nenhum, em nenhuma superfície. Agora existe
-      `RunTelemetryView` no contrato, o handler é tipado por ele, e um campo que se mexer é
-      erro de compilação em vez de um campo que some.
-      **Ausente não é zero**, e a tela diz isso: uma run cujo log foi truncado, ou anterior
-      ao recorder, não observou nada — e um zero confortável ali seria mentira. Controle
-      positivo no teste.
-      A janela do `/analytics` é declarada na tela ("50 de 200"), porque um gráfico que
-      descreve vinte de duzentas em silêncio está mentindo sobre o próprio assunto. E
-      **nenhuma cifra aparece, em nível nenhum** — decisão do contrato, agora asserida.
-
-- [x] **7.5 · `doctor` não tem rota** — `src/app/diagnostics.ts`, `GET /api/v1/doctor`, `/doctor`
-      O comando calculava cada fato e o imprimia no mesmo fôlego, então o CLI era o único
-      chamador **possível**. A extração é o item inteiro: `diagnose()` decide — Node, Git
-      contra o piso de worktree, o probe §8.4, capacidades declaradas por role, roteamento
-      por stage, veredito e remediações — e as duas superfícies só desenham. O
-      `render/routing.ts` virou renderizador puro, e o teste passa pelas duas metades para
-      que um achado sem frase (ou uma frase sem achado) fique vermelho.
-      **Uma diferença é honesta e está declarada:** o servidor não lê o ambiente (§93), então
-      runner com `apiKeyEnv` responde 401 ao health e sai `not configured`. O relatório
-      carrega `readsEnvironment: false` e a tela qualifica em vez de repetir um falso
-      negativo como achado. A rota é **sempre rasa** — `--deep` gasta cota por runner, e uma
-      página que pudesse pedir pediria a cada refresh.
-      Verificado rodando `agent-flow doctor` de verdade: saída idêntica à anterior.
-
-- [x] **7.6 · Não há como registrar um projeto pela tela** — `POST /api/v1/projects`
-      A nota do §68 dizia que faltava rota "porque adicionar significa escrever no
-      registry". Diagnóstico errado do obstáculo certo: o registry é uma **caminhada**, não
-      um arquivo — o que faltava era um **id**. Toda rota nomeia projeto por id que o
-      servidor emitiu (§93), e um diretório sem `.agent-flow/` não tinha nenhum, então
-      nenhuma requisição podia nomeá-lo. A caminhada agora emite id para candidatos também,
-      sob os mesmos roots, a mesma profundidade e a mesma regra de contenção — nenhum path
-      atravessa a fronteira, nos dois sentidos.
-      Marcador é `.git`, não `package.json`: agent-flow precisa de worktree, branch e
-      `planningBase`, e oferecer todo diretório seria um navegador de arquivos pior.
-      O guarda de arquitetura pegou a primeira versão — o handler chamava `appendEvent`
-      direto, que é a máquina de estado paralela do §60 — e forçou a forma certa:
-      `registerProject()` em `app/init-project.ts`, com o gate AR-01 **antes** da escrita,
-      chamado igual pelo CLI e pela rota. O aviso PRI-25 (`npm install` sem lockfile
-      versionado recusa toda task) virou dado no `InitResult`, então chega às duas telas.
-      O registry aprendeu a re-varrer: sem isso a escrita passa e a lista continua errada.
-
-- [x] **7.7 · `clean` não tem rota** — `POST /api/v1/clean`, `/clean`
-      `namespace-reclaim` já era o dono da metade perigosa — o que pode ser apagado, e em
-      que ordem. O que estava no CLI era a metade de cima: quais runs são candidatas, se
-      alguém está executando uma agora, e a regra §20.1 de que o diretório de estado vai
-      por último e só se a metade Git deu certo. Isso virou `app/workspace-cleanup.ts`.
-      **O preview é a mesma função.** `dryRun` desce pelo mesmo caminho e não escreve nada
-      — um preview calculado por outro código é o preview de outra operação, e essa é a
-      única coisa que um preview não pode ser. Na tela: nada é reclamado antes de um
-      preview, e o preview **morre** no instante em que as opções dele mudam (com controle
-      positivo). A única opção que apaga trabalho (`branches`, §20.4) não parece com as
-      outras — nunca implícita, nunca default.
-      O guarda de arquitetura foi ajustado junto: a leitura do lock (`.describe`) saiu dos
-      dois adapters e passou a viver uma vez no caso de uso, e a regra agora falha se
-      qualquer um dos dois voltar a perguntar por conta própria.
-
-- [x] **7.8 · `/team` e `/collaboration` sem tela no Deck**
-      Servidos desde o M5 e o M4, e o Deck não desenhava nenhum dos dois — então *"por que
-      essa tarefa foi para esse agente"* só tinha resposta no `--classic`. Duas abas novas
-      no registro da run, e **nada nelas é derivado**: score, `excludedBy`, status de
-      membro, status de thread e de entrada vêm de `core/team/view.ts` e das projeções de
-      colaboração. Um browser que reordenasse candidatos seria uma segunda autoridade de
-      atribuição, e a primeira discordância colocaria na tela uma decisão que ninguém
-      tomou (I-33, I-34).
-      O ranking fica atrás de um disclosure por tarefa — a linha fechada é quem pegou e a
-      frase que a política gravou; "por que não o outro" é pergunta real e rara.
-      **Achado ao ligar os fios:** o `focus: 'team'` da fila de atenção existe desde o M8 e
-      caía num `default: return undefined` — o item dizia "nenhum membro pôde pegar" e não
-      abria nada. O mapa virou um `Record<AttentionFocus, …>`: um foco novo agora **não
-      compila** até alguém decidir onde ele cai. Teste exaustivo sobre o union, mais os
-      dois estados vazios que a M4 torna o caso comum (desligado ≠ ligado e quieto).
-
----
-
-## O que só apareceu abrindo a tela
-
-Levantado em 09/09/2026, rodando `agent-flow ui` de verdade contra dois workspaces: o real
-(`wk/particular`, dois projetos e um repositório não registrado) e um descartável com **um**
-repositório e nenhum projeto — a forma exata de um primeiro dia. Suíte verde nas duas
-ocasiões; nada disto era visível de dentro dela.
-
-- [x] **9.1 · O Doctor não abria: a sonda de install segurava a página inteira**
-      `GET /doctor` rodava a sonda §8.4 — checkout descartável mais o install do projeto —
-      **antes** de responder. Contra este repositório isso é minutos, o deadline de leitura
-      do browser disparou primeiro, e a tela dizia *"This machine could not be diagnosed:
-      signal timed out"*. Tudo o mais que o `doctor` sabe é lido de declarações e responde
-      em menos de um segundo; **uma** checagem mantinha o resto refém.
-      A sonda virou opt-in na rota (`?install=true`) e um botão na tela, com o custo dito
-      na frase. Medido depois: **1,9 s** para a página, e a sonda quando alguém pede.
-      Os dois opt-ins agora são separados porque custam coisas diferentes: `--deep` gasta
-      **cota**, este gasta **tempo**. No terminal a sonda continua sendo o padrão — lá dá
-      para bloquear, e o comando já anuncia antes de rodar.
-
-- [x] **9.2 · Dia um: quatro telas girando para sempre**
-      Workspace com zero projetos — que o 7.6 acabou de tornar um estado normal. O deck
-      estava certo. **Doctor, Clean e Crew** guardavam com
-      `projects.loading || project === undefined` e devolviam skeleton: duas respostas
-      diferentes vestindo uma só. Carregando é temporário; não ter nenhum é permanente até
-      alguém agir. **Analytics** era pior — buscava um agregado que o servidor não tem como
-      escopar, levava 404, e reportava *"could not be read"*: uma falha, para uma ausência.
-      Um estado vazio compartilhado (`NoProjectsYet`) que diz qual dos dois é e aponta para
-      **Add project**. Teste em `first-day.test.tsx` cobre as quatro de uma vez, porque o
-      defeito não era de nenhuma delas — era de uma forma que as quatro tinham copiado.
-
-- [x] **9.3 · Duas coisas que só a captura de tela mostrou, nas abas novas do 7.8**
-      `<small>` é inline, então a linha do membro saiu **`Backendpinned-model-id ·
-      configured`** e quebrava no meio da frase — e nenhuma asserção pegou, porque toda
-      elas casam um trecho e um trecho é exatamente o que uma falta de espaço continua
-      contendo. `.doctor-row__name small { display: block }`, verificado na captura
-      seguinte (é layout: o jsdom da suíte roda com `css: false` e não computa nenhum).
-      E o handoff mostrava `backend → frontend` ao lado de uma thread que dizia
-      `Backend, Frontend` — uma tela, dois vocabulários para os mesmos dois agentes.
-      `HandoffView` carrega **ids** onde a mensagem carrega `fromName`; os nomes agora
-      saem do roster que veio na *mesma* resposta, com o id como fallback e um controle
-      positivo para ele.
-      Verificado com o navegador de verdade contra uma run montada à mão em um projeto
-      descartável (nenhum runner invocado, nenhuma cota gasta) — e o clique no item de
-      atenção `focus: 'team'` **abre a aba Team**: `REVIEW` → `TEAM`, medido na página.
-
-**O que foi verificado ponta a ponta pela tela**, num repositório descartável: registrar um
-projeto (arquivos no disco conferidos, e o aviso PRI-25 disparou porque não havia lockfile
-versionado), a sonda de install rodando sob demanda, o dry-run do `clean` e o plano
-**morrendo** quando as opções mudam, a aba de telemetria, e `/analytics`. Sem erro de
-console e sem requisição falha em nenhuma delas.
-
----
-
-## O Deck em português
-
-- [x] **10.1 · Toda a interface do Deck em pt-BR, com o inglês ainda disponível**
-      Pedido: *"falta traduzir toda a interface do deck para pt-br, 100%"*. Escolhida a
-      forma que o repo já usa em dois lugares — `apps/web` tem i18n com `en` + `pt-BR`, e
-      existe um `README.pt-BR.md` ao lado do inglês: **dicionário por idioma, pt-BR como
-      padrão**, seletor no cabeçalho, escolha lembrada por navegador.
-      `en.ts` **é** o contrato: `Dictionary = typeof en`, e `pt-BR.ts` é anotado com ele —
-      chave que falte, sobre ou mude de nome é **erro de compilação**, não uma tela meio
-      traduzida que ninguém percebe. O teste de paridade cobre o que o compilador não vê:
-      aridade das funções, formato dos arrays, e uma asserção de que nenhum valor foi
-      **copiado** em vez de traduzido (com a lista curta do que é igual de propósito).
-      **Funções, não `{n}`.** Contagem entra como argumento porque as duas línguas
-      discordam do que uma contagem muda: `1 task` → `2 tasks` é sufixo, `1 tarefa` →
-      `2 tarefas` concorda com um substantivo que o modelo não enxerga. É o mesmo motivo
-      que `formatRelative`, `describe` (as frases do log) e `sectionFields` passaram a
-      **receber** o dicionário: são folds puros, e um locale de módulo os tornaria função
-      de quando rodaram.
-      `words()` saiu de `lib/tone.ts` — aquele arquivo diz de si mesmo que é "o único
-      lugar onde um status vira cor", e virar *linguagem* é outro trabalho que morava lá
-      só porque os dois começam na mesma string.
-
-- [x] **10.2 · Três defeitos que só a captura de tela mostrou**
-      **`esforço alta`.** `low/medium/high` são gravidade *e* esforço; uma tabela só não
-      concorda com *gravidade* e *esforço* ao mesmo tempo. Virou `levels` (masculino, para
-      esforço e risco) ao lado de `words` (feminino, para gravidade). O inglês escreve as
-      duas iguais — que é exatamente por que a separação tinha de ficar visível.
-      **`autenticação desconhecido`.** Mesma classe, tabela própria (`authState`).
-      **`verificação` no meio de oito ids de papel.** `verification` é id de papel *e*
-      nome de estágio; o id é o que se digita no `config.yaml`, e traduzi-lo quebrou a
-      regra que o próprio cabeçalho do `pt-BR.ts` enuncia. Ids não passam mais por
-      `word()`; o estágio de mesmo nome continua traduzido na tabela de roteamento, porque
-      lá ele é vocabulário e não chave.
-      Achado de tabela: `sectionFields` era indexado pelo **rótulo**, e o `CrewPage` abria
-      duas seções por padrão comparando com `'Runners'` e `'Parallelism'` — em pt-BR
-      nenhuma das duas abria. Agora é indexado pela chave da configuração, que não é
-      idioma.
-      Verificado no navegador de verdade: `html lang` acompanha, a escolha **sobrevive ao
-      reload**, e as seis telas abrem em português.
-
-- [x] **10.3 · A regra de arquitetura que a tradução acordou**
-      Mover a prosa do `doctor` para o dicionário transformou texto JSX em *string
-      literal*, e a regra do Issue #21 — "nenhum nome de provider decide uma questão de
-      modelo no browser" — passou a ver `openai-compatible` numa frase que ela nunca tinha
-      lido. A frase não mudou; as aspas em volta dela mudaram.
-      Os dois dicionários viraram exceção **como arquivos**, e a exceção é limitada por
-      uma regra nova ao lado: nenhuma comparação contra um *provider* dentro deles.
-      Estreita de propósito — o `taskFinished` do pt-BR compara `status` para concordar
-      (`TASK-004 concluída`), e isso é fato sobre o português, não decisão sobre a run.
-
----
-
-## A suíte no Windows, medida de novo
-
-- [x] **8.1 · Duas portas de `GitWorkspaces` respondendo em vocabulários diferentes**
-      `workspacePath` resolvia com `path.resolve` e devolvia `\`; `listWorktrees` devolve o
-      que o Git imprimiu e `ownWorktrees` o que o `realPath` normalizou — os dois `/`. Uma
-      porta, dois vocabulários, e quem compara um contra o outro decide que nada está
-      dentro de nada. `namespace-reclaim` é esse chamador: sobreviveu só porque também
-      pergunta ao `realPath` e testa as duas formas, sob um comentário sobre symlink que
-      não menciona separador — e o fallback `?? path.value` volta para a forma `\`, onde o
-      teste de pertinência falha e um worktree que devia ser reclamado é **silenciosamente
-      retido**. Normalizado em `workspacePath`; `resolveWithinRoot` ficou intacto, porque é
-      a checagem de contenção e as regras dela são asseridas para win32 desde o Linux
-      (§26.2). Teste novo fixa o contrato, com controle positivo.
-
-- [x] **8.2 · A cópia do defeito de separador que o 6.2 não pegou** — `apps/web/src/lib/architecture.test.ts`
-      Cinco regras comparando `'lib\api.ts'` com `'lib/api.ts'`, um diretório ao lado do
-      suite que o 6.2 fechou. Mesmo seam (`srcPath`) e o mesmo guarda que falha se o
-      vocabulário voltar ao separador do host.
-
-- [x] **8.3 · O vermelho que sobra não era "tempo" — era um arquivo na lane errada**
-      A separação em duas lanes (`8960c2d`) resolveu as famílias de Git. O que restou não
-      era contenção difusa: era **um** arquivo, e o predicado de lane não conseguia vê-lo.
-
-      `run-execution-lock.race.test.ts` empacota o lock com esbuild e sobe **oito**
-      processos Node. Não se chama `.integration.`, não importa a fixture de repositório e
-      não importa `NodeProcessRunner` — alcança `node:child_process` pelo harness ao lado.
-      Nenhuma das três propriedades o pegava, então o arquivo mais pesado da suíte rodava
-      na lane apertada, e num gate com a máquina ocupada ele reprovou duas vezes. É
-      literalmente o defeito que o comentário do `vitest.lanes.ts` previa: *"o próximo
-      teste que ganhar um subprocesso não entra em lista nenhuma, cai na lane apertada, e
-      fica vermelho na máquina de outra pessoa meses depois."*
-
-      **Três correções, e nenhuma é afrouxar asserção:**
-      - o predicado passou a seguir **um** nível de import local e a tratar
-        `node:child_process` como marcador — derivado, não soletrado. Regra nova em
-        `architecture.test.ts` que falha se um teste alcançar um filho por um helper e
-        ficar na lane rápida, com o arquivo nomeado como controle.
-      - `refuses a second process while the first is still holding` dormia 300 ms e
-        **torcia**. Sob carga o primeiro filho ainda não tinha adquirido, o segundo pegou o
-        lock legitimamente, e a asserção leu isso como falha de exclusão. Virou handshake:
-        espera o arquivo de lock existir. Mesma classe de suposição que a barreira do teste
-        acima já tinha removido — e que continuava aqui.
-      - `leaves no grandchild running behind it` tinha a mesma forma de suposição: matava
-        aos 300 ms e torcia. Medido sob carga, o kill chegava **durante a criação** do
-        neto — `taskkill /T` andou uma árvore que ainda não o continha, e a segunda
-        tentativa tinha raiz morta e não alcança nada. O órfão era real; o defeito que
-        parecia, não. Orçamento de 3 s e um marcador `alive` que transforma o orçamento em
-        **evidência**: se o neto nunca existiu, o teste diz isso em vez de passar sobre uma
-        árvore que nunca foi construída.
-        Duas medições viraram controle, porque cada uma é uma afirmação sobre a plataforma:
-        desligar o kill em árvore **não** deixa o teste vermelho no Windows (um neto já
-        iniciado morre junto com o pai de qualquer jeito), e `detached: true` também não
-        escapa (`taskkill /T` anda por **pid do pai**, e destacar muda o console, não a
-        parentela). Quem escapa é o processo cujo pai já saiu: foi re-parenteado, não está
-        na árvore de ninguém, e nenhum kill ancorado em pid o alcança. Esse é o **limite
-        honesto** do mecanismo, não um defeito dele — e é o sobrevivente que o teste
-        precisa conseguir enxergar para não ser vácuo.
-      - `expect(held).toHaveLength(1)` saiu. **Não é a propriedade**, e este arquivo já
-        tinha escrito isso duas vezes: a barreira remove a suposição de *start-up*, não a
-        de *escalonamento* — um contender desescalonado por mais que os 250 ms de posse
-        acorda, acha o lock livre e o toma, o que é correto. Medido: duas aquisições, com
-        `overlaps` vazio. Ficam a exclusão exata (`overlaps`, `maxSimultaneous`) e a
-        completude (`held + refused === 8`), mais um **controle** novo sobre o detector,
-        porque agora ele carrega a afirmação inteira e um detector cego passaria sempre.
-
-- [x] **8.4 · `SHELL` morto travando o lint** — `test/app/verification-commands.test.ts`
-      A prosa sobre "o shell que o produto realmente spawna" já vive onde a asserção
-      acontece (`shellInvocation` no lugar, comparando `command` e `args`). O const acima
-      não era usado por ninguém.
-
-- [x] **8.5 · O gate ficou vermelho numa fixture que depende de um `spawn` dar certo**
-      `doctor-install-probe` > *"names the checkout phase when a fresh checkout is born
-      dirty"* falhou uma vez sob a lane cheia e passa sozinho — quatro gates anteriores
-      verdes. A mensagem acusava o produto: *"expected … to contain 'not clean before
-      installing'"*, ou seja, o checkout saiu **limpo**.
-      Medido, não deduzido. A fixture nascia suja com `.gitattributes` +
-      `filter.dirtier.smudge = sed …`, e um filtro **não-`required`** que não consegue
-      subir é *ignorado* pelo Git:
-      ```
-      error: cannot fork to run external filter 'this-command-does-not-exist'
-      $ git status --porcelain     # (nada)
-      ```
-      Sob a lane paralela no Windows, um `spawn` que falha apaga a condição sob teste e a
-      asserção morre como se fosse regressão. Controle positivo: neutralizando a fixture
-      nova, o erro reproduz **a mesma frase** do gate.
-      Uma fixture só (`bornDirty`, usada pelos dois call sites — o outro era
-      `task-workspaces`) e sem processo nenhum: o blob é commitado com CRLF **antes** de
-      `.gitattributes` declarar `*.txt text`, então o checkout escreve aqueles bytes e o
-      `status` limpa para LF antes de comparar.
-      **E a primeira versão dela falhou no gate seguinte, pelo mesmo sintoma e por outro
-      mecanismo** — o que desmentiu o "sempre" que eu tinha escrito aqui. O segundo commit
-      usava `commitAll`, e `git add -A` **re-lê** um arquivo cujo stat parece sujo, aplica
-      o atributo que ele mesmo acabou de declarar, e versiona a normalização:
-      ```
-      $ git add -A && git commit -m 'declare text'
-      $ git cat-file -p :content.txt | od -c
-      0000000   o   r   i   g   i   n   a   l  
-      # normalizado, e a premissa foi embora
-      ```
-      Ou seja: se o índice guardava CRLF dependia de como o relógio caía entre dois
-      commits. Agora o `.gitattributes` é staged **por nome**, o que não pode tocar no
-      outro arquivo — medido nos dois lados, com e sem o stat sujo.
-      E a fixture **verifica a própria premissa**: se o índice não tiver mais CRLF ela
-      lança dizendo isso. As duas falhas chegaram à suíte como "o produto regrediu" quando
-      a verdade era "a fixture não produziu nada para testar", e isso é o que a asserção
-      corrige de vez.
-
----
-
-## Já fechado nesta frente
-
-- [x] `\d` nos schemas travava toda stage estruturada com modelo local — `08c66c2`
-- [x] pipeline dizia `pending` para cache, para stage em execução e para implementação em
-      curso — `034ee4a`, `6b8abff`
-- [x] `feature` silencioso por 4 minutos; `…` que não disparava; linha de retomada na
-      falha — `1e263a8`
-- [x] ~~dashboard ignora `--config`~~ — retirado: o `ui` aceita, era erro de operação
-
-
----
-
-## Fechado
-
-Cinco commits, 14 itens, tudo com teste e controle positivo:
-
-| commit | o que |
-|---|---|
-| `5246077` | `run` anuncia a task · `doctor` anuncia o install · findings apontam pro `status` · `status` distingue review de falha técnica · `plan_rejected_by_checks` · README e comentário dos prompts |
-| `d53e3b2` | `args` e `contextWindow` em `RunnerConfig` · aviso a 80% da janela · os dois timeouts documentados |
-| `5d2138b` | `doctor` reporta por stage · lista runner não roteado |
-| `df7ea8f` | `stage_output_received` · `currentStage` derivado do log · vocabulário de eventos declarado |
-| `b37bc0b` | override de runner por stage |
-
-**Suíte:** 4361 testes, typecheck, lint, build.
-
-**Dois itens ficaram abertos de propósito**, e ambos com motivo escrito: `retry-stage`
-(simetria não é motivo suficiente) e estreitar `stage_completed` (quebraria uma decisão
-de independência, em silêncio).
+Nenhum item. (A memória entre runs saiu daqui: é a F6, na onda 3.) Gatilho automático,
+planejamento disparado pelo tracker, loop até produção,
+agente de limpeza recorrente, A2A com autoridade e RBAC só entram nesta fila quando a
+condição de reabertura do [`roadmap.md`](roadmap.md) for cumprida.

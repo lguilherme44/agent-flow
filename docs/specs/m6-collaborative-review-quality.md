@@ -600,4 +600,3 @@ The charter's M6-ACC-01 … 28, verbatim.
 
 - [M4 — Collaboration Foundation](m4-collaboration-foundation.md)
 - [M5 — Team Orchestration](m5-team-orchestration.md)
-- [M5 — live dogfood report](m5-live-dogfood-report.md)

@@ -719,7 +719,7 @@ describe('M6-ACC-24 … 28 — what only a live run can answer', () => {
     // malformed every time it is used — four attempts in the M6 run, zero accepted. The
     // recovery ladder stopped both failed tasks at `recovery_exhausted` and asked a human
     // rather than rerouting, which is its documented behaviour and not a reassignment.
-    // See docs/specs/m6-live-dogfood-report.md.
+    // Seen in the M6 live dogfood (its report is in the git history).
   });
 
   it.skip('M6-ACC-25 — live collaboration payload changes downstream behaviour', () => {

@@ -44,8 +44,8 @@ async function readyWorkspace(current: WorktreeRun): Promise<IntegrationWorkspac
  * Normalised at the *comparison*, not at the source, because the source is Git and Git is
  * already right: `worktree list --porcelain` prints `/` on Windows. What was wrong is the
  * other side, where a `join`-built expectation carries the host separator and the two can
- * never be equal. The fourth copy of that defect found in this suite; see
- * `docs/todo.md` §8.5 for the systemic one, which is the fixture and is its own pass.
+ * never be equal. The fourth copy of that defect found in this suite; the systemic one is
+ * the fixture, and is its own pass (§8.5 of the 04/09 queue, in the git history).
  */
 function registered(current: WorktreeRun): string[] {
   return current.repo
