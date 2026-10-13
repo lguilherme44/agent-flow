@@ -131,6 +131,9 @@ const VENDOR_PREFIXES: readonly string[] = [
   'GOOGLE_APPLICATION_',
   'AGY_',
   'ANTIGRAVITY_',
+  // O provedor que a equipe usa como *segundo* agente: o harness apontado para ele le a
+  // chave daqui, e a sonda de allowlist (`scripts/env-allowlist-probe.ts`) ja a esperava.
+  'DEEPSEEK_',
   'OPENCODE_',
   'AGENT_FLOW_',
   'AF_',

@@ -54,6 +54,15 @@ export const RunnerConfigSchema = z.object({
   /** The model id to request. Optional for the same reason `RoleConfig.model` is (AD-13). */
   model: z.string().min(1).optional(),
   /**
+   * How an output schema is enforced on the wire: `json_schema` (default) or `json_object`.
+   *
+   * Only the `openai-compatible` adapter reads it. An endpoint that answers `This
+   * response_format type is unavailable now` — DeepSeek, measured — takes the second: the
+   * schema travels in the prompt and the reply is validated locally, by the parser and the
+   * repair loop the enforced path already uses.
+   */
+  structuredOutput: z.enum(['json_schema', 'json_object']).optional(),
+  /**
    * Extra arguments appended to the argv the adapter builds.
    *
    * The seam for a CLI that has to be told something this schema does not model —
@@ -765,6 +774,17 @@ export const ProjectConfigSchema = z.object({
     })
     .prefault({}),
   rules: z.object({ architecture: z.array(z.string()).default([]) }).prefault({}),
+  /**
+   * The shell that runs this project's command lines (`commandShell`).
+   *
+   * Absent — the default — keeps the host shell: `cmd.exe` on Windows, `/bin/sh` everywhere
+   * else. A repository whose commands are POSIX script — `export`, `$(...)`, `[ -n ]` —
+   * cannot run under `cmd.exe`, and no syntax is accepted by both, so it names its shell
+   * here instead: `sh` runs every command through a POSIX shell on every platform. On
+   * Windows that shell has to be resolvable (Git for Windows' `bin` on PATH), or named by
+   * absolute path.
+   */
+  commandShell: z.string().min(1).optional(),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 

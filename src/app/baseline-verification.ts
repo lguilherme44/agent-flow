@@ -72,6 +72,8 @@ export interface BaselineRequest {
   /** The failing steps the project listed, each with the command line it ran. */
   readonly steps: readonly { readonly step: VerificationStep; readonly command: string }[];
   readonly timeoutSeconds: number;
+  /** The project's `commandShell`, so the base runs each line in the shell the head did. */
+  readonly commandShell?: string;
   /** `runs/<id>/baseline.json`. */
   readonly cachePath: string;
 }
@@ -99,7 +101,7 @@ export async function judgeAgainstBase(
 
   const missing = request.steps.filter(({ command }) => known(command) === undefined);
   if (missing.length > 0) {
-    const asked = await askTheBase(deps, base, missing.map(({ command }) => command), request.timeoutSeconds);
+    const asked = await askTheBase(deps, base, missing.map(({ command }) => command), request.timeoutSeconds, request.commandShell);
     if (!asked.ok) {
       for (const { step } of missing) verdicts.set(step, { verdict: 'not_run', base, reason: asked.reason });
     } else {
@@ -155,6 +157,7 @@ async function askTheBase(
   base: string,
   commands: readonly string[],
   timeoutSeconds: number,
+  commandShell: string | undefined,
 ): Promise<{ readonly ok: true; readonly results: readonly CommandResult[] } | { readonly ok: false; readonly reason: string }> {
   const checkout = await deps.openCheckout(base);
   if (!checkout.ok) return { ok: false, reason: `the base could not be checked out: ${checkout.detail}` };
@@ -163,7 +166,13 @@ async function askTheBase(
     const prepared = await deps.prepare(checkout.cwd);
     if (!prepared.ok) return { ok: false, reason: `the base checkout could not be prepared: ${prepared.detail}` };
 
-    const ran = await runCommands({ processRunner: deps.processRunner, commands, cwd: checkout.cwd, timeoutSeconds });
+    const ran = await runCommands({
+      processRunner: deps.processRunner,
+      commands,
+      cwd: checkout.cwd,
+      timeoutSeconds,
+      ...(commandShell === undefined ? {} : { commandShell }),
+    });
     return { ok: true, results: ran.results };
   } finally {
     // Never evidence, and a command that wrote into it must not keep it on disk — and when it

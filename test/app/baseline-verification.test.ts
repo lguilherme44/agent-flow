@@ -61,6 +61,18 @@ describe('judgeAgainstBase', () => {
     expect(retained).toEqual(['EBUSY']);
   });
 
+  it('runs the base in the shell the project named, as the head ran', async () => {
+    // Merge with master's `commandShell`: a POSIX line under the host default fails on the base
+    // for the shell, and that failure would read as pre-existing.
+    const named = deps(1);
+    const proc = named.deps.processRunner as FakeProcessRunner;
+
+    await judgeAgainstBase(named.deps, { ...REQUEST, commandShell: 'sh' });
+
+    expect(proc.lastCall?.command).toBe('sh');
+    expect(proc.lastCall?.args).toEqual(['-c', 'npm run lint']);
+  });
+
   it.each([124, 127])('never reads exit %i on the base as permission, and does not cache it', async (exitCode) => {
     const environment = deps(exitCode);
 

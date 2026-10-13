@@ -47,9 +47,10 @@ describe('ConfigEditor', () => {
     const project = await editor.describe({ scope: 'project', projectId: 'demo' });
 
     // +12 for maxTurns: `stages.*.maxTurns` on each of the ten roles, and the two under
-    // `fallback.roles.*`.
-    expect(global.dynamicFields).toHaveLength(86);
-    expect(project.dynamicFields).toHaveLength(87);
+    // `fallback.roles.*`. +1 for `runners.*.structuredOutput` (the openai-compatible endpoint
+    // that refuses json_schema), which arrived from master without its count.
+    expect(global.dynamicFields).toHaveLength(87);
+    expect(project.dynamicFields).toHaveLength(88);
     expect(global.dynamicFields.map((entry) => entry.path.join('.'))).toEqual(expect.arrayContaining([
       'runners.*.type', 'teams.*.members.*.runner', 'roles.architect.stages.*.runner',
       'fallback.roles.*.runner', 'quality.gates.*.category',
@@ -58,6 +59,7 @@ describe('ConfigEditor', () => {
       // which is the failure mode a bare length check invites.
       'runners.*.mcp.config', 'runners.*.mcp.servers',
       'roles.architect.stages.*.maxTurns', 'fallback.roles.*.maxTurns',
+      'runners.*.structuredOutput',
     ]));
     expect(project.dynamicFields.map((entry) => entry.path.join('.'))).toContain('validationCommands.*');
     expect(project.dynamicFields.find((entry) => entry.path.join('.') === 'teams.*.name')).toMatchObject({ editable: false, reason: 'global_only' });

@@ -3178,6 +3178,11 @@ async function judgeRun(
         {
           path: tree.value.cwd,
           ...(install === undefined ? {} : { install }),
+          // The shell the repository's commands are written for: `cmd.exe` answers
+          // `'export' is not recognized` to a POSIX line, and this is the caller that runs the install.
+          ...(context.config.project?.commandShell === undefined
+            ? {}
+            : { commandShell: context.config.project.commandShell }),
           timeoutSeconds: commandTimeoutSeconds,
         },
       )
@@ -3647,6 +3652,10 @@ async function baselineOf(
   if (steps.length === 0) return byCommand;
 
   const install = project.commands.install;
+  // The base runs in the shell the head ran in. A POSIX line under the host default fails on
+  // the base for the shell, not the code, and that failure would read as pre-existing — a
+  // regression passed as permission (merge with master's `commandShell`).
+  const shell = project.commandShell === undefined ? {} : { commandShell: project.commandShell };
   const verdicts = await judgeAgainstBase(
     {
       fs: context.fs,
@@ -3667,12 +3676,12 @@ async function baselineOf(
       prepare: async (cwd) => {
         const prepared = await prepareWorkspace(
           { workspaces: context.workspaces, processRunner: context.processRunner },
-          { path: cwd, ...(install === undefined ? {} : { install }), timeoutSeconds },
+          { path: cwd, ...(install === undefined ? {} : { install }), ...shell, timeoutSeconds },
         );
         return prepared.ok ? { ok: true } : { ok: false, detail: prepared.failure.detail };
       },
     },
-    { base: tree.base, steps, timeoutSeconds, cachePath: runPaths(context.projectDir, runId).baseline },
+    { base: tree.base, steps, timeoutSeconds, ...shell, cachePath: runPaths(context.projectDir, runId).baseline },
   );
   for (const { step, command } of steps) {
     const verdict = verdicts.get(step);

@@ -182,6 +182,7 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
       baseUrl: config.baseUrl,
       ...(apiKey === undefined || apiKey.length === 0 ? {} : { apiKey }),
       ...(config.model === undefined ? {} : { model: config.model }),
+      ...(config.structuredOutput === undefined ? {} : { structuredOutput: config.structuredOutput }),
     });
   },
 };
@@ -194,7 +195,7 @@ const FACTORIES: Readonly<Record<string, RunnerFactory>> = {
  * Two places would eventually disagree, and the one an editor reads would be the wrong one.
  */
 export interface RunnerTypeField {
-  readonly name: 'command' | 'args' | 'baseUrl' | 'apiKeyEnv' | 'model' | 'contextWindow';
+  readonly name: 'command' | 'args' | 'baseUrl' | 'apiKeyEnv' | 'model' | 'structuredOutput' | 'contextWindow';
   readonly required: boolean;
   /** Names an environment variable rather than holding a value (§7.1). */
   readonly secretEnv?: true;
@@ -228,6 +229,7 @@ const TYPE_FIELDS: Readonly<Record<string, readonly RunnerTypeField[]>> = {
     { name: 'baseUrl', required: true },
     { name: 'apiKeyEnv', required: false, secretEnv: true },
     { name: 'model', required: false },
+    { name: 'structuredOutput', required: false },
     { name: 'contextWindow', required: false },
   ],
 };

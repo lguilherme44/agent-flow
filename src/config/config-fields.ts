@@ -62,6 +62,7 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   // belongs to the repository, not to whoever happens to be running the CLI.
   enumField('language', [...LOCALES], ['global', 'project']),
   ...['type', 'command', 'baseUrl', 'apiKeyEnv', 'model'].map((key) => field(`runners.*.${key}`, 'string')),
+  enumField('runners.*.structuredOutput', ['json_schema', 'json_object']),
   field('runners.*.enabled', 'boolean'), field('runners.*.args', 'string_list'), field('runners.*.contextWindow', 'integer'),
   // The declared MCP set. Editable for the same reason `args` is — it is how an operator
   // hands a runner the repository's own index — and `servers` is a list rather than a
@@ -93,6 +94,9 @@ export const configFieldCatalog: readonly ConfigFieldDefinition[] = [
   ...['host', 'owner', 'repo'].map((key) => field(`forge.repository.${key}`, 'string')), field('forge.baseBranch', 'string'), field('forge.labels', 'string_list'),
   ...['requestTimeoutMs', 'maxResponseBytes', 'maxMutationAttempts', 'maxSyncAttempts', 'maxCommentsPerRun', 'maxRecoveryScan'].map((key) => field(`forge.budgets.${key}`, 'integer')),
   field('project.name', 'string', PROJECT), field('project.type', 'string', PROJECT),
+  // The project's own shell, so an operator can switch a POSIX-command repository away
+  // from the host default without editing YAML by hand.
+  field('commandShell', 'string', PROJECT),
   ...['install', 'lint', 'typecheck', 'test', 'build'].map((key) => field(`commands.${key}`, 'string', PROJECT)),
   field('validationCommands.*', 'string', PROJECT), field('verification.baseline', 'string_list', PROJECT), field('paths.source', 'string_list', PROJECT), field('paths.tests', 'string_list', PROJECT), field('rules.architecture', 'string_list', PROJECT),
 ];

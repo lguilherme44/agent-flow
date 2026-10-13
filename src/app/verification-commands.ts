@@ -29,7 +29,10 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
  * a configured string needs a shell is this module's decision, and a runner that rewrote
  * `/bin/sh` into `cmd` would be silently reinterpreting every caller's argv.
  */
-export function shellInvocation(commandLine: string): {
+export function shellInvocation(
+  commandLine: string,
+  options: { readonly commandShell?: string } = {},
+): {
   command: string;
   args: string[];
   verbatimArguments?: boolean;
@@ -38,6 +41,14 @@ export function shellInvocation(commandLine: string): {
   // strips — Node's own `shell: true` shape. Passing it as an ordinary argument let the
   // argv escaping turn every inner `"` into `\"`, and `cmd` ran a mangled line: measured on
   // a `docker run -v "%CD%\server:/src:ro"` test command ("too many colons").
+  // A project that names its own shell wins over the host default: `shell: sh` is how a
+  // repository whose commands are POSIX script runs them on Windows, where `cmd.exe`
+  // answers `'export' is not recognized as an internal or external command` (SEC-…, the
+  // same class of failure the host default exists to avoid).
+  if (options.commandShell !== undefined && options.commandShell.trim().length > 0 && options.commandShell !== 'auto') {
+    return { command: options.commandShell, args: ['-c', commandLine] };
+  }
+
   return process.platform === 'win32'
     ? { command: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', `"${commandLine}"`], verbatimArguments: true }
     : { command: '/bin/sh', args: ['-c', commandLine] };
@@ -93,7 +104,7 @@ export async function runVerification(
 
     const spawned = await processRunner.run({
       // Through a shell because config holds command lines, not argv.
-      ...shellInvocation(command),
+      ...shellInvocation(command, { commandShell: project?.commandShell }),
       cwd,
       // The operator's own commands, run as they wrote them (PRI-17). `npm test` may
       // need a database URL, a registry token or a language toolchain nobody can enumerate
@@ -135,6 +146,11 @@ export interface RunCommandsOptions {
   readonly commands: readonly string[];
   readonly cwd: string;
   readonly timeoutSeconds?: number;
+  /**
+   * The project's shell, when it named one (`ProjectConfig.shell`). Absent is the host
+   * default, which is what every caller that has no project config gets.
+   */
+  readonly commandShell?: string;
 }
 
 /**
@@ -148,7 +164,7 @@ export async function runCommands(options: RunCommandsOptions): Promise<Verifica
 
   for (const command of options.commands) {
     const spawned = await options.processRunner.run({
-      ...shellInvocation(command),
+      ...shellInvocation(command, { commandShell: options.commandShell }),
       cwd: options.cwd,
       // The operator's own commands, run as they wrote them (PRI-17). `npm test` may
       // need a database URL, a registry token or a language toolchain nobody can enumerate

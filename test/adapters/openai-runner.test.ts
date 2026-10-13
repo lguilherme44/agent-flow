@@ -311,3 +311,41 @@ describe('OpenAiRunner health', () => {
     expect((await runner.healthCheck()).auth).toBe('not_configured');
   });
 });
+
+describe('OpenAiRunner structured output', () => {
+  const schema = { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] };
+
+  it('enforces the schema on the wire by default', async () => {
+    const { runner, calls } = makeRunner(() =>
+      jsonResponse({ choices: [{ message: { content: '{"title":"x"}' } }] }),
+    );
+
+    await runner.run({ ...input, outputSchema: schema });
+
+    expect(calls[0]?.body.response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'response', strict: true, schema },
+    });
+  });
+
+  it('carries the schema in the prompt when the endpoint cannot enforce it', async () => {
+    // Measured against DeepSeek: json_schema comes back as "This response_format type is
+    // unavailable now". The shape still has to reach the model, and JSON mode there also
+    // requires the word json in the prompt.
+    const { runner, calls } = makeRunner(
+      () => jsonResponse({ choices: [{ message: { content: '{"title":"x"}' } }] }),
+      { structuredOutput: 'json_object' },
+    );
+
+    const result = await runner.run({ ...input, outputSchema: schema });
+
+    expect(calls[0]?.body.response_format).toEqual({ type: 'json_object' });
+    const messages = calls[0]?.body.messages as { role: string; content: string }[];
+    const last = messages[messages.length - 1]?.content ?? '';
+    expect(last).toContain('"title"');
+    expect(last).toMatch(/json/i);
+    // Parsed here as well, so a stage receives the same object the enforced path gives it.
+    expect(result.ok).toBe(true);
+    expect(result.ok ? result.json : undefined).toEqual({ title: 'x' });
+  });
+});
