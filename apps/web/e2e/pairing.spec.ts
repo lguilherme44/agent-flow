@@ -208,7 +208,10 @@ test.describe('device pairing over a real socket', () => {
     await page.goto(`${targetUrl}/p/${project}/runs/${runId}`);
     await expect(page.getByRole('heading', { name: runId })).toBeVisible();
 
-    await page.getByRole('button', { name: /Review the plan/i }).click();
+    // Two buttons say this once the run's attention queue has loaded — the page's own and the
+    // queue's ("What needs a person on this run") — and whether the queue is there yet at the
+    // click was a race the strict locator lost on CI now and then. The page's own comes first.
+    await page.getByRole('button', { name: /Review the plan/i }).first().click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: /Approve plan/i }).click();
