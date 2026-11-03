@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { clearAutonomy } from './autonomy-budget.js';
 import { createHash } from 'node:crypto';
 import {
@@ -101,6 +102,8 @@ import { CollaborationStore } from './collaboration-store.js';
 import { projectFindings } from '../core/review/findings.js';
 import { correctiveLinks, correctiveSelection } from '../core/review/corrective.js';
 import { assessIndependence } from '../core/independence.js';
+import { BYTES_PER_TOKEN } from '../core/prompt-budget.js';
+import { weighPlan } from '../core/task-budget.js';
 import { buildValidationRegistry, type ValidationRegistry } from '../core/validation-registry.js';
 import {
   judgeRequiredGates,
@@ -926,6 +929,53 @@ const ATTACHED_FINDINGS_REASON =
   'the plan was approved with --attach-findings over a failed review: its findings were ' +
   'attached to the tasks rather than resolved';
 
+/**
+ * The sizes behind the fit warning, read once at approval.
+ *
+ * The preamble is the largest this run has already measured. It is an estimate — the
+ * implementation prompt is not the planning prompt — and the warning says so. Using the
+ * largest rather than the mean is deliberate: understating the preamble overstates the
+ * room, which is the error that lets an impossible task through.
+ */
+async function warnAboutFit(
+  context: ExecutionContext,
+  runId: string,
+  plan: Plan,
+): Promise<string[]> {
+  const executor = context.config.global.roles.executors.normal;
+  const window = context.config.global.runners[executor.runner]?.contextWindow;
+  if (window === undefined) return [];
+
+  // `readEvents`, not the tolerant read: approval is an action, and the architecture
+  // test reserves best-effort reads for read models. A truncated event log should fail
+  // here rather than quietly produce a smaller preamble and a rosier verdict.
+  const events = await context.store.readEvents(runId);
+  const preambleBytes = events
+    .filter((event) => event.type === 'stage_context_measured')
+    .map((event) => Number(event.detail['totalBytes'] ?? 0))
+    .reduce((worst, bytes) => (bytes > worst ? bytes : worst), 0);
+  if (preambleBytes === 0) return [];
+
+  const sizes = new Map<string, number>();
+  for (const task of plan.tasks) {
+    for (const file of task.files.likely) {
+      if (sizes.has(file)) continue;
+      const found = await context.fs.stat(join(context.projectDir, file));
+      if (found === null || found.isDirectory) continue;
+      sizes.set(file, found.size);
+    }
+  }
+
+  return weighPlan({
+    tasks: plan.tasks.map((task) => ({ id: task.id, files: task.files.likely })),
+    sizes,
+    contextWindow: window,
+    preambleTokens: Math.round(preambleBytes / BYTES_PER_TOKEN),
+  })
+    .filter((fit) => fit.budget.verdict === 'impossible' || fit.budget.verdict === 'tight')
+    .map((fit) => `${fit.task} may not fit: ${fit.budget.detail} (preamble estimated from this run)`);
+}
+
 async function grantApproval(
   deps: RunActionDeps,
   runId: string,
@@ -951,6 +1001,20 @@ async function grantApproval(
   const plan = await loadPlanArtifact(context.store, runId);
   const review = await loadReview(context.store, runId);
   const check = checkApproval(state, plan, review);
+
+  // **Which tasks cannot fit, said while splitting one is still cheap.**
+  //
+  // After `run` the remedy is gone: the attempt burns its window reading and ends without
+  // an edit, which is what a 49 152 window did to a task whose largest target was 76 kB.
+  // Here the person approving can still send it back.
+  //
+  // A warning rather than a refusal, deliberately: the thresholds come from two
+  // observations, and a gate that blocked on a number this soft would train the reader to
+  // force past it. The decision stays with the human, which is what this gate is for.
+  if (plan !== null) {
+    check.warnings.push(...(await warnAboutFit(context, runId, plan)));
+  }
+
   const attaching = options.attachFindings === true;
 
   if (attaching) {

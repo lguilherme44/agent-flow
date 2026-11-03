@@ -3,6 +3,7 @@ import {
   READS_FOR_COMFORT,
   READS_FOR_IMPOSSIBLE,
   measureTaskBudget,
+  weighPlan,
 } from '../../src/core/task-budget.js';
 
 /**
@@ -95,5 +96,66 @@ describe('deciding whether a task fits before calling a model', () => {
 
     expect(budget.workingTokens).toBe(0);
     expect(budget.verdict).toBe('impossible');
+  });
+});
+
+describe('weighing a whole plan at approval', () => {
+  const sizes = new Map([
+    [LARGE_SERVICE.path, LARGE_SERVICE.bytes],
+    [SMALL_COMPONENT.path, SMALL_COMPONENT.bytes],
+  ]);
+
+  it('separates the task that cannot fit from the one that can', () => {
+    const weighed = weighPlan({
+      tasks: [
+        { id: 'TASK-001', files: [LARGE_SERVICE.path] },
+        { id: 'TASK-002', files: [SMALL_COMPONENT.path] },
+      ],
+      sizes,
+      contextWindow: 49_152,
+      preambleTokens: 8_628,
+    });
+
+    expect(weighed.map((fit) => [fit.task, fit.budget.verdict])).toEqual([
+      ['TASK-001', 'impossible'],
+      ['TASK-002', 'fits'],
+    ]);
+  });
+
+  it('omits a path with no measured size rather than counting it as zero', () => {
+    // Same rule as the stage: a task that *creates* a file has nothing to read there, and
+    // a zero would make a tight task look comfortable.
+    const weighed = weighPlan({
+      tasks: [{ id: 'TASK-001', files: ['src/does-not-exist.ts'] }],
+      sizes,
+      contextWindow: 49_152,
+      preambleTokens: 8_628,
+    });
+
+    expect(weighed[0]?.budget.verdict).toBe('unknown');
+  });
+
+  it('reports unknown for every task when no window was declared', () => {
+    const weighed = weighPlan({
+      tasks: [{ id: 'TASK-001', files: [LARGE_SERVICE.path] }],
+      sizes,
+      preambleTokens: 8_628,
+    });
+
+    expect(weighed[0]?.budget.verdict).toBe('unknown');
+  });
+
+  it('keeps the plan order, so the warning names tasks in the order they will run', () => {
+    const weighed = weighPlan({
+      tasks: [
+        { id: 'TASK-003', files: [] },
+        { id: 'TASK-001', files: [LARGE_SERVICE.path] },
+      ],
+      sizes,
+      contextWindow: 131_072,
+      preambleTokens: 8_628,
+    });
+
+    expect(weighed.map((fit) => fit.task)).toEqual(['TASK-003', 'TASK-001']);
   });
 });

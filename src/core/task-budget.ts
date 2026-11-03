@@ -77,6 +77,47 @@ export const DEFAULT_OUTPUT_RESERVE_TOKENS = 8_192;
 
 const toTokens = (bytes: number): number => Math.round(bytes / BYTES_PER_TOKEN);
 
+/** One task weighed, with the id that names it in the plan. */
+export interface TaskFit {
+  readonly task: string;
+  readonly budget: TaskBudget;
+}
+
+/**
+ * Which tasks in a plan cannot fit, decided before a single one runs.
+ *
+ * Separate from `measureTaskBudget` because the unit of the decision is different: the
+ * stage event answers "how did this attempt go", and approval answers "should any of this
+ * start". The person approving is the one who can still split a task; after `run` the
+ * cheapest remedy is gone.
+ *
+ * Sizes arrive already measured, so this stays pure and a test can state a repository's
+ * shape without writing one.
+ */
+export function weighPlan(input: {
+  readonly tasks: readonly { readonly id: string; readonly files: readonly string[] }[];
+  readonly sizes: ReadonlyMap<string, number>;
+  readonly contextWindow?: number;
+  readonly preambleTokens: number;
+  readonly outputReserveTokens?: number;
+}): readonly TaskFit[] {
+  const reserve = input.outputReserveTokens ?? DEFAULT_OUTPUT_RESERVE_TOKENS;
+  return input.tasks.map((task) => ({
+    task: task.id,
+    budget: measureTaskBudget({
+      ...(input.contextWindow === undefined ? {} : { contextWindow: input.contextWindow }),
+      preambleTokens: input.preambleTokens,
+      outputReserveTokens: reserve,
+      // A path with no measured size is omitted rather than counted as zero, for the same
+      // reason the stage skips a missing file: a task that creates one has nothing to read.
+      targets: task.files.flatMap((path) => {
+        const bytes = input.sizes.get(path);
+        return bytes === undefined ? [] : [{ path, bytes }];
+      }),
+    }),
+  }));
+}
+
 export function measureTaskBudget(input: TaskBudgetInput): TaskBudget {
   const { contextWindow, preambleTokens, outputReserveTokens, targets } = input;
 
