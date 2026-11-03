@@ -21,7 +21,14 @@ import {
   type RunnerFailureClassification,
 } from '../core/failure-classification.js';
 import { redactAndTruncate, redactEvidence } from '../core/evidence-redaction.js';
-import { measurePromptComposition } from '../core/prompt-budget.js';
+import { join } from 'node:path';
+import { BYTES_PER_TOKEN, measurePromptComposition } from '../core/prompt-budget.js';
+import {
+  DEFAULT_OUTPUT_RESERVE_TOKENS,
+  measureTaskBudget,
+  type TargetFile,
+  type TaskBudget,
+} from '../core/task-budget.js';
 import type { DirectorySkip } from './directory-instructions.js';
 import type { LoadedPrompt, PromptLoader } from './prompt-loader.js';
 import type { ReadOnlyOutcome, ReadOnlyTree } from './read-only-workspace.js';
@@ -314,6 +321,14 @@ export interface StageRunOptions {
    * naming only the stage cannot be joined to either of them.
    */
   readonly task?: string;
+  /**
+   * The files this task is expected to change (`task.files.likely`).
+   *
+   * Extracted by the caller, exactly as `complexity` is: the stage needs the sizes, not
+   * the whole task. Absent for a pipeline stage, and for a task that declared none — and
+   * absent means the fit is reported `unknown`, never assumed to be fine.
+   */
+  readonly taskFiles?: readonly string[];
   readonly attempt?: number;
   /**
    * A block appended to the rendered prompt, from outside the stage (M4-06).
@@ -469,6 +484,41 @@ export class StageRunner {
   }
 
   /** The roots this stage's output may name, for {@link redactEvidence}. */
+  /**
+   * Weighs what the attempt is about to read against what is left of the window.
+   *
+   * Sizes come through the `FileSystem` port rather than `node:fs`, so a test can state a
+   * repository's shape without writing one to disk.
+   *
+   * A path that does not resolve to a file is skipped rather than counted as zero: a task
+   * that *creates* a file has nothing to read there, and a missing path is as likely to be
+   * a plan naming something not written yet as it is an error. Counting it would quietly
+   * make a tight task look comfortable.
+   */
+  private async measureFit(
+    files: readonly string[] | undefined,
+    cwd: string,
+    contextWindow: number | undefined,
+    promptBytes: number,
+  ): Promise<TaskBudget | undefined> {
+    if (files === undefined || files.length === 0) return undefined;
+
+    const { fs } = this.options;
+    const targets: TargetFile[] = [];
+    for (const relative of files) {
+      const found = await fs.stat(join(cwd, relative));
+      if (found === null || found.isDirectory) continue;
+      targets.push({ path: relative, bytes: found.size });
+    }
+
+    return measureTaskBudget({
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      preambleTokens: Math.round(promptBytes / BYTES_PER_TOKEN),
+      outputReserveTokens: DEFAULT_OUTPUT_RESERVE_TOKENS,
+      targets,
+    });
+  }
+
   private redactionContext(cwd: string): { workspaceRoot: string; home?: string } {
     return redactionContextOf({
       workingDirectory: cwd,
@@ -715,6 +765,16 @@ export class StageRunner {
       runnerWindow,
     );
 
+    // The other half of the same question. `composition` weighs what the harness assembled;
+    // this weighs what the attempt is about to read. The preamble below is not a second
+    // estimate — it is the number `composition` just measured, converted once.
+    const fit = await this.measureFit(
+      options.taskFiles,
+      located.projectDir ?? cwd,
+      runnerWindow,
+      composition.totalBytes,
+    );
+
     await store.appendEvent(runId, 'stage_context_measured', {
       stage: stage.name,
       role: stage.role,
@@ -734,6 +794,18 @@ export class StageRunner {
       ...(composition.windowDetail === undefined
         ? {}
         : { windowDetail: composition.windowDetail }),
+      // Omitted for a stage with no task files, where the fit was never in question.
+      ...(fit === undefined
+        ? {}
+        : {
+            fitVerdict: fit.verdict,
+            fitDetail: fit.detail,
+            workingTokens: fit.workingTokens,
+            ...(fit.readsAfforded === undefined
+              ? {}
+              : { readsAfforded: Math.round(fit.readsAfforded * 10) / 10 }),
+            ...(fit.largestTarget === undefined ? {} : { largestTarget: fit.largestTarget }),
+          }),
       // FR-009. Omitted when nothing was skipped, so a stage with no nested files records
       // exactly the event it recorded before N1.
       ...(options.directoryInstructionsSkipped === undefined ||

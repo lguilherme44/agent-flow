@@ -312,6 +312,10 @@ export class TaskExecutor {
         {
           workingDirectory,
           complexity: task.complexity,
+          // The sizes of these decide whether the task can fit at all, which the static
+          // prompt measurement cannot see: a comfortable preamble says nothing about a
+          // 76 kB file the attempt has to read more than once.
+          taskFiles: task.files.likely,
           // AR-09: what this attempt's context cost, attributable to this attempt.
           task: task.id,
           ...(workspace?.attempt === undefined ? {} : { attempt: workspace.attempt }),
