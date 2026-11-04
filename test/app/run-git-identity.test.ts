@@ -240,6 +240,60 @@ describe('deterministic planning preflight (§6.1, MVP2.1 M2.1-A)', () => {
     expect(result.detail).toContain('dirty.txt');
   });
 
+  /**
+   * The harness's own configuration is not the product (measured 04/11/2026).
+   *
+   * A gate corrected mid-run had no way through: committing the config moved HEAD into
+   * `planning_base_moved`, leaving it uncommitted stayed `working_tree_dirty`, and the only
+   * exit was `git update-index --skip-worktree`.
+   */
+  it('lets an edited .agent-flow/config.yaml through, because no worktree reads it', async () => {
+    repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.commitAll('ignore agent-flow');
+    repo.write('.agent-flow/config.yaml', 'project:\n  name: demo\n  type: node\ncommands: {}\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+
+    expect(result.satisfied, 'only the harness config changed').toBe(true);
+  });
+
+  it('still refuses for another tracked file under .agent-flow/', async () => {
+    // The exemption is one file, not the directory: a project may version prompts or
+    // anything else there, and that is product like any other.
+    repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.write('.agent-flow/notes.md', 'versioned by the project\n');
+    repo.commitAll('ignore agent-flow, keep notes');
+    repo.write('.agent-flow/notes.md', 'edited\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.detail).toContain('notes.md');
+  });
+
+  it('still refuses when product changed alongside the config', async () => {
+    // The control: the exemption is for one file, not for "the tree is nearly clean".
+    repo = await makeTempRepoWithCommit();
+    repo.initAgentFlow();
+    repo.write('.gitignore', '.agent-flow/runs/\n.agent-flow/cache/\n.agent-flow/current-run\n');
+    repo.commitAll('ignore agent-flow');
+    repo.write('.agent-flow/config.yaml', 'project:\n  name: demo\n  type: node\ncommands: {}\n');
+    repo.write('src.txt', 'product changed too\n');
+
+    const result = await checkPlanningPreflight(depsFor(repo, true));
+
+    expect(result.satisfied).toBe(false);
+    if (result.satisfied) return;
+    expect(result.code).toBe('working_tree_dirty');
+    expect(result.detail, 'the refusal names the product file, not the config').toContain('src.txt');
+    expect(result.detail).not.toContain('config.yaml');
+  });
+
   it('refuses before run creation when agent-flow state paths are not ignored', async () => {
     repo = await makeTempRepoWithCommit();
     repo.initAgentFlow();

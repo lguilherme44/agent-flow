@@ -411,18 +411,33 @@ export async function checkPlanningPreflight(
 
   const status = await deps.workspaces.status({ cwd: deps.projectDir });
   if (!status.ok) return unreadable(status.failure.message);
-  if (!status.value.clean) {
-    const changed = status.value.entries.slice(0, 5).map((entry) => entry.path);
+  const uncommitted = status.value.entries.filter((entry) => !isHarnessConfig(entry.path));
+  if (uncommitted.length > 0) {
+    const changed = uncommitted.slice(0, 5).map((entry) => entry.path);
     return refuse(
       'working_tree_dirty',
-      (deps.say ?? en).git.treeHasUncommitted(
-        changed.join(', '),
-        status.value.entries.length > changed.length,
-      ),
+      (deps.say ?? en).git.treeHasUncommitted(changed.join(', '), uncommitted.length > changed.length),
     );
   }
 
   return SATISFIED;
+}
+
+/**
+ * `.agent-flow/config.yaml`, and only it.
+ *
+ * **The harness's own configuration is not the product** (measured 04/11/2026). The tree has
+ * to be clean so a worktree is cut from a commit that describes the work; this file describes
+ * *how the run is judged*, and no worktree reads it — the run loads it from the project
+ * directory. Refusing on it made correcting a gate mid-run impossible: committing moved HEAD
+ * into `planning_base_moved`, leaving it uncommitted stayed `working_tree_dirty`, and the
+ * only way through was `git update-index --skip-worktree`.
+ *
+ * Not the whole directory: `runs/`, `cache/` and `current-run` are gitignored already, and
+ * anything else a project tracked under `.agent-flow/` would be product.
+ */
+function isHarnessConfig(path: string): boolean {
+  return path.replace(/\\/g, '/').replace(/^\.\//, '') === '.agent-flow/config.yaml';
 }
 
 /**
@@ -534,14 +549,12 @@ export async function checkWorktreePreconditions(
   // flag whose only function is to produce an unexplainable tree.
   const status = await deps.workspaces.status({ cwd: deps.projectDir });
   if (!status.ok) return unreadable(status.failure.message);
-  if (!status.value.clean) {
-    const changed = status.value.entries.slice(0, 5).map((entry) => entry.path);
+  const uncommitted = status.value.entries.filter((entry) => !isHarnessConfig(entry.path));
+  if (uncommitted.length > 0) {
+    const changed = uncommitted.slice(0, 5).map((entry) => entry.path);
     return refuse(
       'working_tree_dirty',
-      (deps.say ?? en).git.treeHasUncommitted(
-        changed.join(', '),
-        status.value.entries.length > changed.length,
-      ),
+      (deps.say ?? en).git.treeHasUncommitted(changed.join(', '), uncommitted.length > changed.length),
     );
   }
 
