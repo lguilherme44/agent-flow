@@ -239,6 +239,33 @@ describe("the executor's command grants, as doctor reports them (FR-003, FR-004,
     expect(diagnosis.notes).toContain(UNTRUSTED(en));
   });
 
+  /**
+   * A per-task gate that is the whole suite (measured 04/11/2026).
+   *
+   * `validationCommands` judges a task by what it touches and `commands` judges the review
+   * by everything. Pointed at the same line, a plan that slices a change from its
+   * consequence leaves a task nothing can satisfy — it reddens a spec the next task owns.
+   */
+  it('notes a per-task gate that is the whole suite', async () => {
+    const sameLine =
+      'project:\n  name: demo\n  type: node\ncommands:\n  test: npm test\nvalidationCommands:\n  api-test: npm test\n';
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, sameLine);
+
+    const note = diagnosis.notes.find((line) => line.includes('api-test'));
+    expect(note, 'the gate note names the id that is the whole suite').toBeDefined();
+    expect(note).toContain('whole suite');
+  });
+
+  it('positive control: a scoped per-task gate gets no note', async () => {
+    // The shape that fixed the Beahub run: the task runs only the specs it touched.
+    const scoped =
+      'project:\n  name: demo\n  type: node\ncommands:\n  test: npm test\n' +
+      'validationCommands:\n  api-test: npx jest --runInBand $CHANGED_SPECS\n';
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, scoped);
+
+    expect(diagnosis.notes.some((line) => line.includes('whole suite'))).toBe(false);
+  });
+
   it('positive control: a project declaring nothing gets neither note', async () => {
     const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, 'project:\n  name: demo\n  type: node\ncommands: {}\n');
 

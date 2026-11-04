@@ -569,6 +569,26 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
     say,
   });
 
+  // **A per-task gate that is the whole suite** (measured 04/11/2026). `validationCommands`
+  // exists so a task is judged by what it touches, and `commands` so the review is judged by
+  // everything. A project that points both at the same line has one gate wearing two hats —
+  // and a plan that slices a change from its consequence then has a task nothing can satisfy:
+  // it reddens a spec the *next* task owns, and the base is green, so even
+  // `verification.baseline` reads it as this task's regression.
+  //
+  // A note, not a degradation: running the whole suite per task is slow and strict, never
+  // wrong on its own. What makes it a trap is the slicing, which this cannot see from here.
+  const wholeSuiteGates =
+    config.project === undefined
+      ? []
+      : Object.entries(config.project.validationCommands ?? {})
+          .filter(([, line]) =>
+            Object.values(config.project?.commands ?? {}).some(
+              (whole) => typeof whole === 'string' && whole.trim() === line.trim(),
+            ),
+          )
+          .map(([id]) => say.doctor.taskGateIsWholeSuite(id));
+
   const verdict = {
     ...baseVerdict,
     notes: [
@@ -579,6 +599,7 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
           (runner) =>
             `${say.doctor.runnerGrantsNoTools(runner)} — ${say.doctor.implementationCannotRunCommands(runner)}`,
         ),
+      ...wholeSuiteGates,
       ...untrustedCommands,
       ...excludedCommands,
       ...ignoredLoosenings,

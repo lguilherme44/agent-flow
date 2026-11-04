@@ -128,6 +128,8 @@ export const en: Phrases = {
       `the project config sets \`${path}\`, and it is ignored: this project is not trusted, ` +
       'so its config may only tighten your settings. To let it apply, add the project ' +
       'directory to `trust.projectConfig` in your global config',
+    taskGateIsWholeSuite: (id) =>
+      `\`validationCommands.${id}\` runs the same command as \`commands\`: every task is gated on the whole suite. A task that changes something a later task's test depends on then cannot pass at all — scope the per-task gate to what the task touches.`,
     worktreeCopyExposesEnv: (pattern) =>
       `the \`worktree.copy\` pattern \`${pattern}\` names or matches a .env file, and what it ` +
       'matches is copied into every task worktree, where the model can read it. Narrow the ' +

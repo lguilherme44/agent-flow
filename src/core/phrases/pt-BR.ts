@@ -131,6 +131,8 @@ export const ptBR: Phrases = {
       `a configuração do projeto define \`${path}\`, e isso é ignorado: este projeto não é ` +
       'confiável, então a configuração dele só pode restringir as suas. Para que valha, ' +
       'adicione o diretório do projeto a `trust.projectConfig` na sua configuração global',
+    taskGateIsWholeSuite: (id) =>
+      `\`validationCommands.${id}\` roda o mesmo comando de \`commands\`: toda task é julgada pela suíte inteira. Uma task que mexe em algo de que o teste de uma task posterior depende fica impossível de passar — limite o portão da task ao que ela toca.`,
     worktreeCopyExposesEnv: (pattern) =>
       `o padrão \`${pattern}\` de \`worktree.copy\` nomeia ou casa um arquivo .env, e o que ele ` +
       'casa é copiado para cada worktree de tarefa, onde o modelo consegue lê-lo. Restrinja o ' +

@@ -146,6 +146,8 @@ export interface Phrases {
      * A `worktree.copy` pattern that names a `.env` file or matches one today (FR-018).
      * `pattern` is typed verbatim, exactly as the operator wrote it.
      */
+    /** A per-task gate that is the whole suite, which a sliced plan can make unsatisfiable. */
+    readonly taskGateIsWholeSuite: (id: string) => string;
     readonly worktreeCopyExposesEnv: (pattern: string) => string;
     /** The listing behind rule (b) failed for `pattern`, so it could not be checked (FR-018). */
     readonly worktreeCopyEnvUnchecked: (pattern: string) => string;
