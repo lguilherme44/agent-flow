@@ -78,7 +78,28 @@ describe('a failure that belongs to the next task', () => {
     expect(line).toContain('update-plan.dto.spec.ts');
     expect(line).toContain('scoped to what it touches');
   });
+
+  /**
+   * The shape that killed the first version (measured 04/11/2026, second pass).
+   *
+   * In the Beahub plan TASK-002, TASK-003 and TASK-004 all depend on TASK-001 and on nothing
+   * else: siblings. Asking "does TASK-002 depend on TASK-003" answers no, so a TASK-003
+   * judged against a spec TASK-002 owns got no note at all — the exact silence this module
+   * exists to break. The question was never about the graph; it is whether the work that
+   * would make the file green is in the tree.
+   */
+  it('attributes to a SIBLING whose work has not landed', () => {
+    const owned = failuresOwnedDownstream({
+      taskId: 'TASK-003',
+      tasks: PLAN,
+      integrated: ['TASK-001'],
+      output: JEST_FAIL,
+    });
+
+    expect(owned.map((f) => f.ownedBy)).toEqual(['TASK-002']);
+  });
 });
+
 
 describe('what must NOT be attributed downstream', () => {
   it('keeps a failure in a file the task declares, even when a later task declares it too', () => {
@@ -123,12 +144,13 @@ describe('what must NOT be attributed downstream', () => {
     expect(owned).toEqual([]);
   });
 
-  it('keeps a failure owned by a task this one does NOT come before', () => {
-    // TASK-003 depends on TASK-002; judging TASK-003, TASK-001's file is upstream work
-    // that already landed — a red there is this task's problem.
+  it('keeps a failure in the file of a task that already integrated', () => {
+    // TASK-001's work is in the tree. A red in its file is this task's regression, and
+    // handing it back would excuse exactly what is worth catching.
     const owned = failuresOwnedDownstream({
       taskId: 'TASK-003',
       tasks: PLAN,
+      integrated: ['TASK-001'],
       output: 'FAIL src/modules/tenants/feature-flags.resolver.spec.ts',
     });
 
@@ -146,8 +168,13 @@ describe('what must NOT be attributed downstream', () => {
     expect(describeDownstream(owned)).toBeUndefined();
   });
 
-  it('is a last task problem when nothing depends on it', () => {
-    const owned = failuresOwnedDownstream({ taskId: 'TASK-003', tasks: PLAN, output: JEST_FAIL });
+  it('says nothing when every other task has integrated', () => {
+    const owned = failuresOwnedDownstream({
+      taskId: 'TASK-003',
+      tasks: PLAN,
+      integrated: ['TASK-001', 'TASK-002'],
+      output: JEST_FAIL,
+    });
 
     expect(owned).toEqual([]);
   });

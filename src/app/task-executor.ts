@@ -622,8 +622,20 @@ export class TaskExecutor {
     } catch {
       return undefined;
     }
+    // Quem ja entregou nao e dono de nada: um vermelho no arquivo dele e regressao DESTA
+    // task. Sem o estado, nada consta como integrado — a leitura segura, e a verdadeira num
+    // run sequencial, onde nenhuma outra task entrou na arvore ainda.
+    let integrated: readonly string[] = [];
+    try {
+      const state = await this.options.store.loadRun(runId);
+      integrated = state.tasks.filter((entry) => entry.state === 'completed').map((entry) => entry.id);
+    } catch {
+      integrated = [];
+    }
     const output = failed.map((result) => `${result.stdout}\n${result.stderr}`).join('\n');
-    return describeDownstream(failuresOwnedDownstream({ taskId: task.id, tasks, output }));
+    return describeDownstream(
+      failuresOwnedDownstream({ taskId: task.id, tasks, output, integrated }),
+    );
   }
 
   /**

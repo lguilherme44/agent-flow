@@ -42,6 +42,25 @@ describe('the real run AF-2026-001', () => {
     expect(line).toContain('update-plan.dto.spec.ts');
   });
 
+  /**
+   * The sibling case, from the same run (second pass, 04/11/2026).
+   *
+   * TASK-002, TASK-003 and TASK-004 all depend on TASK-001 and on nothing else. With
+   * TASK-002 not integrated, a TASK-003 judged by the whole suite is red on a spec TASK-002
+   * owns — and the first version of this rule, which asked the dependency graph, said
+   * nothing at all.
+   */
+  it('hands TASK-003 red to TASK-002, which is a sibling that has not landed', () => {
+    const owned = failuresOwnedDownstream({
+      taskId: 'TASK-003',
+      tasks: plan.tasks,
+      integrated: ['TASK-001'],
+      output,
+    });
+
+    expect(owned.map((f) => f.ownedBy)).toContain('TASK-002');
+  });
+
   it('stays silent for the task that owns the file', () => {
     // Judging TASK-002, that spec is its own work: nothing to hand downstream.
     const owned = failuresOwnedDownstream({ taskId: 'TASK-002', tasks: plan.tasks, output });
