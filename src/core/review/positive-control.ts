@@ -1,4 +1,5 @@
 import type { Finding } from '../../contracts/index.js';
+import { aFailureNamesAnyOf, namesAnyOf, stripAnsi } from './runner-output.js';
 
 /**
  * The automatic positive control: the change's tests, on the base, must fail (ported from
@@ -73,81 +74,6 @@ export function isTestPath(path: string): boolean {
  */
 const NOTHING_RAN = /no test files found|no tests found|no tests ran|collected 0 items|^# tests 0$/im;
 
-/** A character that cannot be part of a path token in runner output. */
-const TOKEN_EDGE = /[\s\x27\x22\x60()[\]<>,]/;
-
-/**
- * Whether the text names one of the test files. Slashes are normalised and collapsed: TAP
- * escapes Windows paths, so `test\double.test.mjs` arrives doubled.
- *
- * A name counts only as a whole path token that agrees with the test's path on every segment
- * they share, read from the file name back: runners print the path from their own root
- * (`test/unit/a.test.ts` for `backend/test/unit/a.test.ts`), absolute (TAP `location:`), or
- * the bare file name (go). **A substring was not enough**: `a.test.mjs` matched inside
- * `data.test.mjs`, and `frontend/src/index.test.ts` named `backend/src/index.test.ts`.
- */
-function namesATest(output: string, tests: readonly string[]): boolean {
-  const text = output.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
-  return tests.some((test) => {
-    const wanted = test
-      .replace(/\\/g, '/')
-      .split('/')
-      .filter((segment) => segment.length > 0);
-    const name = wanted[wanted.length - 1];
-    if (name === undefined) return false;
-    for (let at = text.indexOf(name); at !== -1; at = text.indexOf(name, at + 1)) {
-      const after = text[at + name.length];
-      if (after !== undefined && !TOKEN_EDGE.test(after) && after !== ':' && after !== '>') continue;
-      let start = at;
-      while (start > 0 && !TOKEN_EDGE.test(text[start - 1] ?? '')) start -= 1;
-      const token = text
-        .slice(start, at + name.length)
-        .split('/')
-        .filter((segment) => segment.length > 0);
-      const shared = Math.min(token.length, wanted.length);
-      let agrees = token[token.length - 1] === name;
-      for (let i = 1; agrees && i <= shared; i += 1) {
-        agrees = token[token.length - i] === wanted[wanted.length - i];
-      }
-      if (agrees) return true;
-    }
-    return false;
-  });
-}
-
-/**
- * A line where a runner reports one failing test or file: TAP `not ok` (node:test),
- * vitest/jest `FAIL <file>`, pytest `FAILED`/`ERROR <file>::…`, the `×`/`✗`/`✖` marks, go's
- * `--- FAIL`, flutter's `[E]`, mocha's numbered `1) suite` (its stack names the file).
- */
-const FAILURE_RECORD = /^\s*(?:not ok \d+|FAIL\b|FAILED\b|ERROR\b|[×✗✖]\s|--- FAIL|\d+\) \S)|\[E\]\s*$/;
-
-/** At most this many lines under a failure mark belong to its record (TAP YAML, go's `file_test.go:12:`). */
-const RECORD_LINES = 12;
-
-/** A line that starts the next record, passing or failing: the current one ends there. */
-const NEXT_RECORD =
-  /^\s*(?:ok \d+|not ok \d+|PASS\b|FAIL\b|FAILED\b|ERROR\b|[✓√×✗✖]\s|--- (?:FAIL|PASS)|Test Files\b|Tests\s)/;
-
-/**
- * Whether a failure record in the output names one of the change's tests. The record is the
- * marked line plus the lines under it up to the next record: TAP puts the file in
- * `location:`, go in the message. Without the stop, `FAIL other.test.ts` followed by
- * `✓ a.test.ts` read as a failure of `a.test.ts`.
- */
-function aFailureNamesATest(output: string, tests: readonly string[]): boolean {
-  const lines = output.split(/\r?\n/);
-  return lines.some((line, index) => {
-    if (!FAILURE_RECORD.test(line)) return false;
-    const record = [line];
-    for (const next of lines.slice(index + 1, index + 1 + RECORD_LINES)) {
-      if (NEXT_RECORD.test(next)) break;
-      record.push(next);
-    }
-    return namesATest(record.join('\n'), tests);
-  });
-}
-
 /**
  * A dependency PACKAGE the checkout cannot resolve — node ESM/CJS, jest, vite, python —
  * named by a bare specifier. Runners report it as a failure of the test file that imports it
@@ -182,19 +108,6 @@ function missingPackage(output: string): string | undefined {
 function isBarePackage(specifier: string, python: boolean): boolean {
   if (/^(?:\.|\/|\\|[A-Za-z]:|#|~|@\/|file:)/.test(specifier)) return false;
   return python ? !specifier.includes('.') : true;
-}
-
-/**
- * ANSI escape sequences: colour, bold, cursor moves.
- *
- * Built rather than written as a literal, because the escape is the point: a regular
- * expression carrying a control character is what `no-control-regex` exists to catch, and
- * silencing the rule would hide the next one that is a mistake.
- */
-const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
-
-function stripAnsi(text: string): string {
-  return text.replace(ANSI, '');
 }
 
 /** The first line that reads like an error, to say why a failure proved nothing. */
@@ -253,7 +166,7 @@ export function judgePositiveControl(input: PositiveControlRun): PositiveControl
         reason: `\`${command}\` failed on the base because the package '${absent}' is not installed there — an environment failure, not the tests noticing the change`,
       };
     }
-    if (output !== undefined && aFailureNamesATest(output, tests)) {
+    if (output !== undefined && aFailureNamesAnyOf(output, tests)) {
       return {
         ...common,
         result: 'proven',
@@ -276,7 +189,7 @@ export function judgePositiveControl(input: PositiveControlRun): PositiveControl
   // A pass proves something only about tests that ran. A `test` script scoped to another
   // package, or a glob that does not reach where the change put its tests, exits 0 without
   // running them — and a fix task for that is one nobody can satisfy.
-  const ranThem = output !== undefined && namesATest(output, tests);
+  const ranThem = output !== undefined && namesAnyOf(output, tests);
   if (output !== undefined && !ranThem) {
     return {
       ...common,

@@ -14,6 +14,10 @@ import {
   type WorkflowRole,
 } from '../contracts/index.js';
 import { consumesAttempt } from '../core/failure-classification.js';
+import {
+  describeDownstream,
+  failuresOwnedDownstream,
+} from '../core/review/downstream-work.js';
 import { redactAndTruncate } from '../core/evidence-redaction.js';
 import {
   assertObservableChange,
@@ -85,7 +89,8 @@ import type { Clock, FileSystem, Host, ProcessRunner } from '../ports/index.js';
 import type { GitWorkspaces } from '../adapters/git/git-workspaces.js';
 import { routeTask, type RoutingPolicy } from '../core/router.js';
 import { resolveRole, type RunnerCapabilitiesMap } from '../core/role.js';
-import type { GlobalConfig, TaskAssignment } from '../contracts/index.js';
+import type { CommandResult, GlobalConfig, TaskAssignment } from '../contracts/index.js';
+import { loadPlan } from './execution-context.js';
 import { teamMembers } from '../core/collaboration/roster.js';
 import { StageFailure, type StageExecution, type StageRunner } from './stage-runner.js';
 import type { StateStore } from './state-store.js';
@@ -535,6 +540,14 @@ export class TaskExecutor {
 
     const state = acceptance?.satisfied === false ? 'review_required' : judgement.state;
 
+    // **Whose red is it** (measured 04/11/2026). A task that adds a key to a list can turn a
+    // spec the *next* task owns red, and with the whole suite as its gate it then cannot pass
+    // at all. `verification.baseline` does not see it — the base is green, so the failure
+    // reads as this task's regression. The verdict is left alone, because the test really did
+    // go red; what changes is that the attempt says who owns it instead of leaving the
+    // operator to read "the model failed again".
+    const downstream = judgement.state === 'completed' ? undefined : await this.downstreamNote(runId, task, verification);
+
     return this.finish(
       runId,
       {
@@ -554,6 +567,7 @@ export class TaskExecutor {
           ...collaborationNotes,
           ...report.deviations.map((d) => `deviation: ${d}`),
           ...(judgement.note === undefined ? [] : [judgement.note]),
+          ...(downstream === undefined ? [] : [downstream]),
           ...(acceptance?.satisfied === false ? [acceptance.detail] : []),
           ...divergenceNote(observed.changedFiles, report.filesChanged),
         ],
@@ -583,6 +597,33 @@ export class TaskExecutor {
         }),
       },
     );
+  }
+
+  /**
+   * The line that names the task a failing file belongs to, when one does.
+   *
+   * The plan is read here rather than carried in: this is the only place that needs the
+   * other tasks, it is reached only when validation already failed, and a signature change
+   * would reach every caller of `execute` for a note on an unhappy path. A plan that cannot
+   * be read costs nothing — the note is simply absent.
+   */
+  private async downstreamNote(
+    runId: string,
+    task: Task,
+    verification: { readonly results: readonly CommandResult[] },
+  ): Promise<string | undefined> {
+    const failed = verification.results.filter((result) => result.exitCode !== 0);
+    if (failed.length === 0) return undefined;
+    let tasks: readonly Task[];
+    try {
+      const plan = await loadPlan(this.options.store, runId);
+      if (plan === null) return undefined;
+      tasks = plan.tasks;
+    } catch {
+      return undefined;
+    }
+    const output = failed.map((result) => `${result.stdout}\n${result.stderr}`).join('\n');
+    return describeDownstream(failuresOwnedDownstream({ taskId: task.id, tasks, output }));
   }
 
   /**
