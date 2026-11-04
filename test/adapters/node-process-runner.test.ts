@@ -600,6 +600,58 @@ describe('output limits', () => {
     expect(result.truncated).toBe(true);
     expect(result.stderr).toContain('truncated');
   });
+
+  /**
+   * `keep: 'ends'` — the verdict of a test runner is the last thing it prints.
+   *
+   * Measured on a real attempt: `npm test` wrote 105 KB, the head-only buffer kept the first
+   * 56 KB of stderr and ended mid-stack-trace, and `Tests: N failed` was gone. The evidence
+   * said the validation failed and could not say which test did.
+   */
+  it('keeps the verdict a long command prints last', async () => {
+    const result = await runNode(
+      'process.stderr.write("warning\\n" + "noise\\n".repeat(20_000) + "Tests: 3 failed, 10 passed\\n")',
+      { maxOutputBytes: 2_000, keep: 'ends' },
+    );
+
+    expect(result.truncated).toBe(true);
+    expect(result.stderr).toContain('Tests: 3 failed, 10 passed');
+    // And the beginning too, where a setup error that aborts before any test lives.
+    expect(result.stderr.startsWith('warning')).toBe(true);
+    expect(result.stderr).toContain('dropped from the middle');
+    expect(result.stderr.length).toBeLessThan(4_000);
+  });
+
+  it('keeps a long single write whole at its end, never dropping it entire', async () => {
+    // One chunk can be larger than the whole budget. Dropping it would throw away the
+    // verdict with it, which is the defect this buffer exists to prevent.
+    const result = await runNode(
+      'process.stdout.write("a".repeat(50_000) + "VERDICT")',
+      { maxOutputBytes: 1_000, keep: 'ends' },
+    );
+
+    expect(result.stdout).toContain('VERDICT');
+    expect(result.stdout.length).toBeLessThan(2_000);
+  });
+
+  it('leaves output under the limit untouched, and says it was not truncated', async () => {
+    const result = await runNode('process.stdout.write("small")', {
+      maxOutputBytes: 1_000,
+      keep: 'ends',
+    });
+
+    expect(result.truncated).toBe(false);
+    expect(result.stdout).toBe('small');
+  });
+
+  it('still keeps the head when nothing asks for the ends', async () => {
+    // The default must not move: an agent's envelope opens its output.
+    const result = await runNode('process.stdout.write("OPENS" + "x".repeat(50_000))', {
+      maxOutputBytes: 1_000,
+    });
+
+    expect(result.stdout.startsWith('OPENS')).toBe(true);
+  });
 });
 
 describe('a configured command line through the host shell (verification commands)', () => {

@@ -21,13 +21,20 @@ const DEFAULT_KILL_GRACE_MS = 5_000;
  */
 const SUPPORTS_PROCESS_GROUPS = process.platform !== 'win32';
 
+/** What a bounded buffer keeps when the child writes more than it is allowed. */
+interface OutputBuffer {
+  push(chunk: string): void;
+  readonly truncated: boolean;
+  toString(): string;
+}
+
 /**
- * Accumulates child output with a hard ceiling.
+ * Accumulates child output with a hard ceiling, keeping the beginning.
  *
  * An agent that decides to cat the whole repository should degrade into a
  * truncated log, not into an out-of-memory crash in the orchestrator.
  */
-class BoundedBuffer {
+class BoundedBuffer implements OutputBuffer {
   private readonly chunks: string[] = [];
   private size = 0;
   private overflowed = false;
@@ -97,6 +104,70 @@ function environmentFor(options: ProcessSpawnOptions): NodeJS.ProcessEnv {
 }
 
 /**
+ * The same ceiling, keeping **both ends** and dropping the middle.
+ *
+ * **A test runner puts its verdict last.** Measured on a real run: `npm test` printed 105 KB,
+ * the head-only buffer kept the first 56 KB of stderr, and it ended mid-stack-trace — the
+ * `Tests: N failed` line, and every `FAIL <file>` after the cut, were gone. The attempt was
+ * recorded `unsatisfied` with evidence that could not say which test failed, and nothing
+ * downstream could tell the difference between that and a suite nobody could read.
+ *
+ * Both ends rather than the tail alone: the beginning holds the command, the toolchain
+ * banner and a setup error that aborts before any test runs, and a buffer that kept only the
+ * end would lose exactly the case where there is no verdict to keep.
+ */
+class EndsBuffer implements OutputBuffer {
+  private readonly head: string[] = [];
+  private headSize = 0;
+  private readonly tail: string[] = [];
+  private tailSize = 0;
+  private dropped = 0;
+  private readonly half: number;
+
+  constructor(limit: number) {
+    this.half = Math.max(1, Math.floor(limit / 2));
+  }
+
+  push(chunk: string): void {
+    let rest = chunk;
+    if (this.headSize < this.half) {
+      const taken = rest.slice(0, this.half - this.headSize);
+      this.head.push(taken);
+      this.headSize += taken.length;
+      rest = rest.slice(taken.length);
+      if (rest.length === 0) return;
+    }
+    this.tail.push(rest);
+    this.tailSize += rest.length;
+    // Whole chunks first, then the inside of the oldest one: a single chunk can be larger
+    // than the whole budget, and dropping it entire would throw away the verdict with it.
+    while (this.tailSize > this.half && this.tail.length > 1) {
+      const oldest = this.tail.shift() ?? '';
+      this.tailSize -= oldest.length;
+      this.dropped += oldest.length;
+    }
+    const only = this.tail[0];
+    if (this.tailSize > this.half && only !== undefined) {
+      const cut = only.length - this.half;
+      this.tail[0] = only.slice(cut);
+      this.tailSize -= cut;
+      this.dropped += cut;
+    }
+  }
+
+  get truncated(): boolean {
+    return this.dropped > 0;
+  }
+
+  toString(): string {
+    const head = this.head.join('');
+    const tail = this.tail.join('');
+    if (this.dropped === 0) return head + tail;
+    return `${head}\n… [truncated: ${String(this.dropped)} bytes dropped from the middle]\n${tail}`;
+  }
+}
+
+/**
  * The real ProcessRunner.
  *
  * It never throws for a failing child: a non-zero exit, a timeout and a missing
@@ -128,8 +199,10 @@ export class NodeProcessRunner implements ProcessRunner {
     }
 
     return new Promise<ProcessResult>((resolve) => {
-      const stdout = new BoundedBuffer(maxBytes);
-      const stderr = new BoundedBuffer(maxBytes);
+      const buffer = (): OutputBuffer =>
+        options.keep === 'ends' ? new EndsBuffer(maxBytes) : new BoundedBuffer(maxBytes);
+      const stdout = buffer();
+      const stderr = buffer();
 
       let timedOut = false;
       let cancelled = false;

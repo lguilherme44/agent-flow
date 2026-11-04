@@ -6,7 +6,7 @@ export const VERIFICATION_ORDER = ['lint', 'typecheck', 'test', 'build'] as cons
 export type VerificationStep = (typeof VERIFICATION_ORDER)[number];
 
 const DEFAULT_TIMEOUT_SECONDS = 900;
-/** Enough to diagnose a failure, small enough to put in a prompt. */
+/** Enough to diagnose a failure, small enough to put in a prompt. Both ends of it (`keep`). */
 const MAX_OUTPUT_BYTES = 64 * 1024;
 
 /**
@@ -114,6 +114,9 @@ export async function runVerification(
       envMode: 'inherit',
       timeoutSeconds: options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
+      // A test runner prints its verdict last: `Tests: N failed`, and every `FAIL <file>`
+      // under it. Keeping only the head left the evidence ending mid-stack-trace.
+      keep: 'ends',
     });
 
     const result = CommandResultSchema.parse({
@@ -174,6 +177,9 @@ export async function runCommands(options: RunCommandsOptions): Promise<Verifica
       envMode: 'inherit',
       timeoutSeconds: options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
+      // A test runner prints its verdict last: `Tests: N failed`, and every `FAIL <file>`
+      // under it. Keeping only the head left the evidence ending mid-stack-trace.
+      keep: 'ends',
     });
 
     results.push(

@@ -99,6 +99,16 @@ export interface ProcessSpawnOptions {
   /** Beyond this, output is truncated and the result says so. */
   readonly maxOutputBytes?: number;
   /**
+   * Which part of an over-long stream survives. `'head'` (the default) keeps the beginning,
+   * which is right for an agent whose envelope opens its output.
+   *
+   * `'ends'` keeps the beginning *and* the end, dropping the middle — for a command whose
+   * verdict is the last thing it prints. Measured: a `npm test` of 105 KB kept its first
+   * 56 KB of stderr and ended mid-stack-trace, so `Tests: N failed` and every `FAIL <file>`
+   * were gone, and the evidence could not say which test failed.
+   */
+  readonly keep?: 'head' | 'ends';
+  /**
    * Grace period between SIGTERM and SIGKILL. A CLI that traps SIGTERM must not
    * be able to hold the pipeline open indefinitely.
    */
