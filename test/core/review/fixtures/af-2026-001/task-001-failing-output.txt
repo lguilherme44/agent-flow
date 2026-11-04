@@ -1,0 +1,34 @@
+PASS src/modules/tenants/feature-flags.resolver.spec.ts
+FAIL src/modules/plans/dto/update-plan.dto.spec.ts
+  ● UpdatePlanDto.featureFlags (ValidationPipe whitelist) › mantém toda chave de PLAN_FEATURE_FLAG_KEYS (o whitelist não descarta)
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 0
+
+    @@ -9,8 +9,7 @@
+        "helpCenter": false,
+        "planPage": true,
+        "productsCatalog": false,
+        "usersManagement": false,
+        "webChatMenu": true,
+    -   "whatsapp": false,
+        "whatsappReminderQueue": true,
+      }
+
+      57 |     const result = (await transform({ featureFlags: body })) as UpdatePlanDto;
+      58 |
+    > 59 |     expect({ ...result.featureFlags }).toEqual(body);
+         |                                        ^
+      60 |   });
+      61 |
+      62 |   it('aceita null (= sem padrão no plano) e descarta chave fora da lista', async () => {
+
+      at Object.<anonymous> (modules/plans/dto/update-plan.dto.spec.ts:59:40)
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 25 passed, 26 total
+Snapshots:   0 total
+Time:        0.953 s
+Ran all test suites matching src/modules/plans/dto/update-plan.dto.spec.ts|src/modules/tenants/feature-flags.resolver.spec.ts.

@@ -1,0 +1,81 @@
+{
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "dependencies": [],
+      "files": {
+        "likely": [
+          "api/src/modules/tenants/feature-flags.resolver.ts",
+          "api/src/modules/tenants/feature-flags.resolver.spec.ts"
+        ]
+      }
+    },
+    {
+      "id": "TASK-002",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "files": {
+        "likely": [
+          "api/src/modules/plans/dto/create-plan.dto.ts",
+          "api/src/modules/plans/dto/update-plan.dto.ts",
+          "api/src/modules/plans/plans.resolver.ts",
+          "api/prisma/seed-product-plans.ts",
+          "api/src/modules/plans/dto/update-plan.dto.spec.ts"
+        ]
+      }
+    },
+    {
+      "id": "TASK-003",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "files": {
+        "likely": [
+          "api/src/modules/whatsapp/connection.controller.ts",
+          "api/src/modules/whatsapp/connection.controller.spec.ts"
+        ]
+      }
+    },
+    {
+      "id": "TASK-004",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "files": {
+        "likely": [
+          "api/src/modules/reminders/reminders.service.ts",
+          "api/src/modules/reminders/reminders.service.spec.ts",
+          "api/src/modules/campaigns/campaigns.service.ts",
+          "api/src/modules/campaigns/campaigns.service.spec.ts",
+          "api/src/modules/chatbot/chatbot.controller.ts"
+        ]
+      }
+    },
+    {
+      "id": "TASK-005",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "files": {
+        "likely": [
+          "bflowbarber-app/src/pages/Settings.tsx",
+          "bflowbarber-app/src/contexts/AuthContext.tsx",
+          "bflowbarber-app/cypress/e2e/settings-whatsapp-blocked.cy.ts"
+        ]
+      }
+    },
+    {
+      "id": "TASK-006",
+      "dependencies": [
+        "TASK-002"
+      ],
+      "files": {
+        "likely": [
+          "backoffice/app/routes/plan-edit.tsx",
+          "backoffice/app/routes/plan-create.tsx"
+        ]
+      }
+    }
+  ]
+}
