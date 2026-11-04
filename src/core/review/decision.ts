@@ -6,6 +6,7 @@ import type {
   ReviewRecord,
 } from '../../contracts/index.js';
 import type { ProjectedFinding } from './findings.js';
+import { downgradeFinding } from './downgrade.js';
 import { unsatisfiedRequired } from './gates.js';
 
 /**
@@ -131,10 +132,19 @@ export function blockingFindings(
 ): ProjectedFinding[] {
   const threshold: FindingSeverity = quality.blockOnMedium ? 'medium' : 'high';
 
-  return findings.filter(
-    (held) =>
-      held.status !== 'verified' && severityAtLeast(held.finding.severity, threshold),
-  );
+  // **A reviewer proposes severity; `downgrade.ts` decides what that severity may stop.**
+  // Two findings never block, however a reviewer graded them: one that names only
+  // documentation, and one that would block with no failure anybody could reproduce. Both
+  // are kept — they are still true observations and still become corrective work — they
+  // only stop holding the change.
+  return findings.filter((held) => {
+    if (held.status === 'verified') return false;
+    if (!quality.downgradeUnsupportedFindings) {
+      return severityAtLeast(held.finding.severity, threshold);
+    }
+    const judged = downgradeFinding(held.finding, threshold);
+    return judged.downgraded === undefined && severityAtLeast(judged.finding.severity, threshold);
+  });
 }
 
 /**

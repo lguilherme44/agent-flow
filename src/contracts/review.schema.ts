@@ -378,6 +378,17 @@ export const QualityConfigSchema = z.object({
    * which is the property that matters — the threshold itself is a default, not a law.
    */
   blockOnMedium: z.boolean().default(true),
+  /**
+   * Whether a finding that names only documentation, or that would block with no failure
+   * anybody could reproduce, stops holding the change (`core/review/downgrade.ts`).
+   *
+   * **Off by default, and deliberately.** The Smart Place kit measured two ways a review
+   * held a run for nothing — a `high` naming no reproducible failure, and a `high` about
+   * prose — and turning them off is a real improvement there. Here it would change what
+   * blocks in every existing run, so it is an operator's decision rather than a new
+   * default: a finding that stops being blocking is one a person stops being asked about.
+   */
+  downgradeUnsupportedFindings: z.boolean().default(false),
 });
 export type QualityConfig = z.infer<typeof QualityConfigSchema>;
 

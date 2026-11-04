@@ -104,6 +104,7 @@ import { correctiveLinks, correctiveSelection } from '../core/review/corrective.
 import { assessIndependence } from '../core/independence.js';
 import { BYTES_PER_TOKEN } from '../core/prompt-budget.js';
 import { weighPlan } from '../core/task-budget.js';
+import { tasksWithNoExistingFile } from '../core/review/citations.js';
 import { buildValidationRegistry, type ValidationRegistry } from '../core/validation-registry.js';
 import {
   judgeRequiredGates,
@@ -966,14 +967,28 @@ async function warnAboutFit(
     }
   }
 
-  return weighPlan({
+  // **A task whose declared files all fail to resolve.** Not an error by itself — a task that
+  // creates files names files that do not exist yet. It is a question worth asking before
+  // execution, because the other cause is a plan that invented plausible paths, and from here
+  // the two look identical. Measured 04/11/2026: a plan declared two `backoffice/app/routes/*`
+  // files; the directory existed and neither file did, anywhere in the repository.
+  const invented = tasksWithNoExistingFile(
+    plan.tasks.map((task) => ({ id: task.id, files: task.files.likely })),
+    new Map([...sizes.keys()].map((path) => [path, 1])),
+  ).map(
+    (entry) =>
+      `${entry.task} declares ${String(entry.files.length)} file(s) and none of them exist: ` +
+      `${entry.files.join(', ')} — a task that creates them, or a plan that invented them`,
+  );
+
+  return invented.concat(weighPlan({
     tasks: plan.tasks.map((task) => ({ id: task.id, files: task.files.likely })),
     sizes,
     contextWindow: window,
     preambleTokens: Math.round(preambleBytes / BYTES_PER_TOKEN),
   })
     .filter((fit) => fit.budget.verdict === 'impossible' || fit.budget.verdict === 'tight')
-    .map((fit) => `${fit.task} may not fit: ${fit.budget.detail} (preamble estimated from this run)`);
+    .map((fit) => `${fit.task} may not fit: ${fit.budget.detail} (preamble estimated from this run)`));
 }
 
 async function grantApproval(
