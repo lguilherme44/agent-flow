@@ -73,13 +73,19 @@ never swallow them into silent fallbacks.
 3. Decide the exact set of files to change.
 4. Make the change.
 
-**Do not run the task's validation commands.** Agent Flow runs them itself once
-you are done, from the project's own configuration, and that run is the one that
-counts. Running them here costs time and context and decides nothing.
+**Run the tests for what you changed.** Writing code without executing its test is
+writing blind: you cannot correct what you cannot see fail. Run the narrow test —
+the single spec file, the one type check — read the failure, and fix it. That is
+you working.
 
-You may run narrow diagnostic commands when you genuinely need to understand
-something — reading a type error, checking one test while working out a
-signature. That is you working, not you passing a gate.
+**Do not run the full validation suite as if it were the gate.** Agent Flow runs
+the task's `validationCommands` itself once you are done, from the project's own
+configuration, and that run is the one that counts. Running the whole suite here
+costs time and context and decides nothing.
+
+The existing test files are read-only. Change them only when the task asks for it,
+and never to make a failure go away — deleting the assertion that caught you is
+the shortest path to green and the worst one.
 
 ## When to stop
 
