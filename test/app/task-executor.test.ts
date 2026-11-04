@@ -186,6 +186,37 @@ async function harness(
   return { fs, clock, store, run, runner, agy, processRunner, executor, config };
 }
 
+/** Um plano onde a TASK-002 declara o spec que vai ficar vermelho. */
+const PLAN_WITH_SIBLING = JSON.stringify({
+    feature: 'f',
+    tasks: [
+      {
+        id: 'TASK-001',
+        title: 'One',
+        description: 'Do one.',
+        complexity: 'trivial',
+        risk: 'low',
+        dependencies: [],
+        requirements: ['FR-001'],
+        acceptanceCriteria: ['Done.'],
+        validation: ['test'],
+        files: { likely: ['src/tenants/flags.ts'] },
+      },
+      {
+        id: 'TASK-002',
+        title: 'Two',
+        description: 'Do two.',
+        complexity: 'trivial',
+        risk: 'low',
+        dependencies: ['TASK-001'],
+        requirements: ['FR-002'],
+        acceptanceCriteria: ['Done.'],
+        validation: ['test'],
+        files: { likely: ['src/plans/update-plan.dto.spec.ts'] },
+      },
+    ],
+  });
+
 describe('parseResultBlock', () => {
   it('reads a well-formed report', () => {
     const report = parseResultBlock(COMPLETED);
@@ -1291,6 +1322,77 @@ describe('worktree mode records an attempt, not a result (M2-05 §10.1)', () => 
     expect(marker?.detail).toMatchObject({ task: 'TASK-001', attempt: 1, marker: MARKER, tree: TREE });
     // No absolute path in either payload (§7.2, §21.3).
     expect(JSON.stringify([validated, marker])).not.toContain(WORKSPACE);
+  });
+
+  /**
+   * The attribution has to survive a task that never integrates (measured 04/11/2026).
+   *
+   * It started life in `TaskResult.notes`, and in worktree mode a task that does not
+   * integrate never writes `result.json` — so the note was computed and evaporated, which
+   * reads exactly like never computing it. The run's event log is the one place a failed
+   * attempt still writes to.
+   */
+  it('records who owns a failing file, on an attempt that will never integrate', async () => {
+    const world = await isolated({
+      validation: {
+        exitCode: 1,
+        stdout: 'FAIL src/plans/update-plan.dto.spec.ts\n  ● whitelist keeps every key\n',
+      },
+    });
+    world.runner.pushText(COMPLETED);
+
+    // The plan the executor reads back: TASK-002 declares the failing spec and has not
+    // integrated, so the red is its work and not this task's.
+    await world.store.writeArtifact(
+      world.run.runId,
+      'plan',
+      PLAN_WITH_SIBLING,
+    );
+
+    await world.executor.execute(
+      task({ validation: ['test'] }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    const attributed = (await world.store.readEvents(world.run.runId)).find(
+      (event) => event.type === 'task_failure_attributed',
+    );
+
+    expect(attributed, 'a failed attempt still writes to the event log').toBeDefined();
+    expect(attributed?.detail).toMatchObject({ task: 'TASK-001', owners: ['TASK-002'] });
+  });
+
+  it('stays silent when the owner has already integrated', async () => {
+    // The control the first version of this test missed: with TASK-002 in the tree, a red in
+    // its file is THIS task's regression. Handing it back would excuse what is worth
+    // catching, and the executor passing the wrong set would look identical to a green run.
+    const world = await isolated({
+      validation: {
+        exitCode: 1,
+        stdout: 'FAIL src/plans/update-plan.dto.spec.ts\n  ● whitelist keeps every key\n',
+      },
+    });
+    world.runner.pushText(COMPLETED);
+    await world.store.writeArtifact(world.run.runId, 'plan', PLAN_WITH_SIBLING);
+    await world.store.updateRun(world.run.runId, (state) => ({
+      ...state,
+      tasks: [{ id: 'TASK-002', state: 'completed' as const, attempts: 1, infrastructureFailures: 0 }],
+    }));
+
+    await world.executor.execute(
+      task({ validation: ['test'] }),
+      world.run.runId,
+      'SDD',
+      workspace(),
+    );
+
+    const attributed = (await world.store.readEvents(world.run.runId)).find(
+      (event) => event.type === 'task_failure_attributed',
+    );
+
+    expect(attributed, 'TASK-002 landed: the red is this task to answer for').toBeUndefined();
   });
 
   it('gives an unsatisfied attempt no receipt and no marker', async () => {

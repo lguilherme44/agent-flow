@@ -633,9 +633,22 @@ export class TaskExecutor {
       integrated = [];
     }
     const output = failed.map((result) => `${result.stdout}\n${result.stderr}`).join('\n');
-    return describeDownstream(
-      failuresOwnedDownstream({ taskId: task.id, tasks, output, integrated }),
-    );
+    const owned = failuresOwnedDownstream({ taskId: task.id, tasks, output, integrated });
+    if (owned.length === 0) return undefined;
+
+    // **The note goes to the event log, not only to the result** (measured 04/11/2026, third
+    // pass). `TaskResult.notes` is where it started, and in worktree mode a task that does
+    // not integrate never writes `result.json` — the attribution was produced and evaporated,
+    // which is the same silence as not producing it. The audit trail is the one place a
+    // failed attempt still writes to, and structured beats prose: the Deck can group by owner
+    // without parsing a sentence.
+    await this.options.store.appendEvent(runId, 'task_failure_attributed', {
+      task: task.id,
+      owners: [...new Set(owned.map((failure) => failure.ownedBy))],
+      files: owned.map((failure) => failure.path),
+    });
+
+    return describeDownstream(owned);
   }
 
   /**
