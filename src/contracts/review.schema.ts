@@ -389,6 +389,17 @@ export const QualityConfigSchema = z.object({
    * default: a finding that stops being blocking is one a person stops being asked about.
    */
   downgradeUnsupportedFindings: z.boolean().default(false),
+  /**
+   * Whether a review runs the automatic positive control on the change's own tests
+   * (`core/review/positive-control.ts`): the base, checked out alone, with those test files
+   * written over it and nothing else, and the project's `test` command run there.
+   *
+   * **Off by default, because it costs a checkout, an install and a full suite** — the same
+   * price `verification.baseline` pays, and for the same reason it is the operator who
+   * decides. On, it answers the one question a reviewer reading a diff can only guess at: a
+   * test that passes on the base proves nothing about the change, however green it is.
+   */
+  positiveControl: z.boolean().default(false),
 });
 export type QualityConfig = z.infer<typeof QualityConfigSchema>;
 

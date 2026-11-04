@@ -16,6 +16,7 @@ import {
   HUMAN_WORDS_MAX_LENGTH,
   DecisionChannelSchema,
   readHumanDecision,
+  validateAndNormalizeRepositoryPath,
   type DecisionChannel,
   type GateDecision,
 } from '../contracts/index.js';
@@ -72,6 +73,7 @@ import { en, type Phrases } from '../core/phrases/index.js';
 import { GitClient, renderChanges } from '../adapters/git/git-client.js';
 import {
   failureDetail,
+  runCommands,
   runVerification,
   summariseVerification,
   VERIFICATION_ORDER,
@@ -91,6 +93,7 @@ import {
   FINAL_REVIEW_STAGE,
   ReviewResponseSchema,
   VERIFICATION_STAGE,
+  type ReviewResponse,
   authorsOf,
   buildReview,
   normaliseE2EResponse,
@@ -105,6 +108,11 @@ import { assessIndependence } from '../core/independence.js';
 import { BYTES_PER_TOKEN } from '../core/prompt-budget.js';
 import { weighPlan } from '../core/task-budget.js';
 import { tasksWithNoExistingFile } from '../core/review/citations.js';
+import {
+  isTestPath,
+  judgePositiveControl,
+  type PositiveControl,
+} from '../core/review/positive-control.js';
 import { buildValidationRegistry, type ValidationRegistry } from '../core/validation-registry.js';
 import {
   judgeRequiredGates,
@@ -3323,9 +3331,21 @@ async function judgeRun(
     const verdict = baseline.get(result.command);
     return verdict === undefined ? [] : [`- \`${result.command}\` ${describeBaseline(verdict)}`];
   });
+  // The change's own tests, asked of the base: a test that passes without the change proves
+  // nothing about it, however green the suite is. Off unless the operator turned it on.
+  const positiveControl = await positiveControlOf(
+    context,
+    runId,
+    tree.value,
+    changes,
+    prepared.ok,
+    commandTimeoutSeconds,
+  );
+
   const commandResults = [
     summariseVerification(verification),
     baselineLines.length === 0 ? '' : `Compared with the base:\n${baselineLines.join('\n')}`,
+    positiveControl === undefined ? '' : `Positive control (${positiveControl.result}): ${positiveControl.reason}`,
     failureDetail(verification),
   ]
     .filter((part) => part.length > 0)
@@ -3333,8 +3353,9 @@ async function judgeRun(
 
   // ---- Verification agent: what a command cannot see.
   options.onStage?.('inspection');
-  const verificationResponse = ReviewResponseSchema.parse(
-    (
+  const verificationResponse = withPositiveControl(
+    ReviewResponseSchema.parse(
+      (
       await context.stageRunner.run(
         VERIFICATION_STAGE,
         runId,
@@ -3348,8 +3369,10 @@ async function judgeRun(
         // default it would read the project directory — the user's working tree,
         // which in worktree mode holds none of the run's work.
         { workingDirectory: tree.value.cwd },
-      )
-    ).data,
+        )
+      ).data,
+    ),
+    positiveControl,
   );
 
   await context.store.writeArtifact(
@@ -3767,6 +3790,128 @@ async function baselineOf(
     if (verdict !== undefined) byCommand.set(command, verdict);
   }
   return byCommand;
+}
+
+/**
+ * The automatic positive control, when the operator turned it on: the change's own tests,
+ * written over the base and nothing else, run with the project's `test` command.
+ *
+ * `undefined` when nothing qualifies — the control is off, the tree was not prepared, there
+ * is no base, the project named no `test` command, or the change touched no test file. A
+ * `not_run` verdict is reserved for a control that was actually attempted and could not
+ * answer, so that "we did not ask" never reads as "the tests prove nothing".
+ *
+ * The checkout and its preparation are `baselineOf`'s, for the same reasons: a throwaway
+ * checkout belongs to `read-only-workspace.ts`, and the install to the module allowed to
+ * read it out of configuration.
+ */
+async function positiveControlOf(
+  context: ExecutionContext,
+  runId: string,
+  tree: { readonly cwd: string; readonly base: string },
+  changes: readonly { readonly path: string }[],
+  prepared: boolean,
+  timeoutSeconds: number,
+): Promise<PositiveControl | undefined> {
+  const project = context.config.project;
+  if (!context.config.global.quality.positiveControl || !prepared || project === undefined) return undefined;
+  const base = tree.base.trim();
+  const command = project.commands.test?.trim();
+  if (base === '' || command === undefined || command === '') return undefined;
+
+  // Normalised through the one validator that owns path safety: these become writes into a
+  // checkout, and a path that escapes the repository must never be one of them. Git does not
+  // produce such a path, which is exactly why nothing downstream would notice if it did.
+  const tests = changes.flatMap((change) => {
+    const checked = validateAndNormalizeRepositoryPath(change.path);
+    const path = checked.valid ? checked.normalizedPath : undefined;
+    return path !== undefined && isTestPath(path) ? [path] : [];
+  });
+  if (tests.length === 0) return undefined;
+
+  const install = project.commands.install;
+  const shell = project.commandShell === undefined ? {} : { commandShell: project.commandShell };
+  const checkout = await openCheckoutAt(
+    { fs: context.fs, workspaces: context.workspaces, host: context.host },
+    { source: tree.cwd, commit: base, label: 'positive-control' },
+  );
+  if (!checkout.ok) {
+    return judgePositiveControl({
+      base,
+      command,
+      tests,
+      reason: `the base could not be checked out: ${checkout.detail}`,
+    });
+  }
+
+  try {
+    const ready = await prepareWorkspace(
+      { workspaces: context.workspaces, processRunner: context.processRunner },
+      { path: checkout.tree.cwd, ...(install === undefined ? {} : { install }), ...shell, timeoutSeconds },
+    );
+    if (!ready.ok) {
+      return judgePositiveControl({
+        base,
+        command,
+        tests,
+        reason: `the base checkout could not be prepared: ${ready.failure.detail}`,
+      });
+    }
+
+    // The tests, and only the tests. Anything else copied over would be the change itself,
+    // and then the control would be asking whether the change passes its own tests.
+    for (const test of tests) {
+      const source = `${tree.cwd}/${test}`;
+      if (!(await context.fs.exists(source))) continue;
+      const target = `${checkout.tree.cwd}/${test}`;
+      await context.fs.mkdirp(target.slice(0, target.lastIndexOf('/')));
+      await context.fs.writeFileAtomic(target, await context.fs.readFile(source));
+    }
+
+    const ran = await runCommands({
+      processRunner: context.processRunner,
+      commands: [command],
+      cwd: checkout.tree.cwd,
+      timeoutSeconds,
+      ...shell,
+    });
+    const result = ran.results[0];
+    if (result === undefined) {
+      return judgePositiveControl({ base, command, tests, reason: 'the test command produced no result' });
+    }
+    return judgePositiveControl({
+      base,
+      command,
+      tests,
+      exitCode: result.exitCode,
+      output: `${result.stdout}\n${result.stderr}`,
+    });
+  } finally {
+    const released = await checkout.tree.release();
+    if (released !== undefined && !released.removed) {
+      await context.store.appendEvent(runId, 'read_only_workspace_retained', {
+        stage: 'positive-control',
+        detail: released.detail ?? 'the positive-control checkout could not be removed',
+      });
+    }
+  }
+}
+
+/**
+ * The verification review, with the positive control's finding when it raised one.
+ *
+ * The verdict goes to `FAIL` with it: a change whose tests pass on the base has no proof
+ * behind the green, and letting the review stay `PASS` while carrying a `high` would be the
+ * review saying two things at once. Only reachable with the control turned on, so no
+ * existing run changes verdict.
+ */
+function withPositiveControl(
+  response: ReviewResponse,
+  control: PositiveControl | undefined,
+): ReviewResponse {
+  const finding = control?.finding;
+  if (finding === undefined) return response;
+  return { ...response, verdict: 'FAIL', findings: [...response.findings, finding] };
 }
 
 /** `AGENTS.md` of the tree under review, not of whatever the user has open. */

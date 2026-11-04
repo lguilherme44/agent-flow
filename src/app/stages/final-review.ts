@@ -26,6 +26,8 @@ export const ReviewResponseSchema = z
     path: ['findings'],
   });
 
+export type ReviewResponse = z.infer<typeof ReviewResponseSchema>;
+
 export const VERIFICATION_STAGE: StageDefinition = {
   name: 'verification',
   role: 'verification',

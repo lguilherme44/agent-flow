@@ -139,7 +139,17 @@ const PLAN = {
  * task that listed `test` without running it leaves behind — the plan requires the gate and
  * nothing executed it (FR-028). The default records the one command the plan's `test` names.
  */
-async function reviewable({ gateRan = true }: { gateRan?: boolean } = {}): Promise<{
+async function reviewable({
+  gateRan = true,
+  write = { 'one.txt': 'one\n' },
+  globalConfig,
+}: {
+  gateRan?: boolean;
+  /** What the task's attempt puts in the tree, so a test can change what the diff touches. */
+  write?: Record<string, string>;
+  /** A global `config.yaml`, merged over the defaults, when the test needs an option on. */
+  globalConfig?: string;
+} = {}): Promise<{
   current: WorktreeRun;
   deps: RunActionDeps;
   runner: RecordingProcessRunner;
@@ -152,7 +162,7 @@ async function reviewable({ gateRan = true }: { gateRan?: boolean } = {}): Promi
   if (prepared.kind !== 'ready') throw new Error('the namespace could not be prepared');
 
   await current.seed(['TASK-001']);
-  await current.plant('TASK-001', 1, { write: { 'one.txt': 'one\n' } });
+  await current.plant('TASK-001', 1, { write });
   const result = current.resultFor('TASK-001');
   await current.integrator.integrate({
     runId: current.runId,
@@ -200,13 +210,15 @@ async function reviewable({ gateRan = true }: { gateRan?: boolean } = {}): Promi
   );
 
   const runner = new RecordingProcessRunner();
+  const globalConfigPath = join(current.repo.home, globalConfig === undefined ? 'no-such-config.yaml' : 'config.yaml');
+  if (globalConfig !== undefined) writeFileSync(globalConfigPath, globalConfig);
   const deps = fakeRunActionDeps({
     fs: new NodeFileSystem(),
     clock: current.clock,
     processRunner: runner,
     host: current.host,
     projectDir: current.repo.dir,
-    globalConfigPath: join(current.repo.home, 'no-such-config.yaml'),
+    globalConfigPath,
     promptsDir: join(import.meta.dirname, '../../prompts'),
     owner: 'cli',
   });
@@ -728,5 +740,86 @@ describe('a failing step is judged against the base when the project asks (dogfo
 
     expect(first).toBeGreaterThan(0);
     expect(second).toBe(first);
+  });
+});
+
+/**
+ * The automatic positive control: the change's own tests, asked of the base.
+ *
+ * A test that passes without the change proves nothing about it, however green the suite is,
+ * and a reviewer reading a diff can only guess. Running it is a fact — so this drives the
+ * whole review with the option on, over a real repository and a real base checkout.
+ */
+describe('the change tests are asked of the base when the operator turns the control on', () => {
+  const CONTROL_ON = 'quality:\n  positiveControl: true\n';
+  /** A change that carries a test file, so there is something to write over the base. */
+  const WITH_A_TEST = { 'one.txt': 'one\n', 'one.test.ts': 'export const covered = true;\n' };
+  const configRunning = (test: string) =>
+    `project:\n  name: demo\n  type: node\ncommands:\n  test: ${test}\n`;
+
+  it('fails the review when the tests pass on the base, and says which ones', async () => {
+    const { current, deps } = await reviewable({ write: WITH_A_TEST, globalConfig: CONTROL_ON });
+    run = current;
+    // A suite that passes anywhere and names the file: the shape of a test that would be
+    // green with or without the change.
+    current.repo.write('.agent-flow/config.yaml', configRunning('echo "PASS one.test.ts"'));
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    const verification = JSON.parse(
+      (await current.store.readArtifact(current.runId, 'verification')) ?? '{}',
+    ) as { verdict: string; findings: { severity: string; type: string; file?: string }[] };
+
+    expect(verification.verdict).toBe('FAIL');
+    const raised = verification.findings.find((finding) => finding.type === 'test-gap');
+    expect(raised?.severity).toBe('high');
+    expect(raised?.file).toBe('one.test.ts');
+  });
+
+  it('passes the review when the tests fail on the base: they prove the change', async () => {
+    const { current, deps } = await reviewable({ write: WITH_A_TEST, globalConfig: CONTROL_ON });
+    run = current;
+    // Fails wherever `one.txt` is missing, which is exactly the base — and names the test,
+    // the way a runner's failure record does.
+    current.repo.write(
+      '.agent-flow/config.yaml',
+      configRunning('sh -c \'test -f one.txt || { echo "FAIL one.test.ts"; exit 1; }\''),
+    );
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok, outcome.ok ? '' : outcome.error.message).toBe(true);
+    if (!outcome.ok) return;
+
+    const verification = JSON.parse(
+      (await current.store.readArtifact(current.runId, 'verification')) ?? '{}',
+    ) as { verdict: string; findings: { type: string }[] };
+
+    expect(verification.verdict).toBe('PASS');
+    expect(verification.findings.some((finding) => finding.type === 'test-gap')).toBe(false);
+  });
+
+  it('never touches the base when the change carries no test file', async () => {
+    const { current, deps, runner, integrationPath } = await reviewable({ globalConfig: CONTROL_ON });
+    run = current;
+    current.repo.write('.agent-flow/config.yaml', configRunning('echo "PASS one.test.ts"'));
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+
+    // "We did not ask" must never read as "the tests prove nothing": no checkout, no finding.
+    expect(new Set(runner.shellCwds)).toEqual(new Set([integrationPath]));
+  });
+
+  it('is off unless the operator turns it on, whatever the change carries', async () => {
+    const { current, deps, runner, integrationPath } = await reviewable({ write: WITH_A_TEST });
+    run = current;
+    current.repo.write('.agent-flow/config.yaml', configRunning('echo "PASS one.test.ts"'));
+
+    const outcome = await review(deps, current.runId);
+    expect(outcome.ok).toBe(true);
+
+    expect(new Set(runner.shellCwds)).toEqual(new Set([integrationPath]));
   });
 });
