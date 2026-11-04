@@ -578,15 +578,22 @@ export async function diagnose(options: DiagnoseOptions): Promise<Diagnosis> {
   //
   // A note, not a degradation: running the whole suite per task is slow and strict, never
   // wrong on its own. What makes it a trap is the slicing, which this cannot see from here.
+  //
+  // **Containment, not equality** (measured on the Beahub config, 04/11/2026). The review's
+  // `test` runs three apps joined by `&&`; the task's `api-test` was the first of the three,
+  // verbatim. They are never the same string, and an equality check saw nothing — the gate
+  // that made TASK-001 unsatisfiable was the whole suite *of one package*, which is exactly
+  // as unsatisfiable. Only `commands.test` is compared: a broad `build` or `lint` does not
+  // turn one task's change into another task's red.
+  const wholeSuite = config.project?.commands?.test?.trim() ?? '';
   const wholeSuiteGates =
-    config.project === undefined
+    wholeSuite === ''
       ? []
-      : Object.entries(config.project.validationCommands ?? {})
-          .filter(([, line]) =>
-            Object.values(config.project?.commands ?? {}).some(
-              (whole) => typeof whole === 'string' && whole.trim() === line.trim(),
-            ),
-          )
+      : Object.entries(config.project?.validationCommands ?? {})
+          .filter(([, line]) => {
+            const gate = line.trim();
+            return gate === wholeSuite || wholeSuite.includes(gate);
+          })
           .map(([id]) => say.doctor.taskGateIsWholeSuite(id));
 
   const verdict = {

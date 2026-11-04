@@ -251,9 +251,42 @@ describe("the executor's command grants, as doctor reports them (FR-003, FR-004,
       'project:\n  name: demo\n  type: node\ncommands:\n  test: npm test\nvalidationCommands:\n  api-test: npm test\n';
     const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, sameLine);
 
-    const note = diagnosis.notes.find((line) => line.includes('api-test'));
+    const note = diagnosis.notes.find(
+      (line) => line.includes('api-test') && line.includes('whole suite'),
+    );
     expect(note, 'the gate note names the id that is the whole suite').toBeDefined();
     expect(note).toContain('whole suite');
+  });
+
+  /**
+   * The shape the equality check missed, measured on the real Beahub config.
+   *
+   * The review joins three apps with `&&`; the task gate is the first of the three,
+   * verbatim. The two strings are never equal, and the whole suite *of one package* is
+   * exactly as unsatisfiable as the whole suite of all of them.
+   */
+  it('notes a gate that is one package of the review suite, not the whole line', async () => {
+    const contained =
+      'project:\n  name: demo\n  type: node\n' +
+      'commands:\n  test: (cd api && npm test) && (cd web && npx vitest run)\n' +
+      'validationCommands:\n  api-test: cd api && npm test\n';
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, contained);
+
+    expect(
+      diagnosis.notes.some((line) => line.includes('api-test') && line.includes('whole suite')),
+    ).toBe(true);
+  });
+
+  it('leaves a broad build or lint alone: only test turns one task change into another task red', async () => {
+    const broadBuild =
+      'project:\n  name: demo\n  type: node\n' +
+      'commands:\n  test: npx vitest run\n  build: (cd api && npm run build) && (cd web && npm run build)\n' +
+      'validationCommands:\n  api-build: cd api && npm run build\n';
+    const diagnosis = await diagnosed(EXECUTORS_ON_CLAUDE, broadBuild);
+
+    expect(
+      diagnosis.notes.some((line) => line.includes('api-build') && line.includes('whole suite')),
+    ).toBe(false);
   });
 
   it('positive control: a scoped per-task gate gets no note', async () => {
