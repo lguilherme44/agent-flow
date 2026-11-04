@@ -100,30 +100,214 @@ function withoutComments(text: string): string {
 }
 
 /**
- * Strips comments and string literals so identifier scans do not hit prose.
- *
- * **The three quote styles are blanked in one alternation, left to right, and
- * that is load-bearing.** Three sequential passes look equivalent and are not:
- * the single-quote pass ran first over the whole file, so an apostrophe inside a
- * double-quoted or backtick string — `"the coding agent's history"` — opened a
- * literal that closed at the *next* apostrophe anywhere below it, blanking every
- * line in between. Measured when M2-05 landed: it was hiding two thousand
- * characters of `run-git-identity.ts` and most of `attempt-receipt.ts` from every
- * rule in this file, and a rule that cannot see the thing it forbids passes
- * forever. One alternation consumes whichever delimiter opens first, which is
- * what a scanner would do.
+ * Where a `/` opens a regular expression rather than a division: start of input, an
+ * operator, or a keyword that can only be followed by an expression.
  */
+const BEFORE_REGEX =
+  /(?:^|[([{,;:=!?&|+\-*%~^<>]|\b(?:return|typeof|instanceof|in|of|case|do|else|yield|await|new|delete|void))\s*$/;
+
+/**
+ * Strips comments, string literals **and regular-expression literals**, so identifier scans
+ * do not hit prose — and so a rule cannot pass by looking at nothing.
+ *
+ * **This is a scanner, not a chain of `replace` calls, and that is load-bearing twice.**
+ *
+ * Three sequential passes look equivalent and are not: the single-quote pass ran first over
+ * the whole file, so an apostrophe inside a double-quoted or backtick string — `"the coding
+ * agent's history"` — opened a literal that closed at the *next* apostrophe anywhere below
+ * it, blanking every line in between. Measured when M2-05 landed: two thousand characters of
+ * `run-git-identity.ts` and most of `attempt-receipt.ts` were hidden from every rule here.
+ *
+ * One alternation fixed that and left the other half open: **a quote inside a regular
+ * expression still opened a string.** `log-triager.ts` redacts secrets with a pattern that
+ * begins `["']?`, and that bare apostrophe hid the 219 lines under it — the module that must
+ * never print a credential, invisible to every rule that looks for one. Measured across the
+ * repository: 23 files, the worst 278 lines, and `apps/web`'s own copy of this function among
+ * them. A scanner consumes whichever of the four opens first, which is what a parser does.
+ *
+ * Each literal collapses the way the three passes collapsed it: a comment and a regular
+ * expression to one space, a string to its two delimiters — so `case ''` still reads as an
+ * empty-string case.
+ */
+/**
+ * Index just past the string or template literal that starts at `at`.
+ *
+ * Recursive through `${…}`, because a template's interpolation holds whole expressions —
+ * `` `'${value.replaceAll("'", `'\\''`)}'` `` is one line of `crew-config.ts`, and a scanner
+ * that stops at the first inner backtick leaves the rest of the file in a literal nobody
+ * closes. That line hid eleven exported functions from every rule here.
+ */
+function endOfLiteral(text: string, at: number): number {
+  const quote = text[at];
+  if (quote === "'" || quote === '"') {
+    let scan = at + 1;
+    while (scan < text.length && text[scan] !== quote) scan += text[scan] === '\\' ? 2 : 1;
+    return Math.min(scan + 1, text.length);
+  }
+  let scan = at + 1;
+  while (scan < text.length) {
+    const char = text[scan];
+    if (char === '\\') {
+      scan += 2;
+      continue;
+    }
+    if (char === '`') return scan + 1;
+    if (char === '$' && text[scan + 1] === '{') {
+      scan = endOfInterpolation(text, scan + 2);
+      continue;
+    }
+    scan += 1;
+  }
+  return text.length;
+}
+
+/**
+ * Index just past the `}` that closes an interpolation opened at `at`.
+ *
+ * Regular expressions are consumed here too, with the same test the scanner uses. One line
+ * of `autostart.ts` is `` `"${command.replace(/"/g, '""')}"` ``: without it the `"` inside
+ * `/"/g` opened a string, and everything from there to the end of the file — `autostart`'s
+ * only exported function included — stopped existing for every rule.
+ */
+function endOfInterpolation(text: string, at: number): number {
+  let depth = 1;
+  let scan = at;
+  let before = '';
+  while (scan < text.length && depth > 0) {
+    const char = text[scan];
+    if (char === "'" || char === '"' || char === '`') {
+      scan = endOfLiteral(text, scan);
+      before = 'x';
+      continue;
+    }
+    if (char === '/') {
+      const end = endOfRegex(text, scan, before);
+      if (end !== undefined) {
+        scan = end;
+        before = 'x';
+        continue;
+      }
+    }
+    if (char === '{') depth += 1;
+    else if (char === '}') depth -= 1;
+    before = (before + (char ?? '')).slice(-16);
+    scan += 1;
+  }
+  return scan;
+}
+
+/**
+ * Index just past the regular-expression literal at `at`, or `undefined` when that `/` was a
+ * division — decided by what precedes it, and by whether the literal closes on its own line.
+ */
+function endOfRegex(text: string, at: number, before: string): number | undefined {
+  if (!BEFORE_REGEX.test(before)) return undefined;
+  let scan = at + 1;
+  let inClass = false;
+  while (scan < text.length) {
+    const inside = text[scan];
+    if (inside === '\\') {
+      scan += 2;
+      continue;
+    }
+    // A regular-expression literal never crosses a line: this `/` was a division.
+    if (inside === '\n') return undefined;
+    if (inside === '[') inClass = true;
+    else if (inside === ']') inClass = false;
+    else if (inside === '/' && !inClass) {
+      let end = scan + 1;
+      while (end < text.length && /[a-z]/.test(text[end] ?? '')) end += 1;
+      return end;
+    }
+    scan += 1;
+  }
+  return undefined;
+}
+
 function codeOnly(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
-    .replace(
-      /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g,
-      (literal) => `${literal[0] ?? ''}${literal[0] ?? ''}`,
-    );
+  let out = '';
+  let at = 0;
+  while (at < text.length) {
+    const char = text[at];
+    const pair = text.slice(at, at + 2);
+    if (pair === '//') {
+      const end = text.indexOf('\n', at);
+      at = end === -1 ? text.length : end;
+      out += ' ';
+      continue;
+    }
+    if (pair === '/*') {
+      const end = text.indexOf('*/', at + 2);
+      at = end === -1 ? text.length : end + 2;
+      out += ' ';
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      at = endOfLiteral(text, at);
+      out += `${char}${char}`;
+      continue;
+    }
+    // `out.slice(-16)` is the last token, which is all the decision needs: `instanceof` is
+    // the longest keyword that can precede a literal.
+    if (char === '/') {
+      const end = endOfRegex(text, at, out.slice(-16));
+      if (end !== undefined) {
+        at = end;
+        out += ' ';
+        continue;
+      }
+    }
+    out += char;
+    at += 1;
+  }
+  return out;
 }
 
 describe('the rules in this file can see their own subjects', () => {
+  /**
+   * The control on {@link codeOnly}, planted rather than argued.
+   *
+   * A rule that cannot see what it forbids passes forever, and every rule below reads the
+   * file through this one function. Each case here is a shape that hid real code: an
+   * apostrophe inside a double-quoted string (M2-05), and a quote inside a regular
+   * expression — `log-triager.ts`'s secret pattern, which hid the 219 lines under it.
+   */
+  it('blanks a literal without taking the code after it', () => {
+    const apostrophe = codeOnly('const a = "the agent\'s history";\nspawnShell();\nconst b = 1;');
+    expect(apostrophe).toContain('spawnShell');
+    expect(apostrophe).toContain('const b = 1');
+
+    const inRegex = codeOnly('const SECRET = /["\']?(token|password)/gi;\nspawnShell();');
+    expect(inRegex).toContain('spawnShell');
+    expect(inRegex).not.toContain('password');
+  });
+
+  it('keeps a division, and the two delimiters of an empty string', () => {
+    // `a / b` is not a literal, and `case ''` is a rule's subject (helper-de-sanitizacao).
+    expect(codeOnly('const half = total / count;')).toContain('total / count');
+    expect(codeOnly("switch (x) { case '': break; }")).toContain("case ''");
+  });
+
+  it('leaves every exported name of this repository visible to the rules', () => {
+    // The measurement that found the hole, as a gate. `§70` and a dozen other rules decide
+    // by looking for a declaration; a declaration swallowed by an unclosed literal is a rule
+    // reading nothing. `log-triager.ts` lost every export under its secret pattern.
+    // Anchored to the line, so the string `'export const api'` in a rule of apps/web is not
+    // read as a declaration that went missing.
+    const declaration = /^export\s+(?:async\s+)?(?:function|const|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm;
+    const hidden = [...sourceFiles('src'), ...browserFiles()]
+      .map(read)
+      .flatMap(({ path, text }) => {
+        const seen = codeOnly(text);
+        return [...text.matchAll(declaration)]
+          .map((match) => match[1] ?? '')
+          .filter((name) => name.length > 0 && !new RegExp(`\\b${name}\\b`).test(seen))
+          .map((name) => `${path}: ${name}`);
+      });
+
+    expect(hidden, 'a rule looking for this declaration would be looking at nothing').toEqual([]);
+  });
+
   /**
    * The guard on {@link repoPath}, and the reason it is a rule rather than a comment.
    *
