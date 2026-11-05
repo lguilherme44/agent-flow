@@ -180,6 +180,36 @@ describe('what must NOT be attributed downstream', () => {
   });
 });
 
+describe('o mesmo arquivo em duas grafias', () => {
+  it('nomeia o spec uma vez so, mesmo que o runner o escreva de dois jeitos', () => {
+    // Medido na TASK-003 (04/11/2026): o jest poe `FAIL src/x.spec.ts` no rotulo e
+    // `at Object.<anonymous> (modules/x.spec.ts:59)` no stack. A nota saiu listando o
+    // mesmo arquivo duas vezes porque a chave de deduplicacao era a string crua.
+    const output = [
+      'FAIL src/modules/plans/dto/update-plan.dto.spec.ts',
+      '  ● whitelist keeps every key',
+      '    at Object.<anonymous> (modules/plans/dto/update-plan.dto.spec.ts:59:40)',
+    ].join('\n');
+
+    const owned = failuresOwnedDownstream({ taskId: 'TASK-001', tasks: PLAN, output });
+
+    expect(owned).toHaveLength(1);
+    expect(owned[0]?.ownedBy).toBe('TASK-002');
+  });
+
+  it('mantem dois arquivos distintos do mesmo dono', () => {
+    // O controle: deduplicar por arquivo nao pode virar deduplicar por dono.
+    const output = [
+      'FAIL src/modules/plans/dto/update-plan.dto.spec.ts',
+      'FAIL src/modules/plans/dto/update-plan.dto.ts',
+    ].join('\n');
+
+    const owned = failuresOwnedDownstream({ taskId: 'TASK-001', tasks: PLAN, output });
+
+    expect(owned).toHaveLength(2);
+  });
+});
+
 describe('reading a runner output', () => {
   it('takes the path from a failure record and not from a passing line', () => {
     const output = [
