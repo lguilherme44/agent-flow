@@ -110,6 +110,38 @@ describe('the headline comes from the runtime projection, not the persisted stat
   const headline = (rendered: string): string | undefined =>
     rendered.split('\n').find((line, index, lines) => lines[index - 1] === 'Status:');
 
+  /**
+   * Through `render`, not straight into the block that prints it.
+   *
+   * The unit test for `renderIsolatedProgress` passes the attributions by hand, so a wire
+   * cut in the middle — `render` holding the data and not handing it down — looks exactly
+   * like a green run. That is the shape that cost most today: the rule worked, the plug
+   * dropped the answer, and nothing failed.
+   */
+  it('carries the attributions all the way from render to the printed line', () => {
+    const rendered = render(
+      state({ isolationMode: 'worktree', gitRunKey: 'AF-2026-001-0f3a91c4bd27e615' }),
+      projection({ status: 'implementing' }),
+      0,
+      null,
+      [],
+      null,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      [],
+      [],
+      new Map(),
+      undefined,
+      [],
+      [{ task: 'TASK-003', owners: ['TASK-002'], files: ['api/src/plans/update-plan.dto.spec.ts'] }],
+    );
+
+    expect(rendered).toContain('owned by another task');
+    expect(rendered).toContain('TASK-002');
+  });
+
   it('shows PLANNING, not PLAN_REJECTED, while a revision is running', () => {
     const rendered = render(
       state({ status: 'plan_rejected' }),
@@ -217,6 +249,33 @@ describe('renderIsolatedProgress (§21.4)', () => {
       updatedAt: '2026-08-09T20:00:00.000Z',
       ...patch,
     });
+
+  /**
+   * Whose red it was, where the operator actually looks.
+   *
+   * The executor writes the attribution to the audit trail — the one place a task that
+   * never integrates still writes. Leaving it only there means opening `events.jsonl` to
+   * find out, which for a regime of reviewing afterwards is the same as not having it.
+   */
+  it('names the task that owns a failure another task was judged on', () => {
+    const lines = renderIsolatedProgress(isolated(), [], [
+      { task: 'TASK-003', owners: ['TASK-002'], files: ['api/src/plans/update-plan.dto.spec.ts'] },
+    ]);
+
+    const owned = lines.find((line) => line.includes('TASK-003'));
+    expect(owned, 'the attribution is printed, not only logged').toBeDefined();
+    expect(owned).toContain('TASK-002');
+    expect(owned).toContain('update-plan.dto.spec.ts');
+    expect(lines.some((line) => line.includes('owned by another task'))).toBe(true);
+  });
+
+  it('prints no heading when nothing was attributed', () => {
+    // A heading that is always there teaches nobody anything — the same rule the attempt
+    // column follows just above it.
+    const lines = renderIsolatedProgress(isolated(), []);
+
+    expect(lines.some((line) => line.includes('owned by another task'))).toBe(false);
+  });
 
   it('says nothing at all for a run that is not isolated', () => {
     // Printing empty headings for machinery a user never turned on is the tool

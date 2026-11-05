@@ -141,6 +141,24 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
           : [],
       }));
 
+    // **Whose red it was.** A task reddened by a file another task owns is the shape that
+    // kept TASK-001 of the Beahub run unsatisfiable across five attempts with nobody able to
+    // say why (04/11/2026). The executor writes the attribution to the audit trail because a
+    // task that never integrates writes nothing else; leaving it only there would mean the
+    // operator has to open `events.jsonl` to find out — which, for a regime of reviewing
+    // afterwards, is the same as not having it.
+    const attributions = (await store.readEvents(state.runId))
+      .filter((event) => event.type === 'task_failure_attributed')
+      .map((event) => ({
+        task: String(event.detail['task'] ?? ''),
+        owners: Array.isArray(event.detail['owners'])
+          ? event.detail['owners'].filter((owner): owner is string => typeof owner === 'string')
+          : [],
+        files: Array.isArray(event.detail['files'])
+          ? event.detail['files'].filter((file): file is string => typeof file === 'string')
+          : [],
+      }));
+
     // Computed before rendering rather than after (C-19, C-20): the headline and its
     // hint come from what the run is doing *now*, not from the last gate it persisted.
     // `state.status` alone is a record of that gate — it stays `plan_rejected` while a
@@ -187,6 +205,7 @@ export async function runStatusCommand(globals: GlobalOptions): Promise<ExitCode
         contextBytes,
         replan === undefined ? undefined : describeReplanReport(replan),
         stagesOf('stage_skipped'),
+        attributions,
       )}\n`,
     );
 
@@ -339,6 +358,8 @@ async function describeIsolationFor(
 export function renderIsolatedProgress(
   state: RunState,
   conflicts: readonly { task: string; attempt: number; paths: readonly string[] }[],
+  /** Failures a task was judged on that another, still-pending task owns. */
+  attributions: readonly { task: string; owners: readonly string[]; files: readonly string[] }[] = [],
 ): string[] {
   if (state.isolationMode !== 'worktree') return [];
 
@@ -360,6 +381,19 @@ export function renderIsolatedProgress(
     lines.push('  attempts');
     for (const task of retried) {
       lines.push(`    ${task.id.padEnd(12)}${String(task.attempts)}`);
+    }
+  }
+
+  // Above the conflicts on purpose: this explains why a task went red, the conflict below
+  // explains why a merge did not land. A reader scanning for "what do I look at" wants the
+  // first one, and a task whose red is someone else's is the one not to open.
+  if (attributions.length > 0) {
+    lines.push('  failures owned by another task');
+    for (const attribution of attributions) {
+      lines.push(
+        `    ${attribution.task.padEnd(12)}${attribution.owners.join(', ')} — ` +
+          `${attribution.files.slice(0, 3).join(', ')}`,
+      );
     }
   }
 
@@ -414,6 +448,8 @@ export function render(
    * (A cache hit was never affected: `✓ (cached)` is checked first.)
    */
   skippedStages: readonly string[] = [],
+  /** See `renderIsolatedProgress`. Last and defaulted, like every optional above it. */
+  attributions: readonly { task: string; owners: readonly string[]; files: readonly string[] }[] = [],
 ): string {
   const lines: string[] = [
     // The title: the whole request is in `request.md`, and printing 5 KB here pushed the
@@ -462,7 +498,7 @@ export function render(
   // because in sequential mode there is no branch, no attempt numbering worth
   // reading, and nothing waiting to be integrated — printing empty headings there
   // would be the tool describing machinery a user never turned on.
-  lines.push(...renderIsolatedProgress(state, conflicts));
+  lines.push(...renderIsolatedProgress(state, conflicts, attributions));
 
   if (review !== null) {
     lines.push(`Plan review: ${review.verdict}`);
